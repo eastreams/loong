@@ -64,9 +64,14 @@ assert_equal(
     "root cli surface tests map to smoke and cli shards",
 )
 assert_equal(
-    resolve("crates/daemon/tests/integration/channel_surfaces.rs"),
+    resolve("crates/daemon/tests/integration/channel_surfaces_text.rs"),
     ["daemon_cli"],
-    "channel surface root tests map to the cli shard",
+    "channel surface text root tests map to the cli shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/channel_surfaces_json.rs"),
+    ["daemon_cli"],
+    "channel surface json root tests map to the cli shard",
 )
 assert_equal(
     resolve("crates/daemon/tests/integration/memory_surfaces.rs"),
