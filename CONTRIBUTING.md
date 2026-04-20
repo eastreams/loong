@@ -123,9 +123,10 @@ working tree plus reverse dependents. When that closure includes `loong`, the
 script still runs `loong` library and binary coverage, keeps the curated daemon
 smoke suite as the default floor, and now routes daemon test-file changes into
 matching optional daemon domain shards (`test:daemon:cli`, `:gateway`,
-`:onboard`, `:channels`, `:runtime`) with a fallback to the full `integration`
-binary for broad harness edits. These fast loops **do not** replace the Track A
-required checks or CI parity.
+`:onboard`, `:channels`, `:runtime`) by reading the shard entry files as the
+source of truth, with a fallback to the full `integration` binary for broad
+harness edits. These fast loops **do not** replace the Track A required checks
+or CI parity.
 
 If `task` or its transitive dependencies are unavailable locally, run at least
 CI parity plus architecture/dep-graph checks directly:

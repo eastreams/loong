@@ -10,96 +10,47 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DAEMON_CRATE_DIR = REPO_ROOT / "crates/daemon"
+DAEMON_TESTS_DIR = DAEMON_CRATE_DIR / "tests"
+INTEGRATION_DIR = DAEMON_TESTS_DIR / "integration"
+CARGO_TOML_PATH = DAEMON_CRATE_DIR / "Cargo.toml"
+INTEGRATION_TARGET_NAME = "integration"
 INTEGRATION_PREFIX = "crates/daemon/tests/integration/"
-TARGET_ORDER = [
-    "daemon_smoke",
-    "daemon_cli",
-    "daemon_gateway",
-    "daemon_onboard",
-    "daemon_channels",
-    "daemon_runtime",
-    "integration",
-]
-BROAD_DAEMON_TEST_PATHS = {
-    "crates/daemon/Cargo.toml",
-    "crates/daemon/tests/integration.rs",
-    "crates/daemon/tests/integration/mod.rs",
-    "crates/daemon/tests/support.rs",
-}
-TARGET_PREFIXES = {
-    "daemon_smoke": (
-        "crates/daemon/tests/daemon_smoke.rs",
-        "crates/daemon/tests/integration/architecture.rs",
-        "crates/daemon/tests/integration/cli_tests.rs",
-        "crates/daemon/tests/integration/gateway_api_health.rs",
-        "crates/daemon/tests/integration/gateway_read_models.rs",
-        "crates/daemon/tests/integration/runtime_snapshot_cli.rs",
-        "crates/daemon/tests/integration/status_cli.rs",
-        "crates/daemon/tests/integration/work_unit_cli.rs",
-    ),
-    "daemon_cli": (
-        "crates/daemon/tests/daemon_cli.rs",
-        "crates/daemon/tests/integration/ask_cli.rs",
-        "crates/daemon/tests/integration/chat_cli.rs",
-        "crates/daemon/tests/integration/cli_tests.rs",
-        "crates/daemon/tests/integration/latest_selector_process_support.rs",
-        "crates/daemon/tests/integration/mcp.rs",
-        "crates/daemon/tests/integration/memory_context_benchmark_cli.rs",
-        "crates/daemon/tests/integration/personalize_cli.rs",
-        "crates/daemon/tests/integration/plugins_cli.rs",
-        "crates/daemon/tests/integration/session_search_cli.rs",
-        "crates/daemon/tests/integration/sessions_cli.rs",
-        "crates/daemon/tests/integration/skills_cli.rs",
-        "crates/daemon/tests/integration/status_cli.rs",
-        "crates/daemon/tests/integration/tasks_cli.rs",
-    ),
-    "daemon_gateway": (
-        "crates/daemon/tests/daemon_gateway.rs",
-        "crates/daemon/tests/integration/architecture.rs",
-        "crates/daemon/tests/integration/gateway_api_acp.rs",
-        "crates/daemon/tests/integration/gateway_api_events.rs",
-        "crates/daemon/tests/integration/gateway_api_health.rs",
-        "crates/daemon/tests/integration/gateway_api_turn.rs",
-        "crates/daemon/tests/integration/gateway_owner_state.rs",
-        "crates/daemon/tests/integration/gateway_read_models.rs",
-        "crates/daemon/tests/integration/logging.rs",
-        "crates/daemon/tests/integration/managed_bridge_fixtures.rs",
-    ),
-    "daemon_onboard": (
-        "crates/daemon/tests/daemon_onboard.rs",
-        "crates/daemon/tests/integration/import_cli.rs",
-        "crates/daemon/tests/integration/managed_bridge_fixtures.rs",
-        "crates/daemon/tests/integration/managed_bridge_parity.rs",
-        "crates/daemon/tests/integration/migrate_cli.rs",
-        "crates/daemon/tests/integration/migration.rs",
-        "crates/daemon/tests/integration/onboard_cli.rs",
-    ),
-    "daemon_channels": (
-        "crates/daemon/tests/daemon_channels.rs",
-        "crates/daemon/tests/integration/doctor_feishu.rs",
-        "crates/daemon/tests/integration/feishu_cli.rs",
-        "crates/daemon/tests/integration/multi_channel_serve_cli.rs",
-    ),
-    "daemon_runtime": (
-        "crates/daemon/tests/daemon_runtime.rs",
-        "crates/daemon/tests/integration/acp.rs",
-        "crates/daemon/tests/integration/programmatic.rs",
-        "crates/daemon/tests/integration/runtime_capability_cli.rs",
-        "crates/daemon/tests/integration/runtime_experiment_cli.rs",
-        "crates/daemon/tests/integration/runtime_restore_cli.rs",
-        "crates/daemon/tests/integration/runtime_snapshot_cli.rs",
-        "crates/daemon/tests/integration/runtime_trajectory_cli.rs",
-        "crates/daemon/tests/integration/spec_runtime.rs",
-        "crates/daemon/tests/integration/spec_runtime_bridge/",
-        "crates/daemon/tests/integration/trajectory_export_cli.rs",
-        "crates/daemon/tests/integration/work_unit_cli.rs",
-    ),
-}
+SUPPORT_PREFIX = "crates/daemon/tests/support/"
+PATH_ATTRIBUTE_RE = re.compile(r'^#\[path = "([^"]+)"\]$')
+MODULE_DECLARATION_RE = re.compile(r"^mod ([A-Za-z0-9_]+);$")
+INTEGRATION_BLOCK_RE = re.compile(r"^mod integration \{$")
+
+
+@dataclass(frozen=True)
+class ShardTarget:
+    name: str
+    source_path: str
+    dependency_prefixes: tuple[str, ...]
+
+    def matches_path(self, changed_path: str) -> bool:
+        for prefix in self.dependency_prefixes:
+            if prefix.endswith("/"):
+                if changed_path.startswith(prefix):
+                    return True
+                continue
+
+            if changed_path == prefix:
+                return True
+
+        return False
 
 
 def parse_args() -> argparse.Namespace:
@@ -159,44 +110,178 @@ def load_changed_paths(args: argparse.Namespace) -> list[str]:
     return normalize_input_paths(stdin_lines)
 
 
-def path_matches_any_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
-    for prefix in prefixes:
-        if path.startswith(prefix):
-            return True
+def repo_relative_path(path: Path) -> str:
+    resolved_path = path.resolve(strict=False)
+    relative_path = resolved_path.relative_to(REPO_ROOT)
+    return relative_path.as_posix()
+
+
+def add_unique_prefix(prefixes: list[str], seen: set[str], prefix: str) -> None:
+    if prefix in seen:
+        return
+
+    seen.add(prefix)
+    prefixes.append(prefix)
+
+
+def resolve_module_dependency_prefixes(base_dir: Path, module_name: str, path_attribute: str | None) -> list[str]:
+    if path_attribute is not None:
+        candidate_path = base_dir / path_attribute
+        relative_path = repo_relative_path(candidate_path)
+        return [relative_path]
+
+    file_candidate = base_dir / f"{module_name}.rs"
+    if file_candidate.exists():
+        relative_path = repo_relative_path(file_candidate)
+        return [relative_path]
+
+    directory_candidate = base_dir / module_name
+    directory_module = directory_candidate / "mod.rs"
+    if directory_module.exists():
+        relative_path = repo_relative_path(directory_candidate)
+        directory_prefix = f"{relative_path}/"
+        return [directory_prefix]
+
+    return []
+
+
+def discover_shard_dependency_prefixes(shard_source_path: Path) -> tuple[str, ...]:
+    prefixes: list[str] = []
+    seen_prefixes: set[str] = set()
+    shard_source_relative = repo_relative_path(shard_source_path)
+    add_unique_prefix(prefixes, seen_prefixes, shard_source_relative)
+
+    pending_path_attribute: str | None = None
+    inside_integration_block = False
+    integration_block_balance = 0
+
+    shard_source_lines = shard_source_path.read_text().splitlines()
+    for line in shard_source_lines:
+        stripped_line = line.strip()
+
+        if not inside_integration_block and INTEGRATION_BLOCK_RE.match(stripped_line):
+            inside_integration_block = True
+            opening_braces = stripped_line.count("{")
+            closing_braces = stripped_line.count("}")
+            integration_block_balance = opening_braces - closing_braces
+            continue
+
+        path_match = PATH_ATTRIBUTE_RE.match(stripped_line)
+        if path_match is not None:
+            pending_path_attribute = path_match.group(1)
+            continue
+
+        module_match = MODULE_DECLARATION_RE.match(stripped_line)
+        if module_match is not None:
+            module_name = module_match.group(1)
+            if inside_integration_block:
+                module_base_dir = INTEGRATION_DIR
+            else:
+                module_base_dir = DAEMON_TESTS_DIR
+
+            dependency_prefixes = resolve_module_dependency_prefixes(
+                module_base_dir,
+                module_name,
+                pending_path_attribute,
+            )
+            for dependency_prefix in dependency_prefixes:
+                add_unique_prefix(prefixes, seen_prefixes, dependency_prefix)
+            pending_path_attribute = None
+
+        if inside_integration_block:
+            opening_braces = stripped_line.count("{")
+            closing_braces = stripped_line.count("}")
+            integration_block_balance += opening_braces - closing_braces
+            if integration_block_balance == 0:
+                inside_integration_block = False
+
+    return tuple(prefixes)
+
+
+def load_shard_targets() -> list[ShardTarget]:
+    cargo_toml_bytes = CARGO_TOML_PATH.read_bytes()
+    cargo_manifest = tomllib.loads(cargo_toml_bytes.decode())
+    test_entries = cargo_manifest.get("test", [])
+
+    shard_targets: list[ShardTarget] = []
+    for test_entry in test_entries:
+        required_features = test_entry.get("required-features", [])
+        if "test-support" not in required_features:
+            continue
+
+        target_name = test_entry.get("name")
+        source_path = test_entry.get("path")
+        if not target_name or not source_path:
+            continue
+
+        shard_source_path = DAEMON_CRATE_DIR / source_path
+        shard_source_relative = repo_relative_path(shard_source_path)
+        dependency_prefixes = discover_shard_dependency_prefixes(shard_source_path)
+        shard_target = ShardTarget(
+            name=target_name,
+            source_path=shard_source_relative,
+            dependency_prefixes=dependency_prefixes,
+        )
+        shard_targets.append(shard_target)
+
+    return shard_targets
+
+
+def ordered_target_names(shard_targets: list[ShardTarget]) -> list[str]:
+    ordered_names: list[str] = []
+    for shard_target in shard_targets:
+        ordered_names.append(shard_target.name)
+    ordered_names.append(INTEGRATION_TARGET_NAME)
+    return ordered_names
+
+
+def is_broad_daemon_test_path(changed_path: str) -> bool:
+    broad_exact_paths = {
+        repo_relative_path(CARGO_TOML_PATH),
+        repo_relative_path(DAEMON_TESTS_DIR / "integration.rs"),
+        repo_relative_path(INTEGRATION_DIR / "mod.rs"),
+    }
+    if changed_path in broad_exact_paths:
+        return True
+
+    if changed_path.startswith(SUPPORT_PREFIX):
+        return True
+
     return False
 
 
-def ordered_targets(selected_targets: set[str]) -> list[str]:
-    ordered: list[str] = []
-    for target in TARGET_ORDER:
-        if target not in selected_targets:
+def ordered_subset(selected_targets: set[str], ordered_names: list[str]) -> list[str]:
+    ordered_selection: list[str] = []
+    for target_name in ordered_names:
+        if target_name not in selected_targets:
             continue
-        ordered.append(target)
-    return ordered
+        ordered_selection.append(target_name)
+    return ordered_selection
 
 
 def resolve_targets(changed_paths: list[str]) -> list[str]:
+    shard_targets = load_shard_targets()
+    ordered_names = ordered_target_names(shard_targets)
     selected_targets: set[str] = set()
 
     for changed_path in changed_paths:
-        if changed_path in BROAD_DAEMON_TEST_PATHS:
-            return TARGET_ORDER.copy()
+        if is_broad_daemon_test_path(changed_path):
+            return ordered_names
 
-        matched_known_target = False
-        for target_name, prefixes in TARGET_PREFIXES.items():
-            if not path_matches_any_prefix(changed_path, prefixes):
+        matched_shard = False
+        for shard_target in shard_targets:
+            if not shard_target.matches_path(changed_path):
                 continue
-            selected_targets.add(target_name)
-            matched_known_target = True
+            selected_targets.add(shard_target.name)
+            matched_shard = True
 
-        if matched_known_target:
+        if matched_shard:
             continue
 
-        is_unmapped_integration_path = changed_path.startswith(INTEGRATION_PREFIX)
-        if is_unmapped_integration_path:
-            selected_targets.add("integration")
+        if changed_path.startswith(INTEGRATION_PREFIX):
+            selected_targets.add(INTEGRATION_TARGET_NAME)
 
-    return ordered_targets(selected_targets)
+    return ordered_subset(selected_targets, ordered_names)
 
 
 def main() -> int:

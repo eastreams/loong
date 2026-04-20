@@ -54,7 +54,12 @@ assert_equal(
     "unmapped integration files fall back to the full integration target",
 )
 assert_equal(
-    resolve("crates/daemon/tests/support.rs"),
+    resolve("crates/daemon/tests/daemon_smoke.rs"),
+    ["daemon_smoke"],
+    "daemon smoke entrypoint maps to the smoke shard itself",
+)
+assert_equal(
+    resolve("crates/daemon/tests/support/mod.rs"),
     [
         "daemon_smoke",
         "daemon_cli",
@@ -65,6 +70,19 @@ assert_equal(
         "integration",
     ],
     "support changes fan out to all daemon targets",
+)
+assert_equal(
+    resolve("crates/daemon/Cargo.toml"),
+    [
+        "daemon_smoke",
+        "daemon_cli",
+        "daemon_gateway",
+        "daemon_onboard",
+        "daemon_channels",
+        "daemon_runtime",
+        "integration",
+    ],
+    "daemon manifest changes fan out to all daemon targets",
 )
 
 print("daemon_changed_test_targets checks passed")
