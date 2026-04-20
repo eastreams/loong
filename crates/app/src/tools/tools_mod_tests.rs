@@ -2763,6 +2763,71 @@ fn tool_invoke_rejects_tampered_or_missing_leases() {
 
 #[cfg(feature = "tool-file")]
 #[test]
+fn tool_invoke_rejects_missing_outer_lease_field() {
+    let root = std::env::temp_dir().join(format!(
+        "loongclaw-tool-invoke-missing-lease-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "arguments": {
+                    "operation": "policy-status"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("missing lease should fail");
+
+    assert!(error.contains("requires payload.lease"), "error: {error}");
+    assert!(
+        !error.contains("invalid_tool_lease"),
+        "outer payload validation should fail before invalid lease recovery paths: {error}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_invoke_rejects_non_string_outer_lease_field() {
+    let root = std::env::temp_dir().join(format!(
+        "loongclaw-tool-invoke-non-string-lease-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "lease": 123,
+                "arguments": {
+                    "operation": "policy-status"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("non-string lease should fail");
+
+    assert!(error.contains("requires payload.lease"), "error: {error}");
+    assert!(
+        !error.contains("invalid_tool_lease"),
+        "outer payload validation should fail before invalid lease recovery paths: {error}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
 fn tool_invoke_rejects_leases_replayed_in_another_turn() {
     let root = std::env::temp_dir().join(format!(
         "loongclaw-tool-invoke-replay-{}",

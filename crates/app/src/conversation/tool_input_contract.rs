@@ -132,6 +132,12 @@ fn render_tool_input_repair_guidance_from_reason_with_descriptor(
     descriptor: &tools::ToolDescriptor,
     tool_failure_reason: &str,
 ) -> Option<String> {
+    if let Some(guidance) =
+        render_invalid_tool_lease_repair_guidance(tool_name, tool_failure_reason)
+    {
+        return Some(guidance);
+    }
+
     let issue = parse_tool_input_contract_issue_from_reason(descriptor, tool_failure_reason)?;
     let guidance = render_tool_input_repair_guidance_for_issue(tool_name, descriptor, &issue);
     Some(guidance)
@@ -148,6 +154,31 @@ fn strip_tool_input_reason_prefix(reason: &str) -> &str {
     let followup_prefix = "tool input needs repair: ";
     let stripped_followup_reason = trimmed_reason.strip_prefix(followup_prefix);
     stripped_followup_reason.unwrap_or(trimmed_reason)
+}
+
+fn render_invalid_tool_lease_repair_guidance(
+    tool_name: &str,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    if tool_name != "tool.invoke" {
+        return None;
+    }
+
+    let stripped_reason = tool_failure_reason.trim();
+    let mentions_invalid_tool_lease = stripped_reason.contains("invalid_tool_lease:");
+    if !mentions_invalid_tool_lease {
+        return None;
+    }
+
+    Some([
+        "Repair guidance for tool.invoke:".to_owned(),
+        "The lease is invalid, expired, or scoped to a different turn/session.".to_owned(),
+        "Refresh the tool card with `tool.search` before retrying `tool.invoke`.".to_owned(),
+        "If you already know the tool id, call `tool.search` with `exact_tool_id` to fetch a fresh lease.".to_owned(),
+        "Do not reuse older leases from earlier search results.".to_owned(),
+        "Expected payload shape: tool_id:string,lease:string,arguments:object.".to_owned(),
+    ]
+    .join("\n"))
 }
 
 fn parse_tool_input_contract_issue_from_reason(
@@ -525,5 +556,23 @@ mod tests {
         assert!(guidance.contains(
             "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
         ));
+    }
+
+    #[test]
+    fn render_tool_input_repair_guidance_from_reason_recovers_invalid_tool_lease_refresh_steps() {
+        let guidance = render_tool_input_repair_guidance_from_reason(
+            "tool.invoke",
+            "invalid_tool_lease: expired lease",
+        )
+        .expect("guidance");
+
+        assert!(guidance.contains("Repair guidance for tool.invoke:"));
+        assert!(guidance.contains("tool.search"));
+        assert!(guidance.contains("exact_tool_id"));
+        assert!(guidance.contains("Do not reuse older leases"));
+        assert!(
+            guidance
+                .contains("Expected payload shape: tool_id:string,lease:string,arguments:object.")
+        );
     }
 }

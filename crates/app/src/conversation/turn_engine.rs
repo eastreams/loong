@@ -2445,6 +2445,25 @@ fn tool_search_recovery_hint() -> &'static str {
     " If you need a non-core capability, call tool.search with a short natural-language description of the task. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; use tool.invoke with the fresh lease and put the requested operation inside payload.arguments."
 }
 
+fn tool_invoke_recovery_failure(reason: &str) -> Option<TurnFailure> {
+    let (code, message) = if reason.starts_with("invalid_tool_lease:") {
+        (
+            "invalid_tool_lease",
+            "tool.invoke needs a fresh lease from the current tool.search result.",
+        )
+    } else {
+        return None;
+    };
+
+    let mut recovery_reason = message.to_owned();
+    recovery_reason.push_str(tool_search_recovery_hint());
+
+    Some(TurnFailure::policy_denied_with_discovery_recovery(
+        code,
+        recovery_reason,
+    ))
+}
+
 fn provider_tool_denial_reason(reason: &str, source: &str) -> String {
     let is_provider_source = source.starts_with("provider_");
     if !is_provider_source {
@@ -2483,9 +2502,18 @@ async fn execute_tool_intent_via_kernel(
     kernel_ctx: &KernelContext,
     trusted_internal_context: bool,
 ) -> Result<ToolCoreOutcome, TurnFailure> {
+    let requested_tool_name =
+        crate::tools::canonical_tool_name(request.tool_name.as_str()).to_owned();
     crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
         .await
         .map_err(|error| {
+            if requested_tool_name == "tool.invoke"
+                && let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
+                && let Some(recovery_failure) = tool_invoke_recovery_failure(reason)
+            {
+                return recovery_failure;
+            }
+
             let reason = render_kernel_error_reason(&error);
             match classify_kernel_error(&error) {
                 KernelFailureClass::PolicyDenied => {
@@ -2792,6 +2820,7 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             tool_name: resolved_tool.canonical_name.to_owned(),
             payload: augmented_payload.payload,
         };
+        let request = prepare_conversation_kernel_tool_request(request, self.binding, intent);
         let normalized_intent = ToolIntent {
             tool_name: resolved_tool.canonical_name.to_owned(),
             args_json: normalized_payload,
@@ -3546,6 +3575,29 @@ fn resolve_effective_tool_metadata(
     })
 }
 
+fn prepare_conversation_kernel_tool_request(
+    request: ToolCoreRequest,
+    binding: ConversationRuntimeBinding<'_>,
+    _intent: &ToolIntent,
+) -> ToolCoreRequest {
+    let Some(kernel_ctx) = binding.kernel_context() else {
+        return request;
+    };
+
+    let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
+    if canonical_tool_name != "tool.search" {
+        return request;
+    }
+
+    crate::tools::prepare_kernel_tool_request(
+        request,
+        &kernel_ctx.token.allowed_capabilities,
+        None,
+        None,
+        None,
+    )
+}
+
 impl TurnEngine {
     pub fn new(max_tool_steps: usize) -> Self {
         Self::with_parallel_tool_execution(
@@ -4186,6 +4238,132 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepare_tool_intent_injects_capability_filter_prep_for_tool_search() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let intent = ToolIntent {
+            tool_name: "tool.search".to_owned(),
+            args_json: json!({
+                "query": "read note.md",
+                "limit": 3,
+            }),
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-tool-search-prep".to_owned(),
+            turn_id: "turn-tool-search-prep".to_owned(),
+            tool_call_id: "call-tool-search-prep".to_owned(),
+        };
+        let session_context =
+            SessionContext::root_with_tool_view("session-tool-search-prep", runtime_tool_view());
+        let engine = TurnEngine::new(4);
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let prepared_intent = runtime.block_on(async {
+            let autonomy_budget_state = AutonomyTurnBudgetState::default();
+            engine
+                .prepare_tool_intent(
+                    &intent,
+                    0,
+                    &session_context,
+                    &DefaultAppToolDispatcher::runtime(),
+                    ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &autonomy_budget_state,
+                    None,
+                )
+                .await
+                .expect("tool.search request should prepare successfully")
+        });
+
+        let expected_capabilities = serde_json::to_value(
+            harness
+                .kernel_ctx
+                .token
+                .allowed_capabilities
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+        .expect("serialize granted capabilities");
+
+        assert_eq!(prepared_intent.request.tool_name, "tool.search");
+        assert_eq!(
+            prepared_intent.request.payload[crate::tools::TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD],
+            expected_capabilities
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TOKEN_ID_FIELD)
+                .is_none()
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_SESSION_ID_FIELD)
+                .is_none()
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TURN_ID_FIELD)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn prepare_tool_intent_injects_kernel_request_prep_for_tool_invoke() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call(
+            "shell.exec",
+            json!({
+                "command": "echo",
+                "args": ["hello"],
+            }),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-tool-invoke-prep".to_owned(),
+            turn_id: "turn-tool-invoke-prep".to_owned(),
+            tool_call_id: "call-tool-invoke-prep".to_owned(),
+        };
+        let session_context =
+            SessionContext::root_with_tool_view("session-tool-invoke-prep", runtime_tool_view());
+        let engine = TurnEngine::new(4);
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let prepared_intent = runtime.block_on(async {
+            let autonomy_budget_state = AutonomyTurnBudgetState::default();
+            engine
+                .prepare_tool_intent(
+                    &intent,
+                    0,
+                    &session_context,
+                    &DefaultAppToolDispatcher::runtime(),
+                    ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &autonomy_budget_state,
+                    None,
+                )
+                .await
+                .expect("tool.invoke request should prepare successfully")
+        });
+
+        assert_eq!(prepared_intent.request.tool_name, "shell.exec");
+        assert_eq!(
+            prepared_intent.decision.tool_name, "shell.exec",
+            "shell.exec should still rebind to the inner tool for execution metadata"
+        );
+        assert_eq!(
+            prepared_intent.intent.tool_name, "shell.exec",
+            "tool.invoke shell requests should continue using inner tool intent metadata"
+        );
+    }
+
     #[cfg(feature = "tool-file")]
     #[test]
     fn prepare_tool_intent_uses_inner_parallel_safe_metadata_for_tool_invoke_file_read_requests() {
@@ -4253,6 +4431,75 @@ mod tests {
         assert_eq!(
             prepared_intent.scheduling_class,
             crate::tools::ToolSchedulingClass::ParallelSafe
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn prepare_tool_intent_keeps_followup_tool_invoke_wrapper_unbound_to_current_turn() {
+        use crate::test_support::TurnTestHarness;
+
+        let harness = TurnTestHarness::new();
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call(
+            "file.read",
+            json!({
+                "path": "README.md",
+            }),
+        );
+        let intent = ToolIntent {
+            tool_name,
+            args_json,
+            source: "provider_tool_call".to_owned(),
+            session_id: "session-tool-invoke-wrapper-prep".to_owned(),
+            turn_id: "turn-tool-invoke-wrapper-prep".to_owned(),
+            tool_call_id: "call-tool-invoke-wrapper-prep".to_owned(),
+        };
+        let session_context = SessionContext::root_with_tool_view(
+            "session-tool-invoke-wrapper-prep",
+            runtime_tool_view(),
+        );
+        let engine = TurnEngine::new(4);
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let prepared_intent = runtime.block_on(async {
+            let autonomy_budget_state = AutonomyTurnBudgetState::default();
+            engine
+                .prepare_tool_intent(
+                    &intent,
+                    0,
+                    &session_context,
+                    &DefaultAppToolDispatcher::runtime(),
+                    ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &autonomy_budget_state,
+                    None,
+                )
+                .await
+                .expect("tool.invoke file.read request should prepare successfully")
+        });
+
+        assert_eq!(prepared_intent.request.tool_name, "tool.invoke");
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TOKEN_ID_FIELD)
+                .is_none(),
+            "conversation follow-up invoke wrapper should not be rebound to the current turn"
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_SESSION_ID_FIELD)
+                .is_none(),
+            "conversation follow-up invoke wrapper should not be rebound to the current turn"
+        );
+        assert!(
+            prepared_intent
+                .request
+                .payload
+                .get(crate::tools::TOOL_LEASE_TURN_ID_FIELD)
+                .is_none(),
+            "conversation follow-up invoke wrapper should not be rebound to the current turn"
         );
     }
 
