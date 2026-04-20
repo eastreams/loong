@@ -18,18 +18,10 @@ use support::*;
 mod integration {
     use super::*;
 
-    #[path = "managed_bridge_fixtures.rs"]
-    mod managed_bridge_fixtures;
-    pub(crate) use managed_bridge_fixtures::*;
-
     #[path = "ask_and_spec_cli_root.rs"]
     mod ask_and_spec_cli_root;
     #[path = "audit_cli_root.rs"]
     mod audit_cli_root;
-    #[path = "channel_surfaces_json.rs"]
-    mod channel_surfaces_json;
-    #[path = "channel_surfaces_text.rs"]
-    mod channel_surfaces_text;
     #[path = "latest_selector_process_support.rs"]
     mod latest_selector_process_support;
     #[path = "memory_surfaces.rs"]

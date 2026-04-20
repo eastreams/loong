@@ -18,6 +18,18 @@ use support::*;
 mod integration {
     use super::*;
 
+    #[path = "managed_bridge_fixtures.rs"]
+    mod managed_bridge_fixtures;
+    pub(crate) use managed_bridge_fixtures::*;
+
+    #[path = "channel_catalog_json.rs"]
+    mod channel_catalog_json;
+    #[path = "channel_catalog_text.rs"]
+    mod channel_catalog_text;
+    #[path = "channel_plugin_bridge_json.rs"]
+    mod channel_plugin_bridge_json;
+    #[path = "channel_plugin_bridge_text.rs"]
+    mod channel_plugin_bridge_text;
     #[path = "doctor_feishu.rs"]
     mod doctor_feishu;
     #[path = "feishu_cli.rs"]
