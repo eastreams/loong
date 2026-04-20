@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::ToolDescriptor;
 
@@ -244,6 +244,100 @@ pub(super) fn direct_exec_definition(descriptor: &ToolDescriptor) -> Value {
 }
 
 pub(super) fn direct_web_definition(descriptor: &ToolDescriptor) -> Value {
+    let base_properties = || {
+        Map::from_iter([
+            (
+                "url".to_owned(),
+                json!({
+                    "type": "string",
+                    "description": "Fetch or request this HTTP or HTTPS URL without using a web-search provider."
+                }),
+            ),
+            (
+                "mode".to_owned(),
+                json!({
+                    "type": "string",
+                    "enum": ["readable_text", "raw_text"],
+                    "description": "Fetch rendering mode. Used only for plain fetch mode."
+                }),
+            ),
+            (
+                "max_bytes".to_owned(),
+                json!({
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
+                    "description": "Optional response byte limit."
+                }),
+            ),
+            (
+                "method".to_owned(),
+                json!({
+                    "type": "string",
+                    "description": "Optional HTTP method. When present, web routes to low-level request mode."
+                }),
+            ),
+            (
+                "headers".to_owned(),
+                json!({
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "Optional HTTP headers for request mode."
+                }),
+            ),
+            (
+                "body".to_owned(),
+                json!({
+                    "type": "string",
+                    "description": "Optional request body for request mode."
+                }),
+            ),
+            (
+                "content_type".to_owned(),
+                json!({
+                    "type": "string",
+                    "description": "Optional Content-Type header for request mode."
+                }),
+            ),
+        ])
+    };
+
+    #[cfg(feature = "tool-websearch")]
+    let (properties, any_of) = {
+        let mut properties = base_properties();
+        properties.insert(
+            "query".to_owned(),
+            json!({
+                "type": "string",
+                "description": "Search the public web for this query through web-search providers. This is separate from plain URL fetch/request mode."
+            }),
+        );
+        properties.insert(
+            "provider".to_owned(),
+            json!({
+                "type": "string",
+                "enum": crate::config::WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
+                "description": crate::config::web_search_provider_parameter_description()
+            }),
+        );
+        properties.insert(
+            "max_results".to_owned(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "Optional maximum result count in search mode."
+            }),
+        );
+        (
+            properties,
+            vec![json!({"required": ["url"]}), json!({"required": ["query"]})],
+        )
+    };
+
+    #[cfg(not(feature = "tool-websearch"))]
+    let (properties, any_of) = (base_properties(), vec![json!({"required": ["url"]})]);
+
     json!({
         "type": "function",
         "function": {
@@ -251,63 +345,8 @@ pub(super) fn direct_web_definition(descriptor: &ToolDescriptor) -> Value {
             "description": descriptor.description,
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "Fetch or request this HTTP or HTTPS URL without using a web-search provider."
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["readable_text", "raw_text"],
-                        "description": "Fetch rendering mode. Used only for plain fetch mode."
-                    },
-                    "max_bytes": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": crate::config::MAX_WEB_FETCH_MAX_BYTES,
-                        "description": "Optional response byte limit."
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Search the public web for this query through web-search providers. This is separate from plain URL fetch/request mode."
-                    },
-                    "provider": {
-                        "type": "string",
-                        "enum": crate::config::WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
-                        "description": crate::config::web_search_provider_parameter_description()
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 10,
-                        "description": "Optional maximum result count in search mode."
-                    },
-                    "method": {
-                        "type": "string",
-                        "description": "Optional HTTP method. When present, web routes to low-level request mode."
-                    },
-                    "headers": {
-                        "type": "object",
-                        "additionalProperties": {"type": "string"},
-                        "description": "Optional HTTP headers for request mode."
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Optional request body for request mode."
-                    },
-                    "content_type": {
-                        "type": "string",
-                        "description": "Optional Content-Type header for request mode."
-                    }
-                },
-                "anyOf": [
-                    {
-                        "required": ["url"]
-                    },
-                    {
-                        "required": ["query"]
-                    }
-                ],
+                "properties": properties,
+                "anyOf": any_of,
                 "additionalProperties": false
             }
         }

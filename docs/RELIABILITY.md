@@ -41,6 +41,28 @@ These must hold at every commit on every branch:
 Enforced by: CI (`.github/workflows/ci.yml`, surfaced through the aggregate `build` check). The
 optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
+## Feedback Lanes
+
+- **Quick local loop** — use `task verify:quick` for a faster edit/test cycle, or
+  `task test:packages PACKAGES='-p loong-app -p loong-spec'` when you want a
+  targeted package subset. This lane keeps curated daemon smoke coverage but
+  skips the heaviest integration suite and does not replace CI parity. When you
+  are iterating inside daemon integration tests, `task test:daemon:domains`
+  gives you the optional sharded domain binaries and `task test:daemon:heavy`
+  still runs the canonical full integration binary.
+- **Changed-package loop** — use `task verify:changed` to scope local Rust tests
+  to the packages touched in the current working tree plus reverse dependents.
+  When that closure includes `loong`, the loop still runs the curated daemon
+  integration smoke subset by default and now escalates daemon test-file edits
+  into the matching optional domain shards, with a fallback to the full
+  `integration` binary for broad harness changes.
+- **CI parity** — the `build` check runs workspace fmt/clippy, default workspace
+  tests on Ubuntu and Windows, the all-features workspace test lane on Ubuntu,
+  and explicit feature-delta compile checks for `loong-spec` `test-hooks` plus
+  the browser-without-web.fetch app feature set.
+- **Extended gate** — `task verify:full` adds smoke and benchmark validation on
+  top of the canonical local verification bar.
+
 ## Runtime Stability Guardrails
 
 1. **Wasm trap behavior is platform-aware by default** — on macOS, `signals_based_traps` is disabled to avoid trap-handler abort instability under parallel bridge tests.
