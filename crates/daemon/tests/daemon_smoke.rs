@@ -20,14 +20,14 @@ mod integration {
 
     #[path = "architecture.rs"]
     mod architecture;
+    #[path = "ask_and_spec_cli_root.rs"]
+    mod ask_and_spec_cli_root;
     #[path = "cli_tests.rs"]
     mod cli_tests;
     #[path = "gateway_api_health.rs"]
     mod gateway_api_health;
     #[path = "gateway_read_models.rs"]
     mod gateway_read_models;
-    #[path = "root_cli.rs"]
-    mod root_cli;
     #[path = "runtime_snapshot_cli.rs"]
     mod runtime_snapshot_cli;
     #[path = "status_cli.rs"]

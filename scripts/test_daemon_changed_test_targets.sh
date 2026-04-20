@@ -59,9 +59,14 @@ assert_equal(
     "daemon smoke entrypoint maps to the smoke shard itself",
 )
 assert_equal(
-    resolve("crates/daemon/tests/integration/root_cli.rs"),
+    resolve("crates/daemon/tests/integration/ask_and_spec_cli_root.rs"),
     ["daemon_smoke", "daemon_cli"],
-    "root cli surface tests map to smoke and cli shards",
+    "ask and spec root tests map to smoke and cli shards",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/audit_cli_root.rs"),
+    ["daemon_cli"],
+    "audit root tests map to the cli shard",
 )
 assert_equal(
     resolve("crates/daemon/tests/integration/channel_surfaces_text.rs"),
@@ -77,6 +82,11 @@ assert_equal(
     resolve("crates/daemon/tests/integration/memory_surfaces.rs"),
     ["daemon_cli"],
     "memory surface root tests map to the cli shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/validate_config_root.rs"),
+    ["daemon_cli"],
+    "validate-config root tests map to the cli shard",
 )
 assert_equal(
     resolve("crates/daemon/tests/support/mod.rs"),

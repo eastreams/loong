@@ -22,6 +22,10 @@ mod integration {
     mod managed_bridge_fixtures;
     pub(crate) use managed_bridge_fixtures::*;
 
+    #[path = "ask_and_spec_cli_root.rs"]
+    mod ask_and_spec_cli_root;
+    #[path = "audit_cli_root.rs"]
+    mod audit_cli_root;
     #[path = "channel_surfaces_json.rs"]
     mod channel_surfaces_json;
     #[path = "channel_surfaces_text.rs"]
@@ -30,8 +34,8 @@ mod integration {
     mod latest_selector_process_support;
     #[path = "memory_surfaces.rs"]
     mod memory_surfaces;
-    #[path = "root_cli.rs"]
-    mod root_cli;
+    #[path = "validate_config_root.rs"]
+    mod validate_config_root;
 
     #[path = "ask_cli.rs"]
     mod ask_cli;
