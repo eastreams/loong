@@ -54,8 +54,9 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
   to the packages touched in the current working tree plus reverse dependents.
   When that closure includes `loong`, the loop still runs the curated daemon
   integration smoke subset by default and now escalates daemon test-file edits
-  into the matching optional domain shards, with a fallback to the full
-  `integration` binary for broad harness changes.
+  into the matching optional domain shards by reading the shard entry files as
+  the source of truth, with a fallback to the full `integration` binary for
+  broad harness changes.
 - **CI parity** — the `build` check runs workspace fmt/clippy, default workspace
   tests on Ubuntu and Windows, the all-features workspace test lane on Ubuntu,
   and explicit feature-delta compile checks for `loong-spec` `test-hooks` plus

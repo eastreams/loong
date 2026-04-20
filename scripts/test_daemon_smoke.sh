@@ -4,16 +4,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-FILTERS=(
-  "integration::cli_"
-  "integration::architecture::"
-  "integration::gateway_api_health::"
-  "integration::gateway_read_models::"
-  "integration::runtime_snapshot_cli::"
-  "integration::status_cli::"
-  "integration::work_unit_cli::"
-)
-
 build_output_json="$(mktemp -t loong-daemon-smoke-build.XXXXXX.json)"
 trap 'rm -f "$build_output_json"' EXIT
 
@@ -42,12 +32,53 @@ print(artifact_path)
 PY
 )"
 
+smoke_filters=()
+while IFS= read -r line; do
+  smoke_filters+=("$line")
+done < <(python3 - <<'PY' "$test_binary"
+import subprocess
+import sys
+
+binary_path = sys.argv[1]
+list_output = subprocess.check_output([binary_path, "--list"], text=True)
+filters = []
+seen = set()
+
+for raw_line in list_output.splitlines():
+    line = raw_line.strip()
+    if not line.endswith(": test"):
+        continue
+
+    test_name = line[:-6]
+    if not test_name.startswith("integration::"):
+        continue
+
+    parts = test_name.split("::")
+    if len(parts) >= 3:
+        filter_name = "::".join(parts[:2]) + "::"
+    else:
+        filter_name = test_name
+
+    if filter_name in seen:
+        continue
+
+    seen.add(filter_name)
+    filters.append(filter_name)
+
+if not filters:
+    raise SystemExit("failed to derive daemon smoke filters from test binary")
+
+for filter_name in filters:
+    print(filter_name)
+PY
+)
+
 if [[ -z "${LOONG_HOME:-}" ]]; then
   mkdir -p "$REPO_ROOT/target/test-loong-home"
   export LOONG_HOME="$REPO_ROOT/target/test-loong-home"
 fi
 
-for filter in "${FILTERS[@]}"; do
+for filter in "${smoke_filters[@]}"; do
   echo "[daemon-smoke] $test_binary $filter"
   "$test_binary" "$filter"
 done
