@@ -198,6 +198,17 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         .plugin_bridge_contract
         .as_ref()
         .expect("weixin plugin bridge contract");
+    assert_eq!(
+        weixin
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
     assert_eq!(weixin_contract.manifest_channel_id, "weixin");
     assert_eq!(weixin_contract.required_setup_surface, "channel");
     assert_eq!(weixin_contract.runtime_owner, "external_plugin");
@@ -220,12 +231,34 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         .plugin_bridge_contract
         .as_ref()
         .expect("qqbot plugin bridge contract");
+    assert_eq!(
+        qqbot
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
     assert_eq!(qqbot_contract.manifest_channel_id, "qqbot");
 
     let onebot_contract = onebot
         .plugin_bridge_contract
         .as_ref()
         .expect("onebot plugin bridge contract");
+    assert_eq!(
+        onebot
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
     assert_eq!(onebot_contract.manifest_channel_id, "onebot");
 }
 

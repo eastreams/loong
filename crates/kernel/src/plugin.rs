@@ -3912,6 +3912,7 @@ mod tests {
 
     #[test]
     fn absorb_allows_shared_and_advisory_slot_claims_and_projects_metadata() {
+        let current_host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
         let report = PluginScanReport {
             scanned_files: 2,
             matched_plugins: 2,
@@ -3950,7 +3951,7 @@ mod tests {
                         }],
                         compatibility: Some(PluginCompatibility {
                             host_api: Some(CURRENT_PLUGIN_HOST_API.to_owned()),
-                            host_version_req: Some(">=0.1.0-alpha.1".to_owned()),
+                            host_version_req: Some(current_host_version_req.clone()),
                         }),
                     },
                 },
@@ -4021,7 +4022,7 @@ mod tests {
                 .metadata
                 .get(PLUGIN_COMPATIBILITY_HOST_VERSION_REQ_METADATA_KEY)
                 .map(String::as_str),
-            Some(">=0.1.0-alpha.1")
+            Some(current_host_version_req.as_str())
         );
     }
 

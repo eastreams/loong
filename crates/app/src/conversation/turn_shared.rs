@@ -16,6 +16,7 @@ use super::turn_engine::{
 use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
@@ -26,7 +27,7 @@ pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the 
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
-pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. Otherwise, provide the best possible answer with the currently available evidence.";
+pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
@@ -304,9 +305,7 @@ impl ToolDrivenFollowupPayload {
 }
 
 pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
-    let is_tool_not_found = failure.code == "tool_not_found";
-    let has_recovery_hint = failure.supports_discovery_recovery;
-    is_tool_not_found && has_recovery_hint
+    failure.supports_discovery_recovery
 }
 
 pub fn tool_driven_followup_payload(
@@ -717,7 +716,7 @@ impl ApprovalPromptView {
             ApprovalPromptLocale::En => self
                 .tool_name
                 .as_ref()
-                .map(|tool_name| format!("Loong wants to call {tool_name}"))
+                .map(|tool_name| format!("loong wants to call {tool_name}"))
                 .or_else(|| Some("Tool call needs confirmation".to_owned())),
         }
     }
@@ -848,6 +847,7 @@ pub struct ExternalSkillInvokeContext {
     pub skill_id: String,
     pub display_name: String,
     pub instructions: String,
+    pub skill_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2173,10 +2173,17 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
         .filter(|value| !value.is_empty())
         .unwrap_or(skill_id.as_str())
         .to_owned();
+    let skill_root = payload_json
+        .get("skill_root")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
     Some(ExternalSkillInvokeContext {
         skill_id,
         display_name,
         instructions,
+        skill_root,
     })
 }
 
@@ -2524,12 +2531,12 @@ mod tests {
     #[test]
     fn turn_failure_supports_discovery_recovery_requires_structured_metadata() {
         let recovery_failure = TurnFailure::policy_denied_with_discovery_recovery(
-            "tool_not_found",
-            "tool_not_found: requested tool is not available If you need a non-core capability, call tool.search with a short natural-language description of the task.",
+            "invalid_tool_lease",
+            "tool.invoke needs a fresh lease from the current tool.search result. If you need a non-core capability, call tool.search with a short natural-language description of the task.",
         );
         let plain_failure = TurnFailure::policy_denied(
-            "tool_not_found",
-            "tool_not_found: requested tool is not available",
+            "invalid_tool_lease",
+            "tool execution failed: invalid_tool_lease: expired lease",
         );
 
         assert!(turn_failure_supports_discovery_recovery(&recovery_failure));
@@ -3047,6 +3054,14 @@ mod tests {
         assert!(user_prompt.contains(DISCOVERY_RECOVERY_FOLLOWUP_PROMPT));
         assert!(user_prompt.contains("Recovery reason:\nbounded-recovery"));
         assert!(!user_prompt.contains("tool_not_found"));
+        assert!(
+            user_prompt.contains("tool.invoke"),
+            "discovery recovery prompt should explain the invoke step: {user_prompt}"
+        );
+        assert!(
+            user_prompt.contains("lease"),
+            "discovery recovery prompt should mention the lease requirement: {user_prompt}"
+        );
         assert!(user_prompt.contains("Loop warning:\nwarning"));
     }
 

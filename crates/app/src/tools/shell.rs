@@ -75,12 +75,16 @@ pub(super) fn execute_shell_tool_with_config(
         }
 
         let runtime_event_sink = current_tool_runtime_event_sink();
+        let resolved_invocation = crate::process_launch::resolve_command_invocation(
+            normalized_command.as_str(),
+            args.iter().map(String::as_str),
+        );
         // process_exec owns runtime command metrics emission. Keep shell.exec
         // focused on payload construction so the live surface observes one
         // metrics event per command.
         let output = run_shell_async(run_shell_command_with_timeout(
-            normalized_command.as_str(),
-            &args,
+            resolved_invocation.program.as_os_str(),
+            resolved_invocation.args.as_slice(),
             cwd.as_path(),
             timeout_ms,
             runtime_event_sink.clone(),
@@ -128,8 +132,8 @@ where
 
 #[cfg(feature = "tool-shell")]
 async fn run_shell_command_with_timeout(
-    command: &str,
-    args: &[String],
+    command: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
     cwd: &std::path::Path,
     timeout_ms: u64,
     runtime_event_sink: Option<
@@ -152,7 +156,7 @@ async fn run_shell_command_with_timeout(
 #[cfg(all(test, feature = "tool-shell", unix))]
 mod tests {
     use super::*;
-    use crate::test_support::{acquire_subprocess_test_guard, unique_temp_dir};
+    use crate::test_support::{ScopedEnv, acquire_subprocess_test_guard, unique_temp_dir};
     use crate::tools::runtime_config::ToolRuntimeConfig;
     use crate::tools::runtime_events::{
         ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
@@ -190,11 +194,24 @@ mod tests {
         }
     }
 
+    fn shell_test_env() -> ScopedEnv {
+        let mut env = ScopedEnv::new();
+
+        #[cfg(unix)]
+        env.set("PATH", "/bin:/usr/bin:/usr/local/bin");
+
+        #[cfg(windows)]
+        env.set("PATH", r"C:\Windows\System32;C:\Windows");
+
+        env
+    }
+
     fn execute_shell_tool_for_subprocess_test(
         request: ToolCoreRequest,
         config: &ToolRuntimeConfig,
     ) -> Result<ToolCoreOutcome, String> {
         let _guard = acquire_subprocess_test_guard();
+        let _env = shell_test_env();
         execute_shell_tool_with_config(request, config)
     }
 

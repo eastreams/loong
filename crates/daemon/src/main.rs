@@ -2,6 +2,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
 use loong_daemon::*;
 
+#[cfg(debug_assertions)]
 const DEBUG_TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOKIO_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
 const TOKIO_WORKER_STACK_ENV: &str = "LOONG_TOKIO_WORKER_STACK_BYTES";
@@ -60,6 +61,7 @@ fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
+#[cfg(debug_assertions)]
 fn command_prefers_large_tokio_worker_stack(command: &Commands) -> bool {
     matches!(
         command,
@@ -209,6 +211,7 @@ async fn run_command(command: Commands) -> CliResult<()> {
     match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
+        Commands::Update => run_update_cli().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
         Commands::Turn { command } => match command {
             loong_daemon::TurnCommands::Run {
@@ -710,6 +713,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::TelegramServe {
             config,
             once,
+            stop,
+            stop_duplicates,
             account,
         } => {
             run_channel_serve_cli(
@@ -718,6 +723,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: None,
                     path_override: None,
                 },
@@ -768,6 +775,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
         }
         Commands::FeishuServe {
             config,
+            stop,
+            stop_duplicates,
             account,
             bind,
             path,
@@ -778,6 +787,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: bind.as_deref(),
                     path_override: path.as_deref(),
                 },
@@ -807,6 +818,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::MatrixServe {
             config,
             once,
+            stop,
+            stop_duplicates,
             account,
         } => {
             run_channel_serve_cli(
@@ -815,6 +828,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: None,
                     path_override: None,
                 },
@@ -841,13 +856,20 @@ async fn run_command(command: Commands) -> CliResult<()> {
             )
             .await
         }
-        Commands::WecomServe { config, account } => {
+        Commands::WecomServe {
+            config,
+            stop,
+            stop_duplicates,
+            account,
+        } => {
             run_channel_serve_cli(
                 WECOM_SERVE_CLI_SPEC,
                 ChannelServeCliArgs {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: None,
                     path_override: None,
                 },
@@ -874,12 +896,16 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::WeixinServe {
             config,
             once,
+            stop,
+            stop_duplicates,
             account,
         } => {
             run_weixin_serve_cli_impl(ChannelServeCliArgs {
                 config_path: config.as_deref(),
                 account: account.as_deref(),
                 once,
+                stop_requested: stop,
+                stop_duplicates_requested: stop_duplicates,
                 bind_override: None,
                 path_override: None,
             })
@@ -905,12 +931,16 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::QqbotServe {
             config,
             once,
+            stop,
+            stop_duplicates,
             account,
         } => {
             run_qqbot_serve_cli_impl(ChannelServeCliArgs {
                 config_path: config.as_deref(),
                 account: account.as_deref(),
                 once,
+                stop_requested: stop,
+                stop_duplicates_requested: stop_duplicates,
                 bind_override: None,
                 path_override: None,
             })
@@ -936,12 +966,16 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::OnebotServe {
             config,
             once,
+            stop,
+            stop_duplicates,
             account,
         } => {
             run_onebot_serve_cli_impl(ChannelServeCliArgs {
                 config_path: config.as_deref(),
                 account: account.as_deref(),
                 once,
+                stop_requested: stop,
+                stop_duplicates_requested: stop_duplicates,
                 bind_override: None,
                 path_override: None,
             })
@@ -949,6 +983,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
         }
         Commands::WhatsappServe {
             config,
+            stop,
+            stop_duplicates,
             account,
             bind,
             path,
@@ -959,6 +995,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: bind.as_deref(),
                     path_override: path.as_deref(),
                 },
@@ -1047,6 +1085,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
         }
         Commands::LineServe {
             config,
+            stop,
+            stop_duplicates,
             account,
             bind,
             path,
@@ -1057,6 +1097,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: bind.as_deref(),
                     path_override: path.as_deref(),
                 },
@@ -1125,6 +1167,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
         }
         Commands::WebhookServe {
             config,
+            stop,
+            stop_duplicates,
             account,
             bind,
             path,
@@ -1135,6 +1179,8 @@ async fn run_command(command: Commands) -> CliResult<()> {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     once: false,
+                    stop_requested: stop,
+                    stop_duplicates_requested: stop_duplicates,
                     bind_override: bind.as_deref(),
                     path_override: path.as_deref(),
                 },

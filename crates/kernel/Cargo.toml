@@ -12,7 +12,7 @@ homepage.workspace = true
 name = "loong_kernel"
 
 [dependencies]
-loong-contracts = { package = "loong-contracts", version = "0.1.0-alpha.3", path = "../contracts" }
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
 async-trait.workspace = true
 futures-util.workspace = true
 hex.workspace = true

@@ -23,7 +23,6 @@
 /crates/kernel/src/harness.rs @eastreams/harness
 /scripts/architecture_budget_lib.sh @eastreams/harness
 /scripts/check*.sh @eastreams/harness
-/scripts/generate_architecture_drift_report.sh @eastreams/harness
 /scripts/pre-commit @eastreams/harness
 /scripts/stress_daemon_tests.sh @eastreams/harness
 /scripts/sync_github_labels.py @eastreams/harness

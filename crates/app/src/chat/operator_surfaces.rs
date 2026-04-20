@@ -614,6 +614,11 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
             value: "repair durable turn finalization tail when safe".to_owned(),
         },
         TuiKeyValueSpec::Plain {
+            key: "$skill-name <request>".to_owned(),
+            value: "explicitly activate a visible external skill before handling the request"
+                .to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
             key: "/exit".to_owned(),
             value: "quit chat".to_owned(),
         },
@@ -654,6 +659,8 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
                 .to_owned(),
             "Use /history to inspect the active memory window when a reply feels off.".to_owned(),
             "Use /compact to checkpoint the active session before the next turn.".to_owned(),
+            "Prefix a prompt with $skill-name to force explicit activation of a visible external skill."
+                .to_owned(),
         ],
     };
     let command_section = TuiSectionSpec::KeyValues {

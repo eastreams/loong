@@ -4845,7 +4845,7 @@ mod tests {
     fn sample_render_data() -> SurfaceRenderData {
         SurfaceRenderData {
             header_lines: vec![
-                "LOONG  v0.1.0-alpha.3".to_owned(),
+                "LOONG  v0.1.2-alpha.1".to_owned(),
                 "interactive chat".to_owned(),
             ],
             header_status_line:

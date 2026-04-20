@@ -18,6 +18,8 @@ use crate::tools::{ToolView, delegate_child_tool_view_for_contract};
 
 use super::super::memory;
 use super::super::{config::LoongConfig, provider};
+#[cfg(feature = "memory-sqlite")]
+use super::active_external_skills;
 use super::context_engine::ContextArtifactKind;
 use super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
@@ -60,6 +62,7 @@ pub struct SessionContext {
     pub profile: Option<DelegateBuiltinProfile>,
     pub tool_view: ToolView,
     pub workspace_root: Option<PathBuf>,
+    pub active_external_skill_roots: Vec<PathBuf>,
     pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
     pub subagent_execution: Option<ConstrainedSubagentExecution>,
     pub subagent_contract: Option<ConstrainedSubagentContractView>,
@@ -76,6 +79,7 @@ impl SessionContext {
             profile: None,
             tool_view,
             workspace_root: None,
+            active_external_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -98,6 +102,7 @@ impl SessionContext {
             profile: None,
             tool_view,
             workspace_root: None,
+            active_external_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -108,6 +113,18 @@ impl SessionContext {
     #[must_use]
     pub fn with_workspace_root(mut self, workspace_root: PathBuf) -> Self {
         self.workspace_root = Some(workspace_root);
+        self
+    }
+
+    #[must_use]
+    pub fn with_active_external_skill_roots(
+        mut self,
+        active_external_skill_roots: Vec<PathBuf>,
+    ) -> Self {
+        self.active_external_skill_roots = active_external_skill_roots
+            .into_iter()
+            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+            .collect();
         self
     }
 
@@ -461,6 +478,7 @@ struct PersistedSessionSnapshot {
     delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
     delegate_profile: Option<DelegateBuiltinProfile>,
     workspace_root: Option<PathBuf>,
+    active_external_skill_roots: Vec<PathBuf>,
     runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
 
@@ -509,6 +527,8 @@ fn load_persisted_session_snapshot(
             None
         };
         let runtime_self_continuity = load_session_runtime_self_continuity(repo, session_id)?;
+        let active_external_skill_roots =
+            load_active_external_skill_roots(repo, session_id).unwrap_or_default();
         let snapshot = PersistedSessionSnapshot {
             session_id: session.session_id,
             parent_session_id,
@@ -519,6 +539,7 @@ fn load_persisted_session_snapshot(
             delegate_runtime_narrowing,
             delegate_profile,
             workspace_root,
+            active_external_skill_roots,
             runtime_self_continuity,
         };
         return Ok(Some(snapshot));
@@ -555,6 +576,8 @@ fn load_persisted_session_snapshot(
         None
     };
     let runtime_self_continuity = load_session_runtime_self_continuity(repo, session_id)?;
+    let active_external_skill_roots =
+        load_active_external_skill_roots(repo, session_id).unwrap_or_default();
     let snapshot = PersistedSessionSnapshot {
         session_id: summary.session_id,
         parent_session_id: summary.parent_session_id,
@@ -565,9 +588,38 @@ fn load_persisted_session_snapshot(
         delegate_runtime_narrowing,
         delegate_profile,
         workspace_root,
+        active_external_skill_roots,
         runtime_self_continuity,
     };
     Ok(Some(snapshot))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_active_external_skill_roots(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let active_skills =
+        active_external_skills::load_persisted_active_external_skills(repo, session_id)?;
+    let Some(active_skills) = active_skills else {
+        return Ok(Vec::new());
+    };
+    let mut roots = Vec::new();
+    for skill in active_skills.skills {
+        let Some(skill_root) = skill.skill_root.as_deref() else {
+            continue;
+        };
+        let trimmed = skill_root.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(trimmed);
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+        if !roots.contains(&canonical) {
+            roots.push(canonical);
+        }
+    }
+    Ok(roots)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -637,6 +689,10 @@ fn build_session_context_from_snapshot(
     }
     if let Some(workspace_root) = snapshot.workspace_root {
         session_context = session_context.with_workspace_root(workspace_root);
+    }
+    if !snapshot.active_external_skill_roots.is_empty() {
+        session_context =
+            session_context.with_active_external_skill_roots(snapshot.active_external_skill_roots);
     }
     if snapshot.is_delegate_child {
         if let Some(label) = snapshot.label {
@@ -1125,6 +1181,17 @@ where
         let runtime_self_continuity = include_system_prompt
             .then(|| runtime_self_continuity_prompt_summary(effective_config, session_context))
             .flatten();
+        #[cfg(feature = "memory-sqlite")]
+        let active_external_skills = include_system_prompt
+            .then(|| {
+                active_external_skills_prompt_summary(
+                    effective_config,
+                    session_context.session_id.as_str(),
+                )
+            })
+            .flatten();
+        #[cfg(not(feature = "memory-sqlite"))]
+        let active_external_skills: Option<String> = None;
         let delegate_runtime_contract = include_system_prompt
             .then(|| {
                 delegate_child_runtime_contract_prompt_summary(effective_config, session_context)
@@ -1140,6 +1207,12 @@ where
             "runtime-self-continuity",
             runtime_self_continuity,
             PromptFrameAuthority::RuntimeSelf,
+        );
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "active-external-skills",
+            active_external_skills,
+            PromptFrameAuthority::SessionLocalRecall,
         );
         append_runtime_prompt_fragment(
             &mut assembled,
@@ -2164,6 +2237,16 @@ fn runtime_self_continuity_prompt_summary(
     runtime_self_continuity::render_runtime_self_continuity_section(&missing_continuity, inherited)
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn active_external_skills_prompt_summary(config: &LoongConfig, session_id: &str) -> Option<String> {
+    let repo = open_session_repository(config).ok()?;
+    let active_skills =
+        active_external_skills::load_persisted_active_external_skills(&repo, session_id)
+            .ok()
+            .flatten()?;
+    active_external_skills::render_active_external_skills_section(&active_skills)
+}
+
 fn append_runtime_prompt_fragment(
     assembled: &mut AssembledConversationContext,
     source_id: &'static str,
@@ -2202,7 +2285,20 @@ fn normalize_turn_middleware_ids(ids: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "memory-sqlite")]
+    use crate::conversation::active_external_skills::{
+        ACTIVE_EXTERNAL_SKILLS_EVENT_KIND, ActiveExternalSkill, ActiveExternalSkillsState,
+    };
+    #[cfg(feature = "memory-sqlite")]
+    use crate::memory::runtime_config::MemoryRuntimeConfig;
+    #[cfg(feature = "memory-sqlite")]
+    use crate::session::repository::{
+        NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    };
     use crate::test_support::TurnTestHarness;
+    use crate::test_support::unique_temp_dir;
+    #[cfg(feature = "memory-sqlite")]
+    use serde_json::json;
     #[cfg(feature = "memory-sqlite")]
     use std::sync::Arc;
 
@@ -2233,8 +2329,7 @@ mod tests {
             _session_id: &str,
             _binding: ConversationRuntimeBinding<'_>,
         ) -> CliResult<ToolView> {
-            let tool_view = crate::tools::runtime_tool_view();
-            Ok(tool_view)
+            Ok(crate::tools::runtime_tool_view())
         }
 
         fn async_delegate_spawner(
@@ -2523,5 +2618,77 @@ mod tests {
 
         assert!(async_delegate_spawner.is_some());
         assert!(background_task_spawner.is_none());
+    }
+
+    #[tokio::test]
+    async fn default_runtime_build_context_rehydrates_active_external_skills() {
+        let runtime = DefaultConversationRuntime::default();
+        let session_id = "session-active-external-skills";
+        let root = unique_temp_dir("active-external-skills-runtime");
+        let sqlite_path = root.join("memory.db");
+        let workspace_root = root.join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+        let mut config = LoongConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.tools.file_root = Some(workspace_root.display().to_string());
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: session_id.to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.append_event(NewSessionEvent {
+            session_id: session_id.to_owned(),
+            event_kind: ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+            actor_session_id: Some(session_id.to_owned()),
+            payload_json: json!({
+                "source": "test",
+                "active_external_skills": ActiveExternalSkillsState {
+                    skills: vec![ActiveExternalSkill {
+                        skill_id: "release-guard".to_owned(),
+                        display_name: "Release Guard".to_owned(),
+                        instructions: "<skill_content name=\"Release Guard\">protect releases</skill_content>".to_owned(),
+                        skill_root: Some("/tmp/release-guard".to_owned()),
+                    }],
+                },
+            }),
+        })
+        .expect("append active skills event");
+
+        let assembled = runtime
+            .build_context(
+                &config,
+                session_id,
+                true,
+                ConversationRuntimeBinding::direct(),
+            )
+            .await
+            .expect("build context");
+        let system_content = assembled.messages[0]["content"]
+            .as_str()
+            .expect("system prompt should be text");
+
+        assert!(
+            system_content.contains("[active_external_skills]"),
+            "expected active external skills marker, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("release-guard"),
+            "expected skill id in system prompt, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("Release Guard"),
+            "expected skill display name in system prompt, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("protect releases"),
+            "expected skill instructions in system prompt, got: {system_content}"
+        );
     }
 }

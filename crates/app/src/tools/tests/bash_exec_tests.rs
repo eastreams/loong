@@ -393,6 +393,70 @@ fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
 }
 
 #[cfg(all(feature = "tool-shell", unix))]
+const BASH_EMPTY_PATH_PROBE_ENV: &str = "LOONG_BASH_EMPTY_PATH_PROBE";
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn bash_exec_succeeds_when_path_is_empty_but_stable_search_path_can_find_runtime() {
+    let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .arg("--exact")
+        .arg("tools::tests::bash_exec_tests::bash_exec_empty_path_probe")
+        .arg("--nocapture")
+        .env(BASH_EMPTY_PATH_PROBE_ENV, "1")
+        .output()
+        .expect("spawn bash empty PATH probe");
+
+    assert!(
+        output.status.success(),
+        "bash empty PATH probe failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn bash_exec_empty_path_probe() {
+    use std::fs;
+
+    if std::env::var_os(BASH_EMPTY_PATH_PROBE_ENV).is_none() {
+        return;
+    }
+
+    let root = unique_tool_temp_dir("loong-bash-empty-path-fallback");
+    fs::create_dir_all(&root).expect("create fixture root");
+
+    let mut env = ScopedEnv::new();
+    env.set("PATH", "");
+
+    let mut config = test_tool_runtime_config(root.clone());
+    config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
+    config.bash_exec = runtime_config::BashExecRuntimePolicy {
+        available: true,
+        command: Some(std::path::PathBuf::from("bash")),
+        ..runtime_config::BashExecRuntimePolicy::default()
+    };
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({"command": "printf bash-path-fallback"}),
+        },
+        &config,
+    )
+    .expect("bash.exec should succeed even when PATH is empty");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(
+        outcome.payload["stdout"].as_str(),
+        Some("bash-path-fallback")
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn bash_exec_defaults_cwd_to_configured_file_root() {
     use std::fs;
@@ -760,7 +824,7 @@ fn bash_exec_times_out_when_timeout_ms_is_small() {
         ToolCoreRequest {
             tool_name: "bash.exec".to_owned(),
             payload: json!({
-                "command": "sleep 10",
+                "command": "/bin/sleep 10",
                 "timeout_ms": 1,
             }),
         },

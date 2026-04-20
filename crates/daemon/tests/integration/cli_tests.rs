@@ -56,6 +56,30 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
 }
 
 #[test]
+fn update_subcommand_help_mentions_latest_stable_release_only() {
+    let help = render_cli_help(["update"]);
+
+    assert!(
+        help.contains("latest stable GitHub release"),
+        "update help should describe the stable release channel: {help}"
+    );
+    assert!(
+        help.contains("prereleases are excluded"),
+        "update help should explicitly say prereleases are not used: {help}"
+    );
+}
+
+#[test]
+fn update_subcommand_parses_without_flags() {
+    let cli = try_parse_cli(["loong", "update"]).expect("`loong update` should parse");
+
+    match cli.command {
+        Some(Commands::Update) => {}
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn setup_subcommand_is_removed() {
     let error = try_parse_cli(["loong", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");
@@ -2105,6 +2129,44 @@ fn matrix_serve_cli_accepts_once_and_account_flags() {
 }
 
 #[test]
+fn matrix_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "matrix-serve", "--stop", "--account", "ops"])
+        .expect("matrix serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::MatrixServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn matrix_serve_cli_accepts_stop_duplicates_flag() {
+    let cli = try_parse_cli([
+        "loong",
+        "matrix-serve",
+        "--stop-duplicates",
+        "--account",
+        "ops",
+    ])
+    .expect("matrix serve CLI should parse stop-duplicates flag");
+
+    match cli.command {
+        Some(Commands::MatrixServe {
+            stop_duplicates,
+            account,
+            ..
+        }) => {
+            assert!(stop_duplicates);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
 fn wecom_serve_cli_accepts_account_flag() {
     let cli = try_parse_cli(["loong", "wecom-serve", "--account", "ops"])
         .expect("wecom serve CLI should parse");
@@ -2114,6 +2176,180 @@ fn wecom_serve_cli_accepts_account_flag() {
             assert_eq!(account.as_deref(), Some("ops"));
         }
         other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn feishu_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "feishu-serve", "--stop", "--account", "ops"])
+        .expect("feishu serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::FeishuServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn feishu_serve_cli_accepts_stop_duplicates_flag() {
+    let cli = try_parse_cli([
+        "loong",
+        "feishu-serve",
+        "--stop-duplicates",
+        "--account",
+        "ops",
+    ])
+    .expect("feishu serve CLI should parse stop-duplicates flag");
+
+    match cli.command {
+        Some(Commands::FeishuServe {
+            stop_duplicates,
+            account,
+            ..
+        }) => {
+            assert!(stop_duplicates);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn wecom_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "wecom-serve", "--stop", "--account", "ops"])
+        .expect("wecom serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::WecomServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn line_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "line-serve", "--stop", "--account", "ops"])
+        .expect("line serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::LineServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn telegram_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "telegram-serve", "--stop", "--account", "ops"])
+        .expect("telegram serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::TelegramServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn managed_bridge_serve_cli_accepts_stop_flag() {
+    let weixin_cli = try_parse_cli(["loong", "weixin-serve", "--stop", "--account", "ops"])
+        .expect("weixin serve CLI should parse stop flag");
+    let qqbot_cli = try_parse_cli(["loong", "qqbot-serve", "--stop"])
+        .expect("qqbot serve CLI should parse stop flag");
+    let onebot_cli = try_parse_cli(["loong", "onebot-serve", "--stop"])
+        .expect("onebot serve CLI should parse stop flag");
+
+    match weixin_cli.command {
+        Some(Commands::WeixinServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected weixin serve parse result: {other:?}"),
+    }
+    match qqbot_cli.command {
+        Some(Commands::QqbotServe { stop, .. }) => assert!(stop),
+        other => panic!("unexpected qqbot serve parse result: {other:?}"),
+    }
+    match onebot_cli.command {
+        Some(Commands::OnebotServe { stop, .. }) => assert!(stop),
+        other => panic!("unexpected onebot serve parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn managed_bridge_serve_cli_accepts_stop_duplicates_flag() {
+    let weixin_cli = try_parse_cli([
+        "loong",
+        "weixin-serve",
+        "--stop-duplicates",
+        "--account",
+        "ops",
+    ])
+    .expect("weixin serve CLI should parse stop-duplicates flag");
+    let qqbot_cli = try_parse_cli(["loong", "qqbot-serve", "--stop-duplicates"])
+        .expect("qqbot serve CLI should parse stop-duplicates flag");
+    let onebot_cli = try_parse_cli(["loong", "onebot-serve", "--stop-duplicates"])
+        .expect("onebot serve CLI should parse stop-duplicates flag");
+
+    match weixin_cli.command {
+        Some(Commands::WeixinServe {
+            stop_duplicates,
+            account,
+            ..
+        }) => {
+            assert!(stop_duplicates);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected weixin serve parse result: {other:?}"),
+    }
+    match qqbot_cli.command {
+        Some(Commands::QqbotServe {
+            stop_duplicates, ..
+        }) => assert!(stop_duplicates),
+        other => panic!("unexpected qqbot serve parse result: {other:?}"),
+    }
+    match onebot_cli.command {
+        Some(Commands::OnebotServe {
+            stop_duplicates, ..
+        }) => assert!(stop_duplicates),
+        other => panic!("unexpected onebot serve parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn webhook_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "webhook-serve", "--stop", "--account", "ops"])
+        .expect("webhook serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::WebhookServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected webhook serve parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn whatsapp_serve_cli_accepts_stop_flag() {
+    let cli = try_parse_cli(["loong", "whatsapp-serve", "--stop", "--account", "ops"])
+        .expect("whatsapp serve CLI should parse stop flag");
+
+    match cli.command {
+        Some(Commands::WhatsappServe { stop, account, .. }) => {
+            assert!(stop);
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected whatsapp serve parse result: {other:?}"),
     }
 }
 
@@ -2135,10 +2371,12 @@ fn fake_send_cli_runner(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture
 fn fake_serve_cli_runner(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         Err(format!(
-            "config={}|account={}|once={}|bind={}|path={}",
+            "config={}|account={}|once={}|stop={}|stop_duplicates={}|bind={}|path={}",
             args.config_path.unwrap_or("-"),
             args.account.unwrap_or("-"),
             args.once,
+            args.stop_requested,
+            args.stop_duplicates_requested,
             args.bind_override.unwrap_or("-"),
             args.path_override.unwrap_or("-")
         ))
@@ -2190,6 +2428,8 @@ fn run_channel_serve_cli_forwards_optional_arguments_to_runner() {
                 config_path: Some("/tmp/loong.toml"),
                 account: Some("ops"),
                 once: true,
+                stop_requested: false,
+                stop_duplicates_requested: false,
                 bind_override: Some("127.0.0.1:8123"),
                 path_override: Some("/hooks/feishu"),
             },
@@ -2198,7 +2438,7 @@ fn run_channel_serve_cli_forwards_optional_arguments_to_runner() {
 
     assert_eq!(
         error,
-        "config=/tmp/loong.toml|account=ops|once=true|bind=127.0.0.1:8123|path=/hooks/feishu"
+        "config=/tmp/loong.toml|account=ops|once=true|stop=false|stop_duplicates=false|bind=127.0.0.1:8123|path=/hooks/feishu"
     );
 }
 

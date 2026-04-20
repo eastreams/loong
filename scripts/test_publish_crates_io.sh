@@ -7,6 +7,7 @@ PACKAGE_CHAIN=(
   loong-contracts
   loong-protocol
   loong-kernel
+  loong-bridge-runtime
   loong-spec
   loong-bench
   loong-app
@@ -157,16 +158,17 @@ run_resume_from_test() {
 
   PATH="$stub_dir:$PATH" \
     FAKE_CARGO_INVOCATION_LOG="$invocation_log" \
-    bash "$SCRIPT_UNDER_TEST" --from loong-spec >"$output_file" 2>&1
+    bash "$SCRIPT_UNDER_TEST" --from loong-bridge-runtime >"$output_file" 2>&1
 
   assert_publish_sequence \
     "$invocation_log" \
     "dry-run" \
+    loong-bridge-runtime \
     loong-spec \
     loong-bench \
     loong-app \
     loong
-  assert_contains "$output_file" "starting from: loong-spec"
+  assert_contains "$output_file" "starting from: loong-bridge-runtime"
 }
 
 run_default_dry_run_test

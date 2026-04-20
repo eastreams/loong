@@ -207,6 +207,7 @@ release_base_url="${LOONG_INSTALL_RELEASE_BASE_URL:-${LOONG_INSTALL_RELEASE_BASE
 target_libc="${LOONG_INSTALL_TARGET_LIBC:-${LOONG_INSTALL_TARGET_LIBC:-auto}}"
 package_name="loong"
 bin_name="loong"
+legacy_bin_name="loongclaw"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -357,6 +358,24 @@ install_binary() {
 
   mkdir -p "${prefix}"
   install -m 755 "${source_path}" "${prefix}/${primary_output_name}"
+}
+
+remove_legacy_binary_if_present() {
+  local legacy_output_name="${1:?legacy_output_name is required}"
+  local legacy_output_path="${prefix}/${legacy_output_name}"
+
+  if [[ -L "${legacy_output_path}" ]]; then
+    rm -f "${legacy_output_path}"
+    printf '==> Removed legacy loongclaw compatibility command from %s\n' "${legacy_output_path}"
+    return 0
+  fi
+
+  if [[ ! -f "${legacy_output_path}" ]]; then
+    return 0
+  fi
+
+  rm -f "${legacy_output_path}"
+  printf '==> Removed legacy loongclaw compatibility command from %s\n' "${legacy_output_path}"
 }
 
 install_web_search_provider_display_name() {
@@ -854,6 +873,8 @@ if [[ "${install_source}" -eq 1 ]]; then
 else
   install_from_release
 fi
+
+remove_legacy_binary_if_present "${legacy_bin_name}"
 
 printf '==> Installed loong to %s\n' "${prefix}/${bin_name}"
 

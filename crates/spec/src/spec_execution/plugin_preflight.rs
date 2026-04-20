@@ -8,10 +8,10 @@ use kernel::{
 };
 use semver::{Version, VersionReq};
 
+use super::bridge_runtime_policy_support::bridge_support_spec_matrix;
 use super::bridge_support_policy::{
     BUNDLED_BRIDGE_SUPPORT_PROFILE_IDS, bridge_support_policy_sha256, resolve_bridge_support_policy,
 };
-use super::bridge_support_spec_matrix;
 use super::plugin_inventory::collect_plugin_inventory_results;
 use super::plugin_preflight_policy::resolve_plugin_preflight_policy;
 use crate::spec_runtime::{

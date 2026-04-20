@@ -130,14 +130,17 @@ When startup or supervision is unclear, use the shortest diagnostic loop first:
 loong doctor
 loong channels
 loong gateway status --json
+loong status --json
 ```
 
-That combination answers three different questions:
+That combination answers four different questions:
 
 - `doctor` checks provider and channel readiness
 - `channels` shows how Loong currently classifies each surface
 - `gateway status --json` is the quickest way to inspect current ownership from
   another CLI process
+- `loong status --json` provides the broader operator summary across gateway,
+  ACP, and work-unit surfaces
 
 If the runtime still does not start cleanly:
 

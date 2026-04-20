@@ -138,11 +138,15 @@ pub(super) fn execute_bash_tool_with_config(
             .as_deref()
             .ok_or_else(|| "bash unavailable".to_owned())?;
         let args = bash_exec_args(command, runtime.login_shell);
+        let resolved_invocation = crate::process_launch::resolve_command_invocation(
+            runtime_command.to_string_lossy().as_ref(),
+            args.iter().map(String::as_str),
+        );
         let runtime_event_sink = current_tool_runtime_event_sink();
         let output = process_exec::run_tool_async(
             process_exec::run_process_with_timeout_with_sink(
-                runtime_command,
-                &args,
+                resolved_invocation.program.as_os_str(),
+                resolved_invocation.args.as_slice(),
                 cwd.as_path(),
                 timeout_ms,
                 "bash command",

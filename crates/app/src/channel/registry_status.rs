@@ -654,6 +654,67 @@ pub(super) fn ready_operation(operation: ChannelCatalogOperation) -> ChannelOper
     }
 }
 
+pub(super) fn apply_runtime_attention(status: &mut ChannelOperationStatus) {
+    let Some(runtime) = status.runtime.as_ref() else {
+        return;
+    };
+    if status.health != ChannelOperationHealth::Ready {
+        return;
+    }
+
+    let runtime_issue = if runtime.stale {
+        Some((
+            "runtime stale",
+            "runtime stale; the latest heartbeat is outside the expected freshness window"
+                .to_owned(),
+        ))
+    } else if runtime.running_instances > 1 {
+        let duplicate_owner_pids = if runtime.duplicate_owner_pids.is_empty() {
+            "-".to_owned()
+        } else {
+            runtime
+                .duplicate_owner_pids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let preferred_owner_pid = runtime
+            .pid
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        Some((
+            "multiple runtime instances detected",
+            format!(
+                "multiple runtime instances detected; running_instances={}; preferred_owner_pid={preferred_owner_pid}; duplicate_owner_pids={duplicate_owner_pids}",
+                runtime.running_instances
+            ),
+        ))
+    } else if runtime.running && runtime.consecutive_failures > 0 {
+        let last_error = runtime.last_error.as_deref().unwrap_or("-");
+        Some((
+            "runtime retrying after transient failures",
+            format!(
+                "runtime retrying after transient failures; consecutive_failures={}; last_error={last_error}",
+                runtime.consecutive_failures,
+            ),
+        ))
+    } else {
+        None
+    };
+
+    let Some((detail_marker, issue)) = runtime_issue else {
+        return;
+    };
+
+    if !status.detail.contains(detail_marker) {
+        status.detail = format!("{}; {detail_marker}", status.detail);
+    }
+    if !status.issues.iter().any(|existing| existing == &issue) {
+        status.issues.push(issue);
+    }
+}
+
 pub(super) fn disabled_operation(
     operation: ChannelCatalogOperation,
     detail: String,
@@ -730,15 +791,24 @@ pub(super) fn attach_runtime(
             stale: false,
             busy: false,
             active_runs: 0,
+            consecutive_failures: 0,
             last_run_activity_at: None,
             last_heartbeat_at: None,
+            last_failure_at: None,
+            last_recovery_at: None,
+            last_error: None,
+            last_duplicate_reclaim_at: None,
             pid: None,
             account_id: Some(account_id.to_owned()),
             account_label: Some(account_label.to_owned()),
             instance_count: 0,
             running_instances: 0,
             stale_instances: 0,
+            duplicate_owner_pids: Vec::new(),
+            last_duplicate_reclaim_cleanup_owner_pids: Vec::new(),
+            recent_incidents: Vec::new(),
         }));
+        apply_runtime_attention(&mut status);
     }
     status
 }

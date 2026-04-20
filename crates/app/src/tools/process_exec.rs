@@ -3,7 +3,7 @@ use loong_contracts::ToolCoreOutcome;
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-shell")]
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 #[cfg(feature = "tool-shell")]
 use std::future::Future;
 #[cfg(feature = "tool-shell")]
@@ -674,6 +674,55 @@ pub(super) fn build_process_tool_outcome(
 }
 
 #[cfg(feature = "tool-shell")]
+fn resolve_process_program(program: &OsStr, cwd: &Path) -> PathBuf {
+    let candidate = PathBuf::from(program);
+    if candidate.components().count() > 1 {
+        return candidate;
+    }
+
+    if let Ok(resolved) = which::which(candidate.as_path()) {
+        return resolved;
+    }
+
+    let stable_search_path = stable_command_search_path();
+    which::which_in(candidate.as_path(), Some(stable_search_path), cwd).unwrap_or(candidate)
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+fn stable_command_search_path() -> OsString {
+    let env_path = std::env::var_os("PATH");
+    let fallback = env_path
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"));
+    let output = std::process::Command::new("/usr/bin/getconf")
+        .arg("PATH")
+        .output();
+    let Ok(output) = output else {
+        return fallback;
+    };
+    if !output.status.success() {
+        return fallback;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return fallback;
+    }
+
+    OsString::from(trimmed)
+}
+
+#[cfg(all(feature = "tool-shell", windows))]
+fn stable_command_search_path() -> OsString {
+    std::env::var_os("PATH")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            OsString::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd")
+        })
+}
+
+#[cfg(feature = "tool-shell")]
 pub(super) async fn run_process_with_timeout_with_sink<P, S>(
     program: P,
     args: &[S],
@@ -688,8 +737,9 @@ where
     S: AsRef<OsStr>,
 {
     let started_at = Instant::now();
-    let mut command = Command::new(program);
     let sanitized_env = loong_contracts::sanitized_child_process_env();
+    let resolved_program = resolve_process_program(program.as_ref(), cwd);
+    let mut command = Command::new(&resolved_program);
 
     command.env_clear();
     command.envs(sanitized_env);
@@ -817,6 +867,9 @@ mod tests {
         retry_executable_file_busy_async, should_retry_executable_file_busy,
     };
 
+    #[cfg(unix)]
+    use crate::test_support::ScopedEnv;
+
     #[test]
     fn should_retry_spawn_error_matches_executable_file_busy() {
         let busy_error = Error::from(ErrorKind::ExecutableFileBusy);
@@ -850,5 +903,18 @@ mod tests {
 
         assert_eq!(result, "spawned");
         assert_eq!(total_attempts, 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_process_program_falls_back_to_stable_search_path() {
+        let mut env = ScopedEnv::new();
+        env.remove("PATH");
+        let cwd = std::env::current_dir().expect("current dir");
+
+        let resolved = super::resolve_process_program(std::ffi::OsStr::new("sh"), &cwd);
+
+        assert!(resolved.is_absolute(), "resolved path: {resolved:?}");
+        assert!(resolved.exists(), "resolved path: {resolved:?}");
     }
 }

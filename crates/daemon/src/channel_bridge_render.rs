@@ -18,6 +18,18 @@ pub(crate) fn push_channel_surface_plugin_bridge_contract(
         lines.push(stable_targets_line);
     }
 
+    let supported_operations = if plugin_bridge_contract.supported_operations.is_empty() {
+        "-".to_owned()
+    } else {
+        plugin_bridge_contract.supported_operations.join(",")
+    };
+    lines.push(format!(
+        "  plugin_bridge_contract required_setup_surface={} runtime_owner={} supported_operations={}",
+        plugin_bridge_contract.required_setup_surface,
+        plugin_bridge_contract.runtime_owner,
+        render_line_safe_text_value(&supported_operations),
+    ));
+
     let account_scope_note = plugin_bridge_contract.account_scope_note;
     let Some(account_scope_note) = account_scope_note else {
         return;

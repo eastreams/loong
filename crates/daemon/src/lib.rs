@@ -182,6 +182,7 @@ mod tlon_cli;
 mod tool_calling_readiness;
 pub mod trajectory_cli;
 mod turn_cli;
+pub mod update_cli;
 pub mod work_unit_cli;
 pub use self::acp_cli::{
     acp_backend_metadata_json, acp_binding_scope_json, acp_control_plane_json,
@@ -230,6 +231,7 @@ pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
+pub use update_cli::run_update_cli;
 #[rustfmt::skip]
 use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
@@ -414,6 +416,8 @@ pub struct ChannelServeCliArgs<'a> {
     pub config_path: Option<&'a str>,
     pub account: Option<&'a str>,
     pub once: bool,
+    pub stop_requested: bool,
+    pub stop_duplicates_requested: bool,
     pub bind_override: Option<&'a str>,
     pub path_override: Option<&'a str>,
 }
@@ -471,6 +475,11 @@ pub enum Commands {
     Welcome,
     /// Run the original end-to-end bootstrap demo
     Demo,
+    #[command(
+        long_about = "Download and apply the latest stable GitHub release for the current Loong binary.\n\nThis command intentionally follows the latest stable release channel only. GitHub prereleases are excluded."
+    )]
+    /// Update this Loong install to the latest stable GitHub release
+    Update,
     #[command(hide = true)]
     /// Deprecated compatibility alias for the generic task runner
     RunTask {
@@ -1121,6 +1130,10 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         once: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "once")]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -1163,6 +1176,10 @@ pub enum Commands {
     FeishuServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "stop")]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
@@ -1193,6 +1210,10 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         once: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "once")]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -1217,6 +1238,10 @@ pub enum Commands {
     WecomServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "stop")]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -1243,6 +1268,10 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         once: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "once")]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -1269,6 +1298,10 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         once: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "once")]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -1295,6 +1328,10 @@ pub enum Commands {
         config: Option<String>,
         #[arg(long, default_value_t = false)]
         once: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "once")]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
     },
@@ -1302,6 +1339,10 @@ pub enum Commands {
     WhatsappServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "stop")]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
@@ -1381,6 +1422,10 @@ pub enum Commands {
     LineServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "stop")]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
@@ -1443,6 +1488,10 @@ pub enum Commands {
     WebhookServe {
         #[arg(long)]
         config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        stop: bool,
+        #[arg(long, default_value_t = false, conflicts_with = "stop")]
+        stop_duplicates: bool,
         #[arg(long)]
         account: Option<String>,
         #[arg(long)]
@@ -3855,7 +3904,264 @@ pub async fn run_channel_serve_cli(
     spec: ChannelServeCliSpec,
     args: ChannelServeCliArgs<'_>,
 ) -> CliResult<()> {
-    let _ = spec.family;
+    if args.stop_requested {
+        let channel_id = spec.family.channel_id;
+        let stop_result = match channel_id {
+            "telegram" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Telegram,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.telegram.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "feishu" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Feishu,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.feishu.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "line" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Line,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.line.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "matrix" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Matrix,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.matrix.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "wecom" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Wecom,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.wecom.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "webhook" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Webhook,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.webhook.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "whatsapp" => {
+                request_runtime_backed_channel_serve_stop(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::WhatsApp,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.whatsapp.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            _ => Err(format!(
+                "{} does not support --stop on this serve surface",
+                spec.family.serve.command
+            )),
+        };
+        return stop_result;
+    }
+    if args.stop_duplicates_requested {
+        let channel_id = spec.family.channel_id;
+        let stop_result = match channel_id {
+            "telegram" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Telegram,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.telegram.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "feishu" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Feishu,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.feishu.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "line" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Line,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.line.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "matrix" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Matrix,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.matrix.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "wecom" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Wecom,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.wecom.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "webhook" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::Webhook,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.webhook.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            "whatsapp" => {
+                request_runtime_backed_channel_serve_duplicate_cleanup(
+                    args.config_path,
+                    channel_id,
+                    mvp::channel::ChannelPlatform::WhatsApp,
+                    args.account,
+                    |config, account| {
+                        let resolved = config.whatsapp.resolve_account(account)?;
+                        Ok((
+                            resolved.configured_account_id,
+                            resolved.account.id,
+                            resolved.account.label,
+                        ))
+                    },
+                )
+                .await
+            }
+            _ => Err(format!(
+                "{} does not support --stop-duplicates on this serve surface",
+                spec.family.serve.command
+            )),
+        };
+        return stop_result;
+    }
     (spec.run)(args).await
 }
 
@@ -4193,6 +4499,40 @@ pub fn run_twitch_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComma
 pub fn run_telegram_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = (args.bind_override, args.path_override);
+        if args.stop_requested {
+            return request_runtime_backed_channel_serve_stop(
+                args.config_path,
+                "telegram",
+                mvp::channel::ChannelPlatform::Telegram,
+                args.account,
+                |config, account| {
+                    let resolved = config.telegram.resolve_account(account)?;
+                    Ok((
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        resolved.account.label,
+                    ))
+                },
+            )
+            .await;
+        }
+        if args.stop_duplicates_requested {
+            return request_runtime_backed_channel_serve_duplicate_cleanup(
+                args.config_path,
+                "telegram",
+                mvp::channel::ChannelPlatform::Telegram,
+                args.account,
+                |config, account| {
+                    let resolved = config.telegram.resolve_account(account)?;
+                    Ok((
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        resolved.account.label,
+                    ))
+                },
+            )
+            .await;
+        }
         with_graceful_shutdown(mvp::channel::run_telegram_channel(
             args.config_path,
             args.once,
@@ -4434,6 +4774,40 @@ pub fn parse_nostr_send_target_kind(
 pub fn run_matrix_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = (args.bind_override, args.path_override);
+        if args.stop_requested {
+            return request_runtime_backed_channel_serve_stop(
+                args.config_path,
+                "matrix",
+                mvp::channel::ChannelPlatform::Matrix,
+                args.account,
+                |config, account| {
+                    let resolved = config.matrix.resolve_account(account)?;
+                    Ok((
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        resolved.account.label,
+                    ))
+                },
+            )
+            .await;
+        }
+        if args.stop_duplicates_requested {
+            return request_runtime_backed_channel_serve_duplicate_cleanup(
+                args.config_path,
+                "matrix",
+                mvp::channel::ChannelPlatform::Matrix,
+                args.account,
+                |config, account| {
+                    let resolved = config.matrix.resolve_account(account)?;
+                    Ok((
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        resolved.account.label,
+                    ))
+                },
+            )
+            .await;
+        }
         with_graceful_shutdown(mvp::channel::run_matrix_channel(
             args.config_path,
             args.once,
@@ -4450,12 +4824,138 @@ pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliComm
         // discarded because single-run mode and HTTP bind/path overrides do not
         // apply to this transport.
         let _ = (args.once, args.bind_override, args.path_override);
+        if args.stop_requested {
+            return request_runtime_backed_channel_serve_stop(
+                args.config_path,
+                "wecom",
+                mvp::channel::ChannelPlatform::Wecom,
+                args.account,
+                |config, account| {
+                    let resolved = config.wecom.resolve_account(account)?;
+                    Ok((
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        resolved.account.label,
+                    ))
+                },
+            )
+            .await;
+        }
+        if args.stop_duplicates_requested {
+            return request_runtime_backed_channel_serve_duplicate_cleanup(
+                args.config_path,
+                "wecom",
+                mvp::channel::ChannelPlatform::Wecom,
+                args.account,
+                |config, account| {
+                    let resolved = config.wecom.resolve_account(account)?;
+                    Ok((
+                        resolved.configured_account_id,
+                        resolved.account.id,
+                        resolved.account.label,
+                    ))
+                },
+            )
+            .await;
+        }
         with_graceful_shutdown(mvp::channel::run_wecom_channel(
             args.config_path,
             args.account,
         ))
         .await
     })
+}
+
+async fn request_runtime_backed_channel_serve_stop<F>(
+    config_path: Option<&str>,
+    channel_id: &str,
+    platform: mvp::channel::ChannelPlatform,
+    account_id: Option<&str>,
+    resolve_account: F,
+) -> CliResult<()>
+where
+    F: FnOnce(&mvp::config::LoongConfig, Option<&str>) -> CliResult<(String, String, String)>,
+{
+    let (_resolved_path, config) = mvp::config::load(config_path)?;
+    let (configured_account_id, runtime_account_id, runtime_account_label) =
+        resolve_account(&config, account_id)?;
+    let outcome = mvp::channel::request_channel_operation_stop(
+        platform,
+        mvp::channel::CHANNEL_OPERATION_SERVE_ID,
+        Some(runtime_account_id.as_str()),
+    )?;
+
+    let outcome_label = match outcome {
+        mvp::channel::ChannelOperationStopRequestOutcome::Requested => "requested",
+        mvp::channel::ChannelOperationStopRequestOutcome::AlreadyRequested => "already_requested",
+        mvp::channel::ChannelOperationStopRequestOutcome::AlreadyStopped => "already_stopped",
+    };
+    #[allow(clippy::print_stdout)]
+    {
+        println!(
+            "{} serve stop {} (configured_account={}, account={})",
+            channel_id, outcome_label, configured_account_id, runtime_account_label
+        );
+    }
+
+    Ok(())
+}
+
+async fn request_runtime_backed_channel_serve_duplicate_cleanup<F>(
+    config_path: Option<&str>,
+    channel_id: &str,
+    platform: mvp::channel::ChannelPlatform,
+    account_id: Option<&str>,
+    resolve_account: F,
+) -> CliResult<()>
+where
+    F: FnOnce(&mvp::config::LoongConfig, Option<&str>) -> CliResult<(String, String, String)>,
+{
+    let (_resolved_path, config) = mvp::config::load(config_path)?;
+    let (configured_account_id, runtime_account_id, runtime_account_label) =
+        resolve_account(&config, account_id)?;
+    let result = mvp::channel::request_channel_operation_duplicate_cleanup(
+        platform,
+        mvp::channel::CHANNEL_OPERATION_SERVE_ID,
+        Some(runtime_account_id.as_str()),
+    )?;
+
+    let outcome_label = match result.outcome {
+        mvp::channel::ChannelOperationDuplicateCleanupOutcome::Requested => "requested",
+        mvp::channel::ChannelOperationDuplicateCleanupOutcome::AlreadyRequested => {
+            "already_requested"
+        }
+        mvp::channel::ChannelOperationDuplicateCleanupOutcome::NoDuplicates => "no_duplicates",
+        mvp::channel::ChannelOperationDuplicateCleanupOutcome::AlreadyStopped => "already_stopped",
+    };
+    let preferred_owner_pid = result
+        .preferred_owner_pid
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let cleanup_owner_pids = if result.targeted_owner_pids.is_empty() {
+        "-".to_owned()
+    } else {
+        result
+            .targeted_owner_pids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    #[allow(clippy::print_stdout)]
+    {
+        println!(
+            "{} serve duplicate cleanup {} (configured_account={}, account={}, preferred_owner_pid={}, cleanup_owner_pids={})",
+            channel_id,
+            outcome_label,
+            configured_account_id,
+            runtime_account_label,
+            preferred_owner_pid,
+            cleanup_owner_pids,
+        );
+    }
+
+    Ok(())
 }
 
 pub async fn run_multi_channel_serve_cli(

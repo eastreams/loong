@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::io;
 #[cfg(unix)]
 use std::io::Read;
+#[cfg(windows)]
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -123,9 +125,18 @@ where
         .map(|value| OsString::from(value.as_ref()))
         .collect::<Vec<_>>();
 
-    #[cfg(unix)]
-    if let Some(invocation) = resolve_shebang_invocation(command, &collected_args) {
-        return invocation;
+    if let Some(resolved_path) = resolve_existing_command_path(command) {
+        #[cfg(unix)]
+        if let Some(invocation) =
+            resolve_shebang_invocation_from_path(resolved_path.as_path(), &collected_args)
+        {
+            return invocation;
+        }
+
+        return ResolvedCommandInvocation {
+            program: resolved_path.into_os_string(),
+            args: collected_args,
+        };
     }
 
     ResolvedCommandInvocation {
@@ -135,12 +146,11 @@ where
 }
 
 #[cfg(unix)]
-fn resolve_shebang_invocation(
-    command: &str,
+fn resolve_shebang_invocation_from_path(
+    script_path: &Path,
     collected_args: &[OsString],
 ) -> Option<ResolvedCommandInvocation> {
-    let script_path = resolve_existing_command_path(command)?;
-    let shebang = read_shebang(script_path.as_path())?;
+    let shebang = read_shebang(script_path)?;
     let trimmed_shebang = shebang.trim();
     let separator_index = trimmed_shebang.find(char::is_whitespace);
     let interpreter = match separator_index {
@@ -155,7 +165,7 @@ fn resolve_shebang_invocation(
     {
         resolved_args.push(OsString::from(remainder));
     }
-    let script_arg = script_path.into_os_string();
+    let script_arg = script_path.to_path_buf().into_os_string();
     resolved_args.push(script_arg);
     for argument in collected_args {
         let cloned_argument = argument.clone();
@@ -175,7 +185,61 @@ fn resolve_existing_command_path(command: &str) -> Option<PathBuf> {
         return Some(direct_path.to_path_buf());
     }
 
-    which::which(command).ok()
+    if let Ok(discovered) = which::which(command) {
+        return Some(discovered);
+    }
+
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    which::which_in(command, Some(stable_command_search_path()), current_dir).ok()
+}
+
+#[cfg(unix)]
+fn stable_command_search_path() -> OsString {
+    let fallback = std::env::var_os("PATH")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from("/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"));
+
+    let output = std::process::Command::new("/usr/bin/getconf")
+        .arg("PATH")
+        .output();
+    let Ok(output) = output else {
+        return fallback;
+    };
+    if !output.status.success() {
+        return fallback;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return fallback;
+    }
+
+    OsString::from(trimmed)
+}
+
+#[cfg(windows)]
+fn resolve_existing_command_path(command: &str) -> Option<PathBuf> {
+    let direct_path = std::path::Path::new(command);
+    if direct_path.is_file() {
+        return Some(direct_path.to_path_buf());
+    }
+
+    if let Ok(discovered) = which::which(command) {
+        return Some(discovered);
+    }
+
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    which::which_in(command, Some(stable_command_search_path()), current_dir).ok()
+}
+
+#[cfg(windows)]
+fn stable_command_search_path() -> OsString {
+    std::env::var_os("PATH")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            OsString::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd")
+        })
 }
 
 #[cfg(unix)]
@@ -331,6 +395,29 @@ mod tests {
             vec![
                 script_path.into_os_string(),
                 std::ffi::OsString::from("--flag"),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_command_invocation_falls_back_to_stable_search_path_when_env_path_is_empty() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("PATH", "");
+
+        let resolved = resolve_command_invocation("sh", ["-c", "printf ok"]);
+
+        assert_ne!(resolved.program, std::ffi::OsString::from("sh"));
+        assert!(
+            std::path::Path::new(&resolved.program).is_absolute(),
+            "expected absolute fallback path, got {:?}",
+            resolved.program
+        );
+        assert_eq!(
+            resolved.args,
+            vec![
+                std::ffi::OsString::from("-c"),
+                std::ffi::OsString::from("printf ok"),
             ]
         );
     }

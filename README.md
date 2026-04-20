@@ -146,7 +146,10 @@ loong onboard                # Interactive setup — configure provider and mode
 loong ask --message "Summarize this repo in one sentence."  # Single-turn query to verify config
 loong chat                   # Start a multi-turn conversation
 loong doctor --fix           # Check environment and auto-fix common issues
+loong update                 # Replace this install with the latest stable GitHub release
 ```
+
+`loong update` always targets the latest stable GitHub release and never installs a pre-release.
 
 Running `onboard` is enough for the golden path — it writes a working config to `~/.loong/config.toml` without asking you to hand-edit TOML. The snippets below show what that file looks like on `dev` today, when you want to add another provider or wire up a channel.
 

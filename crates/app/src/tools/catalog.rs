@@ -389,6 +389,10 @@ impl ToolDescriptor {
         self.exposure == ToolExposureClass::Discoverable
     }
 
+    pub fn is_provider_invokable_discoverable(&self) -> bool {
+        self.is_discoverable() && self.execution_kind == ToolExecutionKind::Core
+    }
+
     pub fn capability_action_class(&self) -> CapabilityActionClass {
         self.capability_action_class
     }
