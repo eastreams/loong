@@ -2,6 +2,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
 use loong_daemon::*;
 
+#[cfg(debug_assertions)]
 const DEBUG_TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOKIO_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
 const TOKIO_WORKER_STACK_ENV: &str = "LOONG_TOKIO_WORKER_STACK_BYTES";
@@ -60,6 +61,7 @@ fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
+#[cfg(debug_assertions)]
 fn command_prefers_large_tokio_worker_stack(command: &Commands) -> bool {
     matches!(
         command,

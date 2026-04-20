@@ -53,9 +53,10 @@ fn test_tool_runtime_config(root: impl AsRef<Path>) -> ToolTestRuntimeConfig {
 }
 
 fn ready_bash_exec_runtime_policy() -> runtime_config::BashExecRuntimePolicy {
+    let resolved_bash = which::which("bash").unwrap_or_else(|_| PathBuf::from("/bin/bash"));
     runtime_config::BashExecRuntimePolicy {
         available: true,
-        command: Some(PathBuf::from("bash")),
+        command: Some(resolved_bash),
         ..runtime_config::BashExecRuntimePolicy::default()
     }
 }
