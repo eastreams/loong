@@ -1856,6 +1856,20 @@ fn build_channel_runtime_check(
         };
     };
 
+    let recent_incidents = runtime
+        .recent_incidents
+        .iter()
+        .map(|incident| {
+            let kind = match incident.kind {
+                mvp::channel::ChannelOperationRuntimeIncidentKind::Failure => "failure",
+                mvp::channel::ChannelOperationRuntimeIncidentKind::Recovery => "recovery",
+                mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim => {
+                    "duplicate_reclaim"
+                }
+            };
+            format!("{kind}@{}", incident.at_ms)
+        })
+        .collect::<Vec<_>>();
     let detail_tail = format!(
         "account={} account_id={} pid={} busy={} active_runs={} consecutive_failures={} instance_count={} running_instances={} stale_instances={} last_run_activity_at={} last_heartbeat_at={} last_failure_at={} last_recovery_at={} last_error={} duplicate_owner_pids={} last_duplicate_reclaim_at={} last_duplicate_reclaim_cleanup_owner_pids={} recent_incidents={}",
         runtime.account_label.as_deref().unwrap_or("-"),
@@ -1893,7 +1907,7 @@ fn build_channel_runtime_check(
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_owned()),
         render_u32_list(&runtime.last_duplicate_reclaim_cleanup_owner_pids),
-        render_runtime_incident_summary(runtime.recent_incidents.as_slice()),
+        render_runtime_incident_summary(recent_incidents.as_slice()),
     );
 
     if runtime.stale {
@@ -2389,27 +2403,12 @@ fn render_u32_list(values: &[u32]) -> String {
         .join(",")
 }
 
-fn render_runtime_incident_summary(
-    incidents: &[mvp::channel::ChannelOperationRuntimeIncident],
-) -> String {
+fn render_runtime_incident_summary(incidents: &[String]) -> String {
     if incidents.is_empty() {
         return "-".to_owned();
     }
 
-    incidents
-        .iter()
-        .map(|incident| {
-            let kind = match incident.kind {
-                mvp::channel::ChannelOperationRuntimeIncidentKind::Failure => "failure",
-                mvp::channel::ChannelOperationRuntimeIncidentKind::Recovery => "recovery",
-                mvp::channel::ChannelOperationRuntimeIncidentKind::DuplicateReclaim => {
-                    "duplicate_reclaim"
-                }
-            };
-            format!("{kind}@{}", incident.at_ms)
-        })
-        .collect::<Vec<_>>()
-        .join(",")
+    incidents.join(",")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

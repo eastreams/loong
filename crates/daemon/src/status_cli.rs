@@ -1249,6 +1249,8 @@ mod tests {
                 enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
                 enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
@@ -1260,6 +1262,13 @@ mod tests {
                     reason:
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
         };
@@ -1377,6 +1386,8 @@ mod tests {
                 enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
                 enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
@@ -1388,6 +1399,13 @@ mod tests {
                     reason:
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
         };
@@ -1493,6 +1511,8 @@ mod tests {
                 enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
                 enabled_outbound_only_channel_ids: Vec::new(),
                 visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
@@ -1504,6 +1524,13 @@ mod tests {
                     reason:
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
         };
