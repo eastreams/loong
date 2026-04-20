@@ -22,8 +22,10 @@ mod integration {
     mod managed_bridge_fixtures;
     pub(crate) use managed_bridge_fixtures::*;
 
-    #[path = "channel_surfaces.rs"]
-    mod channel_surfaces;
+    #[path = "channel_surfaces_json.rs"]
+    mod channel_surfaces_json;
+    #[path = "channel_surfaces_text.rs"]
+    mod channel_surfaces_text;
     #[path = "latest_selector_process_support.rs"]
     mod latest_selector_process_support;
     #[path = "memory_surfaces.rs"]
