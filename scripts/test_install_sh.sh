@@ -36,7 +36,7 @@ assert_installed_binary() {
 
   [[ -x "$install_dir/$PRIMARY_BIN_NAME" ]]
   legacy_path="$install_dir/$LEGACY_BIN_NAME"
-  [[ ! -e "$legacy_path" ]]
+  [[ ! -f "$legacy_path" ]]
   [[ ! -L "$legacy_path" ]]
 
   primary_output="$("$install_dir/$PRIMARY_BIN_NAME")"
@@ -657,6 +657,27 @@ run_release_install_removes_stale_legacy_binary_test() {
   assert_contains "$output_file" "Removed legacy loongclaw compatibility command from"
 }
 
+run_release_install_keeps_legacy_directory_collision_test() {
+  local fixture install_dir output_file stale_legacy_directory
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-keep-legacy-directory.out"
+  stale_legacy_directory="$install_dir/$LEGACY_BIN_NAME"
+
+  mkdir -p "$stale_legacy_directory"
+
+  (
+    cd "$REPO_ROOT"
+    LOONG_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_installed_binary "$install_dir" "fixture-binary"
+  [[ -d "$stale_legacy_directory" ]]
+  assert_not_contains "$output_file" "Removed legacy loongclaw compatibility command from"
+}
+
 run_release_install_adds_path_to_bashrc_and_prints_source_hint_test() {
   local fixture
   local home_dir
@@ -1120,6 +1141,7 @@ run_standalone_linux_arm64_install_rejects_missing_glibc_test() {
 
 run_release_override_install_and_onboard_test
 run_release_install_removes_stale_legacy_binary_test
+run_release_install_keeps_legacy_directory_collision_test
 run_release_install_adds_path_to_bashrc_and_prints_source_hint_test
 run_release_install_skips_source_hint_when_path_is_already_available_test
 run_release_install_keeps_source_hint_when_rc_already_has_path_entry_test
