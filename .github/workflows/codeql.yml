@@ -1,0 +1,114 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+      - release
+      - 'release/**'
+  pull_request:
+    branches:
+      - dev
+      - main
+      - release
+      - 'release/**'
+  merge_group:
+    types:
+      - checks_requested
+  schedule:
+    - cron: "0 5 * * 1"
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run_analysis: ${{ steps.classify.outputs.run_analysis }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Classify CodeQL-relevant changes
+        id: classify
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const modulePath = `${process.env.GITHUB_WORKSPACE}/scripts/workflow_change_router.mjs`;
+            const moduleUrl = `file://${modulePath}`;
+            const routerModule = await import(moduleUrl);
+            const runtime = { core, github, context };
+            const changedFileContext = await routerModule.collectChangedFileContext(runtime, {
+              workflowLabel: "CodeQL",
+              forceRunEvents: ["schedule", "merge_group"],
+            });
+            const routeOutputs = routerModule.classifyCodeqlJobSet(changedFileContext);
+            const touchedPathSummary = routerModule.describeTouchedPaths(routeOutputs);
+            core.info(`CodeQL changed paths: ${touchedPathSummary || "<full-validation>"}`);
+            routerModule.writeRouteOutputs(core, routeOutputs);
+
+  analyze:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_analysis == 'true' }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - rust
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Detect Advanced Security availability
+        id: ghas
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            try {
+              const { data } = await github.rest.repos.get({ owner, repo });
+              const status = data?.security_and_analysis?.advanced_security?.status;
+              const enabled = status === "enabled";
+              core.info(`security_and_analysis.advanced_security.status=${status ?? "unavailable"}`);
+              core.setOutput("enabled", enabled ? "true" : "false");
+              if (!enabled) {
+                core.notice("GitHub Advanced Security is unavailable; skipping CodeQL upload to avoid false-red CI.");
+              }
+            } catch (error) {
+              core.warning(`failed to inspect repository security settings; skipping CodeQL. error=${error.message}`);
+              core.setOutput("enabled", "false");
+            }
+
+      - name: Initialize CodeQL
+        if: steps.ghas.outputs.enabled == 'true'
+        uses: github/codeql-action/init@c10b8064de6f491fea524254123dbe5e09572f13
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        if: steps.ghas.outputs.enabled == 'true'
+        uses: github/codeql-action/autobuild@c10b8064de6f491fea524254123dbe5e09572f13
+
+      - name: Analyze
+        if: steps.ghas.outputs.enabled == 'true'
+        uses: github/codeql-action/analyze@c10b8064de6f491fea524254123dbe5e09572f13
+        timeout-minutes: 10
+
+      - name: Skip CodeQL when GHAS is unavailable
+        if: steps.ghas.outputs.enabled != 'true'
+        run: |
+          echo "GitHub Advanced Security is not enabled for this repository."
+          echo "Skipping CodeQL analyze/upload step to keep CI green for code changes."

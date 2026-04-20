@@ -1,0 +1,3 @@
+# Keep Linux ARM64 release binaries on a CentOS 7-compatible glibc floor.
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main-centos"

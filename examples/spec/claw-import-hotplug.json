@@ -1,0 +1,44 @@
+{
+  "pack": {
+    "pack_id": "ops-claw-import-hotplug",
+    "domain": "ops",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [
+      "InvokeTool"
+    ],
+    "metadata": {
+      "owner": "loong-ai",
+      "stage": "dev"
+    }
+  },
+  "agent_id": "agent-migrate-legacy-claw",
+  "ttl_s": 300,
+  "defaults": {
+    "tool": "core-tools"
+  },
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins"
+    ]
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "tool_extension",
+    "extension_action": "plan_many",
+    "required_capabilities": [
+      "InvokeTool"
+    ],
+    "payload": {
+      "input_path": "./legacy"
+    },
+    "extension": "claw-migration",
+    "core": null
+  }
+}

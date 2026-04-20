@@ -1,0 +1,66 @@
+---
+title: Bailian Coding
+description: Configure the Bailian Coding provider profile in Loong.
+---
+
+# Bailian Coding
+
+Dedicated coding lanes that keep coding quota, pricing, or route ownership separate from the general assistant lane. This page covers the built-in `bailian_coding` provider kind directly.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `bailian_coding` |
+| Provider group | Coding-Specialized Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | BAILIAN_API_KEY |
+| Aliases | `bailian_coding_compatible` |
+| Default base URL | `https://coding.dashscope.aliyuncs.com/v1` |
+| Request endpoint | `https://coding.dashscope.aliyuncs.com/v1/chat/completions` |
+| Models endpoint | `https://coding.dashscope.aliyuncs.com/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "bailian_coding"
+
+[providers.bailian_coding]
+kind = "bailian_coding"
+api_key = { env = "BAILIAN_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `BAILIAN_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://coding.dashscope.aliyuncs.com/v1/chat/completions` |
+| Primary model-catalog route | `https://coding.dashscope.aliyuncs.com/v1/models` |
+
+## Operator Notes
+
+- This provider kind sends the default user agent `openclaw`.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

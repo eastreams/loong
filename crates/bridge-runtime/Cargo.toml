@@ -1,0 +1,21 @@
+[package]
+name = "loong-bridge-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Internal support crate for Loong: reusable managed bridge execution primitives"
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
+loong-protocol = { package = "loong-protocol", version = "0.1.2-alpha.1", path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

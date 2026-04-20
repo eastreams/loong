@@ -1,0 +1,75 @@
+---
+title: MiniMax
+description: Configure the MiniMax provider profile in Loong.
+---
+
+# MiniMax
+
+Use this when your team already runs on MiniMax and you want that vendor family to stay explicit in Loong config instead of disappearing behind a generic compatibility route.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `minimax` |
+| Provider group | Direct Hosted Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | MINIMAX_API_KEY |
+| Aliases | `minimax_compatible` |
+| Default base URL | `https://api.minimaxi.com` |
+| Request endpoint | `https://api.minimaxi.com/v1/chat/completions` |
+| Models endpoint | `https://api.minimaxi.com/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "minimax"
+
+[providers.minimax]
+kind = "minimax"
+api_key = { env = "MINIMAX_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `MINIMAX_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://api.minimaxi.com/v1/chat/completions` |
+| Primary model-catalog route | `https://api.minimaxi.com/v1/models` |
+
+## Region Endpoints
+
+| Variant | Base URL |
+| --- | --- |
+| CN | `https://api.minimaxi.com` |
+| Global | `https://api.minimax.io` |
+
+MiniMax region endpoint: CN default (`https://api.minimaxi.com`); switch `provider.base_url` to `https://api.minimax.io` for Global accounts
+
+## Operator Notes
+
+- Reviewed onboarding fallback when `model = "auto"` cannot probe cleanly: `MiniMax-M2.7`.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

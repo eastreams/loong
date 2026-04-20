@@ -1,0 +1,55 @@
+{
+  "pack": {
+    "pack_id": "bridge-enforce-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [
+      "ObserveTelemetry"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "bridge-enforce"
+    }
+  },
+  "agent_id": "agent-bridge-enforce",
+  "ttl_s": 120,
+  "defaults": null,
+  "self_awareness": null,
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins"
+    ]
+  },
+  "bridge_support": {
+    "enabled": true,
+    "supported_bridges": [
+      "http_json"
+    ],
+    "supported_adapter_families": [],
+    "enforce_supported": true,
+    "policy_version": "v1",
+    "expected_checksum": "ad21a95109a9a130",
+    "expected_sha256": "550bc3c5b02a4c25b2798bebd25e5c4e2baba8f6994828fd38bd5f8105b3c26e",
+    "execute_process_stdio": false,
+    "execute_http_json": false,
+    "allowed_process_commands": [],
+    "enforce_execution_success": false
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "connector_legacy",
+    "connector_name": "openrouter",
+    "operation": "chat",
+    "required_capabilities": [
+      "InvokeConnector"
+    ],
+    "payload": {}
+  }
+}

@@ -1,0 +1,73 @@
+---
+title: First Run
+description: Reach a first useful answer without learning the full runtime surface.
+---
+
+# First Run
+
+## Supported First-Run Loop
+
+```bash
+loong onboard
+loong ask --message "Summarize this repository and suggest the best next step."
+```
+
+Onboarding is the supported first-run path. It is expected to detect reusable config where possible, write credential references instead of inline secrets, and hand you off to a first concrete command.
+
+## Continue The Session
+
+When you need follow-up work:
+
+```bash
+loong chat
+```
+
+If you want to inspect the active provider's model catalog after credentials are healthy:
+
+```bash
+loong list-models
+```
+
+## What Success Looks Like
+
+- `loong onboard` finishes without leaving you in raw config editing as step zero.
+- `loong ask` produces one useful answer.
+- `loong chat` is available for follow-up work.
+- `loong doctor` is there as the repair path if something still looks off.
+
+## If First Run Feels Incomplete
+
+Go straight to [Doctor And Health](/get-started/doctor-and-health) when:
+
+- credentials were not detected cleanly
+- the provider path still feels ambiguous
+- `ask` or `chat` does not behave like a healthy local assistant path
+
+## Approximate Config Shape
+
+```toml
+active_provider = "openai"
+
+[providers.openai]
+kind = "openai"
+api_key = { env = "PROVIDER_API_KEY" }
+```
+
+The exact provider kind and env var will vary. The important part is that onboarding writes the same provider surface the runtime will keep using later.
+
+Secret reference note:
+- `api_key = { env = "PROVIDER_API_KEY" }` means "read the secret from that environment variable".
+- `api_key = "PROVIDER_API_KEY"` would instead be treated as the literal API key value itself.
+- The docs standardize on the `{ env = "..." }` shape because it is explicit and matches the wider secret-reference model.
+
+## Why This Page Stays Short
+
+- The first-run handoff should get you to one useful answer quickly.
+- Provider matrices, channel matrices, and richer runtime policy details belong in deeper guides.
+- The local CLI success path should come before gateway, channels, or broader product surfaces.
+
+## What Comes Next
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) if you want the public provider and model-selection contract.
+- Continue to [Doctor And Health](/get-started/doctor-and-health) if the first run is incomplete or unstable.
+- Continue to [Use Loong](/use-loong/overview) once the base operator path is healthy.

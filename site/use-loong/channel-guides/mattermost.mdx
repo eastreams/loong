@@ -1,0 +1,59 @@
+---
+title: Mattermost
+description: Configure the Mattermost channel surface in Loong.
+---
+
+# Mattermost
+
+This is a shipped config-backed outbound surface. Mattermost serve runtime is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `mattermost` |
+| Config key | `mattermost` |
+| Implementation status | `config_backed` |
+| Transport | `mattermost_rest_api` |
+| Aliases | `mm` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[mattermost]
+enabled = true
+server_url_env = "MATTERMOST_SERVER_URL"
+bot_token_env = "MATTERMOST_BOT_TOKEN"
+```
+
+## Smoke Test
+
+```bash
+loong mattermost-send --target "town-square" --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| channel send | `mattermost-send` | Usage: loong mattermost-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| event websocket service | `mattermost-serve` | mattermost serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `mattermost.enabled`<br/>`mattermost.accounts.<account>.enabled` | none | none |
+| server url | `mattermost.server_url`<br/>`mattermost.accounts.<account>.server_url` | `mattermost.server_url_env`<br/>`mattermost.accounts.<account>.server_url_env` | `MATTERMOST_SERVER_URL` |
+| bot token | `mattermost.bot_token`<br/>`mattermost.accounts.<account>.bot_token` | `mattermost.bot_token_env`<br/>`mattermost.accounts.<account>.bot_token_env` | `MATTERMOST_BOT_TOKEN` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

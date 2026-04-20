@@ -1,0 +1,390 @@
+---
+title: Provider Recipes
+description: Tutorial-style setup paths for hosted APIs, compatible gateways, local runtimes, and multi-profile configs.
+---
+
+# Provider Recipes
+
+This page turns the provider catalog into practical operator paths.
+
+Start with `loong onboard` if you do not have a working config yet. Use these recipes when you want to review, harden, or hand-tune what onboarding wrote.
+If you want the shared public provider-profile shape before the recipes become
+provider-specific, start with [Configuration Patterns](/use-loong/configuration-patterns).
+
+## Start Here
+
+Most operators only need one of these routes:
+
+| If your situation is... | Start with |
+| --- | --- |
+| one platform-first hosted provider should own first value | Recipe 1 |
+| one direct hosted provider your team already uses should stay explicit | Recipe 1 |
+| coding traffic should stay on a separate route | Recipe 2 |
+| the real provider is behind a gateway or compatibility layer | Recipe 3 |
+| the model server is local or self-hosted | Recipe 4 |
+| one config should hold several explicit lanes | Recipe 5 |
+| `model = "auto"` should stay, but recovery should be explicit | Recipe 6 |
+
+## Hosted Provider Quick Map
+
+Loong supports a broad hosted-provider catalog. Volcengine and BytePlus
+stay high in the order because they are a common first-run path, but the docs
+should keep the broader hosted map legible too.
+
+| Family | Current built-in kinds | Use it when |
+| --- | --- | --- |
+| platform-first hosted | `volcengine`, `byteplus` | one managed hosted provider should own first value and you want a short reviewed path |
+| direct hosted general | `openai`, `anthropic`, `gemini`, `deepseek`, `minimax`, `mistral`, `cohere`, `xai`, `zai`, `zhipu`, `qwen`, `kimi`, `groq`, `fireworks`, `together`, `perplexity`, `qianfan`, `cerebras`, `nvidia`, `sambanova`, `novita`, `siliconflow`, `stepfun`, `venice` | your team already runs on a named hosted provider and you want that family to stay explicit |
+| coding-specialized hosted | `volcengine_coding`, `byteplus_coding`, `kimi_coding`, `step_plan`, `bailian_coding` | coding traffic, pricing, or quota should stay on a deliberate lane |
+| gateway and platform routing | `openrouter`, `cloudflare_ai_gateway`, `vercel_ai_gateway`, `bedrock`, `custom` | a gateway, proxy, or managed route sits between Loong and the upstream models |
+| local and self-hosted | `ollama`, `lm_studio`, `llamacpp`, `vllm`, `sglang` | the model server boundary should stay operator-owned |
+
+## Pick The Right Recipe
+
+| Goal | Start with | Good fit when |
+| --- | --- | --- |
+| get one platform-first hosted provider running fast | Recipe 1 | Volcengine or BytePlus should own first value |
+| keep one direct hosted provider explicit | Recipe 1 | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, or another direct hosted family already owns the lane |
+| use the dedicated coding-plan lane explicitly | Recipe 2 | Volcengine Coding, BytePlus Coding, Kimi Coding, Step Plan, or Bailian Coding should stay separate from the general lane |
+| point Loong at a gateway or compatibility layer | Recipe 3 | internal proxy, OpenAI-compatible endpoint, or managed gateway |
+| run against a local model server | Recipe 4 | Ollama, LM Studio, llama.cpp, vLLM, or SGLang |
+| keep several providers in one config | Recipe 5 | cost, latency, quota, or region should stay explicit |
+| keep `model = "auto"` but make recovery explicit | Recipe 6 | model catalog discovery is flaky or region-sensitive |
+
+## Shared Readback Loop
+
+After each provider edit, use the same short verification loop:
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and summarize the active provider setup."
+```
+
+If `list-models` fails but chat still works, that is usually a signal to pin
+`provider.model`, add `preferred_models`, or fix the provider route rather than
+pretending discovery is always available.
+
+## Reading Rule
+
+- Use this page to get from provider lane to concrete config quickly.
+- Start with Recipe 1 unless you already know you are in a coding-lane, gateway, local, or multi-profile case.
+- Use [Configuration Patterns](/use-loong/configuration-patterns) when you
+  want the shared `active_provider` plus `providers.<id>` shape before the
+  provider-specific walkthroughs.
+- Jump to [Common Setups](/use-loong/common-setups) when provider choice only makes sense together with the delivery surface.
+- Come back to [Providers And Models](/use-loong/providers-and-models) when you need the broader chooser or model-selection contract.
+
+## Need A Full Rollout Instead?
+
+If the provider choice is already tied to a delivery surface, skip the narrower
+provider-only lane and jump straight to the matching playbook.
+
+| Stack | Jump here | Why |
+| --- | --- | --- |
+| Volcengine plus Feishu or Lark | [Volcengine Plus Feishu Or Lark](/use-loong/volcengine-feishu-lark-playbook) | hosted provider and team-chat runtime stay in one path |
+| Volcengine plus WeCom | [WeCom Rollout](/use-loong/wecom-rollout-playbook) | hosted provider and the official WeCom lane stay in one path |
+| BytePlus Coding plus Telegram | [BytePlus Coding Plus Telegram](/use-loong/byteplus-coding-telegram-playbook) | coding route and bot runtime stay explicit together |
+| local or self-hosted provider plus outbound delivery | [Local Model Plus Outbound Delivery](/use-loong/local-outbound-playbook) | local inference and outbound-only delivery stay truthful |
+
+## Recipe 1: One Hosted Provider Profile
+
+This is the cleanest path when one hosted provider should own the current
+runtime. The exact built-in kind can be Volcengine, BytePlus, OpenAI,
+Anthropic, Gemini, DeepSeek, MiniMax, or another direct hosted family.
+
+### Platform-First Hosted: Volcengine Or BytePlus
+
+```toml
+active_provider = "volcengine"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+```
+
+BytePlus variant:
+
+```toml
+active_provider = "byteplus"
+
+[providers.byteplus]
+kind = "byteplus"
+api_key = { env = "BYTEPLUS_API_KEY" }
+model = "auto"
+```
+
+Secret reference rule:
+- `api_key = { env = "ARK_API_KEY" }` or `api_key = { env = "BYTEPLUS_API_KEY" }` means the runtime should read the secret from that env var.
+- `api_key = "ARK_API_KEY"` would mean the literal string `ARK_API_KEY` is the configured key.
+
+Use this when:
+
+- one hosted provider should own first value cleanly
+- you want the runtime to keep model choice visible instead of burying it in a proxy story
+- you do not need multiple saved profiles yet
+
+What to do next:
+
+1. Run `loong doctor` to verify credentials and route health.
+2. Run `loong list-models` once credentials are healthy.
+3. Keep `model = "auto"` during first setup, then pin an explicit model if you want deterministic behavior.
+
+Operational notes:
+
+- `volcengine` and `byteplus` are the general hosted lanes, not the coding-plan lanes.
+- Volcengine defaults to `ARK_API_KEY`.
+- BytePlus defaults to `BYTEPLUS_API_KEY` and also accepts `ARK_API_KEY` as an alias.
+
+### Other Direct Hosted Families
+
+The same provider-profile shape works for the broader direct-hosted set. Swap
+the built-in `kind`, the default credential env, and the reviewed model choice.
+
+```toml
+active_provider = "openai"
+
+[providers.openai]
+kind = "openai"
+api_key = { env = "OPENAI_API_KEY" }
+model = "auto"
+```
+
+Representative direct-hosted variants:
+
+| Built-in kind | Default key env | Notes |
+| --- | --- | --- |
+| `openai` | `OPENAI_API_KEY` | good when one OpenAI profile should stay explicit |
+| `anthropic` | `ANTHROPIC_API_KEY` | the built-in kind keeps the Messages-protocol details visible |
+| `gemini` | `GEMINI_API_KEY` | use the built-in Gemini family instead of forcing a compatibility proxy |
+| `deepseek` | `DEEPSEEK_API_KEY` | pairs well with `preferred_models` when recovery should stay explicit |
+| `minimax` | `MINIMAX_API_KEY` | set `base_url` explicitly when the account uses the global endpoint |
+| `mistral` | `MISTRAL_API_KEY` | same profile shape, built-in auth and endpoint defaults |
+| `cohere` | `COHERE_API_KEY` | same profile shape, built-in auth and endpoint defaults |
+| `xai` | `XAI_API_KEY` | same profile shape, built-in auth and endpoint defaults |
+| `zhipu` | `ZHIPUAI_API_KEY` | `ZHIPU_API_KEY` is also accepted as an alias |
+
+The broader direct-hosted catalog also includes `qwen`, `kimi`, `zai`, `groq`,
+`fireworks`, `together`, `perplexity`, `qianfan`, `cerebras`, `nvidia`,
+`sambanova`, `novita`, `siliconflow`, `stepfun`, and `venice`. Use the built-in
+provider `kind`, then let `loong onboard` or `loong doctor` surface the exact
+default credential env and readiness hints for that family.
+
+## Recipe 2: Dedicated Coding Lane
+
+Use this lane when coding traffic should stay on the dedicated coding-plan
+route instead of the normal hosted chat lane.
+
+Volcengine Coding example:
+
+```toml
+active_provider = "coding"
+
+[providers.coding]
+kind = "volcengine_coding"
+api_key = { env = "ARK_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+BytePlus Coding variant:
+
+```toml
+active_provider = "coding"
+
+[providers.coding]
+kind = "byteplus_coding"
+api_key = { env = "BYTEPLUS_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+Use this when:
+
+- coding quota or billing should stay separate from the normal hosted lane
+- your org expects the dedicated `/api/coding/v3` route
+- you do not want a general hosted profile accidentally drifting into the wrong pricing path
+
+Important boundary:
+
+- `volcengine` and `byteplus` belong to the general `/api/v3` lane.
+- `volcengine_coding` and `byteplus_coding` belong to `/api/coding/v3`.
+- Do not point a general kind at the coding route, or a coding kind at the general route. Keep the provider `kind` and route family aligned so runtime validation and quota expectations match.
+- Other coding-specialized families such as `kimi_coding`, `step_plan`, and `bailian_coding` follow the same rule: keep a separate profile id, use the matching built-in `kind`, and pin a reviewed coding model instead of letting the general hosted lane absorb the traffic by accident.
+
+## Recipe 3: OpenAI-Compatible Gateway Or Managed Proxy
+
+Use a built-in provider kind when Loong already knows the provider family.
+Use `kind = "custom"` when the endpoint is OpenAI-compatible but does not map to
+one of the built-in families.
+
+```toml
+active_provider = "gateway"
+
+[providers.gateway]
+kind = "custom"
+base_url = "https://codex.example.com/v1"
+wire_api = "responses"
+models_endpoint = "https://codex.example.com/v1/models"
+api_key = { env = "GATEWAY_API_KEY" }
+model = "your-reviewed-model-id"
+```
+
+Use this when:
+
+- the team runs a compatibility proxy in front of upstream providers
+- you are connecting to a managed gateway instead of a first-party provider
+- the provider route is stable, but the model catalog may live on a different endpoint
+
+Important notes:
+
+- If the endpoint already maps to a built-in family such as `openrouter`, `cloudflare_ai_gateway`, or `vercel_ai_gateway`, prefer that built-in kind over `custom`.
+- Keep `wire_api = "chat_completions"` unless the endpoint really expects the Responses API.
+- If you set `endpoint` or `models_endpoint` explicitly, later `base_url` edits will not rewrite those routes for you.
+- If chat works but catalog probing fails, pin `model` explicitly and treat the catalog as optional recovery material rather than a hard requirement.
+
+## Recipe 4: Local Or Self-Hosted Provider
+
+Loong has built-in kinds for several local and self-hosted lanes.
+
+| Provider kind | Typical base URL |
+| --- | --- |
+| `ollama` | `http://127.0.0.1:11434` |
+| `lm_studio` | `http://127.0.0.1:1234` |
+| `llamacpp` | `http://127.0.0.1:8080` |
+| `vllm` | set the server URL you run |
+| `sglang` | set the server URL you run |
+
+Example with Ollama:
+
+```toml
+active_provider = "local"
+
+[providers.local]
+kind = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "auto"
+```
+
+Example with a remote vLLM host:
+
+```toml
+active_provider = "gpu-lab"
+
+[providers.gpu-lab]
+kind = "vllm"
+base_url = "http://gpu-box.internal:8000"
+model = "your-reviewed-model-id"
+```
+
+Use this when:
+
+- you want local control over model hosting
+- one machine or one lab box owns the model runtime
+- you are willing to pin model names when catalog discovery is thin or absent
+
+Practical guidance:
+
+- Start with `model = "auto"` only if the server exposes enough catalog information to make that useful.
+- If the server effectively has one production model, pin `model` explicitly and skip discovery drama.
+- Prefer a stable profile id such as `local`, `gpu-lab`, or `lmstudio-dev` instead of rewriting one profile back and forth.
+
+## Recipe 5: Keep Multiple Saved Provider Profiles
+
+Loong supports provider profiles directly. That means you do not need to
+throw away a working profile when you add a second one.
+
+```toml
+active_provider = "ark_main"
+
+[providers.ark_main]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+
+[providers.ark_coding]
+kind = "volcengine_coding"
+api_key = { env = "ARK_API_KEY" }
+model = "your-reviewed-coding-model"
+
+[providers.review_fallback]
+kind = "deepseek"
+api_key = { env = "DEEPSEEK_API_KEY" }
+model = "deepseek-chat"
+```
+
+Use this when:
+
+- general chat, coding work, and fallback review should stay explicit
+- some work should stay on one quota or region while other work should not
+- the team wants explicit provider choices instead of one profile being overwritten repeatedly
+
+Recommended workflow:
+
+1. Keep profile ids semantic, such as `ark_main`, `ark_coding`, `review_fallback`, or `ops_gateway`.
+2. Change `active_provider` deliberately when you want to switch lanes.
+3. Re-run `loong doctor` after switching, because the active route and health checks should follow the active profile, not the last one you happened to edit.
+
+You can build the same pattern with BytePlus, gateway, and local profiles too.
+
+## Recipe 6: Keep Auto Discovery, But Add Explicit Recovery
+
+This is the right pattern when you like the onboarding path and dynamic catalog
+lookup, but you do not want the runtime inventing hidden defaults.
+
+DeepSeek example:
+
+```toml
+active_provider = "deepseek"
+
+[providers.deepseek]
+kind = "deepseek"
+api_key = { env = "DEEPSEEK_API_KEY" }
+model = "auto"
+preferred_models = ["deepseek-chat", "deepseek-reasoner"]
+```
+
+MiniMax global-region example:
+
+```toml
+active_provider = "minimax-global"
+
+[providers.minimax-global]
+kind = "minimax"
+base_url = "https://api.minimax.io"
+api_key = { env = "MINIMAX_API_KEY" }
+model = "auto"
+preferred_models = ["MiniMax-M2.7", "MiniMax-M2.5"]
+```
+
+Why this pattern matters:
+
+- `preferred_models` is an operator-owned fallback order, not a hidden provider default.
+- reviewed onboarding defaults currently exist for DeepSeek (`deepseek-chat`) and MiniMax (`MiniMax-M2.7`)
+- region-sensitive providers may need an explicit `base_url` that matches the account region
+
+Region note:
+
+- MiniMax defaults to the CN endpoint `https://api.minimaxi.com`
+- the global MiniMax endpoint is `https://api.minimax.io`
+- if you later set `provider.endpoint` or `provider.models_endpoint`, changing only `provider.base_url` will no longer move those explicit overrides
+
+## Troubleshooting Patterns
+
+| Symptom | What to do |
+| --- | --- |
+| credentials look healthy, but `list-models` fails while config still uses `model = "auto"` | rerun onboarding and accept a reviewed model when available, or set `provider.model` / `preferred_models` explicitly |
+| auth failures show up only on some region-sensitive providers | verify `base_url`, `endpoint`, and `models_endpoint` all match the account region |
+| `volcengine_coding` or `byteplus_coding` was pointed at a generic `/api/v3` path | switch back to the dedicated coding kind and route pairing instead of patching around it with ad-hoc URL overrides |
+| a compatibility gateway answers chat requests but model discovery is broken | keep the gateway profile, pin `model`, and only keep `models_endpoint` when the endpoint is actually real |
+| a local server only serves one production model | set `provider.model` explicitly instead of treating catalog discovery as mandatory |
+| you are no longer sure which profile is active | check `active_provider`, then rerun `loong doctor` against the current config |
+
+## Continue Reading
+
+| If you want to... | Go here |
+| --- | --- |
+| return to the provider chooser and model-selection contract | [Providers And Models](/use-loong/providers-and-models) |
+| inspect the full built-in provider matrix | [Provider Guides](/use-loong/provider-guides/index) |
+| move from provider-only setup to a full rollout path | [Common Setups](/use-loong/common-setups) |
+| choose a delivery surface after provider setup is healthy | [Channels](/use-loong/channels) |
+| go straight to concrete channel demos | [Channel Guides](/use-loong/channel-guides/index) and [Channel Recipes](/use-loong/channel-recipes) |

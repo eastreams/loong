@@ -1,0 +1,54 @@
+name: perf-lint
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+      - release
+      - 'release/**'
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/lint_programmatic_pressure_baseline.sh'
+      - 'examples/benchmarks/**'
+      - 'crates/daemon/**'
+      - 'crates/spec/**'
+      - 'crates/kernel/**'
+      - 'crates/app/**'
+  push:
+    branches:
+      - dev
+      - main
+      - release
+      - 'release/**'
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/lint_programmatic_pressure_baseline.sh'
+      - 'examples/benchmarks/**'
+      - 'crates/daemon/**'
+      - 'crates/spec/**'
+      - 'crates/kernel/**'
+      - 'crates/app/**'
+
+concurrency:
+  group: perf-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perf-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Lint benchmark baseline
+        run: ./scripts/lint_programmatic_pressure_baseline.sh

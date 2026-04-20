@@ -1,0 +1,73 @@
+---
+title: LINE
+description: Configure the LINE channel surface in Loong.
+---
+
+# LINE
+
+This is a shipped standalone native-serve surface: direct sends are implemented, the signed webhook reply loop is implemented, and the runtime stays on `line-serve` instead of `gateway run` today.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `line` |
+| Config key | `line` |
+| Implementation status | `runtime_backed` |
+| Transport | `line_messaging_api` |
+| Aliases | `line-bot` |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[line]
+enabled = true
+channel_access_token_env = "LINE_CHANNEL_ACCESS_TOKEN"
+channel_secret_env = "LINE_CHANNEL_SECRET"
+```
+
+## Smoke Test
+
+```bash
+loong line-send --target "U4af4980629..." --text "hello from loong"
+loong line-serve --bind 127.0.0.1:6401
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| push send | `line-send` | Usage: loong line-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| webhook reply loop | `line-serve` | Usage: loong line-serve --bind &lt;HOST:PORT&gt; [--path &lt;PATH&gt;] |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `line.enabled`<br/>`line.accounts.<account>.enabled` | none | none |
+| channel access token | `line.channel_access_token`<br/>`line.accounts.<account>.channel_access_token` | `line.channel_access_token_env`<br/>`line.accounts.<account>.channel_access_token_env` | `LINE_CHANNEL_ACCESS_TOKEN` |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `line.enabled`<br/>`line.accounts.<account>.enabled` | none | none |
+| channel access token | `line.channel_access_token`<br/>`line.accounts.<account>.channel_access_token` | `line.channel_access_token_env`<br/>`line.accounts.<account>.channel_access_token_env` | `LINE_CHANNEL_ACCESS_TOKEN` |
+| channel secret | `line.channel_secret`<br/>`line.accounts.<account>.channel_secret` | `line.channel_secret_env`<br/>`line.accounts.<account>.channel_secret_env` | `LINE_CHANNEL_SECRET` |
+
+## Gateway And Ownership
+
+This surface ships a real built-in serve loop, but it remains a standalone native-serve lane today. Use `line-serve` directly; it does not join `multi-channel-serve` or the gateway-owned reply-loop contract yet.
+
+## Operator Notes
+
+- `line-serve` requires `--bind` because the local listener address stays an explicit operator decision.
+- `--path` is optional when the default webhook path already matches the LINE console setup.
+- Treat this as a native serve lane, not as an outbound-only sink.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

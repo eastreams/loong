@@ -1,0 +1,47 @@
+---
+title: Releases
+description: Public release notes and announcements.
+---
+
+# Releases
+
+Use this page when you want the public release trail quickly.
+
+Public release material remains in:
+
+- [GitHub Releases](https://github.com/eastreams/loong/releases)
+- [CHANGELOG.md](https://github.com/eastreams/loong/blob/dev/CHANGELOG.md)
+- the public release notes under [`docs/releases/`](https://github.com/eastreams/loong/tree/dev/docs/releases)
+
+This page is the public release entrypoint. The raw repository directory stays
+available because release notes are tracked in git, but the reader-facing path
+should start here or at GitHub Releases.
+
+## What To Expect Here
+
+- Release notes and changelog-style history are public.
+- Reader-facing version history belongs in the OSS repository.
+- Release-support files may still exist in the repository when automation depends on them, but they are not the default reader path.
+
+## How To Read The Repository Release Directory
+
+When you open `docs/releases/` in the repository:
+
+- start with files named `vX.Y.Z*.md` when you want the canonical public release note
+- read `*-announcement.md` when you want the shorter announcement-style artifact
+- treat `support/README.md` and `support/TEMPLATE.md` as maintainer or
+  release-governance support material
+
+## What Still Lives In The Repository
+
+Some release-support files still remain in the repository because scripts and
+release-governance checks depend on them.
+
+They stay in the repo as support material for public release quality, but they
+are not promoted as part of the primary user-facing docs navigation.
+
+## Use These References When
+
+- you want to understand what changed between released versions
+- you need the public release trail without digging through release-support helpers
+- you are evaluating whether a behavior change has already been documented for users

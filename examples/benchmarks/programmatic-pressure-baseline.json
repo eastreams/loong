@@ -1,0 +1,59 @@
+{
+  "profile": "programmatic-pressure-baseline-v1",
+  "scenarios": {
+    "rate_limit_steady_state": {
+      "max_error_rate": 0.0,
+      "max_p95_latency_ms": 600,
+      "max_p99_latency_ms": 800,
+      "min_throughput_rps": 12.0,
+      "min_peak_in_flight": 2.0,
+      "max_circuit_open_error_ratio": 0.0,
+      "expected_schema_fingerprint": "cd2523cfa4ed8ca4d29a55f8f4a386fe9c110812190501fd9687ec44330e169e",
+      "tolerance": {
+        "max_ratio": 0.15,
+        "min_ratio": 0.1,
+        "latency_ms": 20.0
+      }
+    },
+    "adaptive_concurrency_recovery": {
+      "max_error_rate": 0.0,
+      "max_p95_latency_ms": 900,
+      "max_p99_latency_ms": 1200,
+      "min_throughput_rps": 8.0,
+      "min_peak_in_flight": 2.0,
+      "max_circuit_open_error_ratio": 0.2,
+      "expected_schema_fingerprint": "73b2d6f1a265030e812da87835070198d2191104d0685c02cce03b1c301c33a3",
+      "tolerance": {
+        "max_ratio": 0.2,
+        "min_ratio": 0.1,
+        "latency_ms": 25.0
+      }
+    },
+    "circuit_open_pressure": {
+      "max_error_rate": 0.0,
+      "max_p95_latency_ms": 600,
+      "max_p99_latency_ms": 900,
+      "min_throughput_rps": 6.0,
+      "min_peak_in_flight": 1.0,
+      "max_circuit_open_error_ratio": 0.9,
+      "expected_schema_fingerprint": "e01f8cbe85dc1d45a7369d18844930f2e6c3d33dd8e077cdc7d2c46e15eff66a",
+      "tolerance": {
+        "max_ratio": 0.2,
+        "min_ratio": 0.1,
+        "latency_ms": 20.0
+      }
+    },
+    "circuit_half_open_transition": {
+      "max_error_rate": 0.0,
+      "max_p95_latency_ms": 800,
+      "max_p99_latency_ms": 900,
+      "min_throughput_rps": 1.0,
+      "max_half_open_p95_ms": 500,
+      "tolerance": {
+        "max_ratio": 0.15,
+        "min_ratio": 0.0,
+        "latency_ms": 30.0
+      }
+    }
+  }
+}

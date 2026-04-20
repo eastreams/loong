@@ -1,0 +1,48 @@
+name: perf-benchmark
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: perf-benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LOONG_BENCH_PROFILE: release
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Run programmatic pressure benchmark
+        run: ./scripts/benchmark_programmatic_pressure.sh
+
+      - name: Run wasm cache benchmark
+        run: ./scripts/benchmark_wasm_cache.sh
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: programmatic-pressure-report-${{ github.run_id }}
+          path: target/benchmarks/programmatic-pressure-report.json
+          retention-days: 30
+
+      - name: Upload wasm cache benchmark report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wasm-cache-benchmark-report-${{ github.run_id }}
+          path: target/benchmarks/wasm-cache-benchmark-report.json
+          retention-days: 30

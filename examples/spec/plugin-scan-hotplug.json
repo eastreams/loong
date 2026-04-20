@@ -1,0 +1,45 @@
+{
+  "pack": {
+    "pack_id": "ops-plugin-scan",
+    "domain": "ops",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [],
+    "metadata": {
+      "owner": "community",
+      "stage": "bootstrap"
+    }
+  },
+  "agent_id": "agent-community-01",
+  "ttl_s": 300,
+  "defaults": {
+    "connector": "http-core",
+    "runtime": "native-core",
+    "tool": "core-tools",
+    "memory": "kv-core"
+  },
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins"
+    ]
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "connector_legacy",
+    "connector_name": "openrouter",
+    "operation": "chat",
+    "required_capabilities": [
+      "InvokeConnector"
+    ],
+    "payload": {
+      "channel_id": "primary",
+      "prompt": "hello"
+    }
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "required_files": [
+    "Taskfile.yml",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "CONTRIBUTING.md",
+    "scripts/pre-commit",
+    "docs/RELIABILITY.md",
+    "docs/SECURITY.md",
+    "docs/QUALITY_SCORE.md",
+    "docs/design-docs/index.md",
+    "docs/design-docs/core-beliefs.md",
+    "docs/design-docs/layered-kernel-design.md",
+    "docs/design-docs/harness-engineering.md"
+  ],
+  "taskfile_checks": {
+    "Taskfile.yml": [
+      "check:architecture:",
+      "check:conventions:",
+      "check:harness:",
+      "verify:",
+      "verify:full:"
+    ]
+  },
+  "canonical_pointer_mode": "all",
+  "canonical_pointers": [
+    {
+      "name": "claude-mirror",
+      "file": "CLAUDE.md",
+      "text": "intentionally mirrored in `CLAUDE.md` and `AGENTS.md`"
+    },
+    {
+      "name": "agents-mirror",
+      "file": "AGENTS.md",
+      "text": "intentionally mirrored in `CLAUDE.md` and `AGENTS.md`"
+    }
+  ],
+  "content_checks": [
+    {
+      "name": "claude-command-contract",
+      "file": "CLAUDE.md",
+      "required_markers": [
+        "Architecture check: `task check:architecture`",
+        "Convention check: `task check:conventions`",
+        "Runs CI-parity cargo checks before each commit.",
+        "Use `task verify` for the stricter local superset"
+      ]
+    },
+    {
+      "name": "agents-command-contract",
+      "file": "AGENTS.md",
+      "required_markers": [
+        "Architecture check: `task check:architecture`",
+        "Convention check: `task check:conventions`",
+        "Runs CI-parity cargo checks before each commit.",
+        "Use `task verify` for the stricter local superset"
+      ]
+    },
+    {
+      "name": "claude-structure",
+      "file": "CLAUDE.md",
+      "required_markers": [
+        "## 1. Start Here",
+        "## 2. Architecture Contract",
+        "## 3. Commands",
+        "## 4. Non-Negotiable Rules",
+        "## 5. Verification Gates",
+        "## 7. Where to Look Next"
+      ]
+    },
+    {
+      "name": "agents-structure",
+      "file": "AGENTS.md",
+      "required_markers": [
+        "## 1. Start Here",
+        "## 2. Architecture Contract",
+        "## 3. Commands",
+        "## 4. Non-Negotiable Rules",
+        "## 5. Verification Gates",
+        "## 7. Where to Look Next"
+      ]
+    },
+    {
+      "name": "architecture-structure",
+      "file": "ARCHITECTURE.md",
+      "required_markers": [
+        "## Crate Structure",
+        "## Layered Execution Model",
+        "## Design Principles"
+      ]
+    },
+    {
+      "name": "contributing-structure",
+      "file": "CONTRIBUTING.md",
+      "required_markers": [
+        "## Contribution Tracks",
+        "## Where Do I Start?"
+      ]
+    },
+    {
+      "name": "security-structure",
+      "file": "docs/SECURITY.md",
+      "required_markers": [
+        "## Security Model",
+        "## Enforcement Points"
+      ]
+    },
+    {
+      "name": "quality-structure",
+      "file": "docs/QUALITY_SCORE.md",
+      "required_markers": [
+        "## Domain Grades",
+        "## Grading Criteria",
+        "## Harness Maturity Assessment"
+      ]
+    },
+    {
+      "name": "design-index-structure",
+      "file": "docs/design-docs/index.md",
+      "required_markers": [
+        "## Active Design Documents",
+        "## Key Patterns",
+        "## Tracked Deviations",
+        "## Decision Log"
+      ]
+    },
+    {
+      "name": "pre-commit-ci-parity",
+      "file": "scripts/pre-commit",
+      "required_markers": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+        "cargo test --workspace",
+        "cargo test --workspace --all-features"
+      ]
+    }
+  ],
+  "invariant_contract": {
+    "required": false
+  }
+}

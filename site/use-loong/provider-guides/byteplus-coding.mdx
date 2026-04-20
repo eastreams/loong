@@ -1,0 +1,68 @@
+---
+title: BytePlus Coding
+description: Configure the BytePlus Coding provider profile in Loong.
+---
+
+# BytePlus Coding
+
+Dedicated coding lanes that keep coding quota, pricing, or route ownership separate from the general assistant lane. This page covers the built-in `byteplus_coding` provider kind directly.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `byteplus_coding` |
+| Provider group | Coding-Specialized Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `volcengine` |
+| Auth scheme | `bearer` |
+| Credential envs | BYTEPLUS_API_KEY, ARK_API_KEY |
+| Aliases | `byteplus_coding_compatible` |
+| Default base URL | `https://ark.ap-southeast.bytepluses.com/api/coding/v3` |
+| Request endpoint | `https://ark.ap-southeast.bytepluses.com/api/coding/v3/chat/completions` |
+| Models endpoint | `https://ark.ap-southeast.bytepluses.com/api/coding/v3/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "byteplus_coding"
+
+[providers.byteplus_coding]
+kind = "byteplus_coding"
+api_key = { env = "BYTEPLUS_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `BYTEPLUS_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://ark.ap-southeast.bytepluses.com/api/coding/v3/chat/completions` |
+| Primary model-catalog route | `https://ark.ap-southeast.bytepluses.com/api/coding/v3/models` |
+
+## Operator Notes
+
+- Loong's BytePlus OpenAI-compatible path uses `provider.api_key` / `BYTEPLUS_API_KEY` and sends `Authorization: Bearer <BYTEPLUS_API_KEY>`; AK/SK request signing is not used on this path.
+- Keep this lane separate from the general `byteplus` lane so coding pricing and route ownership do not drift into the normal hosted profile by accident.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.
+- Continue to [BytePlus Coding Plus Telegram](/use-loong/byteplus-coding-telegram-playbook) when the provider choice already belongs to that rollout path.

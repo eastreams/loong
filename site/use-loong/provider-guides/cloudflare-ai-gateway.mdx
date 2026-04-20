@@ -1,0 +1,67 @@
+---
+title: Cloudflare AI Gateway
+description: Configure the Cloudflare AI Gateway provider profile in Loong.
+---
+
+# Cloudflare AI Gateway
+
+Use this when Cloudflare AI Gateway owns the upstream route and you want the gateway path, account id, and gateway name to remain operator-visible.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `cloudflare_ai_gateway` |
+| Provider group | Gateway And Compatibility Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | CLOUDFLARE_API_KEY, CLOUDFLARE_AI_GATEWAY_API_KEY |
+| Aliases | `cloudflare-ai-gateway`, `cloudflare_ai`, `cloudflare-ai`, `cloudflare` |
+| Default base URL | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat` |
+| Request endpoint | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat/chat/completions` |
+| Models endpoint | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "cloudflare_ai_gateway"
+
+[providers.cloudflare_ai_gateway]
+kind = "cloudflare_ai_gateway"
+base_url = "https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat"
+api_key = { env = "CLOUDFLARE_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `CLOUDFLARE_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat/chat/completions` |
+| Primary model-catalog route | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat/models` |
+
+## Operator Notes
+
+- cloudflare_ai_gateway requires tenant-scoped base_url configuration: replace `<account_id>` and `<gateway_name>` in `provider.base_url` with your real Cloudflare AI Gateway path; current template: `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>/openai/compat`.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

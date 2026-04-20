@@ -1,0 +1,111 @@
+---
+title: Contribution Workflow
+description: The public contribution bar, validation flow, and standard PR path.
+---
+
+# Contribution Workflow
+
+Loong treats docs, tests, verification, and architecture boundaries as part
+of a complete contribution.
+
+## Contribution Tracks
+
+Loong publicly distinguishes two contribution tracks.
+
+| Track | Good fit | What changes usually fall here |
+| --- | --- | --- |
+| Track A | routine and low-risk work | docs updates, tests, small refactors, contained bug fixes |
+| Track B | higher-risk work | security-sensitive behavior, public contract changes, kernel or policy changes, architecture-impacting refactors |
+
+## Validation Bar
+
+The public minimum validation bar is:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+cargo test --workspace --all-features
+```
+
+The main local convenience gate is:
+
+```bash
+task verify
+```
+
+If a contribution changes architecture-sensitive areas, contributors should also
+expect to run the repo's architecture and dependency checks instead of assuming
+CI will discover every boundary regression later.
+
+## Docs Change Loop
+
+For reader-facing docs work under `site/`, use the docs-specific validation loop
+in addition to the normal repository bar that still applies to the branch.
+
+```bash
+cd site
+NODE20_BIN="$(npm exec --yes --package=node@20.20.2 -- node -p 'process.execPath')"
+PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify broken-links
+PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify export --output /tmp/loong-docs-export.zip
+```
+
+That loop belongs to the public contribution workflow because Mintlify docs are
+deployed from this repository, not from a separate docs repo.
+The versions are pinned so contributors do not hit two avoidable false failures:
+a transient registry mismatch on Mintlify, or an unsupported local Node 25+
+shell leaking into the docs validation path.
+The extra PATH step is intentional because Mintlify's wrapper spawns `node`
+from the shell path instead of reusing the outer npm exec runtime automatically.
+GitHub Actions mirrors this same loop in the `docs-site` job, so docs pull
+requests should be reproducible locally before review.
+The CI export step is time-bounded because Mintlify can occasionally leave the
+process alive after the static export artifact has already been written.
+
+## Standard Workflow
+
+1. Branch from `dev`.
+2. Keep commits focused on one task or one coherent slice of work.
+3. Run the relevant validation checks before opening a PR.
+4. Open the PR against `dev`.
+5. Address review feedback without letting the branch sprawl into unrelated work.
+
+## When To Start With An Issue First
+
+Open an issue or discussion before deep implementation when:
+
+- the change affects kernel or policy behavior
+- the change weakens or reshapes a public contract
+- the change is large enough that scope alignment matters more than coding speed
+- you are not sure whether the work belongs in Track A or Track B
+
+## What Maintainers Expect
+
+- public architecture boundaries should be preserved rather than bypassed
+- reader-facing docs should be updated when the public contract changes
+- generated or agent-assisted code still needs human ownership and review
+- smaller, reviewable diffs are preferred over opaque drops that no reviewer can defend
+
+## Issue Intake
+
+| If you have... | Public path |
+| --- | --- |
+| a reproducible runtime or workflow defect | bug report issue |
+| a new capability or meaningful behavior change | feature request issue |
+| confusing public docs or onboarding drift | documentation improvement issue |
+| setup questions or broader discussion | GitHub Discussions or community channels |
+| a vulnerability | private security advisory flow |
+
+## Documentation Language Scope
+
+- The repository keeps Simplified Chinese support only for `README.zh-CN.md`.
+- The Mintlify site under `site/` is the main English reader-facing docs surface.
+- Repository markdown under `docs/` remains public as supporting reference and source-facing material.
+- If broader docs i18n is introduced later, it should happen at the docs-site layer instead of by expanding repository-wide markdown translation.
+
+## Deep References
+
+- [Contributing](https://github.com/eastreams/loong/blob/dev/CONTRIBUTING.md)
+- [Docs Workflow](/build-on-loong/docs-workflow)
+- [Contribution Areas We Especially Welcome](https://github.com/eastreams/loong/blob/dev/docs/references/contribution-areas.md)
+- Maintainer-managed GitHub intake details, labels, and automation rules stay repository-native instead of being promoted as primary reader-facing docs.

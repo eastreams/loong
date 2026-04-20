@@ -1,0 +1,130 @@
+[workspace]
+members = [
+  "crates/contracts",
+  "crates/kernel",
+  "crates/protocol",
+  "crates/bridge-runtime",
+  "crates/spec",
+  "crates/bench",
+  "crates/app",
+  "crates/daemon",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.2-alpha.1"
+authors = ["chumyin"]
+repository = "https://github.com/eastreams/loong"
+homepage = "https://github.com/eastreams/loong"
+
+[workspace.dependencies]
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+dialoguer = { version = "0.12", features = ["fuzzy-select"] }
+console = "0.16.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+semver = "1"
+thiserror = "2"
+chrono = "0.4"
+time = { version = "0.3.47", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "cookies", "json", "multipart", "rustls-tls", "gzip", "deflate", "stream"] }
+futures-util = "0.3"
+hex = "0.4"
+sha2 = "0.11"
+flate2 = "1"
+tar = "0.4.45"
+rand = "0.10.1"
+regex = "1.12.3"
+wasmparser = "0.246"
+base64 = "0.22"
+bech32 = "0.11"
+ed25519-dalek = "2.2"
+secp256k1 = "0.31"
+wasmtime = { version = "43.0.1", default-features = false, features = ["std", "runtime", "cranelift"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+which = "8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "forbid"
+unused_must_use = "deny"
+unreachable_patterns = "deny"
+
+[workspace.lints.clippy]
+# === Deny: these block CI ===
+
+# Safety-critical: no debug artifacts or forgotten stubs
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+get_unwrap = "deny"
+
+# Error handling
+error_impl_error = "deny"
+
+# Unsafe discipline: every unsafe block documented, one op per block
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+
+# Process safety
+exit = "deny"
+mem_forget = "deny"
+
+# Panic prevention — agent runtime must never panic in production
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+panic_in_result_fn = "deny"
+
+# Debug artifact prevention
+print_stdout = "deny"
+print_stderr = "deny"
+
+# Error quality
+map_err_ignore = "deny"
+
+# Exhaustiveness: catch-all match arms hide new enum variants
+wildcard_enum_match_arm = "deny"
+
+# Clone hygiene: flag unnecessary clones
+redundant_clone = "deny"
+
+# Missing docs (allow for now — large existing surface)
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
+
+# === Pedantic allows (rationale per lint) ===
+module_name_repetitions = "allow"
+too_many_arguments = "allow"
+new_without_default = "allow"
+option_if_let_else = "allow"
+redundant_pub_crate = "allow"
+use_self = "allow"
+missing_const_for_fn = "allow"
+derive_partial_eq_without_eq = "allow"
+branches_sharing_code = "allow"
+must_use_candidate = "allow"
+doc_markdown = "allow"
+return_self_not_must_use = "allow"
+type_complexity = "allow"
+
+[patch.crates-io]
+dialoguer = { path = "patches/dialoguer-0.12.0" }

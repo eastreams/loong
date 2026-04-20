@@ -1,0 +1,343 @@
+---
+title: Configuration Patterns
+description: Shared public config shapes for providers, channels, account selectors, memory, and outbound trust.
+---
+
+# Configuration Patterns
+
+Use this page when you want the shared public config shape before reading the
+full field-level reference.
+
+This page is intentionally about patterns, not every field. It should help you
+recognize how Loong's config is organized before you drop into provider
+guides, channel guides, rollout recipes, or the deeper
+[Configuration Reference](/use-loong/configuration-reference) page.
+
+## Start With The Right Question
+
+| If you need... | Start here |
+| --- | --- |
+| every field, default, or `validate-config` note | [Configuration Reference](/use-loong/configuration-reference) |
+| one provider profile that should own first value | [Single Provider Profile](#single-provider-profile) |
+| several explicit provider lanes in one file | [Multi-Profile Provider Config](#multi-profile-provider-config) |
+| one service-channel account that should own a reply loop | [Single-Account Channel Shape](#single-account-channel-shape) |
+| several channel accounts with stable selector ids | [Multi-Account Channel Shape](#multi-account-channel-shape) |
+| `gateway run` or `multi-channel-serve` selectors | [Gateway Selector Rule](#gateway-selector-rule) |
+| managed skill install, exposure, and persisted download policy | [Managed Skills](/use-loong/managed-skills) |
+| built-in web or browser private-host and domain rules | [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) |
+| outbound sends to a private bridge or self-hosted HTTP endpoint | [Outbound HTTP Trust Toggle](#outbound-http-trust-toggle) |
+| the current public memory shape | [Memory Profile Shape](#memory-profile-shape) |
+
+## Public Top-Level Shape
+
+Loong keeps the top-level operator config explicit:
+
+- `active_provider` chooses the current provider lane
+- `providers.<id>` stores reviewed provider profiles
+- channel families such as `feishu`, `telegram`, or `wecom` keep their own
+  account-aware config blocks
+- `external_skills` keeps managed skill enablement and download policy explicit
+- `tools.browser`, `tools.web`, and `tools.browser_companion` keep browser
+  session limits, trust boundaries, and companion policy explicit instead of
+  hiding them in helper scripts
+- `memory.profile` stays operator-visible instead of hiding behind prompt logic
+- top-level runtime toggles such as `outbound_http` stay explicit
+
+Example:
+
+```toml
+active_provider = "volcengine"
+
+[memory]
+profile = "window_only"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+
+[feishu]
+enabled = true
+domain = "lark"
+mode = "websocket"
+receive_id_type = "chat_id"
+app_id = { env = "LARK_APP_ID" }
+app_secret = { env = "LARK_APP_SECRET" }
+allowed_chat_ids = ["oc_ops_room"]
+```
+
+This is the public pattern: one provider lane, one explicit memory profile, and
+one channel family that stays visible in config instead of being hidden behind a
+launcher.
+
+Secret reference note:
+- `api_key = { env = "ARK_API_KEY" }` is an explicit env-backed secret reference.
+- `api_key = "ARK_API_KEY"` would be parsed as an inline literal, not as an env name lookup.
+- `${ARK_API_KEY}` can also work, but the docs prefer `{ env = "..." }` because it is clearer and consistent with `file` and `exec` secret references.
+
+Other governed operator-facing config families live alongside that core shape:
+
+- [Managed Skills](/use-loong/managed-skills) covers `[external_skills]`
+  enablement, install policy, and browser preview bootstrap.
+- [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries)
+  covers `[tools.browser]`, `[tools.web]`, `[tools.browser_companion]`, and
+  when `[outbound_http] allow_private_hosts = true` is the right owner.
+
+## Skills And Browser Boundary Shape
+
+When the `config.toml` question is really about managed skills, browser
+enablement, or domain restrictions, the public shape looks like this:
+
+```toml
+[external_skills]
+enabled = false
+require_download_approval = true
+auto_expose_installed = false
+
+[tools.browser]
+enabled = true
+max_sessions = 4
+max_links = 8
+max_text_chars = 2048
+
+[tools.web]
+enabled = true
+allow_private_hosts = false
+allowed_domains = ["docs.example.com"]
+blocked_domains = ["internal.example"]
+
+[tools.browser_companion]
+enabled = false
+
+[outbound_http]
+allow_private_hosts = false
+```
+
+Read that block with these owner rules:
+
+- `[external_skills]` governs managed skill discovery, download approval,
+  install location, and runtime exposure policy
+- `[tools.browser]` governs built-in browser enablement and local session, link,
+  and text limits
+- `[tools.web]` governs built-in web fetch and built-in browser host and domain
+  trust
+- `[tools.browser_companion]` governs the managed companion runtime lane
+- `[outbound_http]` governs HTTP-backed outbound delivery, not the built-in
+  browser
+
+Continue to [Managed Skills](/use-loong/managed-skills) when the blocker is
+install or exposure policy. Continue to
+[Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) when
+the blocker is private hosts, domains, or companion readiness.
+
+## Single Provider Profile
+
+Use one provider profile when one hosted or local lane should own the current
+runtime.
+
+```toml
+active_provider = "volcengine"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+```
+
+Rules that matter:
+
+- keep the provider id stable instead of rewriting it for every experiment
+- use `model = "auto"` only when discovery is actually useful for that lane
+- treat `preferred_models` as an explicit fallback path, not a hidden override
+
+When you need the exact built-in provider contract, continue to
+[Provider Guides](/use-loong/provider-guides/index). Keep
+[Provider Recipes](/use-loong/provider-recipes) for representative rollout
+patterns layered on top.
+
+## Multi-Profile Provider Config
+
+Use several profiles when cost, quota, latency, region, or coding traffic
+should stay explicit in one config file.
+
+```toml
+active_provider = "ark_main"
+
+[providers.ark_main]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+
+[providers.ark_coding]
+kind = "volcengine_coding"
+api_key = { env = "ARK_API_KEY" }
+model = "your-reviewed-coding-model"
+
+[providers.local_lab]
+kind = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "auto"
+```
+
+Pattern notes:
+
+- `active_provider` should name the default runtime lane
+- profile ids should describe purpose, not just vendor
+- coding-plan lanes should stay separate from the general hosted lane
+- local or gateway-backed lanes belong in the same profile system rather than a
+  separate ad-hoc config story
+
+## Single-Account Channel Shape
+
+Start with one account when one service-channel or outbound-only identity should
+own the lane.
+
+Feishu / Lark example:
+
+```toml
+[feishu]
+enabled = true
+domain = "lark"
+mode = "websocket"
+receive_id_type = "chat_id"
+app_id = { env = "LARK_APP_ID" }
+app_secret = { env = "LARK_APP_SECRET" }
+allowed_chat_ids = ["oc_ops_room"]
+```
+
+WeCom example:
+
+```toml
+[wecom]
+enabled = true
+bot_id = { env = "WECOM_BOT_ID" }
+secret = { env = "WECOM_SECRET" }
+allowed_conversation_ids = ["group_demo"]
+```
+
+Operational rule:
+
+- keep one explicit account first
+- only move to selectors after the basic `*-serve` or `*-send` path is already
+  healthy
+
+## Multi-Account Channel Shape
+
+Use named accounts before you introduce gateway selectors or environment-specific
+routing.
+
+```toml
+[feishu]
+enabled = true
+mode = "websocket"
+default_account = "work"
+receive_id_type = "chat_id"
+
+[feishu.accounts.work]
+domain = "lark"
+app_id = { env = "LARK_WORK_APP_ID" }
+app_secret = { env = "LARK_WORK_APP_SECRET" }
+allowed_chat_ids = ["oc_ops_room"]
+
+[feishu.accounts.backup]
+domain = "feishu"
+app_id = { env = "FEISHU_BACKUP_APP_ID" }
+app_secret = { env = "FEISHU_BACKUP_APP_SECRET" }
+allowed_chat_ids = ["oc_backup_room"]
+```
+
+The same pattern applies to runtime-backed or outbound-only channel families:
+
+- use `default_account` when one account should be the normal lane
+- use `accounts.<id>` when one config should hold prod, backup, or environment-specific identities
+- keep selector ids stable and human-readable, such as `work`, `alerts`, or
+  `bot_123456`
+
+For the exact built-in channel contract, continue to
+[Channel Guides](/use-loong/channel-guides/index). Keep
+[Channel Recipes](/use-loong/channel-recipes) for representative rollout
+patterns and sequencing.
+
+## Gateway Selector Rule
+
+Selectors should resolve against configured account ids, not names invented at
+command time.
+
+```bash
+loong gateway run \
+  --channel-account lark=work \
+  --channel-account wecom=alerts \
+  --channel-account telegram=bot_123456
+```
+
+Rules that matter:
+
+- `lark=work` is accepted as an alias for the Feishu family
+- one channel family should appear only once in the selector list
+- selectors should target `accounts.<id>` entries that already exist in config
+- `default_account` should stay explicit so fallback routing is not accidental
+
+Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision)
+when you need the owner contract and command model.
+
+## Outbound HTTP Trust Toggle
+
+HTTP-backed outbound delivery blocks private or special-use hosts by default.
+Widen that boundary explicitly when you really do want a private bridge or
+self-hosted endpoint.
+
+```toml
+[outbound_http]
+allow_private_hosts = true
+```
+
+Use this only when the deployment really targets:
+
+- loopback bridges
+- RFC1918 or other private-network endpoints
+- self-hosted services that should stay inside the trusted network boundary
+
+This toggle widens the runtime boundary on purpose instead of silently assuming
+all private delivery targets are acceptable.
+
+## Memory Profile Shape
+
+Memory stays a small, operator-visible runtime choice.
+
+```toml
+[memory]
+profile = "window_only"
+```
+
+Current public profiles:
+
+| Profile | Use it when |
+| --- | --- |
+| `window_only` | you want the safest default and no durable profile memory |
+| `window_plus_summary` | one conversation should stay coherent across a longer span |
+| `profile_plus_window` | repeated sessions need durable operator context |
+
+Continue to [Memory Profiles](/use-loong/memory-profiles) when you want the
+continuity model and progression rules.
+
+## Reading Rules
+
+- Use this page for shared public config shape, not every field.
+- Use guide pages when you need the exact built-in contract for one provider or channel.
+- Use recipe pages when you need representative commands, smoke tests, or rollout
+  order.
+- Use repository-native product specs when you need the exact source-level
+  contract behind the public docs.
+
+## Continue Reading
+
+| If you want to... | Go here |
+| --- | --- |
+| choose the provider lane first | [Providers And Models](/use-loong/providers-and-models) |
+| follow provider-specific config walkthroughs | [Provider Guides](/use-loong/provider-guides/index) and [Provider Recipes](/use-loong/provider-recipes) |
+| understand the delivery-surface model first | [Channels](/use-loong/channels) |
+| manage skill install and exposure policy | [Managed Skills](/use-loong/managed-skills) |
+| debug private-host, domain, or browser runtime gates | [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) |
+| follow channel setup and smoke-test paths | [Channel Guides](/use-loong/channel-guides/index), [Channel Recipes](/use-loong/channel-recipes), and [Channel Setup](/use-loong/channel-setup) |
+| choose between foreground serve loops and gateway ownership | [Gateway And Supervision](/use-loong/gateway-and-supervision) |
+| inspect the source-level public contract | the repository-native [Channel Setup](https://github.com/eastreams/loong/blob/dev/docs/product-specs/channel-setup.md) spec |

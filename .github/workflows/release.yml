@@ -1,0 +1,304 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (required for manual runs, for example v0.1.0 or v0.1.0-alpha.1)"
+        required: true
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  BIN_NAME: loong
+  PACKAGE_NAME: loong
+  LINUX_ARM64_GLIBC_FLOOR: "2.17"
+  LINUX_ARM64_ZIG_VERSION: "0.13.0"
+  LINUX_ARM64_ZIG_SHA256: "d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea"
+  CARGO_ZIGBUILD_VERSION: "0.22.1"
+  ANDROID_NDK_VERSION: "27.3.13750724"
+  ANDROID_NDK_REVISION: "r27d"
+  ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
+  ANDROID_API_LEVEL: "24"
+
+jobs:
+  verify-release:
+    name: Verify release gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy check
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test (workspace)
+        run: cargo test --workspace --locked
+
+      - name: Test (all features)
+        run: cargo test --workspace --all-features --locked
+
+      - name: Bootstrap local release artifacts
+        run: scripts/bootstrap_release_local_artifacts.sh
+
+      - name: Strict docs governance
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          LOONG_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+          grep -F "## [${RELEASE_TAG#v}]" CHANGELOG.md > /dev/null
+          release_doc="docs/releases/${RELEASE_TAG}.md"
+          test -f "$release_doc"
+          grep -Fx "# Release ${RELEASE_TAG}" "$release_doc"
+
+      - name: Docs build
+        run: cargo doc --workspace --no-deps
+
+      - name: Dependency graph contract
+        run: chmod +x ./scripts/check_dep_graph.sh && ./scripts/check_dep_graph.sh
+
+      - name: Strict architecture contract
+        run: chmod +x ./scripts/check_architecture_boundaries.sh && LOONG_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh
+
+  build-binaries:
+    name: Build ${{ matrix.target }} on ${{ matrix.os }}
+    needs: verify-release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            ext: ""
+            archive: tar.gz
+            install_musl_tools: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            ext: ""
+            archive: tar.gz
+            use_zig: true
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            ext: ""
+            archive: tar.gz
+            use_android_ndk: true
+          - os: macos-14
+            target: x86_64-apple-darwin
+            ext: ""
+            archive: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            ext: ""
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+            archive: zip
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Ensure active toolchain target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Install musl tools
+        if: matrix.install_musl_tools == true
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Zig and cargo-zigbuild
+        if: matrix.use_zig == true
+        run: |
+          set -euo pipefail
+          zig_tarball="zig-linux-x86_64-${{ env.LINUX_ARM64_ZIG_VERSION }}.tar.xz"
+          zig_dir="zig-linux-x86_64-${{ env.LINUX_ARM64_ZIG_VERSION }}"
+          curl -fSL "https://ziglang.org/download/${{ env.LINUX_ARM64_ZIG_VERSION }}/${zig_tarball}" -o "$zig_tarball"
+          echo "${{ env.LINUX_ARM64_ZIG_SHA256 }}  ${zig_tarball}" | shasum -a 256 --check -
+          tar -xf "$zig_tarball"
+          [ -d "$zig_dir" ] || (echo "Missing extracted Zig directory: $zig_dir" && exit 1)
+          chmod +x "$zig_dir/zig"
+          echo "$PWD/$zig_dir" >> "$GITHUB_PATH"
+          rm -f "$zig_tarball"
+          cargo install "cargo-zigbuild" --version "${{ env.CARGO_ZIGBUILD_VERSION }}" --locked
+
+      - name: Install Android NDK
+        if: matrix.use_android_ndk == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_zip="android-ndk-${{ env.ANDROID_NDK_REVISION }}-linux.zip"
+          ndk_dir="android-ndk-${{ env.ANDROID_NDK_REVISION }}"
+          curl -fSL "https://dl.google.com/android/repository/${ndk_zip}" -o "${ndk_zip}"
+          echo "${{ env.ANDROID_NDK_LINUX_SHA256 }}  ${ndk_zip}" | shasum -a 256 --check -
+          unzip -q "${ndk_zip}"
+          [ -d "${ndk_dir}" ] || (echo "Missing extracted NDK directory: ${ndk_dir}" && exit 1)
+          rm -f "${ndk_zip}"
+          {
+            echo "ANDROID_NDK_HOME=${PWD}/${ndk_dir}"
+            echo "ANDROID_NDK_ROOT=${PWD}/${ndk_dir}"
+            echo "ANDROID_NDK_LATEST_HOME=${PWD}/${ndk_dir}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release binary with cargo-zigbuild
+        if: matrix.use_zig == true
+        env:
+          LOONG_RELEASE_BUILD: "1"
+        run: |
+          cargo zigbuild --release --locked -p loong --bin ${{ env.BIN_NAME }} \
+            --target "${{ matrix.target }}.${{ env.LINUX_ARM64_GLIBC_FLOOR }}"
+
+      - name: Build release binary (Android/Termux)
+        if: matrix.use_android_ndk == true
+        shell: bash
+        env:
+          LOONG_RELEASE_BUILD: "1"
+        run: |
+          set -euo pipefail
+          toolchain="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+          export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
+          export AR_aarch64_linux_android="${toolchain}/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+          cargo build --release --locked -p loong --bin "${BIN_NAME}" --target "${{ matrix.target }}"
+
+      - name: Build release binary (native)
+        if: matrix.use_zig != true && matrix.use_android_ndk != true
+        env:
+          LOONG_RELEASE_BUILD: "1"
+        run: cargo build --release --locked -p loong --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
+
+      - name: Package archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          archive="${PACKAGE_NAME}-${RELEASE_TAG}-${{ matrix.target }}.tar.gz"
+          tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${BIN_NAME}${{ matrix.ext }}"
+          cd dist && shasum -a 256 "${archive}" > "${archive}.sha256"
+
+      - name: Package archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $archive = "${env:PACKAGE_NAME}-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath "dist/$archive" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
+          Set-Content -Path "dist/$archive.sha256" -Value "$hash  $archive"
+
+      - name: Verify glibc floor (Linux GNU targets)
+        if: endsWith(matrix.target, '-unknown-linux-gnu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          . ./scripts/release_artifact_lib.sh
+          max_glibc="$(release_gnu_glibc_floor_for_target "${{ matrix.target }}")"
+          chmod +x ./scripts/check_glibc_floor.sh
+          ./scripts/check_glibc_floor.sh "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}" "$max_glibc"
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Stage installer scripts
+        run: |
+          cp scripts/install.sh dist/install.sh
+          cp scripts/install.ps1 dist/install.ps1
+
+      - name: Generate shell completions
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tar -xzf "dist/loong-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" -C /tmp loong
+          /tmp/loong completions bash        > dist/loong.bash
+          /tmp/loong completions zsh         > dist/_loong
+          /tmp/loong completions fish        > dist/loong.fish
+          /tmp/loong completions powershell  > dist/loong.ps1
+          /tmp/loong completions elvish      > dist/loong.elv
+
+      - name: Resolve release channel
+        id: release_meta
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          overwrite_files: true
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
+          files: dist/*

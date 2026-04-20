@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs the CI-parity cargo gates before each commit.
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or:      git config core.hooksPath scripts
+
+set -euo pipefail
+
+echo "[pre-commit] public repo hygiene"
+bash scripts/check_public_repo_hygiene.sh
+export LOONG_CARGO="${LOONG_CARGO:-./scripts/cargo-local-toolchain.sh}"
+
+echo "[pre-commit] cargo fmt --check"
+"$LOONG_CARGO" fmt --all -- --check
+
+echo "[pre-commit] cargo clippy"
+"$LOONG_CARGO" clippy --workspace --all-targets --all-features -- -D warnings
+
+echo "[pre-commit] cargo test --workspace"
+"$LOONG_CARGO" test --workspace
+
+echo "[pre-commit] cargo test --workspace --all-features"
+"$LOONG_CARGO" test --workspace --all-features
+
+echo "[pre-commit] all checks passed"

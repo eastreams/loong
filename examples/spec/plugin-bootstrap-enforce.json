@@ -1,0 +1,63 @@
+{
+  "pack": {
+    "pack_id": "bootstrap-enforce-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [
+      "ObserveTelemetry"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "bootstrap-enforce"
+    }
+  },
+  "agent_id": "agent-bootstrap-enforce",
+  "ttl_s": 120,
+  "defaults": null,
+  "self_awareness": null,
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins"
+    ]
+  },
+  "bridge_support": {
+    "enabled": true,
+    "supported_bridges": [
+      "native_ffi"
+    ],
+    "supported_adapter_families": [],
+    "enforce_supported": true,
+    "policy_version": "v1",
+    "expected_checksum": "e9ad296bdd2c3ef2",
+    "expected_sha256": "fa0d6c805d0c56cbc8dfd92a66ab9a41af60f4ddecb5a4ee73219fea3be33fc6",
+    "execute_process_stdio": false,
+    "execute_http_json": false,
+    "allowed_process_commands": [],
+    "enforce_execution_success": false
+  },
+  "bootstrap": {
+    "enabled": true,
+    "allow_http_json_auto_apply": true,
+    "allow_process_stdio_auto_apply": false,
+    "allow_native_ffi_auto_apply": false,
+    "allow_wasm_component_auto_apply": false,
+    "allow_mcp_server_auto_apply": false,
+    "enforce_ready_execution": true,
+    "max_tasks": 16
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "task",
+    "task_id": "bootstrap-enforce-task",
+    "objective": "should be blocked when ready plugins are deferred by bootstrap policy",
+    "required_capabilities": [],
+    "payload": {}
+  }
+}

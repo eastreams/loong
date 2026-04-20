@@ -1,0 +1,119 @@
+[package]
+name = "loong-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Internal support crate for Loong: providers, tools, channels, and runtime"
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "loong_app"
+
+[features]
+default = ["channel-cli", "channel-plugin-bridge", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-http", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+channel-cli = []
+channel-plugin-bridge = []
+channel-telegram = []
+channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
+channel-matrix = []
+channel-wecom = ["dep:rustls", "dep:tokio-tungstenite"]
+channel-discord = []
+channel-dingtalk = []
+channel-slack = []
+channel-webhook = ["dep:axum"]
+channel-google-chat = []
+channel-line = ["dep:axum"]
+channel-signal = []
+channel-twitch = []
+channel-teams = []
+channel-tlon = []
+channel-whatsapp = ["dep:axum"]
+channel-email = []
+channel-mattermost = []
+channel-nextcloud-talk = []
+channel-synology-chat = []
+channel-irc = ["dep:rustls", "dep:rustls-native-certs", "dep:tokio-rustls"]
+channel-imessage = []
+channel-nostr = ["dep:tokio-tungstenite"]
+provider-openai = []
+provider-anthropic = []
+provider-bedrock = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4", "dep:http"]
+provider-volcengine = []
+config-toml = ["dep:toml"]
+memory-sqlite = ["dep:rusqlite"]
+feishu-integration = ["dep:rusqlite"]
+tool-shell = []
+tool-file = []
+tool-browser = ["dep:scraper"]
+tool-http = []
+tool-webfetch = []
+tool-websearch = []
+test-support = []
+
+[dependencies]
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
+bytes = "1"
+async-trait.workspace = true
+console.workspace = true
+ratatui = "0.30.0"
+dunce = "1"
+rand.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+toml = { workspace = true, optional = true }
+reqwest.workspace = true
+scraper = { version = "0.26", optional = true }
+sha2.workspace = true
+hmac = "0.13"
+hex = "0.4"
+subtle = "2.6"
+flate2.workspace = true
+tar.workspace = true
+tokio.workspace = true
+lettre = { version = "0.11.21", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+futures-util.workspace = true
+base64.workspace = true
+bech32.workspace = true
+aws-config = { version = "1.8.15", optional = true }
+aws-credential-types = { version = "1.2.14", optional = true }
+aws-sigv4 = { version = "1.4.2", optional = true }
+http = { version = "1.4.0", optional = true }
+time.workspace = true
+http-body = "1"
+rusqlite = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+aes = { version = "0.9", optional = true }
+cbc = { version = "0.2", optional = true }
+wait-timeout = "0.2"
+tempfile = "3"
+which.workspace = true
+unicode-normalization = "0.1"
+unicode-segmentation = "1.13"
+jieba-rs = "0.8"
+tree-sitter = "0.26"
+tree-sitter-bash = "0.25"
+starlark = "0.13"
+# Kept unconditional because conversation/turn_shared.rs uses Regex to strip
+# leaked <think> tags even when tool-websearch is compiled out.
+regex.workspace = true
+prost = { version = "0.14", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+rustls-native-certs = { version = "0.8.3", optional = true }
+secp256k1.workspace = true
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
+tokio-rustls = { version = "0.26.4", optional = true }
+libc = "0.2"
+tracing.workspace = true
+zip.workspace = true
+include_dir = "0.7"
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true
