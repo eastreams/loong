@@ -850,6 +850,8 @@ pub struct ExternalSkillInvokeContext {
     pub display_name: String,
     pub instructions: String,
     pub skill_root: Option<PathBuf>,
+    pub allowed_tools: Vec<String>,
+    pub blocked_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2177,12 +2179,35 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
+    let metadata = payload_json.get("metadata").and_then(Value::as_object);
+    let allowed_tools = metadata
+        .and_then(|metadata| metadata.get("allowed_tools"))
+        .map(parse_external_skill_tool_restrictions)
+        .unwrap_or_default();
+    let blocked_tools = metadata
+        .and_then(|metadata| metadata.get("blocked_tools"))
+        .map(parse_external_skill_tool_restrictions)
+        .unwrap_or_default();
     Some(ExternalSkillInvokeContext {
         skill_id,
         display_name,
         instructions,
         skill_root,
+        allowed_tools,
+        blocked_tools,
     })
+}
+
+fn parse_external_skill_tool_restrictions(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(test)]
@@ -3553,6 +3578,10 @@ mod tests {
             "skill_id": "demo-skill",
             "display_name": "Demo Skill",
             "instructions": instructions,
+            "metadata": {
+                "allowed_tools": ["shell.exec"],
+                "blocked_tools": ["web.fetch"]
+            }
         });
         let line = format!(
             "[ok] {}",
@@ -3572,6 +3601,8 @@ mod tests {
         assert_eq!(parsed.skill_id, "demo-skill");
         assert_eq!(parsed.display_name, "Demo Skill");
         assert!(parsed.instructions.contains("suffix-marker"));
+        assert_eq!(parsed.allowed_tools, vec!["shell.exec"]);
+        assert_eq!(parsed.blocked_tools, vec!["web.fetch"]);
     }
 
     #[test]

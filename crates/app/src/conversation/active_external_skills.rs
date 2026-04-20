@@ -11,6 +11,10 @@ pub(crate) struct ActiveExternalSkill {
     pub display_name: String,
     pub instructions: String,
     pub skill_root: Option<String>,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub blocked_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +48,8 @@ pub(crate) fn collect_active_external_skills_from_tool_result_text(
                 skill_root: skill_context
                     .skill_root
                     .map(|skill_root| skill_root.display().to_string()),
+                allowed_tools: skill_context.allowed_tools,
+                blocked_tools: skill_context.blocked_tools,
             },
         );
     }
@@ -84,6 +90,12 @@ pub(crate) fn render_active_external_skills_section(
         ));
         if let Some(skill_root) = skill.skill_root.as_deref() {
             sections.push(format!("Skill directory: {skill_root}"));
+        }
+        if !skill.allowed_tools.is_empty() {
+            sections.push(format!("Allowed tools: {}", skill.allowed_tools.join(", ")));
+        }
+        if !skill.blocked_tools.is_empty() {
+            sections.push(format!("Blocked tools: {}", skill.blocked_tools.join(", ")));
         }
         sections.push(skill.instructions.clone());
     }
@@ -165,7 +177,10 @@ mod tests {
                 "payload_summary": serde_json::to_string(&serde_json::json!({
                     "skill_id": "demo-skill",
                     "display_name": "Demo Skill",
-                    "instructions": "updated"
+                    "instructions": "updated",
+                    "metadata": {
+                        "blocked_tools": ["web.fetch"]
+                    }
                 }))
                 .expect("encode payload"),
                 "payload_chars": 128,
@@ -197,6 +212,7 @@ mod tests {
         assert_eq!(active_skills.len(), 2);
         assert_eq!(active_skills[0].skill_id, "demo-skill");
         assert_eq!(active_skills[0].instructions, "updated");
+        assert_eq!(active_skills[0].blocked_tools, vec!["web.fetch"]);
         assert_eq!(active_skills[1].skill_id, "other-skill");
     }
 
@@ -208,6 +224,8 @@ mod tests {
                 display_name: "Demo Skill".to_owned(),
                 instructions: "<skill_content name=\"Demo Skill\">demo</skill_content>".to_owned(),
                 skill_root: Some("/tmp/demo-skill".to_owned()),
+                allowed_tools: vec!["shell.exec".to_owned()],
+                blocked_tools: vec!["web.fetch".to_owned()],
             }],
         })
         .expect("render active skills");
@@ -216,6 +234,8 @@ mod tests {
         assert!(rendered.contains("demo-skill"));
         assert!(rendered.contains("Demo Skill"));
         assert!(rendered.contains("Skill directory: /tmp/demo-skill"));
+        assert!(rendered.contains("Allowed tools: shell.exec"));
+        assert!(rendered.contains("Blocked tools: web.fetch"));
         assert!(rendered.contains("<skill_content name=\"Demo Skill\">demo</skill_content>"));
     }
 }

@@ -3692,6 +3692,7 @@ fn skill_is_visible_to_audience(entry: &DiscoveredSkillEntry, audience: SkillAud
         SkillAudience::Model => {
             entry.active
                 && entry.model_visibility == SkillModelVisibility::Visible
+                && entry.invocation_policy != SkillInvocationPolicy::Manual
                 && entry.eligibility.available
         }
     }
@@ -3715,6 +3716,10 @@ fn ensure_skill_access_for_audience(
     if skill.model_visibility == SkillModelVisibility::Hidden {
         blockers.push("the skill is operator-only and hidden from the model surface".to_owned());
     }
+    if skill.invocation_policy == SkillInvocationPolicy::Manual {
+        blockers
+            .push("the skill is manual-only and not invokable from the model surface".to_owned());
+    }
     if !skill.eligibility.missing_env.is_empty() {
         blockers.push(format!(
             "missing env vars: {}",
@@ -3731,6 +3736,12 @@ fn ensure_skill_access_for_audience(
         blockers.push(format!(
             "missing required paths: {}",
             skill.eligibility.missing_paths.join(", ")
+        ));
+    }
+    if !skill.eligibility.missing_config.is_empty() {
+        blockers.push(format!(
+            "disabled or unavailable config gates: {}",
+            skill.eligibility.missing_config.join(", ")
         ));
     }
 
@@ -4077,7 +4088,29 @@ fn runtime_config_selector_enabled(
     config: &super::runtime_config::ToolRuntimeConfig,
     selector: &str,
 ) -> Option<bool> {
-    match selector.trim().to_ascii_lowercase().as_str() {
+    let normalized_selector = selector.trim().to_ascii_lowercase();
+
+    if let Some(server_name) = mcp_server_selector_name(normalized_selector.as_str()) {
+        return load_runtime_mcp_snapshot(config).map(|snapshot| {
+            snapshot
+                .servers
+                .iter()
+                .any(|server| server.name == server_name && mcp_server_satisfies_skill_gate(server))
+        });
+    }
+
+    if let Some(server_name) = acp_bootstrap_mcp_server_selector_name(normalized_selector.as_str())
+    {
+        return load_runtime_mcp_snapshot(config).map(|snapshot| {
+            snapshot.servers.iter().any(|server| {
+                server.name == server_name
+                    && server.selected_for_acp_bootstrap
+                    && mcp_server_satisfies_skill_gate(server)
+            })
+        });
+    }
+
+    match normalized_selector.as_str() {
         "external_skills.enabled" | "tools.external_skills.enabled" => {
             Some(config.external_skills.enabled)
         }
@@ -4094,6 +4127,52 @@ fn runtime_config_selector_enabled(
         "web_search.enabled" | "tools.web_search.enabled" => Some(config.web_search.enabled),
         _ => None,
     }
+}
+
+fn mcp_server_selector_name(selector: &str) -> Option<String> {
+    [
+        "mcp.server.",
+        "mcp.servers.",
+        "tools.mcp.server.",
+        "tools.mcp.servers.",
+    ]
+    .iter()
+    .find_map(|prefix| selector.strip_prefix(prefix))
+    .and_then(canonical_mcp_server_selector_name)
+}
+
+fn acp_bootstrap_mcp_server_selector_name(selector: &str) -> Option<String> {
+    [
+        "acp.bootstrap_mcp_server.",
+        "acp.bootstrap_mcp_servers.",
+        "acp.dispatch.bootstrap_mcp_server.",
+        "acp.dispatch.bootstrap_mcp_servers.",
+    ]
+    .iter()
+    .find_map(|prefix| selector.strip_prefix(prefix))
+    .and_then(canonical_mcp_server_selector_name)
+}
+
+fn canonical_mcp_server_selector_name(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn load_runtime_mcp_snapshot(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Option<crate::mcp::McpRuntimeSnapshot> {
+    let config_path = config.config_path.as_ref()?;
+    let config_path = config_path.to_string_lossy();
+    let (_, loong_config) = crate::config::load(Some(config_path.as_ref())).ok()?;
+    crate::mcp::collect_mcp_runtime_snapshot(&loong_config).ok()
+}
+
+fn mcp_server_satisfies_skill_gate(server: &crate::mcp::McpRuntimeServerSnapshot) -> bool {
+    server.enabled
+        && matches!(
+            server.status.kind,
+            crate::mcp::McpServerStatusKind::Pending | crate::mcp::McpServerStatusKind::Connected
+        )
 }
 
 fn invocation_policy_id(policy: SkillInvocationPolicy) -> &'static str {
@@ -4161,6 +4240,7 @@ pub(super) fn model_skill_catalog_section_with_config(
     let mut lines = vec![
         "[available_external_skills]".to_owned(),
         "The following external skills provide specialized instructions for specific tasks.".to_owned(),
+        "Only skills listed here are currently model-visible and invokable from the provider surface; manual-only or runtime-ineligible skills stay on the operator surface.".to_owned(),
         "When a task matches a listed skill, use `tool.search` to lease `external_skills.invoke`, then call `tool.invoke` with the selected `skill_id` to load the full skill instructions.".to_owned(),
         "The activation result includes the structured skill content, the skill directory, and a bundled resource listing for on-demand file reads.".to_owned(),
     ];
@@ -4797,6 +4877,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::config::{LoongConfig, McpServerConfig, McpServerTransportConfig};
     use crate::tools::runtime_config::{ExternalSkillsRuntimePolicy, ToolRuntimeConfig};
 
     static POLICY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -4929,6 +5010,11 @@ mod tests {
             },
             ..ToolRuntimeConfig::default()
         }
+    }
+
+    fn write_loong_config(path: &Path, config: &LoongConfig) {
+        let rendered = crate::config::render(config).expect("render loong config");
+        fs::write(path, rendered).expect("write loong config");
     }
 
     #[derive(Default)]
@@ -6159,6 +6245,112 @@ mod tests {
     }
 
     #[test]
+    fn model_surface_hides_manual_only_skills() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loong-ext-skill-manual-only-model-surface");
+            fs::create_dir_all(&root).expect("create fixture root");
+            write_file(
+                &root,
+                ".agents/skills/manual-only/SKILL.md",
+                "---
+name: manual-only
+description: operator-only workflow.
+invocation_policy: manual
+---
+
+# Manual Only
+
+Use this skill only for operator-driven checks.
+",
+            );
+            write_file(
+                &root,
+                ".agents/skills/model-ready/SKILL.md",
+                "---
+name: model-ready
+description: model-invokable workflow.
+invocation_policy: both
+---
+
+# Model Ready
+
+Safe for model-driven activation.
+",
+            );
+            let config = managed_runtime_config(&root);
+
+            let model_list = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("model list should succeed");
+            let model_skill_ids = model_list.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .filter_map(|skill| skill["skill_id"].as_str())
+                .collect::<Vec<_>>();
+            assert!(
+                !model_skill_ids.contains(&"manual-only"),
+                "manual-only skills must stay off the model surface: {model_skill_ids:?}"
+            );
+            assert!(
+                model_skill_ids.contains(&"model-ready"),
+                "model-invokable skills should remain visible: {model_skill_ids:?}"
+            );
+
+            let manual_inspect_error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.inspect".to_owned(),
+                    payload: json!({
+                        "skill_id": "manual-only"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("manual-only skill should be hidden from model inspect");
+            assert!(
+                manual_inspect_error.contains("manual-only"),
+                "expected manual-only blocker in inspect error, got: {manual_inspect_error}"
+            );
+
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            assert!(
+                operator_list.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "manual-only"),
+                "operator surface should continue to expose manual-only skills"
+            );
+
+            let catalog = model_skill_catalog_section_with_config(&config)
+                .expect("model skill catalog should be rendered");
+            assert!(
+                !catalog
+                    .lines()
+                    .any(|line| line.starts_with("- manual-only:")),
+                "manual-only skill must not be advertised in the model catalog: {catalog}"
+            );
+            assert!(
+                catalog.contains("model-ready"),
+                "model catalog should still advertise invokable skills: {catalog}"
+            );
+            assert!(
+                catalog
+                    .contains("Only skills listed here are currently model-visible and invokable"),
+                "catalog should explain that it excludes manual-only skills: {catalog}"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
     fn invoke_rejects_manual_or_ineligible_skill_metadata_contracts() {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loong-ext-skill-metadata-contract-reject");
@@ -6204,7 +6396,11 @@ mod tests {
                 &config,
             )
             .expect_err("manual-only skills should reject model invocation");
-            assert!(manual_error.contains("invocation_policy=manual"));
+            assert!(
+                manual_error.contains("manual-only")
+                    || manual_error.contains("not available on the provider surface"),
+                "expected manual-only provider-surface rejection, got: {manual_error}"
+            );
 
             let env_error = crate::tools::execute_tool_core_with_config(
                 ToolCoreRequest {
@@ -7000,6 +7196,146 @@ mod tests {
             assert!(
                 error.contains("DEMO_SKILL_TOKEN"),
                 "expected missing env variable in error, got: {error}"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn provider_surface_hides_skills_with_missing_required_mcp_server_selector() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loong-ext-skill-required-mcp");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config_path = root.join("loong.toml");
+            write_loong_config(&config_path, &LoongConfig::default());
+            write_file(
+                &root,
+                ".agents/skills/mcp-guarded/SKILL.md",
+                "---\nname: mcp-guarded\ndescription: requires a configured MCP server.\nrequired_config:\n  - mcp.server.filesystem\n---\n\n# MCP Guarded Skill\n\nOnly run when the filesystem MCP server is available.\n",
+            );
+
+            let mut config = managed_runtime_config(&root);
+            config.config_path = Some(config_path);
+
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            let operator_skill = operator_list.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .find(|skill| skill["skill_id"] == "mcp-guarded")
+                .cloned()
+                .expect("operator list should include mcp-guarded");
+            assert_eq!(operator_skill["eligibility"]["available"], json!(false));
+            assert!(
+                operator_skill["eligibility"]["issues"]
+                    .as_array()
+                    .expect("eligibility issues should be an array")
+                    .iter()
+                    .any(|issue| issue.as_str()
+                        == Some("config gate `mcp.server.filesystem` is disabled"))
+            );
+
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("model list should succeed");
+            assert!(
+                !list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "mcp-guarded"),
+                "skills with missing MCP config gates should stay hidden from provider list: {}",
+                list_outcome.payload
+            );
+
+            let inspect_error = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.inspect".to_owned(),
+                    payload: json!({
+                        "skill_id": "mcp-guarded"
+                    }),
+                },
+                &config,
+            )
+            .expect_err("inspect should reject skills with missing required MCP config");
+            assert!(
+                inspect_error.contains("mcp.server.filesystem"),
+                "expected missing MCP selector in inspect error, got: {inspect_error}"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn required_mcp_server_and_bootstrap_selectors_accept_enabled_bootstrap_server() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loong-ext-skill-required-bootstrap-mcp");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config_path = root.join("loong.toml");
+            let mut loong_config = LoongConfig::default();
+            loong_config.mcp.servers.insert(
+                " Filesystem ".to_owned(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "uvx".to_owned(),
+                        args: vec!["context7-mcp".to_owned()],
+                        env: BTreeMap::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    startup_timeout_ms: None,
+                    tool_timeout_ms: None,
+                    enabled_tools: Vec::new(),
+                    disabled_tools: Vec::new(),
+                },
+            );
+            loong_config.acp.dispatch.bootstrap_mcp_servers = vec![" filesystem ".to_owned()];
+            write_loong_config(&config_path, &loong_config);
+            write_file(
+                &root,
+                ".agents/skills/mcp-bootstrap/SKILL.md",
+                "---\nname: mcp-bootstrap\ndescription: requires a configured and bootstrapped MCP server.\nrequired_config:\n  - mcp.server.filesystem\n  - acp.bootstrap_mcp_server.filesystem\n---\n\n# MCP Bootstrap Skill\n\nOnly run when the filesystem MCP server is present in ACP bootstrap selection.\n",
+            );
+
+            let mut config = managed_runtime_config(&root);
+            config.config_path = Some(config_path);
+
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            let operator_skill = operator_list.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .find(|skill| skill["skill_id"] == "mcp-bootstrap")
+                .cloned()
+                .expect("operator list should include mcp-bootstrap");
+            assert_eq!(operator_skill["eligibility"]["available"], json!(true));
+
+            let list_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.list".to_owned(),
+                    payload: json!({}),
+                },
+                &config,
+            )
+            .expect("model list should succeed");
+            assert!(
+                list_outcome.payload["skills"]
+                    .as_array()
+                    .expect("skills should be an array")
+                    .iter()
+                    .any(|skill| skill["skill_id"] == "mcp-bootstrap"),
+                "skills with satisfied MCP selectors should stay visible on the provider surface: {}",
+                list_outcome.payload
             );
 
             fs::remove_dir_all(&root).ok();
