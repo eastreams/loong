@@ -152,7 +152,7 @@ async fn run_shell_command_with_timeout(
 #[cfg(all(test, feature = "tool-shell", unix))]
 mod tests {
     use super::*;
-    use crate::test_support::{acquire_subprocess_test_guard, unique_temp_dir};
+    use crate::test_support::{ScopedEnv, acquire_subprocess_test_guard, unique_temp_dir};
     use crate::tools::runtime_config::ToolRuntimeConfig;
     use crate::tools::runtime_events::{
         ToolRuntimeEvent, ToolRuntimeEventSink, ToolRuntimeStream, with_tool_runtime_event_sink,
@@ -190,11 +190,24 @@ mod tests {
         }
     }
 
+    fn shell_test_env() -> ScopedEnv {
+        let mut env = ScopedEnv::new();
+
+        #[cfg(unix)]
+        env.set("PATH", "/bin:/usr/bin:/usr/local/bin");
+
+        #[cfg(windows)]
+        env.set("PATH", r"C:\Windows\System32;C:\Windows");
+
+        env
+    }
+
     fn execute_shell_tool_for_subprocess_test(
         request: ToolCoreRequest,
         config: &ToolRuntimeConfig,
     ) -> Result<ToolCoreOutcome, String> {
         let _guard = acquire_subprocess_test_guard();
+        let _env = shell_test_env();
         execute_shell_tool_with_config(request, config)
     }
 
