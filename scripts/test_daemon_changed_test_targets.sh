@@ -40,8 +40,8 @@ assert_equal(
 )
 assert_equal(
     resolve("crates/daemon/tests/integration/managed_bridge_fixtures.rs"),
-    ["daemon_gateway", "daemon_onboard"],
-    "managed bridge fixtures map to both dependent shards",
+    ["daemon_cli", "daemon_gateway", "daemon_onboard"],
+    "managed bridge fixtures map to all dependent shards",
 )
 assert_equal(
     resolve("crates/daemon/tests/integration/spec_runtime_bridge/http_json.rs"),
@@ -57,6 +57,21 @@ assert_equal(
     resolve("crates/daemon/tests/daemon_smoke.rs"),
     ["daemon_smoke"],
     "daemon smoke entrypoint maps to the smoke shard itself",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/root_cli.rs"),
+    ["daemon_smoke", "daemon_cli"],
+    "root cli surface tests map to smoke and cli shards",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/channel_surfaces.rs"),
+    ["daemon_cli"],
+    "channel surface root tests map to the cli shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/memory_surfaces.rs"),
+    ["daemon_cli"],
+    "memory surface root tests map to the cli shard",
 )
 assert_equal(
     resolve("crates/daemon/tests/support/mod.rs"),
