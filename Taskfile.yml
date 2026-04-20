@@ -1,0 +1,124 @@
+version: "3"
+
+tasks:
+  fmt:
+    desc: Check formatting for all crates
+    cmds:
+      - cargo fmt --all -- --check
+
+  lint:
+    desc: Run clippy across workspace targets
+    cmds:
+      - cargo clippy --workspace --all-targets --all-features
+
+  lint:strict:
+    desc: Run clippy with warnings denied (migration gate)
+    cmds:
+      - cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    desc: Run workspace unit and doc tests
+    cmds:
+      - cargo test --workspace
+
+  test:all-features:
+    desc: Run tests with all features enabled
+    cmds:
+      - cargo test --workspace --all-features
+
+  test:daemon:stress:
+    desc: Stress daemon test binary across thread modes to catch intermittent regressions
+    cmds:
+      - ./scripts/stress_daemon_tests.sh 10 default,2,1
+
+  smoke:
+    desc: Run representative spec-runner smoke scenarios
+    cmds:
+      - cargo run -p loong --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
+      - cargo run -p loong --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
+      - cargo run -p loong --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
+
+  benchmark:pressure:
+    desc: Run programmatic pressure benchmark with gate enforcement
+    cmds:
+      - ./scripts/benchmark_programmatic_pressure.sh
+
+  check:docs:
+    desc: "Validate doc governance (dev mode: warn on missing local .docs release traces)"
+    cmds:
+      - scripts/check-docs.sh
+
+  check:docs:strict:
+    desc: Validate doc governance in strict release mode (missing .docs artifacts fail)
+    cmds:
+      - LOONG_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
+
+  check:github-labels:
+    desc: Validate generated GitHub label taxonomy artifacts
+    cmds:
+      - python3 scripts/sync_github_labels.py --check
+      - bash scripts/test_sync_github_labels.sh
+
+  check:architecture:
+    desc: Validate architecture boundary budgets and memory-operation abstraction
+    cmds:
+      - scripts/check_architecture_boundaries.sh
+
+  check:architecture:strict:
+    desc: Fail on any architecture boundary budget violations
+    cmds:
+      - LOONG_ARCH_STRICT=true scripts/check_architecture_boundaries.sh
+
+  check:conventions:
+    desc: Validate repo convention contracts
+    vars:
+      SKILL_DIR: '{{.HOME}}/.claude/skills/convention-engineering'
+      CONFIG_FILE: '{{default ".convention-engineering.json" .CONFIG}}'
+    preconditions:
+      - sh: test -f "{{.SKILL_DIR}}/scripts/main.go"
+        msg: "convention-engineering skill not installed"
+      - sh: test -f "{{.CONFIG_FILE}}"
+        msg: "convention config not found"
+    cmds:
+      - GO111MODULE=off go run {{.SKILL_DIR}}/scripts/main.go --repo-root . --config {{.CONFIG_FILE}} --json
+
+  check:dep-graph:
+    desc: Validate workspace crate dependency graph against architecture contract
+    cmds:
+      - scripts/check_dep_graph.sh
+
+  check:harness:
+    desc: Verify agent guide mirrors are identical
+    cmds:
+      - diff CLAUDE.md AGENTS.md
+
+  check:deny:
+    desc: Run cargo-deny (advisories, bans, sources)
+    preconditions:
+      - sh: command -v cargo-deny
+        msg: "cargo-deny not installed. Run: cargo install cargo-deny"
+    cmds:
+      - cargo deny check advisories bans licenses sources
+
+  verify:
+    desc: Canonical local verification gate (strict superset of CI checks)
+    cmds:
+      - task: fmt
+      - task: lint:strict
+      - task: check:architecture:strict
+      - task: check:dep-graph
+      - task: check:conventions
+      - task: check:harness
+      - task: test
+      - task: test:all-features
+      - task: check:docs
+      - task: check:github-labels
+      - task: check:deny
+
+  verify:full:
+    desc: Extended verification including architecture, smoke, and benchmark gates
+    cmds:
+      - task: verify
+      - task: check:architecture:strict
+      - task: smoke
+      - task: benchmark:pressure

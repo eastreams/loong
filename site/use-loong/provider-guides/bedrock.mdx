@@ -1,0 +1,68 @@
+---
+title: Bedrock
+description: Configure the Bedrock provider profile in Loong.
+---
+
+# Bedrock
+
+Use this when Loong should talk to AWS Bedrock through the Converse path and region ownership needs to stay explicit.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `bedrock` |
+| Provider group | Gateway And Compatibility Providers |
+| Protocol family | `bedrock_converse` |
+| Feature family | `bedrock` |
+| Auth scheme | `bearer` |
+| Credential envs | AWS_BEARER_TOKEN_BEDROCK |
+| Aliases | `aws-bedrock`, `aws_bedrock` |
+| Default base URL | `https://bedrock-runtime.<region>.amazonaws.com` |
+| Request endpoint | `https://bedrock-runtime.<region>.amazonaws.com/model/{modelId}/converse` |
+| Models endpoint | `https://bedrock.<region>.amazonaws.com/foundation-models` |
+
+## Minimal Config
+
+```toml
+active_provider = "bedrock"
+
+[providers.bedrock]
+kind = "bedrock"
+base_url = "https://bedrock-runtime.<region>.amazonaws.com"
+model = "your-bedrock-model-id"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `AWS_BEARER_TOKEN_BEDROCK` |
+| OAuth env | none |
+| Primary request route | `https://bedrock-runtime.<region>.amazonaws.com/model/{modelId}/converse` |
+| Primary model-catalog route | `https://bedrock.<region>.amazonaws.com/foundation-models` |
+
+## Operator Notes
+
+- set `BEDROCK_AWS_REGION`/`AWS_REGION`/`AWS_DEFAULT_REGION` or replace `<region>` in `provider.base_url` with your Bedrock runtime region.
+- Alternative auth path: configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with BEDROCK_AWS_REGION, AWS_REGION, or AWS_DEFAULT_REGION for SigV4.
+- Bedrock expects a real model id such as an Anthropic or Amazon foundation-model identifier, not `auto` discovery as the final steady-state choice.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

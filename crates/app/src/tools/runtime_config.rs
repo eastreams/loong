@@ -1,0 +1,3663 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use loong_contracts::{ExecutionSecurityTier, SecretRef};
+use serde::{Deserialize, Serialize};
+
+use super::{bash_rules, shell_policy_ext::ShellPolicyDefault};
+use crate::config::{AutonomyProfile, LoongConfig};
+#[cfg(feature = "feishu-integration")]
+use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
+use crate::conversation::{
+    ConstrainedSubagentContractView, ConstrainedSubagentControlScope, ConstrainedSubagentMode,
+    ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
+};
+#[cfg(test)]
+use crate::conversation::{
+    ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
+};
+#[cfg(feature = "feishu-integration")]
+use crate::secrets::has_configured_secret_ref;
+use crate::secrets::{SecretLookup, resolve_secret_lookup};
+
+fn bool_is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BrowserRuntimeNarrowing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_sessions: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_links: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_text_chars: Option<usize>,
+}
+
+impl BrowserRuntimeNarrowing {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.max_sessions.is_none() && self.max_links.is_none() && self.max_text_chars.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WebFetchRuntimeNarrowing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_private_hosts: Option<bool>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub enforce_allowed_domains: bool,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub allowed_domains: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub blocked_domains: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_redirects: Option<usize>,
+}
+
+impl WebFetchRuntimeNarrowing {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.allow_private_hosts.is_none()
+            && !self.enforces_allowed_domains()
+            && self.allowed_domains.is_empty()
+            && self.blocked_domains.is_empty()
+            && self.timeout_seconds.is_none()
+            && self.max_bytes.is_none()
+            && self.max_redirects.is_none()
+    }
+
+    #[must_use]
+    pub fn enforces_allowed_domains(&self) -> bool {
+        self.enforce_allowed_domains || !self.allowed_domains.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ToolRuntimeNarrowing {
+    #[serde(default)]
+    pub browser: BrowserRuntimeNarrowing,
+    #[serde(default)]
+    pub web_fetch: WebFetchRuntimeNarrowing,
+}
+
+impl ToolRuntimeNarrowing {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.browser.is_empty() && self.web_fetch.is_empty()
+    }
+
+    #[must_use]
+    pub fn intersect(&self, other: &Self) -> Self {
+        if self.is_empty() {
+            return other.clone();
+        }
+        if other.is_empty() {
+            return self.clone();
+        }
+
+        let browser = BrowserRuntimeNarrowing {
+            max_sessions: min_optional_limit(self.browser.max_sessions, other.browser.max_sessions),
+            max_links: min_optional_limit(self.browser.max_links, other.browser.max_links),
+            max_text_chars: min_optional_limit(
+                self.browser.max_text_chars,
+                other.browser.max_text_chars,
+            ),
+        };
+
+        let left_enforces_allowed_domains = self.web_fetch.enforces_allowed_domains();
+        let right_enforces_allowed_domains = other.web_fetch.enforces_allowed_domains();
+        let mut allowed_domains = BTreeSet::new();
+        let mut enforce_allowed_domains = false;
+
+        if left_enforces_allowed_domains && right_enforces_allowed_domains {
+            enforce_allowed_domains = true;
+            let left_is_deny_all = self.web_fetch.allowed_domains.is_empty();
+            let right_is_deny_all = other.web_fetch.allowed_domains.is_empty();
+            if !left_is_deny_all && !right_is_deny_all {
+                allowed_domains = self
+                    .web_fetch
+                    .allowed_domains
+                    .intersection(&other.web_fetch.allowed_domains)
+                    .cloned()
+                    .collect();
+            }
+        } else if left_enforces_allowed_domains {
+            enforce_allowed_domains = true;
+            allowed_domains = self.web_fetch.allowed_domains.clone();
+        } else if right_enforces_allowed_domains {
+            enforce_allowed_domains = true;
+            allowed_domains = other.web_fetch.allowed_domains.clone();
+        }
+
+        let allow_private_hosts = intersect_private_host_setting(
+            self.web_fetch.allow_private_hosts,
+            other.web_fetch.allow_private_hosts,
+        );
+
+        let blocked_domains = self
+            .web_fetch
+            .blocked_domains
+            .union(&other.web_fetch.blocked_domains)
+            .cloned()
+            .collect();
+
+        let web_fetch = WebFetchRuntimeNarrowing {
+            allow_private_hosts,
+            enforce_allowed_domains,
+            allowed_domains,
+            blocked_domains,
+            timeout_seconds: min_optional_limit(
+                self.web_fetch.timeout_seconds,
+                other.web_fetch.timeout_seconds,
+            ),
+            max_bytes: min_optional_limit(self.web_fetch.max_bytes, other.web_fetch.max_bytes),
+            max_redirects: min_optional_limit(
+                self.web_fetch.max_redirects,
+                other.web_fetch.max_redirects,
+            ),
+        };
+
+        Self { browser, web_fetch }
+    }
+}
+
+fn min_optional_limit<T>(left: Option<T>, right: Option<T>) -> Option<T>
+where
+    T: Ord + Copy,
+{
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn intersect_private_host_setting(left: Option<bool>, right: Option<bool>) -> Option<bool> {
+    if left == Some(false) || right == Some(false) {
+        return Some(false);
+    }
+    None
+}
+
+pub(crate) fn merge_runtime_narrowing_sources(
+    primary_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    secondary_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+) -> Option<ToolRuntimeNarrowing> {
+    let primary_runtime_narrowing =
+        primary_runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+    let secondary_runtime_narrowing =
+        secondary_runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+
+    match (primary_runtime_narrowing, secondary_runtime_narrowing) {
+        (Some(primary_runtime_narrowing), Some(secondary_runtime_narrowing)) => {
+            let merged_runtime_narrowing =
+                primary_runtime_narrowing.intersect(&secondary_runtime_narrowing);
+            Some(merged_runtime_narrowing)
+        }
+        (Some(primary_runtime_narrowing), None) => Some(primary_runtime_narrowing),
+        (None, Some(secondary_runtime_narrowing)) => Some(secondary_runtime_narrowing),
+        (None, None) => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExternalSkillsRuntimePolicy {
+    pub enabled: bool,
+    pub require_download_approval: bool,
+    pub allowed_domains: BTreeSet<String>,
+    pub blocked_domains: BTreeSet<String>,
+    pub install_root: Option<PathBuf>,
+    pub auto_expose_installed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserRuntimePolicy {
+    pub enabled: bool,
+    pub max_sessions: usize,
+    pub max_links: usize,
+    pub max_text_chars: usize,
+}
+
+impl Default for BrowserRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_sessions: crate::config::DEFAULT_BROWSER_MAX_SESSIONS,
+            max_links: crate::config::DEFAULT_BROWSER_MAX_LINKS,
+            max_text_chars: crate::config::DEFAULT_BROWSER_MAX_TEXT_CHARS,
+        }
+    }
+}
+
+impl BrowserRuntimePolicy {
+    #[must_use]
+    pub const fn execution_security_tier(&self) -> ExecutionSecurityTier {
+        let _ = self;
+        ExecutionSecurityTier::Restricted
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserCompanionRuntimePolicy {
+    pub enabled: bool,
+    pub ready: bool,
+    pub command: Option<String>,
+    pub expected_version: Option<String>,
+    pub timeout_seconds: u64,
+    pub allow_private_hosts: bool,
+    pub enforce_allowed_domains: bool,
+    pub allowed_domains: BTreeSet<String>,
+    pub blocked_domains: BTreeSet<String>,
+}
+
+impl Default for BrowserCompanionRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ready: false,
+            command: None,
+            expected_version: None,
+            timeout_seconds: crate::config::DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS,
+            allow_private_hosts: false,
+            enforce_allowed_domains: false,
+            allowed_domains: BTreeSet::new(),
+            blocked_domains: BTreeSet::new(),
+        }
+    }
+}
+
+impl BrowserCompanionRuntimePolicy {
+    #[must_use]
+    pub fn is_runtime_ready(&self) -> bool {
+        self.enabled && self.ready && self.command.is_some()
+    }
+
+    #[must_use]
+    pub fn execution_security_tier(&self) -> ExecutionSecurityTier {
+        if self.is_runtime_ready() {
+            ExecutionSecurityTier::Balanced
+        } else {
+            ExecutionSecurityTier::Restricted
+        }
+    }
+
+    /// Project the companion's destination-boundary policy into the shared web
+    /// policy shape without inheriting unrelated fetch-only transport limits.
+    #[must_use]
+    pub fn web_policy(&self) -> WebFetchRuntimePolicy {
+        WebFetchRuntimePolicy {
+            enabled: self.enabled,
+            allow_private_hosts: self.allow_private_hosts,
+            enforce_allowed_domains: self.enforce_allowed_domains,
+            allowed_domains: self.allowed_domains.clone(),
+            blocked_domains: self.blocked_domains.clone(),
+            timeout_seconds: self.timeout_seconds,
+            max_bytes: crate::config::DEFAULT_WEB_FETCH_MAX_BYTES,
+            max_redirects: crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BashGovernanceRuntimePolicy {
+    pub rules_dir: PathBuf,
+    pub rules: Vec<bash_rules::CompiledPrefixRule>,
+    pub load_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BashExecRuntimePolicy {
+    pub available: bool,
+    pub command: Option<PathBuf>,
+    pub warning: Option<String>,
+    pub login_shell: bool,
+    pub governance: BashGovernanceRuntimePolicy,
+}
+
+impl BashExecRuntimePolicy {
+    #[must_use]
+    pub fn is_runtime_ready(&self) -> bool {
+        self.available && self.command.is_some()
+    }
+
+    #[must_use]
+    pub fn is_discoverable(&self) -> bool {
+        self.is_runtime_ready() && self.governance.load_error.is_none()
+    }
+}
+
+#[allow(clippy::print_stderr)]
+fn emit_runtime_warning(warning: &str) {
+    eprintln!("warning: {warning}");
+}
+
+#[cfg(feature = "tool-shell")]
+fn cached_bash_exec_runtime_probe() -> BashExecRuntimePolicy {
+    static BASH_RUNTIME_PROBE: OnceLock<BashExecRuntimePolicy> = OnceLock::new();
+
+    BASH_RUNTIME_PROBE
+        .get_or_init(super::bash::detect_bash_runtime_policy)
+        .clone()
+}
+
+#[cfg(feature = "tool-shell")]
+fn emit_bash_runtime_warning_once(warning: &str) {
+    static BASH_RUNTIME_WARNING: OnceLock<()> = OnceLock::new();
+
+    BASH_RUNTIME_WARNING.get_or_init(|| emit_runtime_warning(warning));
+}
+
+fn translate_legacy_shell_rules<'a>(
+    source: &str,
+    decision: bash_rules::PrefixRuleDecision,
+    commands: impl IntoIterator<Item = &'a String>,
+) -> Vec<bash_rules::CompiledPrefixRule> {
+    commands
+        .into_iter()
+        .filter_map(|command| {
+            let normalized = command.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return None;
+            }
+
+            Some(bash_rules::CompiledPrefixRule {
+                source: format!("{source}:{normalized}"),
+                prefix: vec![normalized],
+                decision,
+                origin: bash_rules::CompiledRuleOrigin::LegacyShellCompatibility,
+            })
+        })
+        .collect()
+}
+
+fn build_bash_governance_runtime_policy<'a>(
+    rules_dir: PathBuf,
+    shell_allow: impl IntoIterator<Item = &'a String>,
+    shell_deny: impl IntoIterator<Item = &'a String>,
+) -> BashGovernanceRuntimePolicy {
+    let mut rules = translate_legacy_shell_rules(
+        "shell_allow",
+        bash_rules::PrefixRuleDecision::Allow,
+        shell_allow,
+    );
+    rules.extend(translate_legacy_shell_rules(
+        "shell_deny",
+        bash_rules::PrefixRuleDecision::Deny,
+        shell_deny,
+    ));
+
+    let load_error = match bash_rules::load_rules_from_dir(&rules_dir) {
+        Ok(loaded_rules) => {
+            rules.extend(loaded_rules);
+            None
+        }
+        Err(error) => Some(error),
+    };
+
+    BashGovernanceRuntimePolicy {
+        rules_dir,
+        rules,
+        load_error,
+    }
+}
+
+fn build_bash_exec_runtime_policy(
+    login_shell: bool,
+    governance: BashGovernanceRuntimePolicy,
+) -> BashExecRuntimePolicy {
+    #[cfg(feature = "tool-shell")]
+    {
+        let mut policy = cached_bash_exec_runtime_probe();
+        if let Some(warning) = policy.warning.as_deref() {
+            emit_bash_runtime_warning_once(warning);
+        }
+        policy.login_shell = login_shell;
+        policy.governance = governance;
+        policy
+    }
+
+    #[cfg(not(feature = "tool-shell"))]
+    {
+        BashExecRuntimePolicy {
+            login_shell,
+            governance,
+            ..BashExecRuntimePolicy::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSelfRuntimePolicy {
+    pub max_source_chars: usize,
+    pub max_total_chars: usize,
+}
+
+impl RuntimeSelfRuntimePolicy {
+    #[must_use]
+    pub fn from_limits(max_source_chars: usize, max_total_chars: usize) -> Self {
+        let clamped_max_source_chars = max_source_chars.clamp(
+            crate::config::MIN_RUNTIME_SELF_MAX_SOURCE_CHARS,
+            crate::config::MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
+        );
+        let clamped_max_total_chars = max_total_chars.clamp(
+            crate::config::MIN_RUNTIME_SELF_MAX_TOTAL_CHARS,
+            crate::config::MAX_RUNTIME_SELF_MAX_TOTAL_CHARS,
+        );
+
+        Self {
+            max_source_chars: clamped_max_source_chars,
+            max_total_chars: clamped_max_total_chars,
+        }
+    }
+}
+
+impl Default for RuntimeSelfRuntimePolicy {
+    fn default() -> Self {
+        Self::from_limits(
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS,
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomyOperationMode {
+    #[default]
+    Deny,
+    ApprovalRequired,
+    Allow,
+}
+
+impl AutonomyOperationMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::ApprovalRequired => "approval_required",
+            Self::Allow => "allow",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AutonomyBudgetPolicy {
+    pub max_capability_acquisitions_per_turn: usize,
+    pub max_provider_switches_per_turn: usize,
+    pub max_topology_mutations_per_turn: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomyPolicySnapshot {
+    pub profile: AutonomyProfile,
+    pub capability_acquisition_mode: AutonomyOperationMode,
+    pub provider_switch_mode: AutonomyOperationMode,
+    pub topology_mutation_mode: AutonomyOperationMode,
+    pub requires_kernel_binding: bool,
+    pub budget: AutonomyBudgetPolicy,
+}
+
+impl AutonomyPolicySnapshot {
+    #[must_use]
+    pub fn from_profile(profile: AutonomyProfile) -> Self {
+        match profile {
+            AutonomyProfile::DiscoveryOnly => Self {
+                profile,
+                capability_acquisition_mode: AutonomyOperationMode::Deny,
+                provider_switch_mode: AutonomyOperationMode::Deny,
+                topology_mutation_mode: AutonomyOperationMode::Deny,
+                requires_kernel_binding: false,
+                budget: AutonomyBudgetPolicy::default(),
+            },
+            AutonomyProfile::GuidedAcquisition => Self {
+                profile,
+                capability_acquisition_mode: AutonomyOperationMode::ApprovalRequired,
+                provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
+                topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
+                requires_kernel_binding: true,
+                budget: AutonomyBudgetPolicy {
+                    max_capability_acquisitions_per_turn: 1,
+                    max_provider_switches_per_turn: 1,
+                    max_topology_mutations_per_turn: 1,
+                },
+            },
+            AutonomyProfile::BoundedAutonomous => Self {
+                profile,
+                capability_acquisition_mode: AutonomyOperationMode::Allow,
+                provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
+                topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
+                requires_kernel_binding: true,
+                budget: AutonomyBudgetPolicy {
+                    max_capability_acquisitions_per_turn: 2,
+                    max_provider_switches_per_turn: 1,
+                    max_topology_mutations_per_turn: 1,
+                },
+            },
+        }
+    }
+}
+
+// General network fetch/request policy for `web { url }`, low-level HTTP requests,
+// and shared SSRF helpers reused by browser. This is separate from web-search
+// provider selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebFetchRuntimePolicy {
+    pub enabled: bool,
+    pub allow_private_hosts: bool,
+    pub enforce_allowed_domains: bool,
+    pub allowed_domains: BTreeSet<String>,
+    pub blocked_domains: BTreeSet<String>,
+    pub timeout_seconds: u64,
+    pub max_bytes: usize,
+    pub max_redirects: usize,
+}
+
+impl Default for WebFetchRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_private_hosts: false,
+            enforce_allowed_domains: false,
+            allowed_domains: BTreeSet::new(),
+            blocked_domains: BTreeSet::new(),
+            timeout_seconds: crate::config::DEFAULT_WEB_FETCH_TIMEOUT_SECONDS,
+            max_bytes: crate::config::DEFAULT_WEB_FETCH_MAX_BYTES,
+            max_redirects: crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS,
+        }
+    }
+}
+
+// Query-style web search policy for `web { query }` / `web.search` only. Keep
+// this separate from normal network egress so missing web-search credentials do
+// not imply that plain fetch/request or browser access is unavailable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSearchRuntimePolicy {
+    pub enabled: bool,
+    pub default_provider: String,
+    pub brave_api_key: Option<String>,
+    pub tavily_api_key: Option<String>,
+    pub perplexity_api_key: Option<String>,
+    pub exa_api_key: Option<String>,
+    pub firecrawl_api_key: Option<String>,
+    pub jina_api_key: Option<String>,
+    pub timeout_seconds: u64,
+    pub max_results: usize,
+}
+
+impl Default for WebSearchRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_provider: crate::config::DEFAULT_WEB_SEARCH_PROVIDER.to_owned(),
+            brave_api_key: None,
+            tavily_api_key: None,
+            perplexity_api_key: None,
+            exa_api_key: None,
+            firecrawl_api_key: None,
+            jina_api_key: None,
+            timeout_seconds: crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
+            max_results: crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS,
+        }
+    }
+}
+
+#[cfg(feature = "feishu-integration")]
+#[derive(Debug, Clone)]
+pub struct FeishuToolRuntimeConfig {
+    pub channel: FeishuChannelConfig,
+    pub integration: FeishuIntegrationConfig,
+}
+
+#[cfg(feature = "feishu-integration")]
+impl FeishuToolRuntimeConfig {
+    pub fn from_loong_config(config: &LoongConfig) -> Option<Self> {
+        has_enabled_feishu_runtime_credentials(&config.feishu).then(|| Self {
+            channel: config.feishu.clone(),
+            integration: config.feishu_integration.clone(),
+        })
+    }
+
+    fn from_env() -> Option<Self> {
+        has_feishu_runtime_credentials(&FeishuChannelConfig::default()).then(|| Self {
+            channel: FeishuChannelConfig {
+                enabled: true,
+                ..FeishuChannelConfig::default()
+            },
+            integration: FeishuIntegrationConfig::default(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolExecutionConfig {
+    pub default_timeout_seconds: Option<u64>,
+    pub per_tool_timeout: BTreeMap<String, u64>,
+}
+
+impl ToolExecutionConfig {
+    pub fn timeout_for_tool(&self, tool_name: &str) -> Option<u64> {
+        let key = tool_name.to_lowercase();
+        self.per_tool_timeout
+            .get(&key)
+            .copied()
+            .or(self.default_timeout_seconds)
+    }
+}
+
+/// Typed runtime configuration for tool executors.
+///
+/// Replaces per-call `std::env::var` lookups with a single read from a
+/// process-wide singleton that is populated once at startup.
+#[derive(Debug, Clone)]
+pub struct ToolRuntimeConfig {
+    pub file_root: Option<PathBuf>,
+    pub workspace_root: Option<PathBuf>,
+    pub memory_sqlite_path: Option<PathBuf>,
+    pub selected_memory_system_id: String,
+    pub shell_allow: BTreeSet<String>,
+    pub shell_deny: BTreeSet<String>,
+    pub shell_default_mode: ShellPolicyDefault,
+    pub config_path: Option<PathBuf>,
+    pub sessions_enabled: bool,
+    pub sessions_allow_mutation: bool,
+    pub messages_enabled: bool,
+    pub delegate_enabled: bool,
+    pub runtime_self: RuntimeSelfRuntimePolicy,
+    pub browser: BrowserRuntimePolicy,
+    pub browser_companion: BrowserCompanionRuntimePolicy,
+    pub bash_exec: BashExecRuntimePolicy,
+    pub web_fetch: WebFetchRuntimePolicy,
+    pub web_search: WebSearchRuntimePolicy,
+    pub autonomy_profile: AutonomyProfile,
+    pub external_skills: ExternalSkillsRuntimePolicy,
+    pub tool_execution: ToolExecutionConfig,
+    #[cfg(feature = "feishu-integration")]
+    pub feishu: Option<FeishuToolRuntimeConfig>,
+}
+
+impl Default for ToolRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            file_root: None,
+            workspace_root: None,
+            memory_sqlite_path: None,
+            selected_memory_system_id: crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
+            shell_allow: crate::config::DEFAULT_SHELL_ALLOW
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            shell_deny: BTreeSet::new(),
+            shell_default_mode: ShellPolicyDefault::Allow,
+            config_path: None,
+            sessions_enabled: true,
+            sessions_allow_mutation: true,
+            messages_enabled: false,
+            delegate_enabled: true,
+            runtime_self: RuntimeSelfRuntimePolicy::default(),
+            browser: BrowserRuntimePolicy::default(),
+            browser_companion: BrowserCompanionRuntimePolicy::default(),
+            bash_exec: BashExecRuntimePolicy::default(),
+            web_fetch: WebFetchRuntimePolicy::default(),
+            web_search: WebSearchRuntimePolicy::default(),
+            autonomy_profile: AutonomyProfile::default(),
+            external_skills: ExternalSkillsRuntimePolicy::default(),
+            tool_execution: ToolExecutionConfig::default(),
+            #[cfg(feature = "feishu-integration")]
+            feishu: None,
+        }
+    }
+}
+
+impl ToolRuntimeConfig {
+    pub fn with_file_root_override(&self, file_root: PathBuf) -> Self {
+        let mut overridden = self.clone();
+        overridden.file_root = Some(file_root);
+        overridden
+    }
+
+    pub fn with_workspace_root_override(&self, workspace_root: PathBuf) -> Self {
+        let mut overridden = self.clone();
+        overridden.workspace_root = Some(workspace_root);
+        overridden
+    }
+
+    pub fn effective_workspace_root(&self) -> Option<&Path> {
+        let configured_workspace_root = self.workspace_root.as_deref();
+        let fallback_file_root = self.file_root.as_deref();
+        configured_workspace_root.or(fallback_file_root)
+    }
+
+    pub fn default_working_directory(&self) -> PathBuf {
+        let configured_root = self.file_root.clone();
+        let fallback_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        configured_root.unwrap_or(fallback_root)
+    }
+
+    pub fn from_loong_config(config: &LoongConfig, config_path: Option<&Path>) -> Self {
+        let file_root = config.tools.configured_file_root();
+        let workspace_root = config
+            .tools
+            .configured_runtime_workspace_root()
+            .or_else(|| file_root.clone());
+        let memory_system_selection = crate::memory::resolve_memory_system_selection(config);
+        let selected_memory_system_id = memory_system_selection.id;
+        let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
+        let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
+        let browser_companion_allowed_domains =
+            config.tools.browser_companion.normalized_allowed_domains();
+        let browser_companion_enforce_allowed_domains =
+            !browser_companion_allowed_domains.is_empty();
+        let shell_allow: BTreeSet<String> = config
+            .tools
+            .shell_allow
+            .iter()
+            .map(|value| value.to_ascii_lowercase())
+            .collect();
+        let shell_deny: BTreeSet<String> = config
+            .tools
+            .shell_deny
+            .iter()
+            .map(|value| value.to_ascii_lowercase())
+            .collect();
+        let bash_governance = build_bash_governance_runtime_policy(
+            config.tools.bash.resolved_rules_dir(),
+            shell_allow.iter(),
+            shell_deny.iter(),
+        );
+        Self {
+            file_root,
+            workspace_root,
+            memory_sqlite_path: Some(config.memory.resolved_sqlite_path()),
+            selected_memory_system_id,
+            shell_allow,
+            shell_deny,
+            shell_default_mode: ShellPolicyDefault::parse(&config.tools.shell_default_mode),
+            config_path: config_path.map(Path::to_path_buf),
+            sessions_enabled: config.tools.sessions.enabled,
+            sessions_allow_mutation: config.tools.sessions.allow_mutation,
+            messages_enabled: config.tools.messages.enabled,
+            delegate_enabled: config.tools.delegate.enabled,
+            runtime_self: RuntimeSelfRuntimePolicy::from_limits(
+                config.tools.runtime_self.max_source_chars,
+                config.tools.runtime_self.max_total_chars,
+            ),
+            browser: BrowserRuntimePolicy {
+                enabled: config.tools.browser.enabled,
+                max_sessions: config.tools.browser.max_sessions,
+                max_links: config.tools.browser.max_links,
+                max_text_chars: config.tools.browser.max_text_chars,
+            },
+            browser_companion: browser_companion_runtime_policy(
+                config.tools.browser_companion.enabled,
+                parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
+                config.tools.browser_companion.command.as_deref(),
+                config.tools.browser_companion.expected_version.as_deref(),
+                config.tools.browser_companion.timeout_seconds,
+                config.tools.browser_companion.allow_private_hosts,
+                browser_companion_allowed_domains.into_iter().collect(),
+                config
+                    .tools
+                    .browser_companion
+                    .normalized_blocked_domains()
+                    .into_iter()
+                    .collect(),
+                browser_companion_enforce_allowed_domains,
+            ),
+            bash_exec: build_bash_exec_runtime_policy(
+                config.tools.bash.login_shell,
+                bash_governance,
+            ),
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: config.tools.web.enabled,
+                allow_private_hosts: config.tools.web.allow_private_hosts,
+                enforce_allowed_domains: web_fetch_enforce_allowed_domains,
+                allowed_domains: web_fetch_allowed_domains.into_iter().collect(),
+                blocked_domains: config
+                    .tools
+                    .web
+                    .normalized_blocked_domains()
+                    .into_iter()
+                    .collect(),
+                timeout_seconds: config.tools.web.timeout_seconds,
+                max_bytes: config.tools.web.max_bytes,
+                max_redirects: config.tools.web.max_redirects,
+            },
+            web_search: WebSearchRuntimePolicy {
+                enabled: config.tools.web_search.enabled,
+                default_provider: crate::config::normalize_web_search_provider(
+                    config.tools.web_search.default_provider.as_str(),
+                )
+                .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
+                .to_owned(),
+                brave_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.brave_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_BRAVE,
+                    ),
+                ),
+                tavily_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.tavily_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_TAVILY,
+                    ),
+                ),
+                perplexity_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.perplexity_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
+                    ),
+                ),
+                exa_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.exa_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_EXA,
+                    ),
+                ),
+                firecrawl_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.firecrawl_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
+                    ),
+                ),
+                jina_api_key: resolve_web_search_secret_binding(
+                    config.tools.web_search.jina_api_key.as_deref(),
+                    crate::config::web_search_provider_api_key_env_names(
+                        crate::config::WEB_SEARCH_PROVIDER_JINA,
+                    ),
+                ),
+                timeout_seconds: config.tools.web_search.timeout_seconds,
+                max_results: config.tools.web_search.max_results,
+            },
+            autonomy_profile: config.tools.autonomy_profile,
+            external_skills: ExternalSkillsRuntimePolicy {
+                enabled: config.external_skills.enabled,
+                require_download_approval: config.external_skills.require_download_approval,
+                allowed_domains: config
+                    .external_skills
+                    .normalized_allowed_domains()
+                    .into_iter()
+                    .collect(),
+                blocked_domains: config
+                    .external_skills
+                    .normalized_blocked_domains()
+                    .into_iter()
+                    .collect(),
+                install_root: config.external_skills.resolved_install_root(),
+                auto_expose_installed: config.external_skills.auto_expose_installed,
+            },
+            tool_execution: ToolExecutionConfig {
+                default_timeout_seconds: config.tools.tool_execution.default_timeout_seconds,
+                per_tool_timeout: config
+                    .tools
+                    .tool_execution
+                    .per_tool_timeout
+                    .iter()
+                    .map(|(k, v): (&String, &u64)| (k.to_lowercase(), *v))
+                    .collect(),
+            },
+            #[cfg(feature = "feishu-integration")]
+            feishu: FeishuToolRuntimeConfig::from_loong_config(config),
+        }
+    }
+
+    /// Build a config by reading the legacy environment variables.
+    ///
+    /// Keeps full backward compatibility for callers that still rely on
+    /// `LOONG_FILE_ROOT`.
+    pub fn from_env() -> Self {
+        let file_root = parse_env_path("LOONG_FILE_ROOT");
+        let workspace_root = parse_env_path("LOONG_WORKSPACE_ROOT").or_else(|| file_root.clone());
+        let memory_sqlite_path = std::env::var_os("LOONG_SQLITE_PATH")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        let memory_sqlite_path = memory_sqlite_path.or_else(|| {
+            let default_config = crate::config::LoongConfig::default();
+            Some(default_config.memory.resolved_sqlite_path())
+        });
+        let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
+            .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
+        let config_path = std::env::var("LOONG_CONFIG_PATH")
+            .ok()
+            .or_else(|| std::env::var("LOONG_CONFIG_PATH").ok())
+            .map(PathBuf::from);
+        let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect();
+        let shell_deny = BTreeSet::new();
+        let sessions_enabled = parse_env_bool("LOONG_TOOL_SESSIONS_ENABLED").unwrap_or(true);
+        let sessions_allow_mutation =
+            parse_env_bool("LOONG_TOOL_SESSIONS_ALLOW_MUTATION").unwrap_or(true);
+        let messages_enabled = parse_env_bool("LOONG_TOOL_MESSAGES_ENABLED").unwrap_or(false);
+        let delegate_enabled = parse_env_bool("LOONG_TOOL_DELEGATE_ENABLED").unwrap_or(true);
+        let runtime_self_max_source_chars = parse_env_usize("LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS")
+            .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS);
+        let runtime_self_max_total_chars = parse_env_usize("LOONG_RUNTIME_SELF_MAX_TOTAL_CHARS")
+            .unwrap_or(crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS);
+        let runtime_self_policy = RuntimeSelfRuntimePolicy::from_limits(
+            runtime_self_max_source_chars,
+            runtime_self_max_total_chars,
+        );
+        let browser_enabled = parse_env_bool("LOONG_BROWSER_ENABLED").unwrap_or(true);
+        let browser_max_sessions = parse_env_usize("LOONG_BROWSER_MAX_SESSIONS")
+            .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_SESSIONS);
+        let browser_max_links = parse_env_usize("LOONG_BROWSER_MAX_LINKS")
+            .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_LINKS);
+        let browser_max_text_chars = parse_env_usize("LOONG_BROWSER_MAX_TEXT_CHARS")
+            .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_TEXT_CHARS);
+        let browser_companion_enabled =
+            parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false);
+        let browser_companion_ready =
+            parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false);
+        let browser_companion_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
+        let browser_companion_expected_version =
+            parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
+        let browser_companion_timeout_seconds =
+            parse_env_u64("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS")
+                .unwrap_or(crate::config::DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS);
+        let web_fetch_enabled = parse_env_bool("LOONG_WEB_FETCH_ENABLED").unwrap_or(true);
+        let web_fetch_allow_private_hosts =
+            parse_env_bool("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false);
+        let web_fetch_allowed_domains = parse_env_domain_list("LOONG_WEB_FETCH_ALLOWED_DOMAINS");
+        let web_fetch_blocked_domains = parse_env_domain_list("LOONG_WEB_FETCH_BLOCKED_DOMAINS");
+        let web_fetch_timeout_seconds = parse_env_u64("LOONG_WEB_FETCH_TIMEOUT_SECONDS")
+            .unwrap_or(crate::config::DEFAULT_WEB_FETCH_TIMEOUT_SECONDS);
+        let web_fetch_max_bytes = parse_env_usize("LOONG_WEB_FETCH_MAX_BYTES")
+            .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_BYTES);
+        let web_fetch_max_redirects = parse_env_usize("LOONG_WEB_FETCH_MAX_REDIRECTS")
+            .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
+        let web_search_enabled = parse_env_bool("LOONG_WEB_SEARCH_ENABLED").unwrap_or(true);
+        let web_search_default_provider = parse_env_string("LOONG_WEB_SEARCH_PROVIDER")
+            .or_else(|| parse_env_string("LOONG_WEB_SEARCH_PROVIDER"))
+            .as_deref()
+            .and_then(crate::config::normalize_web_search_provider)
+            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
+            .to_owned();
+        let web_search_brave_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_BRAVE,
+            ),
+        );
+        let web_search_tavily_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_TAVILY,
+            ),
+        );
+        let web_search_perplexity_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
+            ),
+        );
+        let web_search_exa_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_EXA,
+            ),
+        );
+        let web_search_firecrawl_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
+            ),
+        );
+        let web_search_jina_api_key = resolve_web_search_secret_binding(
+            None,
+            crate::config::web_search_provider_api_key_env_names(
+                crate::config::WEB_SEARCH_PROVIDER_JINA,
+            ),
+        );
+        let web_search_timeout_seconds = parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS")
+            .or_else(|| parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS"))
+            .map(|seconds| seconds.clamp(1, 60))
+            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
+        let web_search_max_results = parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS")
+            .or_else(|| parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS"))
+            .map(|count| count.clamp(1, 10))
+            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
+        let autonomy_profile = resolve_autonomy_profile_from_env();
+        let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
+        let require_download_approval =
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(false);
+        let allowed_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
+        let blocked_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
+        let install_root = std::env::var("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT")
+            .ok()
+            .map(PathBuf::from);
+        let auto_expose_installed =
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
+
+        let tool_execution_default_timeout = parse_env_u64("LOONG_TOOL_DEFAULT_TIMEOUT_SECONDS");
+        let mut tool_execution_per_tool_timeout = BTreeMap::new();
+        for (key, value) in std::env::vars() {
+            if let Some(tool_name) = key.strip_prefix("LOONG_TOOL_")
+                && let Some(stripped) = tool_name.strip_suffix("_TIMEOUT_SECONDS")
+                && !stripped.is_empty()
+                && stripped != "DEFAULT"
+                && let Ok(timeout) = value.parse::<u64>()
+            {
+                tool_execution_per_tool_timeout.insert(stripped.to_lowercase(), timeout);
+            }
+        }
+        let tool_execution = ToolExecutionConfig {
+            default_timeout_seconds: tool_execution_default_timeout,
+            per_tool_timeout: tool_execution_per_tool_timeout,
+        };
+        let bash_exec = build_bash_exec_runtime_policy(
+            false,
+            build_bash_governance_runtime_policy(
+                crate::config::ToolConfig::default()
+                    .bash
+                    .resolved_rules_dir(),
+                shell_allow.iter(),
+                shell_deny.iter(),
+            ),
+        );
+
+        let browser_companion_allow_private_hosts = web_fetch_allow_private_hosts;
+        let browser_companion_allowed_domains = web_fetch_allowed_domains.clone();
+        let browser_companion_blocked_domains = web_fetch_blocked_domains.clone();
+        let browser_companion_enforce_allowed_domains =
+            !browser_companion_allowed_domains.is_empty();
+
+        Self {
+            file_root,
+            workspace_root,
+            memory_sqlite_path,
+            selected_memory_system_id,
+            shell_allow,
+            shell_deny,
+            shell_default_mode: ShellPolicyDefault::Allow,
+            config_path,
+            sessions_enabled,
+            sessions_allow_mutation,
+            messages_enabled,
+            delegate_enabled,
+            runtime_self: runtime_self_policy,
+            browser: BrowserRuntimePolicy {
+                enabled: browser_enabled,
+                max_sessions: browser_max_sessions,
+                max_links: browser_max_links,
+                max_text_chars: browser_max_text_chars,
+            },
+            browser_companion: browser_companion_runtime_policy(
+                browser_companion_enabled,
+                browser_companion_ready,
+                browser_companion_command.as_deref(),
+                browser_companion_expected_version.as_deref(),
+                browser_companion_timeout_seconds,
+                browser_companion_allow_private_hosts,
+                browser_companion_allowed_domains,
+                browser_companion_blocked_domains,
+                browser_companion_enforce_allowed_domains,
+            ),
+            bash_exec,
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: web_fetch_enabled,
+                allow_private_hosts: web_fetch_allow_private_hosts,
+                enforce_allowed_domains: !web_fetch_allowed_domains.is_empty(),
+                allowed_domains: web_fetch_allowed_domains,
+                blocked_domains: web_fetch_blocked_domains,
+                timeout_seconds: web_fetch_timeout_seconds,
+                max_bytes: web_fetch_max_bytes,
+                max_redirects: web_fetch_max_redirects,
+            },
+            web_search: WebSearchRuntimePolicy {
+                enabled: web_search_enabled,
+                default_provider: web_search_default_provider,
+                brave_api_key: web_search_brave_api_key,
+                tavily_api_key: web_search_tavily_api_key,
+                perplexity_api_key: web_search_perplexity_api_key,
+                exa_api_key: web_search_exa_api_key,
+                firecrawl_api_key: web_search_firecrawl_api_key,
+                jina_api_key: web_search_jina_api_key,
+                timeout_seconds: web_search_timeout_seconds,
+                max_results: web_search_max_results,
+            },
+            autonomy_profile,
+            tool_execution,
+            ..Self::default()
+        }
+        .with_external_skills_policy(ExternalSkillsRuntimePolicy {
+            enabled,
+            require_download_approval,
+            allowed_domains,
+            blocked_domains,
+            install_root,
+            auto_expose_installed,
+        })
+    }
+
+    fn with_external_skills_policy(mut self, external_skills: ExternalSkillsRuntimePolicy) -> Self {
+        self.external_skills = external_skills;
+        #[cfg(feature = "feishu-integration")]
+        {
+            self.feishu = FeishuToolRuntimeConfig::from_env();
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn narrowed(&self, narrowing: &ToolRuntimeNarrowing) -> Self {
+        if narrowing.is_empty() {
+            return self.clone();
+        }
+
+        let mut narrowed = self.clone();
+
+        if let Some(max_sessions) = narrowing.browser.max_sessions {
+            narrowed.browser.max_sessions = narrowed.browser.max_sessions.min(max_sessions.max(1));
+        }
+        if let Some(max_links) = narrowing.browser.max_links {
+            narrowed.browser.max_links = narrowed.browser.max_links.min(max_links.max(1));
+        }
+        if let Some(max_text_chars) = narrowing.browser.max_text_chars {
+            narrowed.browser.max_text_chars =
+                narrowed.browser.max_text_chars.min(max_text_chars.max(1));
+        }
+
+        narrowed.web_fetch.allow_private_hosts = match narrowing.web_fetch.allow_private_hosts {
+            Some(false) => false,
+            Some(true) => narrowed.web_fetch.allow_private_hosts,
+            None => narrowed.web_fetch.allow_private_hosts,
+        };
+
+        let preserve_deny_all = narrowed.web_fetch.enforce_allowed_domains
+            && narrowed.web_fetch.allowed_domains.is_empty();
+        if narrowing.web_fetch.enforces_allowed_domains() {
+            narrowed.web_fetch.enforce_allowed_domains = true;
+            if !preserve_deny_all {
+                narrowed.web_fetch.allowed_domains =
+                    if narrowing.web_fetch.allowed_domains.is_empty() {
+                        BTreeSet::new()
+                    } else if narrowed.web_fetch.allowed_domains.is_empty() {
+                        narrowing.web_fetch.allowed_domains.clone()
+                    } else {
+                        narrowed
+                            .web_fetch
+                            .allowed_domains
+                            .intersection(&narrowing.web_fetch.allowed_domains)
+                            .cloned()
+                            .collect()
+                    };
+            }
+        }
+        narrowed
+            .web_fetch
+            .blocked_domains
+            .extend(narrowing.web_fetch.blocked_domains.iter().cloned());
+
+        if let Some(timeout_seconds) = narrowing.web_fetch.timeout_seconds {
+            narrowed.web_fetch.timeout_seconds = narrowed
+                .web_fetch
+                .timeout_seconds
+                .min(timeout_seconds.max(1));
+        }
+        if let Some(max_bytes) = narrowing.web_fetch.max_bytes {
+            narrowed.web_fetch.max_bytes = narrowed.web_fetch.max_bytes.min(max_bytes.max(1));
+        }
+        if let Some(max_redirects) = narrowing.web_fetch.max_redirects {
+            narrowed.web_fetch.max_redirects = narrowed.web_fetch.max_redirects.min(max_redirects);
+        }
+
+        narrowed
+    }
+
+    fn visible_child_tool_allowlist(tool_names: &[String]) -> Vec<String> {
+        let mut visible_tool_names = Vec::new();
+
+        for tool_name in tool_names {
+            let visible_tool_name = super::model_visible_tool_name(tool_name.as_str());
+            if !visible_tool_names.contains(&visible_tool_name) {
+                visible_tool_names.push(visible_tool_name);
+            }
+        }
+
+        visible_tool_names
+    }
+
+    #[must_use]
+    pub(crate) fn delegate_child_prompt_summary(
+        &self,
+        subagent_contract: Option<&ConstrainedSubagentContractView>,
+    ) -> Option<String> {
+        let subagent_contract = subagent_contract?;
+        let narrowing = &subagent_contract.runtime_narrowing;
+        let effective = self.narrowed(narrowing);
+        let child_exec_label = super::model_visible_tool_name(super::SHELL_EXEC_TOOL_NAME);
+        let child_allowlist =
+            Self::visible_child_tool_allowlist(&subagent_contract.child_tool_allowlist);
+        let web_network_label = format!("{} network", super::model_visible_tool_name("web.fetch"));
+        let mut lines = vec![
+            "[delegate_child_runtime_contract]".to_owned(),
+            "Plan within these child-session runtime limits:".to_owned(),
+        ];
+        let mut rendered_any = false;
+
+        if let Some(mode) = subagent_contract.mode {
+            rendered_any = true;
+            let mode = match mode {
+                ConstrainedSubagentMode::Async => "async",
+                ConstrainedSubagentMode::Inline => "inline",
+            };
+            lines.push(format!("- subagent mode: {mode}"));
+        }
+
+        if let Some(identity) = subagent_contract.resolved_identity() {
+            if let Some(nickname) = identity.nickname.as_deref() {
+                rendered_any = true;
+                lines.push(format!("- subagent nickname: {nickname}"));
+            }
+            if let Some(specialization) = identity.specialization.as_deref() {
+                rendered_any = true;
+                lines.push(format!("- subagent specialization: {specialization}"));
+            }
+        }
+
+        if let Some(depth_budget) = subagent_contract.depth_budget {
+            rendered_any = true;
+            lines.push(format!(
+                "- subagent depth budget: {}/{}",
+                depth_budget.current, depth_budget.max
+            ));
+        }
+
+        if let Some(active_child_budget) = subagent_contract.active_child_budget {
+            rendered_any = true;
+            lines.push(format!(
+                "- subagent active-child budget snapshot: {}/{}",
+                active_child_budget.current, active_child_budget.max
+            ));
+        }
+
+        if let Some(timeout_seconds) = subagent_contract.timeout_seconds {
+            rendered_any = true;
+            lines.push(format!("- child timeout seconds: {}", timeout_seconds));
+        }
+
+        if let Some(allow_shell_in_child) = subagent_contract.allow_shell_in_child {
+            rendered_any = true;
+            lines.push(format!(
+                "- child {child_exec_label}: {}",
+                if allow_shell_in_child {
+                    "allowed"
+                } else {
+                    "denied"
+                }
+            ));
+        }
+
+        if !subagent_contract.child_tool_allowlist.is_empty() || subagent_contract.mode.is_some() {
+            rendered_any = true;
+            let tool_allowlist = if child_allowlist.is_empty() {
+                "none".to_owned()
+            } else {
+                child_allowlist.join(", ")
+            };
+            lines.push(format!("- child tool allowlist: {tool_allowlist}"));
+        }
+
+        if let Some(runtime_binding) = subagent_contract.runtime_binding {
+            rendered_any = true;
+            lines.push(format!(
+                "- child runtime binding: {}",
+                match runtime_binding {
+                    ConstrainedSubagentRuntimeBinding::KernelBound => "kernel-bound",
+                    ConstrainedSubagentRuntimeBinding::Direct => "direct",
+                }
+            ));
+        }
+
+        if let Some(subagent_profile) = subagent_contract.profile {
+            rendered_any = true;
+            let role = match subagent_profile.role {
+                ConstrainedSubagentRole::Orchestrator => "orchestrator",
+                ConstrainedSubagentRole::Leaf => "leaf",
+            };
+            let control_scope = match subagent_profile.control_scope {
+                ConstrainedSubagentControlScope::Children => "children",
+                ConstrainedSubagentControlScope::None => "none",
+            };
+            lines.push(format!("- subagent role: {role}"));
+            lines.push(format!("- subagent control scope: {control_scope}"));
+        }
+
+        if effective.web_fetch.enabled {
+            if narrowing.web_fetch.allow_private_hosts.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- {web_network_label} private hosts: {}",
+                    if effective.web_fetch.allow_private_hosts {
+                        "allowed"
+                    } else {
+                        "denied"
+                    }
+                ));
+            }
+            if narrowing.web_fetch.enforces_allowed_domains() {
+                rendered_any = true;
+                if effective.web_fetch.enforce_allowed_domains
+                    && effective.web_fetch.allowed_domains.is_empty()
+                {
+                    lines.push(
+                        format!(
+                            "- {web_network_label} allowed domains: none (effective intersection is empty)"
+                        ),
+                    );
+                } else {
+                    lines.push(format!(
+                        "- {web_network_label} allowed domains: {}",
+                        effective
+                            .web_fetch
+                            .allowed_domains
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+            if !narrowing.web_fetch.blocked_domains.is_empty() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- {web_network_label} blocked domains: {}",
+                    effective
+                        .web_fetch
+                        .blocked_domains
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if narrowing.web_fetch.timeout_seconds.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- {web_network_label} timeout seconds: {}",
+                    effective.web_fetch.timeout_seconds
+                ));
+            }
+            if narrowing.web_fetch.max_bytes.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- {web_network_label} max bytes: {}",
+                    effective.web_fetch.max_bytes
+                ));
+            }
+            if narrowing.web_fetch.max_redirects.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- {web_network_label} max redirects: {}",
+                    effective.web_fetch.max_redirects
+                ));
+            }
+        }
+
+        if effective.browser.enabled {
+            if narrowing.browser.max_sessions.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- browser max sessions: {}",
+                    effective.browser.max_sessions
+                ));
+            }
+            if narrowing.browser.max_links.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- browser max links: {}",
+                    effective.browser.max_links
+                ));
+            }
+            if narrowing.browser.max_text_chars.is_some() {
+                rendered_any = true;
+                lines.push(format!(
+                    "- browser max text chars: {}",
+                    effective.browser.max_text_chars
+                ));
+            }
+        }
+
+        if !rendered_any {
+            return None;
+        }
+
+        lines.push("Treat these as enforced limits for this child session.".to_owned());
+        Some(lines.join("\n"))
+    }
+
+    #[must_use]
+    pub const fn browser_execution_security_tier(&self) -> ExecutionSecurityTier {
+        self.browser.execution_security_tier()
+    }
+
+    #[must_use]
+    pub fn browser_companion_execution_security_tier(&self) -> ExecutionSecurityTier {
+        self.browser_companion.execution_security_tier()
+    }
+
+    #[must_use]
+    pub fn autonomy_policy_snapshot(&self) -> AutonomyPolicySnapshot {
+        AutonomyPolicySnapshot::from_profile(self.autonomy_profile)
+    }
+}
+
+fn resolve_web_search_secret_binding(
+    configured_value: Option<&str>,
+    env_names: &[&str],
+) -> Option<String> {
+    if let Some(secret_ref) = configured_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| SecretRef::Inline(value.to_owned()))
+    {
+        match resolve_secret_lookup(Some(&secret_ref)) {
+            SecretLookup::Value(value) => return Some(value),
+            SecretLookup::Missing => return None,
+            SecretLookup::Absent => {}
+        }
+    }
+
+    env_names
+        .iter()
+        .find_map(|env_name| std::env::var(env_name).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn browser_companion_runtime_policy_from_tool_config(
+    config: &crate::config::ToolConfig,
+) -> BrowserCompanionRuntimePolicy {
+    let allowed_domains = config.browser_companion.normalized_allowed_domains();
+    let enforce_allowed_domains = !allowed_domains.is_empty();
+    browser_companion_runtime_policy(
+        config.browser_companion.enabled,
+        parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
+        config.browser_companion.command.as_deref(),
+        config.browser_companion.expected_version.as_deref(),
+        config.browser_companion.timeout_seconds,
+        config.browser_companion.allow_private_hosts,
+        allowed_domains.into_iter().collect(),
+        config
+            .browser_companion
+            .normalized_blocked_domains()
+            .into_iter()
+            .collect(),
+        enforce_allowed_domains,
+    )
+}
+
+pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
+    config: &crate::config::ToolConfig,
+) -> BrowserCompanionRuntimePolicy {
+    let env_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
+    let env_expected_version = parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
+    let default_browser_companion = crate::config::BrowserCompanionToolConfig::default();
+    let use_env_web_policy = config.browser_companion == default_browser_companion;
+    let allow_private_hosts = if use_env_web_policy {
+        parse_env_bool("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false)
+    } else {
+        config.browser_companion.allow_private_hosts
+    };
+    let allowed_domains = if use_env_web_policy {
+        parse_env_domain_list("LOONG_WEB_FETCH_ALLOWED_DOMAINS")
+    } else {
+        config
+            .browser_companion
+            .normalized_allowed_domains()
+            .into_iter()
+            .collect()
+    };
+    let blocked_domains = if use_env_web_policy {
+        parse_env_domain_list("LOONG_WEB_FETCH_BLOCKED_DOMAINS")
+    } else {
+        config
+            .browser_companion
+            .normalized_blocked_domains()
+            .into_iter()
+            .collect()
+    };
+    let enforce_allowed_domains = !allowed_domains.is_empty();
+    browser_companion_runtime_policy(
+        config.browser_companion.enabled
+            || parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false),
+        parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
+        config
+            .browser_companion
+            .command
+            .as_deref()
+            .or(env_command.as_deref()),
+        config
+            .browser_companion
+            .expected_version
+            .as_deref()
+            .or(env_expected_version.as_deref()),
+        parse_env_u64("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS")
+            .unwrap_or(config.browser_companion.timeout_seconds),
+        allow_private_hosts,
+        allowed_domains,
+        blocked_domains,
+        enforce_allowed_domains,
+    )
+}
+
+fn browser_companion_runtime_policy(
+    enabled: bool,
+    ready: bool,
+    command: Option<&str>,
+    expected_version: Option<&str>,
+    timeout_seconds: u64,
+    allow_private_hosts: bool,
+    allowed_domains: BTreeSet<String>,
+    blocked_domains: BTreeSet<String>,
+    enforce_allowed_domains: bool,
+) -> BrowserCompanionRuntimePolicy {
+    BrowserCompanionRuntimePolicy {
+        enabled,
+        ready,
+        command: normalize_optional_string(command),
+        expected_version: normalize_optional_string(expected_version),
+        timeout_seconds: timeout_seconds.max(1),
+        allow_private_hosts,
+        enforce_allowed_domains,
+        allowed_domains,
+        blocked_domains,
+    }
+}
+
+fn parse_env_bool(key: &str) -> Option<bool> {
+    std::env::var(key).ok().and_then(|raw| {
+        let value = raw.trim().to_ascii_lowercase();
+        match value.as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+fn parse_env_u64(key: &str) -> Option<u64> {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+}
+
+fn parse_env_usize(key: &str) -> Option<usize> {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+}
+
+fn normalize_optional_string(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn parse_env_string(key: &str) -> Option<String> {
+    normalize_optional_string(std::env::var(key).ok().as_deref())
+}
+
+fn parse_env_path(key: &str) -> Option<PathBuf> {
+    let raw_path = parse_env_string(key)?;
+    let path = PathBuf::from(raw_path);
+    Some(path)
+}
+
+fn parse_env_domain_list(key: &str) -> BTreeSet<String> {
+    std::env::var(key)
+        .ok()
+        .unwrap_or_default()
+        .split([',', ';', ' '])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn resolve_autonomy_profile_from_env() -> AutonomyProfile {
+    let raw_profile = parse_env_string("LOONG_AUTONOMY_PROFILE");
+    let Some(raw_profile) = raw_profile else {
+        return AutonomyProfile::default();
+    };
+
+    let parsed_profile = crate::config::parse_autonomy_profile(raw_profile.as_str());
+    let Some(profile) = parsed_profile else {
+        let default_profile = AutonomyProfile::default();
+        let default_profile_id = default_profile.as_str();
+        let valid_values = crate::config::AUTONOMY_PROFILE_VALID_VALUES;
+
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!(
+                "warning: invalid LOONG_AUTONOMY_PROFILE `{raw_profile}`; falling back to `{default_profile_id}`. supported values: {valid_values}"
+            );
+        }
+        return default_profile;
+    };
+
+    profile
+}
+
+#[cfg(feature = "feishu-integration")]
+fn has_enabled_feishu_runtime_credentials(config: &FeishuChannelConfig) -> bool {
+    if !config.enabled {
+        return false;
+    }
+
+    has_secret_binding(config.app_id.as_ref(), config.app_id_env.as_deref())
+        && has_secret_binding(config.app_secret.as_ref(), config.app_secret_env.as_deref())
+        || config
+            .accounts
+            .values()
+            .any(account_has_enabled_feishu_runtime_credentials)
+}
+
+#[cfg(feature = "feishu-integration")]
+fn has_feishu_runtime_credentials(config: &FeishuChannelConfig) -> bool {
+    has_secret_binding(config.app_id.as_ref(), config.app_id_env.as_deref())
+        && has_secret_binding(config.app_secret.as_ref(), config.app_secret_env.as_deref())
+        || config
+            .accounts
+            .values()
+            .any(account_has_feishu_runtime_credentials)
+}
+
+#[cfg(feature = "feishu-integration")]
+fn account_has_enabled_feishu_runtime_credentials(
+    account: &crate::config::FeishuAccountConfig,
+) -> bool {
+    account.enabled.unwrap_or(true) && account_has_feishu_runtime_credentials(account)
+}
+
+#[cfg(feature = "feishu-integration")]
+fn account_has_feishu_runtime_credentials(account: &crate::config::FeishuAccountConfig) -> bool {
+    has_secret_binding(account.app_id.as_ref(), account.app_id_env.as_deref())
+        && has_secret_binding(
+            account.app_secret.as_ref(),
+            account.app_secret_env.as_deref(),
+        )
+}
+
+#[cfg(feature = "feishu-integration")]
+fn has_secret_binding(secret_ref: Option<&SecretRef>, env_name: Option<&str>) -> bool {
+    if let Some(secret_ref) = secret_ref {
+        let explicit_env_name = secret_ref.explicit_env_name();
+        if let Some(explicit_env_name) = explicit_env_name {
+            let resolved_env_value = std::env::var(explicit_env_name.as_str()).ok();
+            let has_resolved_env_value = resolved_env_value
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            return has_resolved_env_value;
+        }
+
+        if has_configured_secret_ref(Some(secret_ref)) {
+            return true;
+        }
+    }
+
+    env_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|name| std::env::var(name).ok())
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+static TOOL_RUNTIME_CONFIG: OnceLock<ToolRuntimeConfig> = OnceLock::new();
+
+/// Initialise the process-wide tool runtime config.
+///
+/// Returns `Ok(())` on the first call.  Subsequent calls return
+/// `Err` because the `OnceLock` rejects duplicate initialisation.
+pub fn init_tool_runtime_config(config: ToolRuntimeConfig) -> Result<(), String> {
+    TOOL_RUNTIME_CONFIG.set(config).map_err(|_err| {
+        "tool runtime config already initialised (duplicate init_tool_runtime_config call)"
+            .to_owned()
+    })
+}
+
+/// Return the process-wide tool runtime config.
+///
+/// If `init_tool_runtime_config` was never called the config is lazily
+/// populated from environment variables (backward-compat path).
+pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
+    TOOL_RUNTIME_CONFIG.get_or_init(ToolRuntimeConfig::from_env)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{ScopedEnv, ScopedLoongHome};
+    #[cfg(feature = "feishu-integration")]
+    use std::collections::BTreeMap;
+
+    fn clear_tool_runtime_env(env: &mut ScopedEnv) {
+        for key in [
+            "LOONG_HOME",
+            "LOONG_CONFIG_PATH",
+            "LOONG_CONFIG_PATH",
+            "LOONG_FILE_ROOT",
+            "LOONG_WORKSPACE_ROOT",
+            "LOONG_SQLITE_PATH",
+            "LOONG_TOOL_SESSIONS_ENABLED",
+            "LOONG_TOOL_SESSIONS_ALLOW_MUTATION",
+            "LOONG_TOOL_MESSAGES_ENABLED",
+            "LOONG_TOOL_DELEGATE_ENABLED",
+            "LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS",
+            "LOONG_RUNTIME_SELF_MAX_TOTAL_CHARS",
+            "LOONG_BROWSER_ENABLED",
+            "LOONG_BROWSER_MAX_SESSIONS",
+            "LOONG_BROWSER_MAX_LINKS",
+            "LOONG_BROWSER_MAX_TEXT_CHARS",
+            "LOONG_BROWSER_COMPANION_ENABLED",
+            "LOONG_BROWSER_COMPANION_READY",
+            "LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS",
+            "LOONG_BROWSER_COMPANION_COMMAND",
+            "LOONG_BROWSER_COMPANION_EXPECTED_VERSION",
+            "LOONG_WEB_FETCH_ENABLED",
+            "LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS",
+            "LOONG_WEB_FETCH_ALLOWED_DOMAINS",
+            "LOONG_WEB_FETCH_BLOCKED_DOMAINS",
+            "LOONG_WEB_FETCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_FETCH_MAX_BYTES",
+            "LOONG_WEB_FETCH_MAX_REDIRECTS",
+            "LOONG_WEB_SEARCH_ENABLED",
+            "LOONG_WEB_SEARCH_PROVIDER",
+            "LOONG_WEB_SEARCH_PROVIDER",
+            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_SEARCH_MAX_RESULTS",
+            "LOONG_WEB_SEARCH_MAX_RESULTS",
+            "LOONG_AUTONOMY_PROFILE",
+            "BRAVE_API_KEY",
+            "TAVILY_API_KEY",
+            "PERPLEXITY_API_KEY",
+            "EXA_API_KEY",
+            "FIRECRAWL_API_KEY",
+            "JINA_API_KEY",
+            "JINA_AUTH_TOKEN",
+            "LOONG_EXTERNAL_SKILLS_ENABLED",
+            "LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
+            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
+            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
+            "LOONG_EXTERNAL_SKILLS_INSTALL_ROOT",
+            "LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
+        ] {
+            env.remove(key);
+        }
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    fn clear_feishu_runtime_env(env: &mut ScopedEnv) {
+        env.remove("FEISHU_APP_ID");
+        env.remove("FEISHU_APP_SECRET");
+    }
+
+    #[test]
+    fn tool_runtime_config_from_env_defaults() {
+        let config = ToolRuntimeConfig::default();
+        assert!(config.file_root.is_none());
+        assert!(config.workspace_root.is_none());
+        assert!(config.config_path.is_none());
+        assert!(config.sessions_enabled);
+        assert!(config.sessions_allow_mutation);
+        assert!(!config.messages_enabled);
+        assert!(config.delegate_enabled);
+        assert_eq!(
+            config.runtime_self.max_source_chars,
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS
+        );
+        assert_eq!(
+            config.runtime_self.max_total_chars,
+            crate::config::DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS
+        );
+        assert!(config.browser.enabled);
+        assert_eq!(config.browser.max_sessions, 8);
+        assert_eq!(config.browser.max_links, 40);
+        assert_eq!(config.browser.max_text_chars, 6000);
+        assert!(!config.browser_companion.enabled);
+        assert!(!config.browser_companion.ready);
+        assert!(config.browser_companion.command.is_none());
+        assert!(config.browser_companion.expected_version.is_none());
+        assert!(config.web_fetch.enabled);
+        assert!(!config.web_fetch.allow_private_hosts);
+        assert!(config.web_fetch.allowed_domains.is_empty());
+        assert!(config.web_fetch.blocked_domains.is_empty());
+        assert_eq!(config.web_fetch.timeout_seconds, 15);
+        assert_eq!(config.web_fetch.max_bytes, 1_048_576);
+        assert_eq!(config.web_fetch.max_redirects, 3);
+        assert!(config.web_search.enabled);
+        assert_eq!(
+            config.web_search.default_provider,
+            crate::config::DEFAULT_WEB_SEARCH_PROVIDER
+        );
+        assert!(config.web_search.brave_api_key.is_none());
+        assert!(config.web_search.tavily_api_key.is_none());
+        assert!(config.web_search.perplexity_api_key.is_none());
+        assert!(config.web_search.exa_api_key.is_none());
+        assert!(config.web_search.jina_api_key.is_none());
+        assert_eq!(
+            config.web_search.timeout_seconds,
+            crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            config.web_search.max_results,
+            crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
+        );
+        assert!(!config.external_skills.enabled);
+        assert!(!config.external_skills.require_download_approval);
+        assert!(config.external_skills.allowed_domains.is_empty());
+        assert!(config.external_skills.blocked_domains.is_empty());
+        assert!(config.external_skills.install_root.is_none());
+        assert!(!config.external_skills.auto_expose_installed);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_defaults_to_discovery_only() {
+        let config = ToolRuntimeConfig::default();
+        let snapshot = config.autonomy_policy_snapshot();
+
+        assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(snapshot.profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(
+            snapshot.capability_acquisition_mode,
+            AutonomyOperationMode::Deny
+        );
+        assert_eq!(snapshot.provider_switch_mode, AutonomyOperationMode::Deny);
+        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert!(!snapshot.requires_kernel_binding);
+        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 0);
+        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 0);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+        assert_eq!(AutonomyProfile::DiscoveryOnly.as_str(), "discovery_only");
+        assert_eq!(
+            AutonomyProfile::GuidedAcquisition.as_str(),
+            "guided_acquisition"
+        );
+        assert_eq!(
+            AutonomyProfile::BoundedAutonomous.as_str(),
+            "bounded_autonomous"
+        );
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_from_loong_config_uses_explicit_profile() {
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+        let snapshot = runtime.autonomy_policy_snapshot();
+
+        assert_eq!(runtime.autonomy_profile, AutonomyProfile::GuidedAcquisition);
+        assert_eq!(
+            snapshot.capability_acquisition_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert_eq!(
+            snapshot.provider_switch_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert_eq!(
+            snapshot.topology_mutation_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert!(snapshot.requires_kernel_binding);
+        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 1);
+        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
+    }
+
+    #[test]
+    fn tool_runtime_config_default_marks_bash_exec_unavailable() {
+        let config = ToolRuntimeConfig::default();
+
+        assert!(!config.bash_exec.is_runtime_ready());
+        assert!(!config.bash_exec.is_discoverable());
+        assert!(config.bash_exec.command.is_none());
+        assert!(config.bash_exec.warning.is_none());
+        assert!(!config.bash_exec.login_shell);
+    }
+
+    #[test]
+    fn bash_exec_discoverability_requires_runtime_ready_and_governance_load_success() {
+        let unavailable = BashExecRuntimePolicy::default();
+        assert!(!unavailable.is_runtime_ready());
+        assert!(!unavailable.is_discoverable());
+
+        let runtime_ready = BashExecRuntimePolicy {
+            available: true,
+            command: Some(PathBuf::from("bash")),
+            ..BashExecRuntimePolicy::default()
+        };
+        assert!(runtime_ready.is_runtime_ready());
+        assert!(runtime_ready.is_discoverable());
+
+        let governance_failed = BashExecRuntimePolicy {
+            governance: BashGovernanceRuntimePolicy {
+                load_error: Some("broken rules".to_owned()),
+                ..BashGovernanceRuntimePolicy::default()
+            },
+            ..runtime_ready
+        };
+        assert!(governance_failed.is_runtime_ready());
+        assert!(!governance_failed.is_discoverable());
+    }
+
+    #[test]
+    fn tool_runtime_config_projects_bash_login_shell_flag() {
+        let config: crate::config::ToolConfig =
+            toml::from_str("[bash]\nlogin_shell = true\n").expect("bash tool config");
+        let loong = crate::config::LoongConfig {
+            tools: config,
+            ..crate::config::LoongConfig::default()
+        };
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&loong, None);
+
+        assert!(runtime.bash_exec.login_shell);
+    }
+
+    #[test]
+    fn tool_runtime_config_uses_loong_home_rules_dir_when_unset() {
+        let home = ScopedLoongHome::new("loong-runtime-config-home");
+
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &LoongConfig::default(),
+            Some(std::path::Path::new("/tmp/work/loong.toml")),
+        );
+
+        assert_eq!(
+            runtime.bash_exec.governance.rules_dir,
+            home.path().join("rules")
+        );
+    }
+
+    #[test]
+    fn tool_runtime_config_keeps_relative_bash_rules_dir_override_relative() {
+        let config: crate::config::ToolConfig =
+            toml::from_str("[bash]\nrules_dir = \"custom/rules\"\n").expect("bash tool config");
+        let loong = crate::config::LoongConfig {
+            tools: config,
+            ..crate::config::LoongConfig::default()
+        };
+
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &loong,
+            Some(std::path::Path::new("/tmp/work/loong.toml")),
+        );
+
+        assert_eq!(
+            runtime.bash_exec.governance.rules_dir,
+            PathBuf::from("custom/rules")
+        );
+    }
+
+    #[test]
+    fn bash_governance_runtime_treats_missing_rules_dir_as_empty_rule_set() {
+        let home = ScopedLoongHome::new("loong-runtime-governance-home");
+        let config_path = home.path().join("loong.toml");
+
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &LoongConfig::default(),
+            Some(config_path.as_path()),
+        );
+
+        assert!(runtime.bash_exec.governance.load_error.is_none());
+        assert!(runtime.bash_exec.governance.rules.is_empty());
+    }
+
+    #[test]
+    fn bash_governance_runtime_preserves_rule_load_error_for_broken_rule_file() {
+        let home = ScopedLoongHome::new("loong-runtime-governance-broken-home");
+        let rules_dir = home.path().join("rules");
+        std::fs::create_dir_all(&rules_dir).expect("create rules dir");
+        std::fs::write(rules_dir.join("broken.rules"), "not valid starlark")
+            .expect("write broken rule file");
+        let config_path = home.path().join("loong.toml");
+
+        let runtime = ToolRuntimeConfig::from_loong_config(
+            &LoongConfig::default(),
+            Some(config_path.as_path()),
+        );
+
+        assert!(runtime.bash_exec.governance.load_error.is_some());
+    }
+
+    #[cfg(not(feature = "tool-shell"))]
+    #[test]
+    fn tool_runtime_config_from_loong_config_does_not_probe_bash_when_tool_shell_disabled() {
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.bash.login_shell = true;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert!(!runtime.bash_exec.available);
+        assert!(runtime.bash_exec.command.is_none());
+        assert!(runtime.bash_exec.warning.is_none());
+        assert!(runtime.bash_exec.login_shell);
+    }
+
+    #[cfg(not(feature = "tool-shell"))]
+    #[test]
+    fn tool_runtime_config_from_env_does_not_probe_bash_when_tool_shell_disabled() {
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert!(!runtime.bash_exec.available);
+        assert!(runtime.bash_exec.command.is_none());
+        assert!(runtime.bash_exec.warning.is_none());
+        assert!(!runtime.bash_exec.login_shell);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_compiles_bounded_autonomous_snapshot() {
+        let config = ToolRuntimeConfig {
+            autonomy_profile: AutonomyProfile::BoundedAutonomous,
+            ..ToolRuntimeConfig::default()
+        };
+
+        let snapshot = config.autonomy_policy_snapshot();
+
+        assert_eq!(snapshot.profile, AutonomyProfile::BoundedAutonomous);
+        assert_eq!(
+            snapshot.capability_acquisition_mode,
+            AutonomyOperationMode::Allow
+        );
+        assert_eq!(
+            snapshot.provider_switch_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert_eq!(
+            snapshot.topology_mutation_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
+        assert!(snapshot.requires_kernel_binding);
+        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 2);
+        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_from_env_invalid_value_fails_closed() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_AUTONOMY_PROFILE", "chaos");
+
+        let runtime = ToolRuntimeConfig::from_env();
+        let snapshot = runtime.autonomy_policy_snapshot();
+
+        assert_eq!(runtime.autonomy_profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(snapshot.profile, AutonomyProfile::DiscoveryOnly);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_from_env_uses_valid_value() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_AUTONOMY_PROFILE", "guided_acquisition");
+
+        let runtime = ToolRuntimeConfig::from_env();
+        let snapshot = runtime.autonomy_policy_snapshot();
+
+        assert_eq!(runtime.autonomy_profile, AutonomyProfile::GuidedAcquisition);
+        assert_eq!(snapshot.profile, AutonomyProfile::GuidedAcquisition);
+    }
+
+    /// Deny starts empty so users are not forced to carry
+    /// any hardcoded restriction they did not opt into.
+    #[test]
+    fn default_deny_is_empty() {
+        let config = ToolRuntimeConfig::default();
+        assert!(config.shell_deny.is_empty());
+    }
+
+    /// Explicit config injection overrides defaults — verifies that
+    /// non-default values survive construction without env-var leakage.
+    #[test]
+    fn explicit_config_injection_overrides_defaults() {
+        let config = ToolRuntimeConfig {
+            sessions_enabled: false,
+            sessions_allow_mutation: true,
+            messages_enabled: true,
+            delegate_enabled: false,
+            shell_allow: BTreeSet::from(["git".to_owned(), "cargo".to_owned()]),
+            file_root: Some(PathBuf::from("/tmp/test-root")),
+            config_path: Some(PathBuf::from("/tmp/test-root/loong.toml")),
+            runtime_self: RuntimeSelfRuntimePolicy::from_limits(4_096, 32_768),
+            browser: BrowserRuntimePolicy {
+                enabled: false,
+                max_sessions: 4,
+                max_links: 12,
+                max_text_chars: 2_048,
+            },
+            browser_companion: BrowserCompanionRuntimePolicy {
+                enabled: true,
+                ready: true,
+                command: Some("loong-browser-companion".to_owned()),
+                expected_version: Some("1.2.3".to_owned()),
+                timeout_seconds: 9,
+                allow_private_hosts: false,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+            },
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: false,
+                allow_private_hosts: true,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
+                timeout_seconds: 9,
+                max_bytes: 262_144,
+                max_redirects: 1,
+            },
+            external_skills: ExternalSkillsRuntimePolicy {
+                enabled: true,
+                require_download_approval: false,
+                allowed_domains: BTreeSet::from(["skills.sh".to_owned()]),
+                blocked_domains: BTreeSet::new(),
+                install_root: Some(PathBuf::from("/tmp/test-root/skills")),
+                auto_expose_installed: false,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        assert!(config.shell_allow.contains("git"));
+        assert!(config.shell_allow.contains("cargo"));
+        assert!(!config.shell_allow.contains("echo"));
+        assert_eq!(config.file_root, Some(PathBuf::from("/tmp/test-root")));
+        assert_eq!(
+            config.config_path,
+            Some(PathBuf::from("/tmp/test-root/loong.toml"))
+        );
+        assert!(!config.sessions_enabled);
+        assert!(config.sessions_allow_mutation);
+        assert!(config.messages_enabled);
+        assert!(!config.delegate_enabled);
+        assert_eq!(config.runtime_self.max_source_chars, 4_096);
+        assert_eq!(config.runtime_self.max_total_chars, 32_768);
+        assert!(!config.browser.enabled);
+        assert_eq!(config.browser.max_sessions, 4);
+        assert_eq!(config.browser.max_links, 12);
+        assert_eq!(config.browser.max_text_chars, 2_048);
+        assert!(config.browser_companion.enabled);
+        assert!(config.browser_companion.ready);
+        assert_eq!(
+            config.browser_companion.command.as_deref(),
+            Some("loong-browser-companion")
+        );
+        assert_eq!(
+            config.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
+        assert!(!config.web_fetch.enabled);
+        assert!(config.web_fetch.allow_private_hosts);
+        assert!(
+            config
+                .web_fetch
+                .allowed_domains
+                .contains("docs.example.com")
+        );
+        assert!(
+            config
+                .web_fetch
+                .blocked_domains
+                .contains("internal.example")
+        );
+        assert_eq!(config.web_fetch.timeout_seconds, 9);
+        assert_eq!(config.web_fetch.max_bytes, 262_144);
+        assert_eq!(config.web_fetch.max_redirects, 1);
+        assert!(config.external_skills.enabled);
+        assert!(!config.external_skills.require_download_approval);
+        assert!(config.external_skills.allowed_domains.contains("skills.sh"));
+        assert_eq!(
+            config.external_skills.install_root,
+            Some(PathBuf::from("/tmp/test-root/skills"))
+        );
+        assert!(!config.external_skills.auto_expose_installed);
+    }
+
+    #[test]
+    fn file_root_uses_injected_config() {
+        let config = ToolRuntimeConfig {
+            file_root: Some(PathBuf::from("/tmp/test-root")),
+            ..ToolRuntimeConfig::default()
+        };
+        assert_eq!(config.file_root, Some(PathBuf::from("/tmp/test-root")));
+    }
+
+    #[test]
+    fn tool_runtime_config_from_loong_config_keeps_file_root_unset_when_not_configured() {
+        let config = crate::config::LoongConfig::default();
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(runtime.file_root, None);
+    }
+
+    #[test]
+    fn memory_sqlite_path_uses_injected_config() {
+        let config = crate::config::LoongConfig::default();
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(
+            runtime.memory_sqlite_path,
+            Some(config.memory.resolved_sqlite_path())
+        );
+    }
+
+    #[test]
+    fn selected_memory_system_id_uses_injected_config() {
+        let mut config = crate::config::LoongConfig::default();
+        config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
+    fn memory_sqlite_path_from_env_uses_legacy_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_SQLITE_PATH", "/tmp/tool-runtime-memory.sqlite3");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.memory_sqlite_path,
+            Some(PathBuf::from("/tmp/tool-runtime-memory.sqlite3"))
+        );
+    }
+
+    #[test]
+    fn selected_memory_system_id_from_env_uses_registered_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "workspace_recall");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
+    fn selected_memory_system_id_from_env_falls_back_on_unknown_value() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "unknown_memory_system");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.selected_memory_system_id,
+            crate::memory::DEFAULT_MEMORY_SYSTEM_ID
+        );
+    }
+
+    #[test]
+    fn memory_sqlite_path_from_env_falls_back_to_loong_home() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        let runtime_home = ScopedLoongHome::new("loong-tool-runtime-memory-home");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.memory_sqlite_path,
+            Some(runtime_home.path().join("memory.sqlite3"))
+        );
+    }
+
+    #[test]
+    fn empty_legacy_memory_sqlite_path_falls_back_to_loong_home() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        let runtime_home = ScopedLoongHome::new("loong-tool-runtime-empty-sqlite-home");
+        env.set("LOONG_SQLITE_PATH", "");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.memory_sqlite_path,
+            Some(runtime_home.path().join("memory.sqlite3"))
+        );
+    }
+
+    #[test]
+    fn from_env_defaults_to_empty_allowlist() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        let config = ToolRuntimeConfig::from_env();
+        assert!(config.shell_allow.is_empty());
+    }
+
+    #[test]
+    fn from_loong_config_projects_browser_companion_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.timeout_seconds = 7;
+        config.tools.browser_companion.command = Some("loong-browser-companion".to_owned());
+        config.tools.browser_companion.expected_version = Some("1.2.3".to_owned());
+        config.tools.browser_companion.allow_private_hosts = true;
+        config.tools.browser_companion.allowed_domains =
+            vec!["Docs.Example.com".to_owned(), "api.example.com".to_owned()];
+        config.tools.browser_companion.blocked_domains = vec![
+            "internal.example".to_owned(),
+            " INTERNAL.EXAMPLE ".to_owned(),
+        ];
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+        assert!(runtime.browser_companion.enabled);
+        assert!(runtime.browser_companion.ready);
+        assert_eq!(
+            runtime.browser_companion.command.as_deref(),
+            Some("loong-browser-companion")
+        );
+        assert_eq!(
+            runtime.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(runtime.browser_companion.timeout_seconds, 7);
+        assert!(runtime.browser_companion.allow_private_hosts);
+        assert!(runtime.browser_companion.enforce_allowed_domains);
+        assert_eq!(
+            runtime.browser_companion.allowed_domains,
+            BTreeSet::from(["api.example.com".to_owned(), "docs.example.com".to_owned()])
+        );
+        assert_eq!(
+            runtime.browser_companion.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
+    }
+
+    #[test]
+    fn from_loong_config_projects_runtime_self_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.runtime_self.max_source_chars = 12_345;
+        config.tools.runtime_self.max_total_chars = 67_890;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(runtime.runtime_self.max_source_chars, 12_345);
+        assert_eq!(runtime.runtime_self.max_total_chars, 67_890);
+    }
+
+    #[test]
+    fn tool_runtime_config_from_env_reads_workspace_root_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+
+        env.set("LOONG_FILE_ROOT", "/tmp/loong-tool-root");
+        env.set("LOONG_WORKSPACE_ROOT", "/tmp/loong-workspace-root");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.file_root.as_deref(),
+            Some(Path::new("/tmp/loong-tool-root"))
+        );
+        assert_eq!(
+            runtime.workspace_root.as_deref(),
+            Some(Path::new("/tmp/loong-workspace-root"))
+        );
+        assert_eq!(
+            runtime.effective_workspace_root(),
+            Some(Path::new("/tmp/loong-workspace-root"))
+        );
+    }
+
+    #[test]
+    fn tool_runtime_config_workspace_root_override_preserves_tool_root_truth() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.file_root = Some("/tmp/loong-tool-root".to_owned());
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+        let runtime =
+            runtime.with_workspace_root_override(PathBuf::from("/tmp/loong-runtime-workspace"));
+
+        assert_eq!(
+            runtime.file_root.as_deref(),
+            Some(Path::new("/tmp/loong-tool-root"))
+        );
+        assert_eq!(
+            runtime.workspace_root.as_deref(),
+            Some(Path::new("/tmp/loong-runtime-workspace"))
+        );
+        assert_eq!(
+            runtime.effective_workspace_root(),
+            Some(Path::new("/tmp/loong-runtime-workspace"))
+        );
+    }
+
+    #[test]
+    fn from_loong_config_projects_session_mutation_toggle() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.sessions.allow_mutation = true;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert!(runtime.sessions_enabled);
+        assert!(runtime.sessions_allow_mutation);
+    }
+
+    #[test]
+    fn from_loong_config_canonicalizes_web_search_provider_alias() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        let mut config = crate::config::LoongConfig::default();
+        config.tools.web_search.default_provider = "ddg".to_owned();
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(
+            runtime.web_search.default_provider,
+            crate::config::DEFAULT_WEB_SEARCH_PROVIDER
+        );
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn injected_config_overrides_global() {
+        let _env = ScopedEnv::new();
+        let injected_root = tempfile::tempdir().expect("create injected file root");
+        let injected_root_path = injected_root.path().to_path_buf();
+        let config_path = injected_root_path.join("loong.toml");
+        let config = ToolRuntimeConfig {
+            file_root: Some(injected_root_path),
+            shell_allow: BTreeSet::from(["echo".to_owned()]),
+            config_path: Some(config_path),
+            ..ToolRuntimeConfig::default()
+        };
+        let result = crate::tools::execute_tool_core_with_config(
+            loong_contracts::ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: serde_json::json!({"command": "echo", "args": ["injected"]}),
+            },
+            &config,
+        );
+        let outcome = result.expect("echo should be allowed with injected config");
+        assert_eq!(outcome.status, "ok");
+        assert!(
+            outcome.payload["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("injected")
+        );
+    }
+
+    #[test]
+    fn from_env_parses_external_skills_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONG_TOOL_SESSIONS_ENABLED", "false");
+        env.set("LOONG_TOOL_SESSIONS_ALLOW_MUTATION", "true");
+        env.set("LOONG_TOOL_MESSAGES_ENABLED", "true");
+        env.set("LOONG_TOOL_DELEGATE_ENABLED", "false");
+        env.set("LOONG_BROWSER_ENABLED", "false");
+        env.set("LOONG_BROWSER_MAX_SESSIONS", "4");
+        env.set("LOONG_BROWSER_MAX_LINKS", "12");
+        env.set("LOONG_BROWSER_MAX_TEXT_CHARS", "2048");
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
+        env.set("LOONG_BROWSER_COMPANION_COMMAND", "loong-browser-companion");
+        env.set("LOONG_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+        env.set("LOONG_WEB_FETCH_ENABLED", "false");
+        env.set("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
+        env.set(
+            "LOONG_WEB_FETCH_ALLOWED_DOMAINS",
+            "docs.example.com,api.example.com",
+        );
+        env.set("LOONG_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
+        env.set("LOONG_WEB_FETCH_TIMEOUT_SECONDS", "9");
+        env.set("LOONG_WEB_FETCH_MAX_BYTES", "262144");
+        env.set("LOONG_WEB_FETCH_MAX_REDIRECTS", "1");
+        env.set("LOONG_EXTERNAL_SKILLS_ENABLED", "true");
+        env.set("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL", "false");
+        env.set(
+            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
+            "skills.sh,clawhub.ai",
+        );
+        env.set(
+            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
+            "malicious.example,*.clawhub.io",
+        );
+        env.set("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT", "/tmp/managed-skills");
+        env.set("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
+
+        let config = ToolRuntimeConfig::from_env();
+        assert!(!config.sessions_enabled);
+        assert!(config.sessions_allow_mutation);
+        assert!(config.messages_enabled);
+        assert!(!config.delegate_enabled);
+        assert!(!config.browser.enabled);
+        assert_eq!(config.browser.max_sessions, 4);
+        assert_eq!(config.browser.max_links, 12);
+        assert_eq!(config.browser.max_text_chars, 2_048);
+        assert!(config.browser_companion.enabled);
+        assert!(config.browser_companion.ready);
+        assert_eq!(
+            config.browser_companion.command.as_deref(),
+            Some("loong-browser-companion")
+        );
+        assert_eq!(
+            config.browser_companion.expected_version.as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(config.browser_companion.timeout_seconds, 11);
+        assert!(config.browser_companion.allow_private_hosts);
+        assert!(
+            config
+                .browser_companion
+                .allowed_domains
+                .contains("docs.example.com")
+        );
+        assert!(
+            config
+                .browser_companion
+                .allowed_domains
+                .contains("api.example.com")
+        );
+        assert!(
+            config
+                .browser_companion
+                .blocked_domains
+                .contains("internal.example")
+        );
+        assert!(config.browser_companion.enforce_allowed_domains);
+        assert!(!config.web_fetch.enabled);
+        assert!(config.web_fetch.allow_private_hosts);
+        assert!(
+            config
+                .web_fetch
+                .allowed_domains
+                .contains("docs.example.com")
+        );
+        assert!(config.web_fetch.allowed_domains.contains("api.example.com"));
+        assert!(
+            config
+                .web_fetch
+                .blocked_domains
+                .contains("internal.example")
+        );
+        assert_eq!(config.web_fetch.timeout_seconds, 9);
+        assert_eq!(config.web_fetch.max_bytes, 262_144);
+        assert_eq!(config.web_fetch.max_redirects, 1);
+        assert!(config.web_search.enabled);
+        assert_eq!(
+            config.web_search.default_provider,
+            crate::config::DEFAULT_WEB_SEARCH_PROVIDER
+        );
+        assert!(config.web_search.brave_api_key.is_none());
+        assert!(config.web_search.tavily_api_key.is_none());
+        assert_eq!(
+            config.web_search.timeout_seconds,
+            crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            config.web_search.max_results,
+            crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
+        );
+        assert!(config.external_skills.enabled);
+        assert!(!config.external_skills.require_download_approval);
+        assert!(config.external_skills.allowed_domains.contains("skills.sh"));
+        assert!(
+            config
+                .external_skills
+                .allowed_domains
+                .contains("clawhub.ai")
+        );
+        assert!(
+            config
+                .external_skills
+                .blocked_domains
+                .contains("malicious.example")
+        );
+        assert!(
+            config
+                .external_skills
+                .blocked_domains
+                .contains("*.clawhub.io")
+        );
+        assert_eq!(
+            config.external_skills.install_root,
+            Some(PathBuf::from("/tmp/managed-skills"))
+        );
+        assert!(!config.external_skills.auto_expose_installed);
+    }
+
+    #[test]
+    fn from_env_clamps_runtime_self_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONG_RUNTIME_SELF_MAX_SOURCE_CHARS", "999999");
+        env.set("LOONG_RUNTIME_SELF_MAX_TOTAL_CHARS", "1");
+
+        let config = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            config.runtime_self.max_source_chars,
+            crate::config::MAX_RUNTIME_SELF_MAX_SOURCE_CHARS
+        );
+        assert_eq!(
+            config.runtime_self.max_total_chars,
+            crate::config::MIN_RUNTIME_SELF_MAX_TOTAL_CHARS
+        );
+    }
+
+    #[test]
+    fn from_env_canonicalizes_and_clamps_web_search_policy() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONG_WEB_SEARCH_PROVIDER", "DDG");
+        env.set("LOONG_WEB_SEARCH_TIMEOUT_SECONDS", "999");
+        env.set("LOONG_WEB_SEARCH_MAX_RESULTS", "42");
+        env.set(
+            crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV,
+            "brave-test-key",
+        );
+        env.set(
+            crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV,
+            "tavily-test-key",
+        );
+        env.set(
+            crate::config::WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
+            "perplexity-test-key",
+        );
+        env.set(crate::config::WEB_SEARCH_EXA_API_KEY_ENV, "exa-test-key");
+        env.set(
+            crate::config::WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
+            "firecrawl-test-key",
+        );
+        env.set(
+            crate::config::WEB_SEARCH_JINA_AUTH_TOKEN_ENV,
+            "jina-test-key",
+        );
+
+        let config = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            config.web_search.default_provider,
+            crate::config::DEFAULT_WEB_SEARCH_PROVIDER
+        );
+        assert_eq!(config.web_search.timeout_seconds, 60);
+        assert_eq!(config.web_search.max_results, 10);
+        assert_eq!(
+            config.web_search.brave_api_key.as_deref(),
+            Some("brave-test-key")
+        );
+        assert_eq!(
+            config.web_search.tavily_api_key.as_deref(),
+            Some("tavily-test-key")
+        );
+        assert_eq!(
+            config.web_search.perplexity_api_key.as_deref(),
+            Some("perplexity-test-key")
+        );
+        assert_eq!(
+            config.web_search.exa_api_key.as_deref(),
+            Some("exa-test-key")
+        );
+        assert_eq!(
+            config.web_search.firecrawl_api_key.as_deref(),
+            Some("firecrawl-test-key")
+        );
+        assert_eq!(
+            config.web_search.jina_api_key.as_deref(),
+            Some("jina-test-key")
+        );
+    }
+
+    #[test]
+    fn from_env_preserves_legacy_web_search_env_fallbacks() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("LOONG_WEB_SEARCH_PROVIDER", "tavily");
+        env.set("LOONG_WEB_SEARCH_TIMEOUT_SECONDS", "41");
+        env.set("LOONG_WEB_SEARCH_MAX_RESULTS", "7");
+
+        let config = ToolRuntimeConfig::from_env();
+
+        assert_eq!(config.web_search.default_provider, "tavily");
+        assert_eq!(config.web_search.timeout_seconds, 41);
+        assert_eq!(config.web_search.max_results, 7);
+    }
+
+    #[test]
+    fn from_loong_config_resolves_inline_env_refs_for_web_search_credentials() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("TEAM_EXA_KEY", "exa-inline-env");
+
+        let mut config = LoongConfig::default();
+        config.tools.web_search.default_provider =
+            crate::config::WEB_SEARCH_PROVIDER_EXA.to_owned();
+        config.tools.web_search.exa_api_key = Some("${TEAM_EXA_KEY}".to_owned());
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(
+            runtime.web_search.default_provider,
+            crate::config::WEB_SEARCH_PROVIDER_EXA
+        );
+        assert_eq!(
+            runtime.web_search.exa_api_key.as_deref(),
+            Some("exa-inline-env")
+        );
+    }
+
+    #[test]
+    fn from_loong_config_resolves_inline_env_refs_for_firecrawl_web_search_credentials() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+        env.set("TEAM_FIRECRAWL_KEY", "firecrawl-inline-env");
+
+        let mut config = LoongConfig::default();
+        let provider_id = crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+        let credential_ref = "${TEAM_FIRECRAWL_KEY}".to_owned();
+
+        config.tools.web_search.default_provider = provider_id;
+        config.tools.web_search.firecrawl_api_key = Some(credential_ref);
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+        let runtime_provider = runtime.web_search.default_provider.as_str();
+        let runtime_credential = runtime.web_search.firecrawl_api_key.as_deref();
+
+        assert_eq!(
+            runtime_provider,
+            crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL
+        );
+        assert_eq!(runtime_credential, Some("firecrawl-inline-env"));
+    }
+
+    #[test]
+    fn external_skills_policy_struct_construction() {
+        let policy = ExternalSkillsRuntimePolicy {
+            enabled: true,
+            require_download_approval: false,
+            allowed_domains: BTreeSet::from(["skills.sh".to_owned(), "clawhub.ai".to_owned()]),
+            blocked_domains: BTreeSet::from([
+                "malicious.example".to_owned(),
+                "*.clawhub.io".to_owned(),
+            ]),
+            install_root: Some(PathBuf::from("/tmp/managed-skills")),
+            auto_expose_installed: false,
+        };
+
+        assert!(policy.enabled);
+        assert!(!policy.require_download_approval);
+        assert!(policy.allowed_domains.contains("skills.sh"));
+        assert!(policy.allowed_domains.contains("clawhub.ai"));
+        assert!(policy.blocked_domains.contains("malicious.example"));
+        assert!(policy.blocked_domains.contains("*.clawhub.io"));
+        assert_eq!(
+            policy.install_root,
+            Some(PathBuf::from("/tmp/managed-skills"))
+        );
+        assert!(!policy.auto_expose_installed);
+    }
+
+    #[test]
+    fn browser_policy_struct_construction() {
+        let policy = BrowserRuntimePolicy {
+            enabled: false,
+            max_sessions: 4,
+            max_links: 12,
+            max_text_chars: 2_048,
+        };
+
+        assert!(!policy.enabled);
+        assert_eq!(policy.max_sessions, 4);
+        assert_eq!(policy.max_links, 12);
+        assert_eq!(policy.max_text_chars, 2_048);
+    }
+
+    #[test]
+    fn browser_companion_policy_struct_construction() {
+        let policy = BrowserCompanionRuntimePolicy {
+            enabled: true,
+            ready: false,
+            command: Some("loong-browser-companion".to_owned()),
+            expected_version: Some("1.2.3".to_owned()),
+            timeout_seconds: 9,
+            allow_private_hosts: false,
+            enforce_allowed_domains: true,
+            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+            blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
+        };
+
+        assert!(policy.enabled);
+        assert!(!policy.ready);
+        assert!(!policy.is_runtime_ready());
+        assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
+        assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
+        assert_eq!(policy.timeout_seconds, 9);
+        assert!(!policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
+        assert_eq!(
+            policy.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert_eq!(
+            policy.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
+    }
+
+    #[test]
+    fn browser_companion_policy_from_tool_config_clamps_zero_timeout() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        let mut config = crate::config::ToolConfig::default();
+        config.browser_companion.enabled = true;
+        config.browser_companion.timeout_seconds = 0;
+        config.browser_companion.allowed_domains = vec!["Docs.Example.com".to_owned()];
+        config.browser_companion.blocked_domains = vec!["internal.example".to_owned()];
+
+        let policy = browser_companion_runtime_policy_from_tool_config(&config);
+
+        assert_eq!(policy.timeout_seconds, 1);
+        assert!(policy.enforce_allowed_domains);
+        assert_eq!(
+            policy.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert_eq!(
+            policy.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
+    }
+
+    #[test]
+    fn browser_companion_policy_with_env_fallback_uses_runtime_exports_for_default_config() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "false");
+        env.set("LOONG_BROWSER_COMPANION_COMMAND", "loong-browser-companion");
+        env.set("LOONG_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+        env.set("LOONG_BROWSER_COMPANION_TIMEOUT_SECONDS", "11");
+
+        let policy = browser_companion_runtime_policy_with_env_fallback(
+            &crate::config::ToolConfig::default(),
+        );
+
+        assert!(policy.enabled);
+        assert!(!policy.ready);
+        assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
+        assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
+        assert_eq!(policy.timeout_seconds, 11);
+    }
+
+    #[test]
+    fn browser_companion_runtime_policy_with_env_fallback_reuses_web_fetch_boundaries() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
+        env.set(
+            "LOONG_WEB_FETCH_ALLOWED_DOMAINS",
+            "docs.example.com,api.example.com",
+        );
+        env.set("LOONG_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
+
+        let policy = browser_companion_runtime_policy_with_env_fallback(
+            &crate::config::ToolConfig::default(),
+        );
+
+        assert!(policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
+        assert_eq!(
+            policy.allowed_domains,
+            BTreeSet::from(["api.example.com".to_owned(), "docs.example.com".to_owned(),])
+        );
+        assert_eq!(
+            policy.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
+    }
+
+    #[test]
+    fn web_fetch_policy_struct_construction() {
+        let policy = WebFetchRuntimePolicy {
+            enabled: false,
+            allow_private_hosts: true,
+            enforce_allowed_domains: true,
+            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+            blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
+            timeout_seconds: 9,
+            max_bytes: 262_144,
+            max_redirects: 1,
+        };
+
+        assert!(!policy.enabled);
+        assert!(policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
+        assert!(policy.allowed_domains.contains("docs.example.com"));
+        assert!(policy.blocked_domains.contains("internal.example"));
+        assert_eq!(policy.timeout_seconds, 9);
+        assert_eq!(policy.max_bytes, 262_144);
+        assert_eq!(policy.max_redirects, 1);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_intersects_web_domains_and_clamps_browser_limits() {
+        let base = ToolRuntimeConfig {
+            browser: BrowserRuntimePolicy {
+                enabled: true,
+                max_sessions: 4,
+                max_links: 12,
+                max_text_chars: 2_048,
+            },
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: true,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from([
+                    "docs.example.com".to_owned(),
+                    "api.example.com".to_owned(),
+                ]),
+                blocked_domains: BTreeSet::from(["blocked.example.com".to_owned()]),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                max_links: Some(6),
+                max_text_chars: Some(512),
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(false),
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+                timeout_seconds: Some(5),
+                max_bytes: Some(4_096),
+                max_redirects: Some(2),
+            },
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert_eq!(effective.browser.max_sessions, 1);
+        assert_eq!(effective.browser.max_links, 6);
+        assert_eq!(effective.browser.max_text_chars, 512);
+        assert!(!effective.web_fetch.allow_private_hosts);
+        assert_eq!(
+            effective.web_fetch.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert_eq!(
+            effective.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "blocked.example.com".to_owned(),
+                "deny.example.com".to_owned(),
+            ])
+        );
+        assert_eq!(effective.web_fetch.timeout_seconds, 5);
+        assert_eq!(effective.web_fetch.max_bytes, 4_096);
+        assert_eq!(effective.web_fetch.max_redirects, 2);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_uses_child_allowlist_when_parent_has_none() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: None,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: None,
+                max_bytes: None,
+                max_redirects: None,
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert_eq!(
+            effective.web_fetch.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert!(effective.web_fetch.enforce_allowed_domains);
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_fail_closes_disjoint_allowlists() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "disjoint allowlists should preserve an enforced empty intersection"
+        );
+    }
+
+    #[test]
+    fn tool_runtime_config_narrowed_preserves_existing_deny_all_allowlist() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 15,
+                max_bytes: 8_192,
+                max_redirects: 4,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+
+        let effective = base.narrowed(&narrowing);
+
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "an existing fail-closed allowlist should not be widened by later narrowing"
+        );
+    }
+
+    #[test]
+    fn tool_runtime_narrowing_intersect_fail_closes_disjoint_allowlists() {
+        let left = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(false),
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-left.example.com".to_owned()]),
+                timeout_seconds: Some(5),
+                max_bytes: Some(4_096),
+                max_redirects: Some(2),
+            },
+        };
+        let right = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(3),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: None,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-right.example.com".to_owned()]),
+                timeout_seconds: Some(9),
+                max_bytes: Some(8_192),
+                max_redirects: Some(4),
+            },
+        };
+
+        let effective = left.intersect(&right);
+
+        assert_eq!(effective.browser.max_sessions, Some(1));
+        assert_eq!(effective.web_fetch.allow_private_hosts, Some(false));
+        assert!(effective.web_fetch.enforce_allowed_domains);
+        assert!(
+            effective.web_fetch.allowed_domains.is_empty(),
+            "disjoint allowlists should collapse to an enforced empty intersection"
+        );
+        assert_eq!(
+            effective.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "deny-left.example.com".to_owned(),
+                "deny-right.example.com".to_owned(),
+            ])
+        );
+        assert_eq!(effective.web_fetch.timeout_seconds, Some(5));
+        assert_eq!(effective.web_fetch.max_bytes, Some(4_096));
+        assert_eq!(effective.web_fetch.max_redirects, Some(2));
+    }
+
+    #[test]
+    fn merge_runtime_narrowing_sources_intersects_delegate_and_policy_inputs() {
+        let delegate_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-left.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+        };
+        let policy_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(3),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-right.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+        };
+
+        let effective_runtime_narrowing = merge_runtime_narrowing_sources(
+            Some(delegate_runtime_narrowing),
+            Some(policy_runtime_narrowing),
+        )
+        .expect("effective runtime narrowing");
+
+        assert_eq!(effective_runtime_narrowing.browser.max_sessions, Some(1));
+        assert!(
+            effective_runtime_narrowing
+                .web_fetch
+                .enforce_allowed_domains
+        );
+        assert!(
+            effective_runtime_narrowing
+                .web_fetch
+                .allowed_domains
+                .is_empty()
+        );
+        assert_eq!(
+            effective_runtime_narrowing.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "deny-left.example.com".to_owned(),
+                "deny-right.example.com".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn merge_runtime_narrowing_sources_handles_empty_and_single_source_inputs() {
+        let primary_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+        let empty_runtime_narrowing = ToolRuntimeNarrowing::default();
+
+        let none_result = merge_runtime_narrowing_sources(None, None);
+        let primary_only_result =
+            merge_runtime_narrowing_sources(Some(primary_runtime_narrowing.clone()), None);
+        let secondary_only_result =
+            merge_runtime_narrowing_sources(None, Some(primary_runtime_narrowing.clone()));
+        let empty_primary_result =
+            merge_runtime_narrowing_sources(Some(empty_runtime_narrowing.clone()), None);
+        let empty_primary_with_secondary_result = merge_runtime_narrowing_sources(
+            Some(empty_runtime_narrowing),
+            Some(primary_runtime_narrowing.clone()),
+        );
+
+        assert!(none_result.is_none());
+        assert_eq!(primary_only_result, Some(primary_runtime_narrowing.clone()));
+        assert_eq!(
+            secondary_only_result,
+            Some(primary_runtime_narrowing.clone())
+        );
+        assert!(empty_primary_result.is_none());
+        assert_eq!(
+            empty_primary_with_secondary_result,
+            Some(primary_runtime_narrowing)
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_returns_none_when_narrowing_is_empty() {
+        assert_eq!(
+            ToolRuntimeConfig::default().delegate_child_prompt_summary(None),
+            None
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_is_effective_stable_and_sparse() {
+        let base = ToolRuntimeConfig {
+            browser: BrowserRuntimePolicy {
+                enabled: true,
+                max_sessions: 1,
+                max_links: 4,
+                max_text_chars: 1_024,
+            },
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: false,
+                enforce_allowed_domains: true,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["base-block.example.com".to_owned()]),
+                timeout_seconds: 3,
+                max_bytes: 2_048,
+                max_redirects: 1,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(8),
+                max_links: Some(8),
+                max_text_chars: Some(512),
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(true),
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+                timeout_seconds: Some(5),
+                max_bytes: Some(4_096),
+                max_redirects: Some(2),
+            },
+        };
+        let execution = ConstrainedSubagentExecution {
+            mode: crate::conversation::ConstrainedSubagentMode::Async,
+            isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
+            depth: 1,
+            max_depth: 2,
+            active_children: 0,
+            max_active_children: 3,
+            timeout_seconds: 60,
+            allow_shell_in_child: false,
+            child_tool_allowlist: vec!["web.fetch".to_owned()],
+            workspace_root: None,
+            runtime_narrowing: narrowing,
+            kernel_bound: false,
+            identity: Some(ConstrainedSubagentIdentity {
+                nickname: Some("child-research".to_owned()),
+                specialization: Some("researcher".to_owned()),
+            }),
+            profile: Some(ConstrainedSubagentProfile::for_child_depth(1, 2)),
+        };
+
+        let contract = execution.contract_view();
+        let summary = base
+            .delegate_child_prompt_summary(Some(&contract))
+            .expect("delegate child prompt summary");
+
+        assert_eq!(
+            summary,
+            "[delegate_child_runtime_contract]\n\
+Plan within these child-session runtime limits:\n\
+- subagent mode: async\n\
+- subagent nickname: child-research\n\
+- subagent specialization: researcher\n\
+- subagent depth budget: 1/2\n\
+- subagent active-child budget snapshot: 0/3\n\
+- child timeout seconds: 60\n\
+- child exec: denied\n\
+- child tool allowlist: web\n\
+- child runtime binding: direct\n\
+- subagent role: orchestrator\n\
+- subagent control scope: children\n\
+- web network private hosts: denied\n\
+- web network allowed domains: none (effective intersection is empty)\n\
+- web network blocked domains: base-block.example.com, deny.example.com\n\
+- web network timeout seconds: 3\n\
+- web network max bytes: 2048\n\
+- web network max redirects: 1\n\
+- browser max sessions: 1\n\
+- browser max links: 4\n\
+- browser max text chars: 512\n\
+Treat these as enforced limits for this child session."
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_omits_disabled_web_fetch() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: false,
+                allow_private_hosts: true,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 30,
+                max_bytes: 1_048_576,
+                max_redirects: 5,
+            },
+            browser: BrowserRuntimePolicy {
+                enabled: true,
+                max_sessions: 4,
+                max_links: 16,
+                max_text_chars: 8_192,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                allow_private_hosts: Some(false),
+                timeout_seconds: Some(5),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+        };
+
+        let contract = ConstrainedSubagentContractView::from_runtime_narrowing(narrowing);
+        let summary = base
+            .delegate_child_prompt_summary(Some(&contract))
+            .expect("should still render browser section");
+
+        assert!(
+            !summary.contains("web.fetch"),
+            "disabled web_fetch fields should not appear in prompt summary: {summary}"
+        );
+        assert!(
+            summary.contains("- browser max sessions: 2"),
+            "enabled browser fields should still appear: {summary}"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_omits_disabled_browser() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: true,
+                allow_private_hosts: true,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                timeout_seconds: 30,
+                max_bytes: 1_048_576,
+                max_redirects: 5,
+            },
+            browser: BrowserRuntimePolicy {
+                enabled: false,
+                max_sessions: 4,
+                max_links: 16,
+                max_text_chars: 8_192,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                timeout_seconds: Some(5),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                max_links: Some(8),
+                ..BrowserRuntimeNarrowing::default()
+            },
+        };
+
+        let contract = ConstrainedSubagentContractView::from_runtime_narrowing(narrowing);
+        let summary = base
+            .delegate_child_prompt_summary(Some(&contract))
+            .expect("should still render web_fetch section");
+
+        assert!(
+            !summary.contains("browser"),
+            "disabled browser fields should not appear in prompt summary: {summary}"
+        );
+        assert!(
+            summary.contains("- web network timeout seconds: 5"),
+            "enabled web_fetch fields should still appear: {summary}"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_returns_none_when_all_tools_disabled() {
+        let base = ToolRuntimeConfig {
+            web_fetch: WebFetchRuntimePolicy {
+                enabled: false,
+                ..WebFetchRuntimePolicy::default()
+            },
+            browser: BrowserRuntimePolicy {
+                enabled: false,
+                ..BrowserRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+        let narrowing = ToolRuntimeNarrowing {
+            web_fetch: WebFetchRuntimeNarrowing {
+                timeout_seconds: Some(5),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+        };
+        let contract = ConstrainedSubagentContractView::from_runtime_narrowing(narrowing);
+
+        assert_eq!(
+            base.delegate_child_prompt_summary(Some(&contract)),
+            None,
+            "should return None when all narrowed tools are disabled"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_renders_profile_even_when_narrowing_is_empty() {
+        let contract = ConstrainedSubagentContractView::from_profile(
+            ConstrainedSubagentProfile::for_child_depth(1, 1),
+        );
+        let summary = ToolRuntimeConfig::default()
+            .delegate_child_prompt_summary(Some(&contract))
+            .expect("profile-only child prompt summary");
+
+        assert_eq!(
+            summary,
+            "[delegate_child_runtime_contract]\n\
+Plan within these child-session runtime limits:\n\
+- subagent role: leaf\n\
+- subagent control scope: none\n\
+Treat these as enforced limits for this child session."
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_env_enables_feishu_runtime_when_credentials_exist() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        clear_feishu_runtime_env(&mut env);
+        let _home = ScopedLoongHome::new("loong-feishu-runtime-home");
+        env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
+        env.set("FEISHU_APP_SECRET", "env-secret");
+
+        let config = ToolRuntimeConfig::from_env();
+        let feishu = config
+            .feishu
+            .as_ref()
+            .expect("feishu runtime should be enabled from env");
+
+        assert!(feishu.channel.enabled);
+        assert_eq!(feishu.channel.app_id_env.as_deref(), Some("FEISHU_APP_ID"));
+        assert_eq!(
+            feishu.channel.app_secret_env.as_deref(),
+            Some("FEISHU_APP_SECRET")
+        );
+        assert_eq!(
+            feishu.integration.resolved_sqlite_path(),
+            crate::config::default_loong_home().join("feishu.sqlite3")
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_loong_config_ignores_disabled_feishu_channel_even_when_root_credentials_exist() {
+        let config = crate::config::LoongConfig {
+            feishu: crate::config::FeishuChannelConfig {
+                enabled: false,
+                app_id: Some(loong_contracts::SecretRef::Inline(
+                    "cli_disabled_root".to_owned(),
+                )),
+                app_secret: Some(loong_contracts::SecretRef::Inline(
+                    "disabled-root-secret".to_owned(),
+                )),
+                ..crate::config::FeishuChannelConfig::default()
+            },
+            ..crate::config::LoongConfig::default()
+        };
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_none(),
+            "disabled Feishu channel should not expose Feishu tools through runtime config"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_loong_config_ignores_disabled_feishu_accounts_when_detecting_runtime() {
+        let mut env = ScopedEnv::new();
+        env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
+        env.set("FEISHU_APP_SECRET", "env-secret");
+
+        let config = crate::config::LoongConfig {
+            feishu: crate::config::FeishuChannelConfig {
+                enabled: true,
+                app_id_env: None,
+                app_secret_env: None,
+                accounts: BTreeMap::from([(
+                    "disabled_account".to_owned(),
+                    crate::config::FeishuAccountConfig {
+                        enabled: Some(false),
+                        app_id: Some(loong_contracts::SecretRef::Inline(
+                            "cli_disabled_account".to_owned(),
+                        )),
+                        app_secret: Some(loong_contracts::SecretRef::Inline(
+                            "disabled-account-secret".to_owned(),
+                        )),
+                        ..crate::config::FeishuAccountConfig::default()
+                    },
+                )]),
+                ..crate::config::FeishuChannelConfig::default()
+            },
+            ..crate::config::LoongConfig::default()
+        };
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_none(),
+            "disabled Feishu accounts should not enable Feishu tool runtime on their own"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn from_loong_config_requires_resolved_env_values_for_typed_feishu_secret_refs() {
+        let mut env = ScopedEnv::new();
+        clear_feishu_runtime_env(&mut env);
+
+        let config = crate::config::LoongConfig {
+            feishu: crate::config::FeishuChannelConfig {
+                enabled: true,
+                app_id: Some(loong_contracts::SecretRef::Env {
+                    env: "FEISHU_APP_ID".to_owned(),
+                }),
+                app_secret: Some(loong_contracts::SecretRef::Env {
+                    env: "FEISHU_APP_SECRET".to_owned(),
+                }),
+                app_id_env: None,
+                app_secret_env: None,
+                ..crate::config::FeishuChannelConfig::default()
+            },
+            ..crate::config::LoongConfig::default()
+        };
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_none(),
+            "missing env values should not enable Feishu runtime for typed env refs"
+        );
+
+        env.set("FEISHU_APP_ID", "cli_env_a1b2c3");
+        env.set("FEISHU_APP_SECRET", "env-secret");
+
+        assert!(
+            FeishuToolRuntimeConfig::from_loong_config(&config).is_some(),
+            "resolved env values should enable Feishu runtime for typed env refs"
+        );
+    }
+}

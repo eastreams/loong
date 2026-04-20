@@ -1,0 +1,57 @@
+---
+title: Google Chat
+description: Configure the Google Chat channel surface in Loong.
+---
+
+# Google Chat
+
+This is a shipped config-backed outbound surface. Google chat incoming webhook surface is outbound-only
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `google-chat` |
+| Config key | `google_chat` |
+| Implementation status | `config_backed` |
+| Transport | `google_chat_incoming_webhook` |
+| Aliases | `gchat`, `googlechat` |
+| Default send target kind | `endpoint` |
+
+## Minimal Config
+
+```toml
+[google_chat]
+enabled = true
+webhook_url_env = "GOOGLE_CHAT_WEBHOOK_URL"
+```
+
+## Smoke Test
+
+```bash
+loong google-chat-send --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| incoming webhook send | `google-chat-send` | Usage: loong google-chat-send [OPTIONS] --text &lt;TEXT&gt; |
+| interactive event service | `google-chat-serve` | google chat incoming webhook surface is outbound-only |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `google_chat.enabled`<br/>`google_chat.accounts.<account>.enabled` | none | none |
+| incoming webhook url | `google_chat.webhook_url`<br/>`google_chat.accounts.<account>.webhook_url` | `google_chat.webhook_url_env`<br/>`google_chat.accounts.<account>.webhook_url_env` | `GOOGLE_CHAT_WEBHOOK_URL` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

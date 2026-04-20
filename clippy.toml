@@ -1,0 +1,41 @@
+# Clippy configuration for loong workspace
+# Derived from: loong-research/11-code-quality/synthesis/loong-code-quality-strategy-v2.md
+
+# Complexity thresholds
+cognitive-complexity-threshold = 20
+too-many-lines-threshold = 80
+too-many-arguments-threshold = 6
+type-complexity-threshold = 200
+
+# Size thresholds
+enum-variant-size-threshold = 200
+large-error-threshold = 128
+future-size-threshold = 16384
+stack-size-threshold = 512000
+
+# Allow panic-family constructs in tests
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Disallowed methods — enforce project conventions.
+# Reason fields give agents actionable remediation in compiler output.
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "Thread-unsafe in multi-threaded context. Use crate::process_env::set_var or a config struct." },
+    { path = "std::env::remove_var", reason = "Thread-unsafe in multi-threaded context. Use crate::process_env::remove_var or a config struct." },
+    { path = "std::thread::sleep", reason = "Blocks the async runtime. Use tokio::time::sleep instead." },
+]
+
+# Boolean parameter limits
+max-fn-params-bools = 3
+max-struct-bools = 3
+
+# Pass-by-value size limit
+pass-by-value-size-limit = 256
+
+# Unsafe block documentation accepts comments above the statement
+accept-comment-above-statement = true
+accept-comment-above-attributes = true

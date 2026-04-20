@@ -1,0 +1,93 @@
+---
+title: Use Loong
+description: Public overview of the current operator-facing runtime surface.
+---
+
+# Use Loong
+
+Use this section when you already know Loong is relevant and need the public runtime model before diving into configuration details.
+The highlighted playbooks are representative rollout paths. The provider and
+channel pages keep the broader supported surface visible.
+
+This section is organized in two layers on purpose:
+
+- chooser pages explain which route fits
+- recipe and playbook pages show concrete config and command paths
+
+## Most Common Reading Paths
+
+| If you are trying to... | Start here | Then continue to... |
+| --- | --- | --- |
+| reach one complete hosted team-chat rollout quickly | [Common Setups](/use-loong/common-setups) | start with the playbook that matches the real rollout shape, then fall back to [Provider Guides](/use-loong/provider-guides/index) or [Channel Guides](/use-loong/channel-guides/index) when you need the broader map |
+| understand the shared public config shape before deep recipes | [Configuration Patterns](/use-loong/configuration-patterns) | [Configuration Reference](/use-loong/configuration-reference), [Provider Guides](/use-loong/provider-guides/index), [Channel Setup](/use-loong/channel-setup), or [Memory Profiles](/use-loong/memory-profiles) |
+| unblock managed skills, browser preview, or domain-policy friction | [Managed Skills](/use-loong/managed-skills) | [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries), [Doctor And Health](/get-started/doctor-and-health), or [Tool Surface](/use-loong/tool-surface) |
+| choose a provider first, then configure it directly | [Providers And Models](/use-loong/providers-and-models) | [Provider Guides](/use-loong/provider-guides/index) and [Provider Recipes](/use-loong/provider-recipes) |
+| choose a delivery surface first, then configure it directly | [Channels](/use-loong/channels) | [Channel Guides](/use-loong/channel-guides/index), [Channel Recipes](/use-loong/channel-recipes), and [Gateway And Supervision](/use-loong/gateway-and-supervision) |
+| understand the runtime surface before touching config | this page | [Providers And Models](/use-loong/providers-and-models), [Channels](/use-loong/channels), and [Tools And Memory](/use-loong/tools-and-memory) |
+| go from basic setup to continuity and governed capabilities | [Tools And Memory](/use-loong/tools-and-memory) | [Tool Surface](/use-loong/tool-surface) and [Memory Profiles](/use-loong/memory-profiles) |
+
+## Page Types
+
+- Use chooser pages when you are still deciding which route fits.
+- Use guide pages when one provider or channel is already decided and you need the exact built-in contract.
+- Use recipe pages when you want representative rollout patterns, smoke tests, or sequencing.
+- Use playbooks when provider, channel, and ownership need to be treated as one rollout.
+- Use reference pages after the operator path is already clear.
+
+## Common Rollout Paths
+
+If the stack is already clear, skip the generic recipe pass and start with one
+complete rollout path.
+
+| If you already know you want... | Start here | Why |
+| --- | --- | --- |
+| Volcengine plus Feishu or Lark | [Volcengine Plus Feishu Or Lark](/use-loong/volcengine-feishu-lark-playbook) | hosted provider and primary team-chat runtime stay in one path |
+| Volcengine plus WeCom | [WeCom Rollout](/use-loong/wecom-rollout-playbook) | hosted provider and the shipped WeCom lane stay together |
+| BytePlus Coding plus Telegram | [BytePlus Coding Plus Telegram](/use-loong/byteplus-coding-telegram-playbook) | the coding lane and the lightweight bot surface remain explicit |
+| a local model plus outbound delivery | [Local Model Plus Outbound Delivery](/use-loong/local-outbound-playbook) | local inference and outbound-only delivery stay truthful |
+| several runtime-backed channels on one host | [Gateway Rollout](/use-loong/gateway-rollout-playbook) | selector and owner-contract rollout stays in one document |
+
+## How To Read This Section
+
+1. Start with the base CLI path and make sure `ask` or `chat` works locally.
+2. Use `Common Setups` when the rollout shape is already clear and you want one proven route.
+3. Use `Providers And Models` or `Channels` when you still need to choose the right lane first.
+4. Drop into recipe pages when the chooser pages stop being concrete enough.
+5. Add channel or gateway surfaces only after the local assistant path is healthy.
+6. Turn on memory or managed-skills flows when you need continuity or reuse rather than on day zero.
+
+## Current Public Runtime Shape
+
+- **Assistant entrypoints**: `onboard`, `ask`, `chat`, and `doctor` are the shortest public operator path.
+- **Provider and model selection**: `onboard` and `list-models` keep provider choice and model discovery visible instead of burying them behind one hardcoded provider story.
+- **Operator runtime commands**: `audit`, `tasks`, `skills`, `plugins`, `channels`, and `runtime-snapshot` are part of the public surface.
+- **Gateway ownership**: `gateway run`, `gateway status`, `gateway stop`, and `multi-channel-serve` cover the current owner and compatibility layer for longer-lived delivery.
+- **Delivery surfaces**: Loong distinguishes runtime-backed reply-loop surfaces, plugin-backed bridge surfaces, and a wider config-backed outbound inventory instead of flattening them into one story.
+- **Governed runtime capabilities**: tools, memory behavior, prompt defaults, policy, approval, and audit stay inside the same runtime model.
+
+## Page Guide
+
+| Page | Read it when... |
+| --- | --- |
+| [Common Setups](/use-loong/common-setups) | you want end-to-end playbooks that combine provider, channel, and gateway choices |
+| [Volcengine Plus Feishu Or Lark](/use-loong/volcengine-feishu-lark-playbook) | you already know the hosted-plus-team-chat rollout shape |
+| [WeCom Rollout](/use-loong/wecom-rollout-playbook) | you already know WeCom should own the enterprise runtime lane |
+| [BytePlus Coding Plus Telegram](/use-loong/byteplus-coding-telegram-playbook) | you want a dedicated coding lane plus a lightweight bot surface |
+| [Local Model Plus Outbound Delivery](/use-loong/local-outbound-playbook) | you want local inference without overclaiming runtime-backed delivery |
+| [Gateway Rollout](/use-loong/gateway-rollout-playbook) | you want the multi-channel ownership sequence as one playbook |
+| [Configuration Patterns](/use-loong/configuration-patterns) | you want the shared public config shape before field-level specs or recipes |
+| [Configuration Reference](/use-loong/configuration-reference) | you want the field-level public config contract, validation semantics, and default paths in the main docs surface |
+| [Managed Skills](/use-loong/managed-skills) | you want the operator path for discovery, install, policy, and browser preview enablement |
+| [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) | you want private-host, domain, and browser runtime troubleshooting without guessing which config lane owns it |
+| [Providers And Models](/use-loong/providers-and-models) | you want the public provider and model-selection contract before touching config |
+| [Provider Guides](/use-loong/provider-guides/index) | you want the exact built-in contract for one provider kind |
+| [Provider Recipes](/use-loong/provider-recipes) | you want a concrete hosted, gateway, local, or multi-profile config path |
+| [Channels](/use-loong/channels) | you want the delivery-surface model and runtime-backed vs outbound-only boundary |
+| [Channel Guides](/use-loong/channel-guides/index) | you want the exact built-in contract for one shipped channel surface |
+| [Channel Setup](/use-loong/channel-setup) | you want the practical setup contract for shipped surfaces |
+| [Gateway And Supervision](/use-loong/gateway-and-supervision) | you want to choose between `gateway run` and `multi-channel-serve`, or pin explicit channel accounts |
+| [Channel Recipes](/use-loong/channel-recipes) | you want smoke tests, rollout order, and multi-channel examples |
+| [Tools And Memory](/use-loong/tools-and-memory) | you want the governed-capability overview |
+| [Tool Surface](/use-loong/tool-surface) | you want the visible-tool truth contract |
+| [Memory Profiles](/use-loong/memory-profiles) | you want the continuity model |
+| [Reference](/reference/overview) | you want roadmap, reliability, security, and release references after the runtime model is clear |

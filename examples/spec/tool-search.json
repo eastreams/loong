@@ -1,0 +1,65 @@
+{
+  "pack": {
+    "pack_id": "tool-search-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [
+      "ObserveTelemetry"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "tool-discovery"
+    }
+  },
+  "agent_id": "agent-tool-search",
+  "ttl_s": 120,
+  "approval": {
+    "mode": "disabled"
+  },
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins",
+      "examples/plugins-process"
+    ]
+  },
+  "bridge_support": {
+    "enabled": true,
+    "supported_bridges": [
+      "http_json",
+      "process_stdio",
+      "native_ffi",
+      "wasm_component",
+      "mcp_server"
+    ],
+    "supported_adapter_families": [],
+    "enforce_supported": true,
+    "execute_process_stdio": false,
+    "execute_http_json": false,
+    "allowed_process_commands": [],
+    "enforce_execution_success": false
+  },
+  "bootstrap": {
+    "enabled": true,
+    "allow_http_json_auto_apply": false,
+    "allow_process_stdio_auto_apply": false,
+    "allow_native_ffi_auto_apply": false,
+    "allow_wasm_component_auto_apply": false,
+    "allow_mcp_server_auto_apply": false,
+    "enforce_ready_execution": false,
+    "max_tasks": 32
+  },
+  "hotfixes": [],
+  "operation": {
+    "kind": "tool_search",
+    "query": "openrouter",
+    "limit": 8,
+    "include_deferred": true,
+    "include_examples": true
+  }
+}

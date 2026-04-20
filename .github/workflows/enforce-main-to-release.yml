@@ -1,0 +1,48 @@
+name: enforce-main-to-release
+
+on:
+  pull_request_target:
+    branches:
+      - release
+      - 'release/**'
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+jobs:
+  block-non-main-source:
+    if: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.head.ref != 'main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
+    steps:
+      - name: Close PR when source branch is not main
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = [
+              "Only the same-repository `main` branch can merge into `release` branches in this repository.",
+              "",
+              `Current source branch: \`${pr.head.repo.full_name}:${pr.head.ref}\``,
+              "Please land your changes on `main` first, then open the promotion PR from `main` into the release branch."
+            ].join("\\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body
+            });
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: "closed"
+            });
+            core.setFailed("Blocked: only main can merge into release branches.");

@@ -1,0 +1,34 @@
+[package]
+name = "loong-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Internal support crate for Loong: kernel primitives and governance core"
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "loong_kernel"
+
+[dependencies]
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+async-trait.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[features]
+test-support = []
+
+[dev-dependencies]
+proptest = "1"
+tokio.workspace = true
+
+[lints]
+workspace = true

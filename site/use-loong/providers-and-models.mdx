@@ -1,0 +1,195 @@
+---
+title: Providers And Models
+description: Choose a provider, understand model selection, and keep provider truth explicit.
+---
+
+# Providers And Models
+
+Use this page when the base CLI path already makes sense and you need to choose
+the right provider lane before editing config in detail.
+
+Loong treats provider and model choice as operator-visible configuration,
+not hidden runtime magic. This page is the chooser. The exact built-in
+provider contract lives in [Provider Guides](/use-loong/provider-guides/index),
+while [Provider Recipes](/use-loong/provider-recipes) keeps a smaller set
+of representative rollout patterns.
+
+Volcengine and BytePlus stay near the top because they are a common first-run
+path, but they are not the only provider families surfaced here.
+If you want the shared public provider-profile shape before the recipes become
+provider-specific, start with
+[Configuration Patterns](/use-loong/configuration-patterns).
+
+If you already know the provider choice and delivery surface together, go
+straight to [Common Setups](/use-loong/common-setups) and the dedicated
+playbook that matches the rollout shape.
+
+## Choose A Provider Lane
+
+| If you need... | Start here | Why |
+| --- | --- | --- |
+| a common hosted first run with a short reviewed path | Volcengine or BytePlus | the main hosted fast path stays short without hiding the broader provider map |
+| a direct hosted provider your team already uses | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Mistral, Cohere, xAI, Z.ai, Zhipu, Qwen, Kimi, Groq, Fireworks, Together, Perplexity, Qianfan, Cerebras, NVIDIA, SambaNova, Novita, SiliconFlow, StepFun, or Venice | built-in families stay explicit instead of being forced through `custom` |
+| a separate coding lane for coding quota or billing | Volcengine Coding, BytePlus Coding, Kimi Coding, Step Plan, or Bailian Coding | coding traffic stays separate from the general hosted lane |
+| one proxy or compatibility endpoint in front of upstream models | gateway or custom endpoint recipes | route ownership stays visible instead of being mistaken for a first-party provider |
+| a local or self-hosted model server | Ollama, LM Studio, llama.cpp, vLLM, or SGLang | the server boundary and model inventory stay explicit |
+| several reviewed provider profiles in one config | multi-profile provider recipes | cost, quota, latency, or region decisions stay operator-visible |
+
+## Already Know The Whole Rollout?
+
+If the provider choice is already tied to the delivery surface, skip this page
+and jump straight to the matching playbook.
+
+| If you already know you want... | Go here |
+| --- | --- |
+| Volcengine plus Feishu or Lark | [Volcengine Plus Feishu Or Lark](/use-loong/volcengine-feishu-lark-playbook) |
+| Volcengine plus WeCom | [WeCom Rollout](/use-loong/wecom-rollout-playbook) |
+| BytePlus Coding plus Telegram | [BytePlus Coding Plus Telegram](/use-loong/byteplus-coding-telegram-playbook) |
+| a local or self-hosted model plus outbound delivery | [Local Model Plus Outbound Delivery](/use-loong/local-outbound-playbook) |
+
+## Start With The Supported Path
+
+```bash
+loong onboard
+loong list-models
+```
+
+`onboard` is the supported first-run path. It should discover what it can, help you resolve credentials, and leave you with a provider profile that the rest of the runtime actually uses.
+
+Use `list-models` after credentials are healthy when you want the current catalog from the active provider.
+
+## Reading Rule
+
+- Use this page to choose the provider lane.
+- Use [Configuration Patterns](/use-loong/configuration-patterns) when you
+  want the shared `active_provider` plus `providers.<id>` shape before the
+  provider-specific walkthroughs.
+- Use [Provider Guides](/use-loong/provider-guides/index) once you know the lane and need the exact built-in contract.
+- Use [Provider Recipes](/use-loong/provider-recipes) when you want representative rollout patterns on top of that contract.
+- Use [Common Setups](/use-loong/common-setups) when the provider choice only makes sense together with the delivery surface.
+
+## How Model Selection Works
+
+| Mode | What it means | When to use it |
+| --- | --- | --- |
+| Explicit model | `provider.model = "..."` pins one model name | when you want deterministic behavior or already know the exact model |
+| Auto discovery | `provider.model = "auto"` asks the runtime to discover usable models from the provider catalog | when you want a clean first-run path and the provider exposes a model catalog |
+| Preferred fallback list | `preferred_models = ["...", "..."]` defines an explicit operator fallback order | when catalog discovery is unstable or you want a reviewed fallback without inventing a hidden default |
+
+- `preferred_models` is only an operator-configured fallback list.
+- It is not a secret provider-owned runtime default.
+- When the config already pins an explicit model, `preferred_models` does not override it.
+
+## Reviewed Onboarding Defaults
+
+A small reviewed subset currently has an explicit onboarding fallback when the saved config still uses `model = "auto"` and model discovery is unavailable.
+
+| Provider | Reviewed onboarding default |
+| --- | --- |
+| DeepSeek | `deepseek-chat` |
+| MiniMax | `MiniMax-M2.7` |
+
+For other providers, Loong prefers to keep `auto` or ask the operator for an explicit model instead of silently inventing one.
+
+## Built-In Provider Map
+
+You do not need to memorize every built-in provider kind to get started. Start
+with the lane chooser above, then use this section as the broader public map.
+
+A practical public grouping, inferred from the built-in provider kinds, is:
+
+### Hosted Families At A Glance
+
+| Family | Current built-in kinds | Use it when... |
+| --- | --- | --- |
+| platform-first hosted | Volcengine, BytePlus | you want a short first-run hosted lane that stays explicit in the docs |
+| direct hosted general | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Mistral, Cohere, xAI, Z.ai, Zhipu, Qwen, Kimi, Groq, Fireworks, Together, Perplexity, Qianfan, Cerebras, NVIDIA, SambaNova, Novita, SiliconFlow, StepFun, Venice | your team already has a named hosted provider and you want that family to remain visible |
+| coding-specialized hosted | Volcengine Coding, BytePlus Coding, Kimi Coding, Step Plan, Bailian Coding | coding work, quota, or pricing should stay on an explicit lane |
+| gateway and platform routing | OpenRouter, Cloudflare AI Gateway, Vercel AI Gateway, Bedrock, Custom | a gateway, proxy, or managed route sits between Loong and the upstream models |
+| local and self-hosted | Ollama, LM Studio, llama.cpp, vLLM, SGLang | the model server boundary should stay operator-owned |
+
+### Platform-First Hosted Providers
+
+- Volcengine
+- Volcengine Coding
+- BytePlus
+- BytePlus Coding
+
+### Direct Hosted Providers
+
+- OpenAI
+- Anthropic
+- Gemini
+- DeepSeek
+- MiniMax
+- Mistral
+- Cohere
+- xAI
+- Z.ai
+- Zhipu
+- Qwen
+- Kimi
+- Groq
+- Fireworks
+- Together
+- Perplexity
+- Qianfan
+- Cerebras
+- NVIDIA
+- SambaNova
+- Novita
+- SiliconFlow
+- StepFun
+- Venice
+
+### Coding-Specialized Hosted Providers
+
+- Kimi Coding
+- Step Plan
+- Bailian Coding
+
+### Gateway And Compatibility Providers
+
+- Cloudflare AI Gateway
+- Vercel AI Gateway
+- OpenRouter
+- Bedrock
+- Custom OpenAI-compatible endpoints
+
+### Local And Self-Hosted Providers
+
+- Ollama
+- LM Studio
+- llama.cpp
+- vLLM
+- SGLang
+
+The exact active set still depends on the build, the configured profile, and whether credentials resolve on the current machine.
+
+## Minimal Config Shape
+
+The first-run path should normally write this for you, but the public config shape looks like this:
+
+```toml
+active_provider = "volcengine"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+```
+
+The important part is that the runtime uses the same provider surface after onboarding that it uses during normal operation. There is no separate marketing-only provider layer.
+Here `api_key = { env = "ARK_API_KEY" }` explicitly means "read from the `ARK_API_KEY` environment variable". Writing `api_key = "ARK_API_KEY"` would instead treat `ARK_API_KEY` as the literal key value, which is why the docs do not use that form for env-backed secrets.
+The same profile shape also works for OpenAI, Anthropic, Gemini, DeepSeek,
+MiniMax, BytePlus, and other built-in hosted families by swapping the provider
+`kind`, the default credential env, and the reviewed model choice.
+
+## Continue Reading
+
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for step-by-step hosted, coding-lane, gateway, local, and multi-profile examples.
+- Go to [First Run](/get-started/first-run) if you still need the shortest path to a useful answer.
+- Go to [Common Setups](/use-loong/common-setups) if the provider choice is already tied to Feishu / Lark, WeCom, Telegram, local outbound delivery, or gateway ownership.
+- Go to [Channels](/use-loong/channels) if you want the current delivery-surface model.
+- Go to [Tools And Memory](/use-loong/tools-and-memory) if you want the broader governed-capability story.

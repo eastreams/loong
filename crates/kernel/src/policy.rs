@@ -1,0 +1,192 @@
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+// Re-export data types from contracts
+pub use loong_contracts::{PolicyContext, PolicyDecision, PolicyRequest};
+
+use crate::{contracts::CapabilityToken, errors::PolicyError, pack::VerticalPackManifest};
+
+pub trait PolicyEngine: Send + Sync {
+    fn issue_token(
+        &self,
+        pack: &VerticalPackManifest,
+        agent_id: &str,
+        now_epoch_s: u64,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, PolicyError>;
+
+    fn authorize(
+        &self,
+        token: &CapabilityToken,
+        runtime_pack_id: &str,
+        now_epoch_s: u64,
+        required: &std::collections::BTreeSet<crate::contracts::Capability>,
+    ) -> Result<(), PolicyError>;
+
+    fn revoke_token(&self, token_id: &str) -> Result<(), PolicyError>;
+
+    fn revoke_generation(&self, _below: u64) {
+        // Default no-op
+    }
+
+    fn check_tool_call(&self, _request: &PolicyRequest) -> PolicyDecision {
+        PolicyDecision::Allow
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct StaticPolicyEngine {
+    token_seq: AtomicU64,
+    revoked_tokens: Mutex<BTreeSet<String>>,
+    generation: AtomicU64,
+    revoked_below_generation: AtomicU64,
+}
+
+impl StaticPolicyEngine {
+    fn next_token_id(&self) -> String {
+        let seq = self.token_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("tok-{seq:016x}")
+    }
+
+    /// Revoke all tokens with generation <= `below`.
+    ///
+    /// Note: tokens issued concurrently during this call may land in the
+    /// revoked range. This is acceptable for StaticPolicyEngine (test/dev).
+    /// A production engine should use a lock or AcqRel ordering.
+    pub fn revoke_generation(&self, below: u64) {
+        self.revoked_below_generation
+            .fetch_max(below, Ordering::Relaxed);
+        // Fast-forward generation so newly issued tokens won't be immediately revoked.
+        self.generation.fetch_max(below, Ordering::Relaxed);
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+}
+
+impl PolicyEngine for StaticPolicyEngine {
+    fn issue_token(
+        &self,
+        pack: &VerticalPackManifest,
+        agent_id: &str,
+        now_epoch_s: u64,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, PolicyError> {
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        Ok(CapabilityToken {
+            token_id: self.next_token_id(),
+            pack_id: pack.pack_id.clone(),
+            agent_id: agent_id.to_owned(),
+            allowed_capabilities: pack.granted_capabilities.clone(),
+            issued_at_epoch_s: now_epoch_s,
+            expires_at_epoch_s: now_epoch_s.saturating_add(ttl_s),
+            generation,
+        })
+    }
+
+    fn authorize(
+        &self,
+        token: &CapabilityToken,
+        runtime_pack_id: &str,
+        now_epoch_s: u64,
+        required: &std::collections::BTreeSet<crate::contracts::Capability>,
+    ) -> Result<(), PolicyError> {
+        if self
+            .revoked_tokens
+            .lock()
+            .map_err(|_err| PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            })?
+            .contains(&token.token_id)
+        {
+            return Err(PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            });
+        }
+
+        let threshold = self.revoked_below_generation.load(Ordering::Relaxed);
+        if token.generation > 0 && token.generation <= threshold {
+            return Err(PolicyError::RevokedToken {
+                token_id: token.token_id.clone(),
+            });
+        }
+
+        if token.pack_id != runtime_pack_id {
+            return Err(PolicyError::PackMismatch {
+                token_pack_id: token.pack_id.clone(),
+                runtime_pack_id: runtime_pack_id.to_owned(),
+            });
+        }
+
+        if now_epoch_s > token.expires_at_epoch_s {
+            return Err(PolicyError::ExpiredToken {
+                token_id: token.token_id.clone(),
+                expires_at_epoch_s: token.expires_at_epoch_s,
+            });
+        }
+
+        for capability in required {
+            if !token.allowed_capabilities.contains(capability) {
+                return Err(PolicyError::MissingCapability {
+                    token_id: token.token_id.clone(),
+                    capability: *capability,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn revoke_token(&self, token_id: &str) -> Result<(), PolicyError> {
+        let mut revoked = self
+            .revoked_tokens
+            .lock()
+            .map_err(|_err| PolicyError::RevokedToken {
+                token_id: token_id.to_owned(),
+            })?;
+        revoked.insert(token_id.to_owned());
+        Ok(())
+    }
+
+    fn revoke_generation(&self, below: u64) {
+        self.revoke_generation(below);
+    }
+
+    // Deprecated: Tool policy is now enforced via PolicyExtensionChain.
+    fn check_tool_call(&self, _request: &PolicyRequest) -> PolicyDecision {
+        PolicyDecision::Allow
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use serde_json::json;
+
+    use super::*;
+
+    fn policy_request(tool_name: &str, parameters: serde_json::Value) -> PolicyRequest {
+        PolicyRequest {
+            tool_name: tool_name.to_owned(),
+            parameters,
+            pack_id: "test-pack".to_owned(),
+            agent_id: "test-agent".to_owned(),
+            capabilities_used: BTreeSet::new(),
+            context: PolicyContext::default(),
+        }
+    }
+
+    #[test]
+    fn deprecated_check_tool_call_always_allows() {
+        let engine = StaticPolicyEngine::default();
+        let request = policy_request("shell.exec", json!({"command": "rm", "args": ["-rf", "/"]}));
+        assert_eq!(engine.check_tool_call(&request), PolicyDecision::Allow);
+    }
+}

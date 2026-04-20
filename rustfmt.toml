@@ -1,0 +1,7 @@
+# Rustfmt configuration for loong workspace
+edition = "2024"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+use_small_heuristics = "Default"

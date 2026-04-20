@@ -1,0 +1,13 @@
+/target/
+.DS_Store
+/.docs
+/.loong.local.toml
+/.env.local
+.worktrees/
+.idea
+.vscode
+.zed
+.claude
+__pycache__/
+*.pyc
+.omx/

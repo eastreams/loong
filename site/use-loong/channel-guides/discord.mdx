@@ -1,0 +1,115 @@
+---
+title: Discord
+description: Configure the Discord channel surface in Loong.
+---
+
+# Discord
+
+This is a shipped config-backed outbound surface. Direct sends are implemented today; native Discord gateway reply-loop ownership is not implemented yet.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `discord` |
+| Config key | `discord` |
+| Implementation status | `config_backed` |
+| Transport | `discord_http_api` |
+| Aliases | `discord-bot` |
+| Default send target kind | `conversation` |
+| Runtime owner today | outbound-only; no native `discord-serve` loop |
+
+## Minimal Config
+
+```toml
+[discord]
+enabled = true
+bot_token_env = "DISCORD_BOT_TOKEN"
+```
+
+Optional multi-account shape:
+
+```toml
+[discord]
+enabled = true
+default_account = "ops"
+
+[discord.accounts.ops]
+bot_token_env = "DISCORD_OPS_BOT_TOKEN"
+
+[discord.accounts.alerts]
+bot_token_env = "DISCORD_ALERTS_BOT_TOKEN"
+```
+
+Optional API override when a controlled environment needs a different API root:
+
+```toml
+[discord]
+enabled = true
+bot_token_env = "DISCORD_BOT_TOKEN"
+api_base_url = "https://discord.com/api/v10"
+```
+
+## Smoke Test
+
+```bash
+loong discord-send --target "123456789012345678" --text "hello from loong"
+loong channels
+loong doctor
+```
+
+What success looks like:
+
+- `discord-send` returns success for a valid channel id target
+- `loong channels` lists Discord under the config-backed section
+- `loong doctor` surfaces any token or endpoint problems without pretending a serve runtime exists
+- multi-account configs show which configured account is ready and which one still needs review
+- if `application_id` or `allowed_guild_ids` are configured, inspection surfaces keep them visible as reserved future-runtime fields instead of silently discarding them
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| direct send | `discord-send` | Usage: loong discord-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| gateway reply loop | `discord-serve` | discord serve runtime is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `discord.enabled`<br/>`discord.accounts.<account>.enabled` | none | none |
+| bot token | `discord.bot_token`<br/>`discord.accounts.<account>.bot_token` | `discord.bot_token_env`<br/>`discord.accounts.<account>.bot_token_env` | `DISCORD_BOT_TOKEN` |
+
+## Planned Fields Reserved For Future Serve Work
+
+These fields already exist in the channel contract because they belong to the eventual richer Discord runtime story, but they are not enough to claim a shipped serve loop today.
+
+| Field family | Current role |
+| --- | --- |
+| `application_id` | reserved for future richer Discord runtime / app identity work |
+| `allowed_guild_ids` | reserved for future native inbound or gateway-owned Discord work |
+
+## Target Rules
+
+- `discord-send` expects a Discord channel/conversation id as the target.
+- Keep targets explicit and numeric.
+- If the target is empty, Loong fails fast instead of attempting an accidental send.
+
+## Operator Notes
+
+- Discord is currently the **Discord HTTP API outbound lane**, not a gateway-owned bot runtime.
+- If `api_base_url` is overridden, it must still resolve to `http` or `https`; non-HTTP schemes are rejected.
+- Multi-account configs should use `default_account` plus `accounts.<id>` before you build higher-level routing on top.
+- `loong doctor` and onboarding preflight summarize per-account direct-send readiness for configured Discord accounts.
+- `application_id` and `allowed_guild_ids` are preserved in status as future-runtime governance fields, not as proof of a shipped `discord-serve` loop.
+- Treat `loong channels` as the inventory surface and `loong doctor` as the recovery surface.
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full actionable matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

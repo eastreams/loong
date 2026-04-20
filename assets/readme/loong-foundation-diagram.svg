@@ -1,0 +1,93 @@
+<svg width="1280" height="960" viewBox="0 0 1280 960" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Loong foundation diagram</title>
+  <desc id="desc">A foundation diagram showing how Loong helps teams shape vertical agents on top of a stable Rust core.</desc>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
+      <polygon points="0 0, 10 5, 0 10" fill="#9CA9B8" />
+    </marker>
+  </defs>
+
+  <rect width="1280" height="960" fill="#FCFDFE" />
+  <rect x="16" y="16" width="1248" height="928" rx="24" fill="#FCFDFE" stroke="#DCE5EE" stroke-width="2" />
+
+  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">How Loong becomes a vertical-agent base</text>
+  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">Start from a runnable Rust-native baseline, then shape domain-specific agents without rewriting the kernel.</text>
+
+  <rect x="60" y="160" width="340" height="110" rx="16" fill="#E7F0FF" stroke="#93B5E2" stroke-width="1.5" />
+  <text x="84" y="196" fill="#243E63" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Builders and teams</text>
+  <text x="84" y="224" fill="#48617A" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="84" dy="0">outcomes, trust boundaries, and</tspan>
+    <tspan x="84" dy="21">workflow design</tspan>
+  </text>
+
+  <rect x="470" y="160" width="340" height="110" rx="16" fill="#E8F5EC" stroke="#A8D2B2" stroke-width="1.5" />
+  <text x="494" y="196" fill="#224A36" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Domain knowledge</text>
+  <text x="494" y="224" fill="#4D6858" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="494" dy="0">policies, prompts, skills, and</tspan>
+    <tspan x="494" dy="21">operating patterns</tspan>
+  </text>
+
+  <rect x="880" y="160" width="340" height="110" rx="16" fill="#FFF1E5" stroke="#EDC099" stroke-width="1.5" />
+  <text x="904" y="196" fill="#5A351D" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Delivery surfaces</text>
+  <text x="904" y="224" fill="#735238" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="904" dy="0">CLI, channels, operator flows,</tspan>
+    <tspan x="904" dy="21">and future products</tspan>
+  </text>
+
+  <line x1="230" y1="270" x2="230" y2="320" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="640" y1="270" x2="640" y2="320" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1050" y1="270" x2="1050" y2="320" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+
+  <rect x="76" y="346" width="308" height="108" rx="16" fill="#F4F7FB" stroke="#D5DFEA" stroke-width="1.5" />
+  <text x="100" y="382" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Research agent</text>
+  <text x="100" y="410" fill="#566C82" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="100" dy="0">retrieval, synthesis, and</tspan>
+    <tspan x="100" dy="21">governed action</tspan>
+  </text>
+
+  <rect x="486" y="346" width="308" height="108" rx="16" fill="#F4F7FB" stroke="#D5DFEA" stroke-width="1.5" />
+  <text x="510" y="382" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Service agent</text>
+  <text x="510" y="410" fill="#566C82" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="510" dy="0">approvals, support, and</tspan>
+    <tspan x="510" dy="21">repeatable workflows</tspan>
+  </text>
+
+  <rect x="896" y="346" width="308" height="108" rx="16" fill="#F4F7FB" stroke="#D5DFEA" stroke-width="1.5" />
+  <text x="920" y="382" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Ops agent</text>
+  <text x="920" y="410" fill="#566C82" font-size="15" font-family="Arial, Helvetica, sans-serif">
+    <tspan x="920" dy="0">tools, diagnostics, and</tspan>
+    <tspan x="920" dy="21">controlled execution</tspan>
+  </text>
+
+  <line x1="230" y1="454" x2="230" y2="516" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="640" y1="454" x2="640" y2="516" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1050" y1="454" x2="1050" y2="516" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+
+  <rect x="60" y="534" width="760" height="78" rx="16" fill="#FFF7D8" stroke="#D8B54B" stroke-width="1.5" />
+  <text x="440" y="568" text-anchor="middle" fill="#402B00" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Shaping layer</text>
+  <text x="440" y="592" text-anchor="middle" fill="#6C5720" font-size="15" font-family="Arial, Helvetica, sans-serif">packs, prompts, profiles, skills</text>
+
+  <rect x="860" y="534" width="360" height="78" rx="16" fill="#EEF3F8" stroke="#B7C6D6" stroke-width="1.5" />
+  <text x="1040" y="568" text-anchor="middle" fill="#29415C" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Rust core</text>
+  <text x="1040" y="592" text-anchor="middle" fill="#5B7188" font-size="15" font-family="Arial, Helvetica, sans-serif">stable, compiled foundation</text>
+
+  <line x1="640" y1="612" x2="640" y2="646" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
+
+  <rect x="60" y="664" width="1160" height="252" rx="18" fill="#F9FBFD" stroke="#D7DFE8" stroke-width="2" />
+  <text x="84" y="706" fill="#122033" font-size="26" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong foundation</text>
+
+  <rect x="80" y="726" width="1120" height="38" rx="10" fill="#FFF7D8" />
+  <text x="100" y="750" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">Governance: policy, approvals, audit, and security posture</text>
+
+  <rect x="80" y="772" width="1120" height="38" rx="10" fill="#E7F0FF" />
+  <text x="100" y="796" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">Runtime surfaces: CLI, channels, browser, file, shell, and web tools</text>
+
+  <rect x="80" y="818" width="1120" height="38" rx="10" fill="#E8F5EC" />
+  <text x="100" y="842" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">Context and memory: profiles, summaries, migration, and canonical history</text>
+
+  <rect x="80" y="864" width="1120" height="38" rx="10" fill="#FFF1E5" />
+  <text x="100" y="888" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">Providers and integrations: model backends, adapters, and external systems</text>
+
+  <text x="640" y="932" text-anchor="middle" fill="#73879B" font-size="18" font-family="Arial, Helvetica, sans-serif" font-style="italic" font-weight="600">Replace seams, not the core.</text>
+</svg>

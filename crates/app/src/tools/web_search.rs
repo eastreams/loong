@@ -1,0 +1,1429 @@
+use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
+
+#[cfg(feature = "tool-websearch")]
+use regex::Regex;
+
+#[cfg(feature = "tool-websearch")]
+use reqwest::Url;
+
+#[cfg(feature = "tool-websearch")]
+use serde_json::{Value, json};
+
+#[cfg(feature = "tool-websearch")]
+const MAX_QUERY_LENGTH: usize = 500;
+#[cfg(feature = "tool-websearch")]
+const FIRECRAWL_SEARCH_ENDPOINT: &str = "https://api.firecrawl.dev/v2/search";
+#[cfg(feature = "tool-websearch")]
+const FIRECRAWL_SOURCE_WEB: &str = "web";
+#[cfg(feature = "tool-websearch")]
+const FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS: usize = 800;
+#[cfg(feature = "tool-websearch")]
+const WEB_SEARCH_NETWORK_MODE_NOTE: &str = "Query search mode is separate from plain `web { url }`, `web.fetch`, or low-level HTTP request network access.";
+
+#[cfg(feature = "tool-websearch")]
+fn web_search_mode_only_error(message: impl Into<String>) -> String {
+    format!("{} {WEB_SEARCH_NETWORK_MODE_NOTE}", message.into())
+}
+
+#[cfg(feature = "tool-websearch")]
+fn missing_web_search_provider_credential_error(
+    provider_label: &str,
+    config_field: &str,
+    env_hint: &str,
+) -> String {
+    web_search_mode_only_error(format!(
+        "{provider_label} API key not configured. Set {config_field} in config or {env_hint} environment variable."
+    ))
+}
+
+pub(super) fn execute_web_search_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    #[cfg(not(feature = "tool-websearch"))]
+    {
+        let _ = (request, config);
+        return Err(
+            "web.search tool is disabled in this build (enable feature `tool-websearch`). Plain `web { url }`, `web.fetch`, or low-level HTTP request mode may still be available."
+                .to_owned(),
+        );
+    }
+
+    #[cfg(feature = "tool-websearch")]
+    {
+        execute_web_search_tool_enabled(request, config)
+    }
+}
+
+#[cfg(feature = "tool-websearch")]
+fn execute_web_search_tool_enabled(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    if !config.web_search.enabled {
+        return Err(web_search_mode_only_error(
+            "web.search is disabled by config.tools.web_search.enabled=false",
+        ));
+    }
+
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| "web.search payload must be an object".to_owned())?;
+
+    let query = match payload.get("query") {
+        Some(value) => value
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| "web.search requires payload.query to be a string".to_owned())?,
+        None => return Err("web.search requires payload.query".to_owned()),
+    };
+    if query.chars().count() > MAX_QUERY_LENGTH {
+        return Err(format!(
+            "web.search payload.query exceeds maximum length ({MAX_QUERY_LENGTH} characters)"
+        ));
+    }
+
+    let provider_override = match payload.get("provider") {
+        Some(value) => Some(
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "web.search payload.provider must be a string".to_owned())?,
+        ),
+        None => None,
+    };
+
+    let max_results = match payload.get("max_results") {
+        Some(value) => usize::try_from(
+            value
+                .as_u64()
+                .ok_or_else(|| "web.search payload.max_results must be an integer".to_owned())?,
+        )
+        .map_err(|error| format!("invalid web.search payload.max_results: {error}"))?,
+        None => config.web_search.max_results,
+    }
+    .clamp(1, 10);
+
+    let provider = provider_override.unwrap_or(&config.web_search.default_provider);
+    let normalized_provider =
+        crate::config::normalize_web_search_provider(provider).unwrap_or(provider);
+
+    let result = super::web_http::run_async(async {
+        match normalized_provider {
+            crate::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO => {
+                search_duckduckgo(query, max_results, config.web_search.timeout_seconds).await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_BRAVE => {
+                search_brave(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.brave_api_key.as_deref(),
+                )
+                .await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_TAVILY => {
+                search_tavily(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.tavily_api_key.as_deref(),
+                )
+                .await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY => {
+                search_perplexity(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.perplexity_api_key.as_deref(),
+                )
+                .await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_EXA => {
+                search_exa(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.exa_api_key.as_deref(),
+                )
+                .await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL => {
+                search_firecrawl(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.firecrawl_api_key.as_deref(),
+                )
+                .await
+            }
+            crate::config::WEB_SEARCH_PROVIDER_JINA => {
+                search_jina(
+                    query,
+                    max_results,
+                    config.web_search.timeout_seconds,
+                    config.web_search.jina_api_key.as_deref(),
+                )
+                .await
+            }
+            _ => Err(format!(
+                "Unknown search provider: '{}'. Supported providers: {}.",
+                provider,
+                crate::config::WEB_SEARCH_PROVIDER_VALID_VALUES
+            )),
+        }
+    })??;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: result,
+    })
+}
+
+#[cfg(feature = "tool-websearch")]
+async fn search_duckduckgo(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+) -> Result<Value, String> {
+    let url = reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])
+        .map_err(|e| format!("Failed to build DuckDuckGo URL: {e}"))?;
+
+    let client = super::web_http::build_ssrf_safe_client(
+        false, // deny private hosts by default
+        timeout_seconds,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    )?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("DuckDuckGo returned status {}", response.status()));
+    }
+
+    let html = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+
+    parse_duckduckgo_html(&html, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_duckduckgo_html(html: &str, query: &str, max_results: usize) -> Result<Value, String> {
+    let link_regex = ddg_link_regex();
+    let snippet_regex = ddg_snippet_regex();
+
+    let link_matches: Vec<_> = link_regex.captures_iter(html).collect();
+
+    if link_matches.is_empty() {
+        return Ok(json!({
+            "query": query,
+            "provider": "duckduckgo",
+            "results": []
+        }));
+    }
+
+    let mut results = Vec::new();
+
+    for (i, caps) in link_matches.iter().take(max_results).enumerate() {
+        let Some(full_match) = caps.get(0) else {
+            continue;
+        };
+        let url = decode_ddg_url(&caps[1]);
+        let title = strip_html_tags(&caps[2]);
+
+        let search_start = full_match.end();
+        let search_end = link_matches
+            .get(i + 1)
+            .and_then(|next_caps| next_caps.get(0))
+            .map(|m| m.start())
+            .unwrap_or(html.len());
+
+        let snippet = if search_start < search_end {
+            let region = &html[search_start..search_end];
+            snippet_regex
+                .captures(region)
+                .and_then(|c| c.get(1))
+                .map(|m| strip_html_tags(m.as_str()))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        results.push(json!({
+            "title": title.trim(),
+            "url": url.trim(),
+            "snippet": snippet.trim()
+        }));
+    }
+
+    Ok(json!({
+        "query": query,
+        "provider": "duckduckgo",
+        "results": results
+    }))
+}
+
+#[cfg(feature = "tool-websearch")]
+fn decode_ddg_url(raw: &str) -> String {
+    let normalized = if raw.starts_with("//") {
+        format!("https:{raw}")
+    } else if raw.starts_with("/l/") {
+        format!("https://duckduckgo.com{raw}")
+    } else {
+        raw.to_owned()
+    };
+
+    if let Ok(url) = Url::parse(&normalized) {
+        let is_ddg_host = url
+            .host_str()
+            .is_some_and(|host| host == "duckduckgo.com" || host.ends_with(".duckduckgo.com"));
+        let is_ddg_redirect = is_ddg_host && url.path().starts_with("/l/");
+        if is_ddg_redirect
+            && let Some(encoded) = url.query_pairs().find(|(k, _)| k == "uddg").map(|(_, v)| v)
+        {
+            return encoded.into_owned();
+        }
+    }
+    raw.to_string()
+}
+
+#[cfg(feature = "tool-websearch")]
+#[allow(clippy::expect_used)]
+fn ddg_link_regex() -> &'static Regex {
+    static LINK_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    LINK_REGEX.get_or_init(|| {
+        Regex::new(r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>"#)
+            .expect("static regex should always compile")
+    })
+}
+
+#[cfg(feature = "tool-websearch")]
+#[allow(clippy::expect_used)]
+fn ddg_snippet_regex() -> &'static Regex {
+    static SNIPPET_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    SNIPPET_REGEX.get_or_init(|| {
+        Regex::new(r#"<a class="result__snippet[^"]*"[^>]*>([\s\S]*?)</a>"#)
+            .expect("static regex should always compile")
+    })
+}
+
+#[cfg(feature = "tool-websearch")]
+#[allow(clippy::expect_used)]
+fn strip_html_tags(s: &str) -> String {
+    static TAG_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let tag_regex = TAG_REGEX
+        .get_or_init(|| Regex::new(r"<[^>]+>").expect("static regex should always compile"));
+    tag_regex.replace_all(s, "").to_string()
+}
+
+#[cfg(feature = "tool-websearch")]
+async fn search_brave(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let api_key = api_key
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            missing_web_search_provider_credential_error(
+                "Brave",
+                "tools.web_search.brave_api_key",
+                crate::config::WEB_SEARCH_BRAVE_API_KEY_ENV,
+            )
+        })?;
+
+    let url = reqwest::Url::parse_with_params(
+        "https://api.search.brave.com/res/v1/web/search",
+        &[("q", query), ("count", &max_results.to_string())],
+    )
+    .map_err(|e| format!("Failed to build Brave URL: {e}"))?;
+
+    let client = super::web_http::build_ssrf_safe_client(
+        false, // deny private hosts by default
+        timeout_seconds,
+        "Loong-WebSearch/0.1",
+    )?;
+
+    let response = client
+        .get(url)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", api_key)
+        .send()
+        .await
+        .map_err(|error| format_request_error("Brave request failed", &error))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Brave returned status {}", response.status()));
+    }
+
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Brave response: {e}"))?;
+
+    parse_brave_response(&json, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_brave_response(json: &Value, query: &str, max_results: usize) -> Result<Value, String> {
+    let results = json
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+        .ok_or("Invalid Brave API response format")?;
+
+    let results: Vec<Value> = results
+        .iter()
+        .take(max_results)
+        .map(|r| {
+            json!({
+                "title": r.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                "url": r.get("url").and_then(|u| u.as_str()).unwrap_or(""),
+                "snippet": r.get("description").and_then(|d| d.as_str()).unwrap_or("")
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "query": query,
+        "provider": "brave",
+        "results": results
+    }))
+}
+
+#[cfg(feature = "tool-websearch")]
+async fn search_tavily(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let api_key = api_key
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            missing_web_search_provider_credential_error(
+                "Tavily",
+                "tools.web_search.tavily_api_key",
+                crate::config::WEB_SEARCH_TAVILY_API_KEY_ENV,
+            )
+        })?;
+
+    let client = super::web_http::build_ssrf_safe_client(
+        false, // deny private hosts by default
+        timeout_seconds,
+        "Loong-WebSearch/0.1",
+    )?;
+
+    let response = client
+        .post("https://api.tavily.com/search")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&json!({
+            "query": query,
+            "max_results": max_results,
+            "include_answer": false,
+            "include_raw_content": false,
+        }))
+        .send()
+        .await
+        .map_err(|error| format_request_error("Tavily request failed", &error))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Tavily returned status {}", response.status()));
+    }
+
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Tavily response: {e}"))?;
+
+    parse_tavily_response(&json, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_tavily_response(json: &Value, query: &str, max_results: usize) -> Result<Value, String> {
+    let results = json
+        .get("results")
+        .and_then(|r| r.as_array())
+        .ok_or("Invalid Tavily API response format")?;
+
+    let results: Vec<Value> = results
+        .iter()
+        .take(max_results)
+        .map(|r| {
+            json!({
+                "title": r.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                "url": r.get("url").and_then(|u| u.as_str()).unwrap_or(""),
+                "snippet": r.get("content").and_then(|c| c.as_str()).unwrap_or("")
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "query": query,
+        "provider": "tavily",
+        "results": results
+    }))
+}
+
+#[cfg(feature = "tool-websearch")]
+async fn search_perplexity(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let api_key = api_key
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            missing_web_search_provider_credential_error(
+                "Perplexity",
+                "tools.web_search.perplexity_api_key",
+                crate::config::WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
+            )
+        })?;
+
+    let client =
+        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "Loong-WebSearch/0.1")?;
+
+    let response = client
+        .post("https://api.perplexity.ai/search")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&json!({
+            "query": query,
+            "max_results": max_results,
+        }))
+        .send()
+        .await
+        .map_err(|error| format_request_error("Perplexity request failed", &error))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Perplexity returned status {}", response.status()));
+    }
+
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Perplexity response: {e}"))?;
+
+    parse_perplexity_response(&json, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_perplexity_response(
+    json: &Value,
+    query: &str,
+    max_results: usize,
+) -> Result<Value, String> {
+    let results = json
+        .get("results")
+        .and_then(|r| r.as_array())
+        .ok_or("Invalid Perplexity API response format")?;
+
+    let results: Vec<Value> = results
+        .iter()
+        .take(max_results)
+        .map(|r| {
+            json!({
+                "title": r.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                "url": r.get("url").and_then(|u| u.as_str()).unwrap_or(""),
+                "snippet": r.get("snippet").and_then(|s| s.as_str()).unwrap_or("")
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "query": query,
+        "provider": "perplexity",
+        "results": results
+    }))
+}
+
+#[cfg(feature = "tool-websearch")]
+async fn search_exa(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let api_key = api_key
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            missing_web_search_provider_credential_error(
+                "Exa",
+                "tools.web_search.exa_api_key",
+                crate::config::WEB_SEARCH_EXA_API_KEY_ENV,
+            )
+        })?;
+
+    let client =
+        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "Loong-WebSearch/0.1")?;
+
+    let response = client
+        .post("https://api.exa.ai/search")
+        .header("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .json(&json!({
+            "query": query,
+            "numResults": max_results,
+            "contents": {
+                "highlights": {
+                    "maxCharacters": 800
+                }
+            }
+        }))
+        .send()
+        .await
+        .map_err(|error| format_request_error("Exa request failed", &error))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Exa returned status {}", response.status()));
+    }
+
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Exa response: {e}"))?;
+
+    parse_exa_response(&json, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_exa_response(json: &Value, query: &str, max_results: usize) -> Result<Value, String> {
+    let results = json
+        .get("results")
+        .and_then(|r| r.as_array())
+        .ok_or("Invalid Exa API response format")?;
+
+    let results: Vec<Value> = results
+        .iter()
+        .take(max_results)
+        .map(|r| {
+            let snippet = r
+                .get("highlights")
+                .and_then(|value| value.as_array())
+                .and_then(|highlights| {
+                    let combined = highlights
+                        .iter()
+                        .filter_map(|entry| entry.as_str())
+                        .map(str::trim)
+                        .filter(|entry| !entry.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    (!combined.is_empty()).then_some(combined)
+                })
+                .or_else(|| {
+                    r.get("summary")
+                        .and_then(|summary| summary.as_str())
+                        .map(str::trim)
+                        .filter(|summary| !summary.is_empty())
+                        .map(str::to_owned)
+                })
+                .or_else(|| {
+                    r.get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default();
+
+            json!({
+                "title": r.get("title").and_then(|t| t.as_str()).unwrap_or(""),
+                "url": r.get("url").and_then(|u| u.as_str()).unwrap_or(""),
+                "snippet": snippet
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "query": query,
+        "provider": "exa",
+        "results": results
+    }))
+}
+
+#[cfg(feature = "tool-websearch")]
+async fn search_firecrawl(
+    query: &str,
+    max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let trimmed_api_key = api_key.and_then(trim_non_empty);
+    let missing_api_key_message = missing_web_search_provider_credential_error(
+        "Firecrawl",
+        "tools.web_search.firecrawl_api_key",
+        crate::config::WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
+    );
+    let api_key = trimmed_api_key.ok_or(missing_api_key_message)?;
+
+    let user_agent = "Loong-WebSearch/0.1";
+    let private_hosts_allowed = false;
+    let client = super::web_http::build_ssrf_safe_client(
+        private_hosts_allowed,
+        timeout_seconds,
+        user_agent,
+    )?;
+
+    let content_type_header = "Content-Type";
+    let authorization_header = "Authorization";
+    let bearer_token = format!("Bearer {api_key}");
+    let request_body = json!({
+        "query": query,
+        "limit": max_results,
+        "sources": [FIRECRAWL_SOURCE_WEB],
+    });
+
+    let response = client
+        .post(FIRECRAWL_SEARCH_ENDPOINT)
+        .header(content_type_header, "application/json")
+        .header(authorization_header, bearer_token)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| format_request_error("Firecrawl request failed", &error))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let message = format!("Firecrawl returned status {status}");
+        return Err(message);
+    }
+
+    let parsed_json = response
+        .json()
+        .await
+        .map_err(|error| format!("Failed to parse Firecrawl response: {error}"))?;
+
+    parse_firecrawl_response(&parsed_json, query, max_results)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_firecrawl_response(
+    json: &Value,
+    query: &str,
+    max_results: usize,
+) -> Result<Value, String> {
+    let data = json.get("data");
+    let web_results = data.and_then(|value| value.get("web"));
+    let web_results = web_results.and_then(Value::as_array);
+    let results = web_results.ok_or("Invalid Firecrawl API response format")?;
+
+    let mut normalized_results = Vec::new();
+
+    for result in results.iter().take(max_results) {
+        let title = firecrawl_result_title(result);
+        let url = firecrawl_result_url(result);
+        let snippet = firecrawl_result_snippet(result);
+
+        let normalized_result = json!({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+        });
+        normalized_results.push(normalized_result);
+    }
+
+    let normalized_payload = json!({
+        "query": query,
+        "provider": "firecrawl",
+        "results": normalized_results
+    });
+
+    Ok(normalized_payload)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn firecrawl_result_title(result: &Value) -> &str {
+    let direct_title = result.get("title");
+    let direct_title = direct_title.and_then(Value::as_str);
+    if let Some(title) = direct_title {
+        return title;
+    }
+
+    let metadata = result.get("metadata");
+    let metadata = metadata.and_then(Value::as_object);
+    let metadata_title = metadata.and_then(|value| value.get("title"));
+    let metadata_title = metadata_title.and_then(Value::as_str);
+    metadata_title.unwrap_or("")
+}
+
+#[cfg(feature = "tool-websearch")]
+fn firecrawl_result_url(result: &Value) -> &str {
+    let direct_url = result.get("url");
+    let direct_url = direct_url.and_then(Value::as_str);
+    if let Some(url) = direct_url {
+        return url;
+    }
+
+    let metadata = result.get("metadata");
+    let metadata = metadata.and_then(Value::as_object);
+
+    let metadata_url = metadata.and_then(|value| value.get("url"));
+    let metadata_url = metadata_url.and_then(Value::as_str);
+    if let Some(url) = metadata_url {
+        return url;
+    }
+
+    let source_url = metadata.and_then(|value| value.get("sourceURL"));
+    let source_url = source_url.and_then(Value::as_str);
+    source_url.unwrap_or("")
+}
+
+#[cfg(feature = "tool-websearch")]
+fn firecrawl_result_snippet(result: &Value) -> String {
+    let direct_description = result.get("description");
+    let direct_description = direct_description.and_then(Value::as_str);
+    let direct_description = direct_description.and_then(trim_non_empty);
+    if let Some(description) = direct_description {
+        return description.to_owned();
+    }
+
+    let metadata = result.get("metadata");
+    let metadata = metadata.and_then(Value::as_object);
+    let metadata_description = metadata.and_then(|value| value.get("description"));
+    let metadata_description = metadata_description.and_then(Value::as_str);
+    let metadata_description = metadata_description.and_then(trim_non_empty);
+    if let Some(description) = metadata_description {
+        return description.to_owned();
+    }
+
+    let markdown = result.get("markdown");
+    let markdown = markdown.and_then(Value::as_str);
+    let markdown = markdown.unwrap_or_default();
+    compact_firecrawl_markdown_snippet(markdown)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn compact_firecrawl_markdown_snippet(markdown: &str) -> String {
+    let normalized_words = markdown.split_whitespace().collect::<Vec<_>>();
+    let normalized = normalized_words.join(" ");
+    let normalized = normalized.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    let total_chars = normalized.chars().count();
+    let mut snippet = normalized
+        .chars()
+        .take(FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS)
+        .collect::<String>();
+
+    if total_chars > FIRECRAWL_MARKDOWN_SNIPPET_MAX_CHARS {
+        snippet.push_str("...");
+    }
+
+    snippet
+}
+
+#[cfg(feature = "tool-websearch")]
+fn trim_non_empty(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed)
+}
+
+#[cfg(feature = "tool-websearch")]
+/// Jina returns a single grounded digest, not a list of ranked result items.
+/// The runtime therefore synthesizes one result entry and ignores
+/// `_max_results`, which is kept only to align the provider function shape.
+async fn search_jina(
+    query: &str,
+    _max_results: usize,
+    timeout_seconds: u64,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
+    let api_key = api_key
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            missing_web_search_provider_credential_error(
+                "Jina",
+                "tools.web_search.jina_api_key",
+                &format!(
+                    "{} / {}",
+                    crate::config::WEB_SEARCH_JINA_API_KEY_ENV,
+                    crate::config::WEB_SEARCH_JINA_AUTH_TOKEN_ENV
+                ),
+            )
+        })?;
+
+    let url = reqwest::Url::parse_with_params("https://s.jina.ai/", &[("q", query)])
+        .map_err(|e| format!("Failed to build Jina Search URL: {e}"))?;
+
+    let client =
+        super::web_http::build_ssrf_safe_client(false, timeout_seconds, "Loong-WebSearch/0.1")?;
+
+    let response = client
+        .get(url)
+        .header("Accept", "text/plain")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .map_err(|error| format_request_error("Jina request failed", &error))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Jina returned status {}", response.status()));
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read Jina response: {e}"))?;
+
+    parse_jina_response(&text, query)
+}
+
+#[cfg(feature = "tool-websearch")]
+fn parse_jina_response(text: &str, query: &str) -> Result<Value, String> {
+    let snippet = text.trim();
+    if snippet.is_empty() {
+        return Ok(json!({
+            "query": query,
+            "provider": "jina",
+            "results": []
+        }));
+    }
+
+    let source_url = reqwest::Url::parse_with_params("https://s.jina.ai/", &[("q", query)])
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| "https://s.jina.ai/".to_owned());
+
+    Ok(json!({
+        "query": query,
+        "provider": "jina",
+        "results": [{
+            "title": format!("Jina Search digest for {query}"),
+            "url": source_url,
+            "snippet": snippet
+        }]
+    }))
+}
+
+#[cfg(feature = "tool-websearch")]
+fn format_request_error(prefix: &str, error: &reqwest::Error) -> String {
+    let kind = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_redirect() {
+        "redirect"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_body() {
+        "body"
+    } else {
+        "unknown"
+    };
+    format!("{prefix} ({kind} error)")
+}
+
+#[cfg(all(test, feature = "tool-websearch"))]
+#[allow(clippy::panic)]
+mod tests {
+    use super::super::runtime_config::ToolRuntimeConfig;
+    use super::*;
+
+    fn request(payload: Value) -> ToolCoreRequest {
+        ToolCoreRequest {
+            tool_name: "web.search".to_owned(),
+            payload,
+        }
+    }
+
+    fn test_config() -> ToolRuntimeConfig {
+        ToolRuntimeConfig::default()
+    }
+
+    #[test]
+    fn web_search_requires_object_payload() {
+        let error = execute_web_search_tool_with_config(request(json!("query")), &test_config())
+            .expect_err("should reject non-object payload");
+        assert!(error.contains("payload must be an object"));
+    }
+
+    #[test]
+    fn web_search_requires_query() {
+        let error = execute_web_search_tool_with_config(request(json!({})), &test_config())
+            .expect_err("should reject missing query");
+        assert!(error.contains("requires payload.query"));
+    }
+
+    #[test]
+    fn web_search_rejects_non_string_query() {
+        let error =
+            execute_web_search_tool_with_config(request(json!({"query": 123})), &test_config())
+                .expect_err("should reject non-string query");
+        assert!(
+            error.contains("payload.query to be a string"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_rejects_empty_query() {
+        let error =
+            execute_web_search_tool_with_config(request(json!({"query": ""})), &test_config())
+                .expect_err("should reject empty query");
+        assert!(error.contains("requires payload.query"));
+    }
+
+    #[test]
+    fn web_search_rejects_unknown_provider() {
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "unknown"})),
+            &test_config(),
+        )
+        .expect_err("should reject unknown provider");
+        assert!(error.contains("Unknown search provider"));
+    }
+
+    #[test]
+    fn web_search_rejects_overlong_query() {
+        let long_query = "x".repeat(MAX_QUERY_LENGTH + 1);
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": long_query})),
+            &test_config(),
+        )
+        .expect_err("should reject too-long query");
+        assert!(error.contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn web_search_rejects_overlong_multibyte_query() {
+        // Test that character count, not byte count, is used for length validation
+        // Each emoji is 4 bytes in UTF-8, so 126 emojis = 504 bytes but 126 characters
+        // We want a query that exceeds MAX_QUERY_LENGTH (500) in characters but is under in bytes
+        let multibyte_query = "😀".repeat(MAX_QUERY_LENGTH + 1); // 501 chars, 2004 bytes
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": multibyte_query})),
+            &test_config(),
+        )
+        .expect_err("should reject too-long multibyte query");
+        assert!(error.contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn web_search_accepts_query_at_max_length() {
+        // Test that a query exactly at MAX_QUERY_LENGTH is accepted
+        let max_query = "x".repeat(MAX_QUERY_LENGTH);
+        // Use an unknown provider to short-circuit after validation without hitting the network
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": max_query, "provider": "unknown"})),
+            &test_config(),
+        )
+        .expect_err("validation should pass before provider dispatch");
+        assert!(error.contains("Unknown search provider"));
+    }
+
+    #[test]
+    fn parse_duckduckgo_html_extracts_results() {
+        let html = r#"
+            <a class="result__a" href="https://example.com">Example Title</a>
+            <a class="result__snippet">Example snippet</a>
+        "#;
+        let result = parse_duckduckgo_html(html, "test", 5).unwrap();
+        assert_eq!(result["provider"], "duckduckgo");
+        assert!(!result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_duckduckgo_html_handles_empty() {
+        let html = "<html><body>No results</body></html>";
+        let result = parse_duckduckgo_html(html, "test", 5).unwrap();
+        assert!(result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_duckduckgo_html_handles_missing_snippet_without_misalignment() {
+        // Regression test: verify that a missing snippet in the middle result
+        // doesn't cause subsequent snippets to shift onto wrong titles/URLs
+        let html = r#"
+            <a class="result__a" href="https://first.com">First Title</a>
+            <a class="result__snippet">First snippet</a>
+            <a class="result__a" href="https://second.com">Second Title</a>
+            <!-- Second result has no snippet -->
+            <a class="result__a" href="https://third.com">Third Title</a>
+            <a class="result__snippet">Third snippet</a>
+        "#;
+        let result = parse_duckduckgo_html(html, "test", 5).unwrap();
+        let results = result["results"]
+            .as_array()
+            .expect("results should be array");
+
+        assert_eq!(results.len(), 3, "should have 3 results");
+
+        // First result: has title, URL, and snippet
+        assert_eq!(results[0]["title"], "First Title");
+        assert_eq!(results[0]["url"], "https://first.com");
+        assert_eq!(results[0]["snippet"], "First snippet");
+
+        // Second result: has title and URL, but no snippet
+        assert_eq!(results[1]["title"], "Second Title");
+        assert_eq!(results[1]["url"], "https://second.com");
+        assert_eq!(
+            results[1]["snippet"], "",
+            "second result should have empty snippet"
+        );
+
+        // Third result: has title, URL, and snippet (not shifted from second)
+        assert_eq!(results[2]["title"], "Third Title");
+        assert_eq!(results[2]["url"], "https://third.com");
+        assert_eq!(
+            results[2]["snippet"], "Third snippet",
+            "third snippet should not be shifted"
+        );
+    }
+
+    #[test]
+    fn strip_html_tags_removes_tags() {
+        let input = "<b>Hello</b> <i>World</i>";
+        assert_eq!(strip_html_tags(input), "Hello World");
+    }
+
+    #[test]
+    fn parse_tavily_response_extracts_results() {
+        let json = json!({
+            "results": [
+                {
+                    "title": "Example Title",
+                    "url": "https://example.com",
+                    "content": "Example content"
+                }
+            ]
+        });
+        let result = parse_tavily_response(&json, "test", 5).unwrap();
+        assert_eq!(result["provider"], "tavily");
+        assert!(!result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_tavily_response_handles_empty() {
+        let json = json!({"results": []});
+        let result = parse_tavily_response(&json, "test", 5).unwrap();
+        assert!(result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_perplexity_response_extracts_results() {
+        let json = json!({
+            "results": [
+                {
+                    "title": "Perplexity result",
+                    "url": "https://example.com/perplexity",
+                    "snippet": "Grounded snippet"
+                }
+            ]
+        });
+        let result = parse_perplexity_response(&json, "test", 5).unwrap();
+        assert_eq!(result["provider"], "perplexity");
+        assert_eq!(result["results"][0]["title"], "Perplexity result");
+    }
+
+    #[test]
+    fn parse_perplexity_response_rejects_invalid_format() {
+        let json = json!({"items": []});
+        let error = parse_perplexity_response(&json, "test", 5)
+            .expect_err("should reject invalid Perplexity format");
+        assert!(error.contains("Invalid Perplexity API response format"));
+    }
+
+    #[test]
+    fn parse_brave_response_extracts_results() {
+        let json = json!({
+            "web": {
+                "results": [{
+                    "title": "Example Title",
+                    "url": "https://example.com",
+                    "description": "Example description"
+                }]
+            }
+        });
+        let result = parse_brave_response(&json, "test", 5).unwrap();
+        assert_eq!(result["provider"], "brave");
+        assert!(!result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_brave_response_handles_empty() {
+        let json = json!({"web": {"results": []}});
+        let result = parse_brave_response(&json, "test", 5).unwrap();
+        assert!(result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_brave_response_rejects_invalid_format() {
+        let json = json!({"invalid": "structure"});
+        let error =
+            parse_brave_response(&json, "test", 5).expect_err("should reject invalid format");
+        assert!(error.contains("Invalid Brave API response format"));
+    }
+
+    #[test]
+    fn parse_exa_response_extracts_results() {
+        let json = json!({
+            "results": [
+                {
+                    "title": "Exa result",
+                    "url": "https://example.com/exa",
+                    "highlights": ["Primary highlight", "Second highlight"]
+                }
+            ]
+        });
+        let result = parse_exa_response(&json, "test", 5).unwrap();
+        assert_eq!(result["provider"], "exa");
+        assert!(
+            result["results"][0]["snippet"]
+                .as_str()
+                .unwrap()
+                .contains("Primary highlight")
+        );
+    }
+
+    #[test]
+    fn parse_exa_response_rejects_invalid_format() {
+        let json = json!({"items": []});
+        let error =
+            parse_exa_response(&json, "test", 5).expect_err("should reject invalid Exa format");
+        assert!(error.contains("Invalid Exa API response format"));
+    }
+
+    #[test]
+    fn parse_firecrawl_response_extracts_results() {
+        let json = json!({
+            "success": true,
+            "data": {
+                "web": [{
+                    "title": "Firecrawl result",
+                    "description": "Grounded snippet",
+                    "url": "https://example.com/firecrawl",
+                    "markdown": "# ignored"
+                }]
+            }
+        });
+
+        let result = parse_firecrawl_response(&json, "test", 5).unwrap();
+        let provider = result["provider"].as_str();
+        let title = result["results"][0]["title"].as_str();
+        let url = result["results"][0]["url"].as_str();
+        let snippet = result["results"][0]["snippet"].as_str();
+
+        assert_eq!(provider, Some("firecrawl"));
+        assert_eq!(title, Some("Firecrawl result"));
+        assert_eq!(url, Some("https://example.com/firecrawl"));
+        assert_eq!(snippet, Some("Grounded snippet"));
+    }
+
+    #[test]
+    fn parse_firecrawl_response_falls_back_to_metadata_and_markdown() {
+        let json = json!({
+            "success": true,
+            "data": {
+                "web": [{
+                    "metadata": {
+                        "title": "Metadata title",
+                        "sourceURL": "https://example.com/source",
+                        "description": ""
+                    },
+                    "markdown": "line one\n\nline two"
+                }]
+            }
+        });
+
+        let result = parse_firecrawl_response(&json, "test", 5).unwrap();
+        let title = result["results"][0]["title"].as_str();
+        let url = result["results"][0]["url"].as_str();
+        let snippet = result["results"][0]["snippet"].as_str();
+
+        assert_eq!(title, Some("Metadata title"));
+        assert_eq!(url, Some("https://example.com/source"));
+        assert_eq!(snippet, Some("line one line two"));
+    }
+
+    #[test]
+    fn parse_firecrawl_response_rejects_invalid_format() {
+        let json = json!({"data": {"images": []}});
+        let error = parse_firecrawl_response(&json, "test", 5)
+            .expect_err("should reject invalid Firecrawl format");
+
+        assert!(error.contains("Invalid Firecrawl API response format"));
+    }
+
+    #[test]
+    fn parse_jina_response_builds_aggregate_result() {
+        let result = parse_jina_response("Result 1\nhttps://example.com", "test").unwrap();
+        assert_eq!(result["provider"], "jina");
+        assert_eq!(result["results"][0]["title"], "Jina Search digest for test");
+    }
+
+    #[test]
+    fn parse_jina_response_handles_empty_body() {
+        let result = parse_jina_response("  ", "test").unwrap();
+        assert!(result["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn web_search_disabled_returns_error() {
+        let mut config = test_config();
+        config.web_search.enabled = false;
+        let error = execute_web_search_tool_with_config(request(json!({"query": "test"})), &config)
+            .expect_err("should reject when disabled");
+        assert!(
+            error.contains("disabled by config"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("Query search mode is separate from plain `web { url }`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn decode_ddg_url_extracts_redirect() {
+        // Standard DDG redirect URL
+        let url = "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage";
+        assert_eq!(decode_ddg_url(url), "https://example.com/page");
+    }
+
+    #[test]
+    fn decode_ddg_url_returns_original_for_non_ddg_url() {
+        // Non-DDG URL should be returned as-is
+        let url = "https://example.com/page?uddg=https%3A%2F%2Fother.com";
+        assert_eq!(decode_ddg_url(url), url);
+
+        // DDG URL but not a redirect path
+        let url = "https://duckduckgo.com/?q=test&uddg=https%3A%2F%2Fother.com";
+        assert_eq!(decode_ddg_url(url), url);
+    }
+
+    #[test]
+    fn decode_ddg_url_handles_malformed_url() {
+        // Malformed URL should be returned as-is
+        let url = "not a valid url";
+        assert_eq!(decode_ddg_url(url), url);
+    }
+
+    #[test]
+    fn web_search_provider_override_uses_specified_provider() {
+        // Test that provider parameter overrides default
+        // Use unknown provider to short-circuit after provider selection
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "unknown"})),
+            &test_config(),
+        )
+        .expect_err("should fail with unknown provider");
+        assert!(error.contains("Unknown search provider"));
+    }
+
+    #[test]
+    fn web_search_brave_requires_api_key() {
+        // Test that brave provider requires API key at runtime
+        let config = test_config(); // No brave_api_key set by default
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "brave"})),
+            &config,
+        )
+        .expect_err("should require brave API key");
+        assert!(
+            error.contains("Brave API key not configured"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("Query search mode is separate from plain `web { url }`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_tavily_requires_api_key() {
+        // Test that tavily provider requires API key at runtime
+        let config = test_config(); // No tavily_api_key set by default
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "tavily"})),
+            &config,
+        )
+        .expect_err("should require tavily API key");
+        assert!(
+            error.contains("Tavily API key not configured"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_perplexity_requires_api_key() {
+        let config = test_config();
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "perplexity"})),
+            &config,
+        )
+        .expect_err("should require perplexity API key");
+        assert!(
+            error.contains("Perplexity API key not configured"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_exa_requires_api_key() {
+        let config = test_config();
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "exa"})),
+            &config,
+        )
+        .expect_err("should require exa API key");
+        assert!(
+            error.contains("Exa API key not configured"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_firecrawl_requires_api_key() {
+        let config = test_config();
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "firecrawl"})),
+            &config,
+        )
+        .expect_err("should require firecrawl API key");
+
+        assert!(
+            error.contains("Firecrawl API key not configured"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn web_search_jina_requires_api_key() {
+        let config = test_config();
+        let error = execute_web_search_tool_with_config(
+            request(json!({"query": "test", "provider": "jina"})),
+            &config,
+        )
+        .expect_err("should require jina API key");
+        assert!(
+            error.contains("Jina API key not configured"),
+            "unexpected error: {error}"
+        );
+    }
+}

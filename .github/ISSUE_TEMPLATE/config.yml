@@ -1,0 +1,23 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability report
+    url: https://github.com/eastreams/loong/security/advisories/new
+    about: Report security issues privately.
+  - name: Questions and troubleshooting
+    url: https://github.com/eastreams/loong/discussions
+    about: Use Discussions for Q&A, setup questions, and general troubleshooting. Discord, Telegram, Feishu, and WeChat community spaces are also welcome support paths.
+  - name: Discord community
+    url: https://discord.gg/7kSTX9mca
+    about: Join Discord for community help and day-to-day discussion. If you are already active in Telegram, Feishu, or WeChat community spaces, those are good places to ask too.
+  - name: Telegram community
+    url: https://t.me/loongclaw
+    about: Telegram is another active community space for support and contributor chat.
+  - name: Direct introduction
+    url: mailto:contact@loongclaw.ai
+    about: If you want to introduce yourself, talk about where you could help most, or ask where your strengths fit, email us directly.
+  - name: Contribution guide
+    url: https://github.com/eastreams/loong/blob/dev/CONTRIBUTING.md
+    about: Read the active dev-branch contribution workflow before opening a PR.
+  - name: Documentation overview
+    url: https://github.com/eastreams/loong/blob/dev/docs/README.md
+    about: Start with the repo docs map, public docs overview, and setup playbook routes before filing a docs or setup issue.

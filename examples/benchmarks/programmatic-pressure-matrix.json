@@ -1,0 +1,511 @@
+{
+  "profile": "programmatic-pressure-v1",
+  "baseline_path": "examples/benchmarks/programmatic-pressure-baseline.json",
+  "default_iterations": 8,
+  "default_warmup_iterations": 1,
+  "scenarios": [
+    {
+      "name": "rate_limit_steady_state",
+      "description": "steady-state webhook fanout under connector min-interval shaping",
+      "kind": "spec_run",
+      "spec": {
+        "pack": {
+          "pack_id": "pressure-rate-limit-pack",
+          "domain": "platform",
+          "version": "0.1.0",
+          "default_route": {
+            "harness_kind": "EmbeddedPi",
+            "adapter": "pi-local"
+          },
+          "allowed_connectors": [
+            "webhook"
+          ],
+          "granted_capabilities": [
+            "InvokeConnector"
+          ],
+          "metadata": {
+            "owner": "platform-team",
+            "stage": "benchmark"
+          }
+        },
+        "agent_id": "bench-rate-limit",
+        "ttl_s": 120,
+        "approval": {
+          "mode": "disabled"
+        },
+        "hotfixes": [],
+        "operation": {
+          "kind": "programmatic_tool_call",
+          "caller": "pressure-suite",
+          "max_calls": 12,
+          "include_intermediate": true,
+          "allowed_connectors": [
+            "webhook"
+          ],
+          "connector_rate_limits": {
+            "webhook": {
+              "min_interval_ms": 12
+            }
+          },
+          "concurrency": {
+            "max_in_flight": 4,
+            "min_in_flight": 1,
+            "fairness": "weighted_round_robin",
+            "adaptive_budget": false,
+            "high_weight": 3,
+            "normal_weight": 2,
+            "low_weight": 1,
+            "adaptive_recovery_successes": 2,
+            "adaptive_upshift_step": 1,
+            "adaptive_downshift_step": 1,
+            "adaptive_reduce_on": [
+              "connector_execution_error",
+              "circuit_open"
+            ]
+          },
+          "return_step": "fanout",
+          "steps": [
+            {
+              "kind": "connector_batch",
+              "step_id": "fanout",
+              "parallel": true,
+              "continue_on_error": false,
+              "calls": [
+                {
+                  "call_id": "r1",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "high",
+                  "payload": {
+                    "channel": "ops-rate-1",
+                    "text": "rate-benchmark",
+                    "_loong_test": {
+                      "delay_ms": 8
+                    }
+                  }
+                },
+                {
+                  "call_id": "r2",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "normal",
+                  "payload": {
+                    "channel": "ops-rate-2",
+                    "text": "rate-benchmark",
+                    "_loong_test": {
+                      "delay_ms": 8
+                    }
+                  }
+                },
+                {
+                  "call_id": "r3",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "normal",
+                  "payload": {
+                    "channel": "ops-rate-3",
+                    "text": "rate-benchmark",
+                    "_loong_test": {
+                      "delay_ms": 8
+                    }
+                  }
+                },
+                {
+                  "call_id": "r4",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "low",
+                  "payload": {
+                    "channel": "ops-rate-4",
+                    "text": "rate-benchmark",
+                    "_loong_test": {
+                      "delay_ms": 8
+                    }
+                  }
+                },
+                {
+                  "call_id": "r5",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "high",
+                  "payload": {
+                    "channel": "ops-rate-5",
+                    "text": "rate-benchmark",
+                    "_loong_test": {
+                      "delay_ms": 8
+                    }
+                  }
+                },
+                {
+                  "call_id": "r6",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "low",
+                  "payload": {
+                    "channel": "ops-rate-6",
+                    "text": "rate-benchmark",
+                    "_loong_test": {
+                      "delay_ms": 8
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "adaptive_concurrency_recovery",
+      "description": "intentional connector failures trigger adaptive downshift then recovery",
+      "kind": "spec_run",
+      "spec": {
+        "pack": {
+          "pack_id": "pressure-adaptive-pack",
+          "domain": "platform",
+          "version": "0.1.0",
+          "default_route": {
+            "harness_kind": "EmbeddedPi",
+            "adapter": "pi-local"
+          },
+          "allowed_connectors": [
+            "webhook"
+          ],
+          "granted_capabilities": [
+            "InvokeConnector"
+          ],
+          "metadata": {
+            "owner": "platform-team",
+            "stage": "benchmark"
+          }
+        },
+        "agent_id": "bench-adaptive",
+        "ttl_s": 120,
+        "approval": {
+          "mode": "disabled"
+        },
+        "hotfixes": [],
+        "operation": {
+          "kind": "programmatic_tool_call",
+          "caller": "pressure-suite",
+          "max_calls": 12,
+          "include_intermediate": true,
+          "allowed_connectors": [
+            "webhook"
+          ],
+          "connector_rate_limits": {
+            "webhook": {
+              "min_interval_ms": 5
+            }
+          },
+          "concurrency": {
+            "max_in_flight": 4,
+            "min_in_flight": 1,
+            "fairness": "weighted_round_robin",
+            "adaptive_budget": true,
+            "high_weight": 4,
+            "normal_weight": 2,
+            "low_weight": 1,
+            "adaptive_recovery_successes": 2,
+            "adaptive_upshift_step": 1,
+            "adaptive_downshift_step": 1,
+            "adaptive_reduce_on": [
+              "any_error"
+            ]
+          },
+          "return_step": "fanout",
+          "steps": [
+            {
+              "kind": "connector_batch",
+              "step_id": "fanout",
+              "parallel": true,
+              "continue_on_error": true,
+              "calls": [
+                {
+                  "call_id": "a-fail",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "retry": {
+                    "max_attempts": 2,
+                    "initial_backoff_ms": 20,
+                    "max_backoff_ms": 80,
+                    "jitter_ratio": 0,
+                    "adaptive_jitter": false
+                  },
+                  "priority_class": "high",
+                  "payload": {
+                    "channel": "ops-adaptive-fail",
+                    "text": "adaptive-failure",
+                    "_loong_test": {
+                      "request_id": "adaptive-suite-fail",
+                      "failures_before_success": 8,
+                      "delay_ms": 8
+                    }
+                  }
+                },
+                {
+                  "call_id": "a1",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "high",
+                  "payload": {
+                    "channel": "ops-adaptive-1",
+                    "text": "adaptive-recover",
+                    "_loong_test": {
+                      "delay_ms": 12
+                    }
+                  }
+                },
+                {
+                  "call_id": "a2",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "normal",
+                  "payload": {
+                    "channel": "ops-adaptive-2",
+                    "text": "adaptive-recover",
+                    "_loong_test": {
+                      "delay_ms": 12
+                    }
+                  }
+                },
+                {
+                  "call_id": "a3",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "normal",
+                  "payload": {
+                    "channel": "ops-adaptive-3",
+                    "text": "adaptive-recover",
+                    "_loong_test": {
+                      "delay_ms": 12
+                    }
+                  }
+                },
+                {
+                  "call_id": "a4",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "low",
+                  "payload": {
+                    "channel": "ops-adaptive-4",
+                    "text": "adaptive-recover",
+                    "_loong_test": {
+                      "delay_ms": 12
+                    }
+                  }
+                },
+                {
+                  "call_id": "a5",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "low",
+                  "payload": {
+                    "channel": "ops-adaptive-5",
+                    "text": "adaptive-recover",
+                    "_loong_test": {
+                      "delay_ms": 12
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "circuit_open_pressure",
+      "description": "failure-threshold=1 should produce deterministic circuit_open errors on follow-up calls",
+      "kind": "spec_run",
+      "spec": {
+        "pack": {
+          "pack_id": "pressure-circuit-open-pack",
+          "domain": "platform",
+          "version": "0.1.0",
+          "default_route": {
+            "harness_kind": "EmbeddedPi",
+            "adapter": "pi-local"
+          },
+          "allowed_connectors": [
+            "webhook"
+          ],
+          "granted_capabilities": [
+            "InvokeConnector"
+          ],
+          "metadata": {
+            "owner": "platform-team",
+            "stage": "benchmark"
+          }
+        },
+        "agent_id": "bench-circuit-open",
+        "ttl_s": 120,
+        "approval": {
+          "mode": "disabled"
+        },
+        "hotfixes": [],
+        "operation": {
+          "kind": "programmatic_tool_call",
+          "caller": "pressure-suite",
+          "max_calls": 10,
+          "include_intermediate": true,
+          "allowed_connectors": [
+            "webhook"
+          ],
+          "connector_circuit_breakers": {
+            "webhook": {
+              "failure_threshold": 1,
+              "cooldown_ms": 120,
+              "half_open_max_calls": 1,
+              "success_threshold": 1
+            }
+          },
+          "concurrency": {
+            "max_in_flight": 1,
+            "min_in_flight": 1,
+            "fairness": "strict_round_robin",
+            "adaptive_budget": false,
+            "high_weight": 1,
+            "normal_weight": 1,
+            "low_weight": 1,
+            "adaptive_recovery_successes": 2,
+            "adaptive_upshift_step": 1,
+            "adaptive_downshift_step": 1,
+            "adaptive_reduce_on": [
+              "circuit_open"
+            ]
+          },
+          "return_step": "fanout",
+          "steps": [
+            {
+              "kind": "connector_batch",
+              "step_id": "fanout",
+              "parallel": false,
+              "continue_on_error": true,
+              "calls": [
+                {
+                  "call_id": "c-fail",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "retry": {
+                    "max_attempts": 1,
+                    "initial_backoff_ms": 10,
+                    "max_backoff_ms": 20,
+                    "jitter_ratio": 0,
+                    "adaptive_jitter": false
+                  },
+                  "priority_class": "high",
+                  "payload": {
+                    "channel": "ops-circuit-fail",
+                    "text": "trip-circuit",
+                    "_loong_test": {
+                      "request_id": "circuit-open-suite",
+                      "failures_before_success": 8,
+                      "delay_ms": 5
+                    }
+                  }
+                },
+                {
+                  "call_id": "c1",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "normal",
+                  "payload": {
+                    "channel": "ops-circuit-1",
+                    "text": "should-be-open"
+                  }
+                },
+                {
+                  "call_id": "c2",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "normal",
+                  "payload": {
+                    "channel": "ops-circuit-2",
+                    "text": "should-be-open"
+                  }
+                },
+                {
+                  "call_id": "c3",
+                  "connector_name": "webhook",
+                  "operation": "notify",
+                  "required_capabilities": [
+                    "InvokeConnector"
+                  ],
+                  "priority_class": "low",
+                  "payload": {
+                    "channel": "ops-circuit-3",
+                    "text": "should-be-open"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "circuit_half_open_transition",
+      "description": "direct state-machine timing for open->half_open->closed transition",
+      "kind": "circuit_half_open",
+      "iterations": 6,
+      "warmup_iterations": 0,
+      "connector_name": "webhook",
+      "policy": {
+        "failure_threshold": 1,
+        "cooldown_ms": 120,
+        "half_open_max_calls": 1,
+        "success_threshold": 1
+      },
+      "failures_before_open": 1,
+      "recovery_successes": 1,
+      "poll_interval_ms": 10,
+      "cooldown_poll_timeout_ms": 500
+    }
+  ]
+}

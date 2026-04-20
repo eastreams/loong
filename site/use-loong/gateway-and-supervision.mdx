@@ -1,0 +1,169 @@
+---
+title: Gateway And Supervision
+description: Choose the right ownership model for longer-lived gateway-supervised service channels.
+---
+
+# Gateway And Supervision
+
+Use this page when one service channel already works and you need to decide how
+Loong should own longer-lived delivery.
+
+If you still need initial channel setup or smoke tests, start with
+[Channel Guides](/use-loong/channel-guides/index) for the exact one-surface
+contract and keep [Channel Recipes](/use-loong/channel-recipes) for the
+representative rollout path. This page is about runtime ownership,
+supervision, and account selection after the basic lane is already healthy.
+If you first need the shared `default_account`, `accounts.<id>`, or outbound
+trust config shape, start with
+[Configuration Patterns](/use-loong/configuration-patterns).
+
+## Choose The Right Owner Shape
+
+| Need | Best command | Why |
+| --- | --- | --- |
+| keep one service channel in the foreground while you verify it | `loong <surface>-serve` | simplest single-surface loop; no cross-channel supervisor yet |
+| keep several gateway-supervised runtime-backed channels attached to one foreground shell | `loong multi-channel-serve --session <name>` | compatibility wrapper for operators who want one visible CLI-first session |
+| claim the persisted owner slot and manage it from another process | `loong gateway run` | explicit owner contract with `status` and `stop` |
+| claim gateway ownership and also attach a named CLI host | `loong gateway run --session <name>` | same owner contract, plus an attached concurrent CLI session |
+
+## Current Public Ownership Model
+
+- `gateway run`, `gateway status`, and `gateway stop` are the current explicit
+  owner contract for longer-lived gateway-supervised delivery.
+- `multi-channel-serve` uses the same ownership model while preserving the
+  attached foreground workflow many operators want during rollout.
+- `multi-channel-serve` is still the compatibility wrapper, not the long-term
+  product noun.
+- This ownership model is for gateway-supervised service channels. It is not
+  the umbrella story for every outbound integration in the catalog.
+
+## What Gateway Supervision Includes Today
+
+Included in runtime supervision today:
+
+- Feishu / Lark
+- Telegram
+- Matrix
+- WhatsApp
+- WeCom
+
+Not part of runtime supervision today:
+
+- Standalone native-serve surfaces: LINE and Webhook
+- Outbound-only surfaces: Email, Slack, Discord, Teams, Google Chat, Mattermost, Nextcloud Talk, Synology Chat, DingTalk, Signal, IRC, iMessage / BlueBubbles, Nostr, Tlon, Twitch, and similar direct-send integrations
+
+If a surface is standalone native-serve or outbound-only, it should stay
+documented that way instead of being described as if it joins the same
+reply-loop supervisor.
+
+## Channel-Account Selectors
+
+Use repeatable `--channel-account <CHANNEL=ACCOUNT>` selectors when you want to
+pin a specific account for a gateway-supervised channel family.
+
+Rules that matter:
+
+- `feishu=work` is valid, and `lark=work` is the accepted alias for the same
+  Feishu family.
+- selectors should target configured account ids such as `work`, `alerts`,
+  `bot_123456`, or `bridge-sync`
+- one channel family can appear only once in the selector list; duplicate
+  overrides are rejected
+- malformed selectors such as `telegrambot123` fail because the syntax must be
+  `CHANNEL=ACCOUNT`
+- when a channel family has several configured accounts, setting
+  `default_account` explicitly keeps fallback routing from becoming accidental
+
+Foreground wrapper example:
+
+```bash
+loong multi-channel-serve \
+  --session cli-supervisor \
+  --channel-account lark=work \
+  --channel-account wecom=alerts \
+  --channel-account telegram=bot_123456 \
+  --channel-account matrix=bridge-sync
+```
+
+Gateway-owned example:
+
+```bash
+loong gateway run \
+  --channel-account feishu=work \
+  --channel-account wecom=work \
+  --channel-account telegram=bot_123456
+```
+
+Attached gateway example:
+
+```bash
+loong gateway run \
+  --session daemon-gateway \
+  --channel-account lark=work \
+  --channel-account matrix=bridge-sync
+```
+
+Control loop:
+
+```bash
+loong gateway status
+loong gateway status --json
+loong gateway stop
+```
+
+## Rollout Order
+
+1. Get `onboard`, `ask` or `chat`, and `doctor` healthy first.
+2. Bring up one gateway-supervised surface with its own `loong <surface>-serve`
+   loop before you introduce supervision.
+3. Add `default_account` plus `accounts.<id>` before you rely on multi-account
+   supervision.
+4. Use `multi-channel-serve` when you want one attached foreground session.
+5. Use `gateway run` when you want a persisted owner that another process can
+   inspect or stop.
+
+## Recovery And Inspection
+
+When startup or supervision is unclear, use the shortest diagnostic loop first:
+
+```bash
+loong doctor
+loong channels
+loong gateway status --json
+```
+
+That combination answers three different questions:
+
+- `doctor` checks provider and channel readiness
+- `channels` shows how Loong currently classifies each surface
+- `gateway status --json` is the quickest way to inspect current ownership from
+  another CLI process
+
+If the runtime still does not start cleanly:
+
+- confirm that the selected surface is actually gateway-supervised, not a
+  standalone native-serve or outbound-only lane
+- confirm that the selected account id exists under `accounts.<id>`
+- rerun with explicit `--channel-account` selectors when a channel family has
+  more than one configured account
+- check duplicate selectors first if startup fails immediately
+
+## Continue Reading
+
+- Continue to [Gateway Rollout](/use-loong/gateway-rollout-playbook) when
+  you want the owner contract turned into a rollout sequence.
+- Continue to [Common Setups](/use-loong/common-setups) when you want
+  provider, channel, and gateway choices combined into one setup path.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns)
+  for the shared public account, selector, and trust-toggle config shapes.
+- Go back to [Channels](/use-loong/channels) for the surface model and the
+  gateway-supervised versus standalone native-serve versus outbound-only boundary.
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the
+  exact built-in contract of one shipped channel surface.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the practical
+  public setup contract.
+- Continue to [Channel Recipes](/use-loong/channel-recipes) for smoke tests,
+  worked examples, and rollout walkthroughs.
+- The field-level public source spec remains in the repository's
+  [Channel Setup](https://github.com/eastreams/loong/blob/dev/docs/product-specs/channel-setup.md)
+  markdown.

@@ -1,0 +1,34 @@
+{
+  "high_risk_keywords": [
+    "delete",
+    "remove",
+    "drop",
+    "truncate",
+    "destroy",
+    "purge",
+    "rm -rf",
+    "删除",
+    "移除"
+  ],
+  "high_risk_tool_names": [
+    "delete-file",
+    "drop-table",
+    "drop-database",
+    "truncate-table"
+  ],
+  "high_risk_payload_keys": [
+    "path",
+    "target",
+    "sql",
+    "query",
+    "command"
+  ],
+  "scoring": {
+    "keyword_weight": 20,
+    "tool_name_weight": 40,
+    "payload_key_weight": 20,
+    "keyword_hit_cap": 4,
+    "payload_key_hit_cap": 2,
+    "high_risk_threshold": 20
+  }
+}

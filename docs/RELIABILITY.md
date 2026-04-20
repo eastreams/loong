@@ -1,0 +1,76 @@
+# Reliability
+
+Reliability expectations and invariants for Loong.
+
+The public reader-facing summary for this material lives in
+[`../site/reference/security-and-reliability.mdx`](../site/reference/security-and-reliability.mdx).
+This file remains the repository-native reliability and invariant reference.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read the public summary first | [`../site/reference/security-and-reliability.mdx`](../site/reference/security-and-reliability.mdx) |
+| inspect repository-native invariants and verification expectations | this file |
+| understand the broader repository docs layering | [`README.md`](README.md) |
+
+## Read This File When
+
+- you need the source-level invariant and verification contract
+- you are checking whether a change weakens an existing reliability guarantee
+- you need the repository-native commands and guardrails behind the public summary
+
+## Reliability Areas
+
+| Area | What this file covers |
+| --- | --- |
+| build invariants | CI-parity commands that must stay green |
+| runtime guardrails | execution behavior that should not silently degrade |
+| architecture guardrails | machine-checkable boundary and complexity rules |
+| kernel and channel invariants | fail-closed and persistence behavior that should remain stable |
+
+## Build Invariants
+
+These must hold at every commit on every branch:
+
+1. `cargo fmt --all -- --check` passes
+2. `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+3. `cargo test --workspace` passes
+4. `cargo test --workspace --all-features` passes (test count evolves with the codebase; CI is the source of truth)
+
+Enforced by: CI (`.github/workflows/ci.yml`, surfaced through the aggregate `build` check). The
+optional `scripts/pre-commit` hook mirrors these cargo gates locally.
+
+## Runtime Stability Guardrails
+
+1. **Wasm trap behavior is platform-aware by default** — on macOS, `signals_based_traps` is disabled to avoid trap-handler abort instability under parallel bridge tests.
+2. **Runtime override is explicit** — set `LOONG_WASM_SIGNALS_BASED_TRAPS=true|false` to force trap behavior for diagnostics/experiments.
+3. **Daemon stress helper is scriptable** — run `./scripts/stress_daemon_tests.sh 10 default,2,1` for manual repeated daemon test validation across thread modes.
+4. **Trap-mode matrix is available when needed** — set `LOONG_STRESS_WASM_TRAPS_MODES=auto,false,true` to sweep daemon tests across trap behavior modes during targeted investigation.
+
+## Architecture Stability Guardrails
+
+1. **Complexity budgets are machine-checkable** — run `./scripts/check_architecture_boundaries.sh` directly, or `task check:architecture` when the optional `task` CLI wrapper is installed, to inspect module line/function budgets for architecture hotspots (`spec_runtime`, `spec_execution`, `provider/mod`, `memory/mod`, `acp/manager`, `acp/acpx`, `channel/registry`, `config/channels`, `chat`, `channel/mod`, `conversation/turn_coordinator`, `tools/mod`, `daemon/lib`, `daemon/onboard_cli`). The checker classifies each hotspot by `foundation`, `structural_size`, and `operational_density` pressure so reviews can distinguish large-surface drift from runtime-density risk.
+2. **Memory operation literals are boundary-guarded** — memory core operation strings (`append_turn`, `window`, `clear_session`) must remain centralized in `crates/app/src/memory/*` and never spread into callsites.
+3. **`spec` stays detached from `app`** — the architecture guardrails treat any direct `loong-app` dependency in `crates/spec/Cargo.toml` as a boundary regression, and `./scripts/check_dep_graph.sh` must stay green.
+4. **Strict enforcement is the blocking gate** — use `LOONG_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh` directly, or `task check:architecture:strict` when the optional `task` CLI wrapper is installed, to make architecture budget violations fail non-zero. This check is part of `task verify`, `task verify:full`, and CI.
+
+## Kernel Invariants
+
+1. **Token authorization is fail-closed** — if the policy engine cannot determine authorization (e.g., mutex poisoned), the operation is denied.
+2. **Audit events are never silently dropped** — kernel sinks fail closed on write errors instead of silently downgrading. Production app bootstraps default to `FanoutAuditSink` backed by `~/.loong/audit/events.jsonl`, `LoongKernel::new()` defaults to `InMemoryAuditSink`, and spec/test/demo helpers may intentionally use explicit in-memory audit seams for side-effect-free reporting. `NoopAuditSink` remains reserved for callers that explicitly opt into `new_without_audit(...)` or wire a noop sink themselves.
+3. **Pack registration is idempotent-safe** — duplicate pack IDs return `DuplicatePack` error, never silently overwrite.
+4. **Generation-based revocation is monotonic** — the revocation threshold only increases, never decreases.
+5. **TaskState transitions are irreversible from terminal states** — `Completed` and `Faulted` states cannot transition.
+
+## MVP Channel Invariants
+
+1. **Kernel context is bootstrapped at startup** — the base CLI loop and shipped service-channel runtimes create `KernelContext` before processing messages.
+2. **Memory persistence failures are surfaced** — `persist_turn` errors propagate to the caller, never silently swallowed.
+3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per operator or channel surface.
+
+## Test Expectations
+
+- Kernel crate: property tests (proptest) for capability boundary invariants
+- All crates: deterministic tests (no time-dependent flakes)
+- Multi-threaded tests use `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]`

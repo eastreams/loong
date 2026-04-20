@@ -1,0 +1,22 @@
+{
+  "high_risk_metadata_keywords": [
+    "rm -rf",
+    "drop table",
+    "drop database",
+    "shell",
+    "unsafe",
+    "exec",
+    "system("
+  ],
+  "wasm": {
+    "enabled": true,
+    "max_module_bytes": 2097152,
+    "allow_wasi": false,
+    "blocked_import_prefixes": [
+      "wasi"
+    ],
+    "allowed_path_prefixes": [],
+    "require_hash_pin": false,
+    "required_sha256_by_plugin": {}
+  }
+}

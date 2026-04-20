@@ -1,0 +1,164 @@
+{
+  "pack": {
+    "pack_id": "programmatic-tool-call-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [
+      "webhook"
+    ],
+    "granted_capabilities": [
+      "InvokeConnector"
+    ],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "orchestration"
+    }
+  },
+  "agent_id": "agent-programmatic-demo",
+  "ttl_s": 120,
+  "approval": {
+    "mode": "disabled"
+  },
+  "hotfixes": [],
+  "operation": {
+    "kind": "programmatic_tool_call",
+    "caller": "planner-demo",
+    "max_calls": 5,
+    "include_intermediate": true,
+    "allowed_connectors": [
+      "webhook"
+    ],
+    "connector_rate_limits": {
+      "webhook": {
+        "min_interval_ms": 10
+      }
+    },
+    "connector_circuit_breakers": {
+      "webhook": {
+        "failure_threshold": 3,
+        "cooldown_ms": 2000,
+        "half_open_max_calls": 1,
+        "success_threshold": 1
+      }
+    },
+    "concurrency": {
+      "max_in_flight": 2,
+      "min_in_flight": 1,
+      "fairness": "weighted_round_robin",
+      "adaptive_budget": true,
+      "high_weight": 3,
+      "normal_weight": 2,
+      "low_weight": 1,
+      "adaptive_recovery_successes": 2,
+      "adaptive_upshift_step": 1,
+      "adaptive_downshift_step": 1,
+      "adaptive_reduce_on": [
+        "connector_execution_error",
+        "circuit_open"
+      ]
+    },
+    "return_step": "notify-summary",
+    "steps": [
+      {
+        "kind": "set_literal",
+        "step_id": "seed",
+        "value": {
+          "channel": "ops-alerts",
+          "message": "loong-orchestration-ready",
+          "status": "green"
+        }
+      },
+      {
+        "kind": "conditional",
+        "step_id": "gate",
+        "from_step": "seed",
+        "pointer": "/status",
+        "equals": "green",
+        "exists": true,
+        "when_true": {
+          "text": "{{seed#/message}}",
+          "priority": "p1"
+        },
+        "when_false": {
+          "text": "blocked-by-gate",
+          "priority": "p3"
+        }
+      },
+      {
+        "kind": "connector_batch",
+        "step_id": "fanout",
+        "parallel": true,
+        "continue_on_error": false,
+        "calls": [
+          {
+            "call_id": "primary",
+            "connector_name": "webhook",
+            "operation": "notify",
+            "required_capabilities": [
+              "InvokeConnector"
+            ],
+            "retry": {
+              "max_attempts": 2,
+              "initial_backoff_ms": 50,
+              "max_backoff_ms": 300,
+              "jitter_ratio": 0.25,
+              "adaptive_jitter": true
+            },
+            "priority_class": "high",
+            "payload": {
+              "channel": "{{seed#/channel}}",
+              "text": "{{gate#/text}}",
+              "priority": "{{gate#/priority}}"
+            }
+          },
+          {
+            "call_id": "backup",
+            "connector_name": "webhook",
+            "operation": "notify",
+            "required_capabilities": [
+              "InvokeConnector"
+            ],
+            "retry": {
+              "max_attempts": 2,
+              "initial_backoff_ms": 50,
+              "max_backoff_ms": 300,
+              "jitter_ratio": 0.25,
+              "adaptive_jitter": true
+            },
+            "priority_class": "low",
+            "payload": {
+              "channel": "ops-backup",
+              "text": "{{gate#/text}}",
+              "priority": "{{gate#/priority}}"
+            }
+          }
+        ]
+      },
+      {
+        "kind": "connector_call",
+        "step_id": "notify-summary",
+        "connector_name": "webhook",
+        "operation": "notify",
+        "required_capabilities": [
+          "InvokeConnector"
+        ],
+        "retry": {
+          "max_attempts": 2,
+          "initial_backoff_ms": 50,
+          "max_backoff_ms": 300,
+          "jitter_ratio": 0.25,
+          "adaptive_jitter": true
+        },
+        "priority_class": "high",
+        "payload": {
+          "channel": "ops-audit",
+          "text": "fanout total={{fanout#/total_calls}} success={{fanout#/success_calls}} failed={{fanout#/failed_calls}}"
+        }
+      }
+    ]
+  }
+}

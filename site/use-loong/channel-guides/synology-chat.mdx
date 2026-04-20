@@ -1,0 +1,57 @@
+---
+title: Synology Chat
+description: Configure the Synology Chat channel surface in Loong.
+---
+
+# Synology Chat
+
+This is a shipped config-backed outbound surface. Synology chat outgoing webhook serve is not implemented yet
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `synology-chat` |
+| Config key | `synology_chat` |
+| Implementation status | `config_backed` |
+| Transport | `synology_chat_outgoing_incoming_webhooks` |
+| Aliases | `synologychat`, `synochat` |
+| Default send target kind | `address` |
+
+## Minimal Config
+
+```toml
+[synology_chat]
+enabled = true
+incoming_url_env = "SYNOLOGY_CHAT_INCOMING_URL"
+```
+
+## Smoke Test
+
+```bash
+loong synology-chat-send --text "hello from loong"
+```
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| chat send | `synology-chat-send` | Usage: loong synology-chat-send [OPTIONS] --text &lt;TEXT&gt; |
+| webhook service | `synology-chat-serve` | synology chat outgoing webhook serve is not implemented yet |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `synology_chat.enabled`<br/>`synology_chat.accounts.<account>.enabled` | none | none |
+| incoming webhook url | `synology_chat.incoming_url`<br/>`synology_chat.accounts.<account>.incoming_url` | `synology_chat.incoming_url_env`<br/>`synology_chat.accounts.<account>.incoming_url_env` | `SYNOLOGY_CHAT_INCOMING_URL` |
+
+## Gateway And Ownership
+
+This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+
+## Related Docs
+
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
+- Continue to [Channels](/use-loong/channels) for the conceptual surface model.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

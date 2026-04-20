@@ -1,0 +1,72 @@
+---
+title: Roadmap And Product
+description: Public product direction, first-run contract, and roadmap references.
+---
+
+# Roadmap And Product
+
+This page keeps the current public product direction in one place so users,
+contributors, and builders can understand the contract Loong is actually
+trying to ship.
+
+## Use This Page To Answer
+
+| Question | Start here |
+| --- | --- |
+| Why does Loong exist and what stance shapes it? | [Why Loong](/reference/why-loong) |
+| What is the shortest public user journey today? | [Current Public Product Contract](#current-public-product-contract) |
+| What principles shape the product surface? | [Product Principles](#product-principles) |
+| How should I read the roadmap without treating it as marketing copy? | [Roadmap Shape](#roadmap-shape) |
+| Where do I go for deeper source material? | [Repository Source Material](#repository-source-material) |
+
+## Who The Current Public Contract Is For
+
+- **Individuals and operators** who want a private assistant they can run locally and trust.
+- **Channel and workflow operators** who want the same assistant behavior to extend from the base CLI path into longer-lived delivery surfaces.
+- **Developers and extension authors** who need stable seams for providers, tools, channels, memory, and policy.
+
+## Product Principles
+
+- **First value fast**: a new user should reach a useful answer quickly instead of reading architecture before they can do anything.
+- **Safe by default**: visible capabilities still sit behind policy, approval, and audit boundaries.
+- **Assistant-first surfaces**: the public story should feel like "my assistant can do this", not only "the platform has an adapter".
+- **Progressive disclosure**: `onboard`, `ask`, `chat`, and `doctor` carry the common path; deeper runtime detail comes later.
+- **One runtime, many surfaces**: local CLI, gateway-owned delivery, and richer future surfaces should reuse the same governed runtime model.
+- **Fail loud with a repair path**: when setup or runtime health breaks, Loong should push users toward `doctor` rather than silent failure.
+
+## Current Public Product Contract
+
+The public MVP journey is intentionally short:
+
+1. Install Loong through the documented installer or source path.
+2. Run `loong onboard`.
+3. Reach a first useful answer with `loong ask` or continue in `loong chat`.
+4. Use `loong doctor` when runtime health or setup truth is unclear.
+5. Add gateway, channels, memory, and richer operator surfaces only after the base path is healthy.
+
+## Roadmap Shape
+
+The current public roadmap is execution-focused rather than aspirational. The major stages are:
+
+| Stage | Status | What it means publicly |
+| --- | --- | --- |
+| Stage 0: Kernel Contract Freeze | Done | the core crate boundaries and kernel contract are already treated as deliberate architecture, not scaffolding |
+| Stage 1: Baseline Security And Governance | In Progress | approval, policy, plugin governance, and audit stay central to the current runtime story |
+| Stage 2: Safe Hotplug Runtime | Next | untrusted extension execution should gain stronger runtime isolation instead of relying on soft convention |
+| Stage 3: Autonomous Integration Expansion | In Progress | provider, protocol, channel, and discovery growth should happen through governed integration surfaces rather than hardcoded one-offs |
+
+## Why This Page Exists
+
+- It defines what the project is actually trying to ship.
+- It gives contributors and operators one compact view of the current product contract.
+- It keeps roadmap reading grounded in shipped and near-term public work instead of vague positioning.
+
+## Repository Source Material
+
+If you are editing or reviewing the repository-native source material behind
+this summary:
+
+- [Why Loong](/reference/why-loong)
+- [Product Sense](https://github.com/eastreams/loong/blob/dev/docs/PRODUCT_SENSE.md)
+- [Roadmap](https://github.com/eastreams/loong/blob/dev/docs/ROADMAP.md)
+- [Product Specs Index](https://github.com/eastreams/loong/blob/dev/docs/product-specs/index.md)

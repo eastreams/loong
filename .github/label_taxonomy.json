@@ -1,0 +1,377 @@
+{
+  "surfaces": [
+    {
+      "name": "kernel",
+      "option": "Kernel / policy / approvals",
+      "color": "0b5fff",
+      "description": "Kernel policy, approvals, and audit surfaces.",
+      "paths": [
+        "crates/kernel/**"
+      ]
+    },
+    {
+      "name": "contracts",
+      "option": "Contracts",
+      "color": "1d76db",
+      "description": "Shared contract and type surfaces.",
+      "paths": [
+        "crates/contracts/**"
+      ]
+    },
+    {
+      "name": "protocol",
+      "option": "Protocol",
+      "color": "0366d6",
+      "description": "Protocol crate and wire-level behavior.",
+      "paths": [
+        "crates/protocol/**"
+      ]
+    },
+    {
+      "name": "spec",
+      "option": "Spec / architecture boundaries",
+      "color": "6f42c1",
+      "description": "Architecture boundaries, product specs, and design docs.",
+      "paths": [
+        "crates/spec/**",
+        "docs/design-docs/**",
+        "docs/product-specs/**"
+      ]
+    },
+    {
+      "name": "daemon",
+      "option": "Daemon / CLI / install",
+      "color": "5319e7",
+      "description": "Daemon binary, CLI entrypoints, and install flow.",
+      "paths": [
+        "crates/daemon/**",
+        "scripts/install.sh",
+        "scripts/install.ps1"
+      ]
+    },
+    {
+      "name": "providers",
+      "option": "Providers / routing",
+      "color": "0e8a16",
+      "description": "Provider routing, selection, and transport behavior.",
+      "paths": [
+        "crates/app/src/provider/**",
+        "crates/app/src/config/provider.rs"
+      ]
+    },
+    {
+      "name": "tools",
+      "option": "Tools",
+      "color": "0f766e",
+      "description": "Tool runtime, policy adapters, and tool catalog behavior.",
+      "paths": [
+        "crates/app/src/tools/**"
+      ]
+    },
+    {
+      "name": "browser",
+      "option": "Browser automation",
+      "color": "0ea5e9",
+      "description": "Browser automation surfaces and related tooling.",
+      "paths": [
+        "crates/app/src/tools/browser.rs"
+      ]
+    },
+    {
+      "name": "channels",
+      "option": "Channels / integrations",
+      "color": "16a34a",
+      "description": "Channel adapters and external integration surfaces.",
+      "paths": [
+        "crates/app/src/channel/**",
+        "crates/app/src/feishu/**"
+      ]
+    },
+    {
+      "name": "memory",
+      "option": "Memory / context assembly",
+      "color": "a855f7",
+      "description": "Memory system, context assembly, and persistence flow.",
+      "paths": [
+        "crates/app/src/memory/**",
+        "crates/app/src/config/memory.rs"
+      ]
+    },
+    {
+      "name": "conversation",
+      "option": "Conversation / session runtime",
+      "color": "d946ef",
+      "description": "Conversation runtime, session flow, and prompt assembly.",
+      "paths": [
+        "crates/app/src/conversation/**",
+        "crates/app/src/prompt/**",
+        "crates/app/src/session/**",
+        "crates/app/src/config/conversation.rs"
+      ]
+    },
+    {
+      "name": "config",
+      "option": "Config",
+      "color": "f59e0b",
+      "description": "Runtime config parsing, schema, and defaults.",
+      "paths": [
+        "crates/app/src/config/**",
+        "crates/spec/config/**"
+      ]
+    },
+    {
+      "name": "acp",
+      "option": "ACP control plane",
+      "color": "ec4899",
+      "description": "ACP manager, binding, routing, and control plane surfaces.",
+      "paths": [
+        "crates/app/src/acp/**"
+      ]
+    },
+    {
+      "name": "migration",
+      "option": "Migration / onboarding",
+      "color": "f97316",
+      "description": "Onboarding, legacy import, and migration flow.",
+      "paths": [
+        "crates/app/src/migration/**"
+      ]
+    },
+    {
+      "name": "docs",
+      "option": "Docs / contributor workflow",
+      "color": "0891b2",
+      "description": "Contributor docs, references, and issue/PR guidance.",
+      "paths": [
+        "docs/references/**",
+        "README.md",
+        "README.zh-CN.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/PULL_REQUEST_TEMPLATE.md"
+      ]
+    },
+    {
+      "name": "ci",
+      "option": "CI / release / workflows",
+      "color": "ea580c",
+      "description": "CI, workflows, release automation, and repo governance scripts.",
+      "paths": [
+        ".github/workflows/**",
+        ".github/dependabot.yml",
+        ".github/labeler.yml",
+        ".github/label_taxonomy.json",
+        "Taskfile.yml",
+        "scripts/architecture_budget_lib.sh",
+        "scripts/bootstrap_release_local_artifacts.sh",
+        "scripts/check*.sh",
+        "scripts/lint_*.sh",
+        "scripts/release_artifact_lib.sh",
+        "scripts/sync_github_labels.py",
+        "scripts/test_*.sh"
+      ]
+    }
+  ],
+  "domains": [
+    {
+      "name": "core-runtime",
+      "color": "1d76db",
+      "description": "Core Runtime domain"
+    },
+    {
+      "name": "agent-experience",
+      "color": "5319e7",
+      "description": "Agent Experience domain"
+    },
+    {
+      "name": "tools-plugins",
+      "color": "0e8a16",
+      "description": "Tools & Plugins domain"
+    },
+    {
+      "name": "channels-protocol",
+      "color": "e99695",
+      "description": "Channels & Protocol domain"
+    },
+    {
+      "name": "platform-dx",
+      "color": "f9d0c4",
+      "description": "Platform & DX domain"
+    }
+  ],
+  "legacy_labels": [
+    {
+      "name": "area: kernel",
+      "replacement": "kernel"
+    },
+    {
+      "name": "area: contracts",
+      "replacement": "contracts"
+    },
+    {
+      "name": "area: protocol",
+      "replacement": "protocol"
+    },
+    {
+      "name": "area: spec",
+      "replacement": "spec"
+    },
+    {
+      "name": "area: daemon",
+      "replacement": "daemon"
+    },
+    {
+      "name": "area: providers",
+      "replacement": "providers"
+    },
+    {
+      "name": "area: tools",
+      "replacement": "tools"
+    },
+    {
+      "name": "area: browser",
+      "replacement": "browser"
+    },
+    {
+      "name": "area: channels",
+      "replacement": "channels"
+    },
+    {
+      "name": "area: memory",
+      "replacement": "memory"
+    },
+    {
+      "name": "area: conversation",
+      "replacement": "conversation"
+    },
+    {
+      "name": "area: config",
+      "replacement": "config"
+    },
+    {
+      "name": "area: acp",
+      "replacement": "acp"
+    },
+    {
+      "name": "area: migration",
+      "replacement": "migration"
+    },
+    {
+      "name": "area: docs",
+      "replacement": "docs"
+    },
+    {
+      "name": "area: ci",
+      "replacement": "ci"
+    },
+    {
+      "name": "domain:core-runtime",
+      "replacement": "core-runtime"
+    },
+    {
+      "name": "domain:agent-experience",
+      "replacement": "agent-experience"
+    },
+    {
+      "name": "domain:tools-plugins",
+      "replacement": "tools-plugins"
+    },
+    {
+      "name": "domain:channels-protocol",
+      "replacement": "channels-protocol"
+    },
+    {
+      "name": "domain:platform-dx",
+      "replacement": "platform-dx"
+    },
+    {
+      "name": "rust",
+      "replacement": null
+    }
+  ],
+  "general_labels": [
+    {
+      "name": "triage",
+      "color": "ededed",
+      "description": "Needs maintainer routing or follow-up."
+    },
+    {
+      "name": "documentation",
+      "color": "0075ca",
+      "description": "Improvements or additions to documentation.",
+      "paths": [
+        "*.md",
+        "**/*.md",
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/PULL_REQUEST_TEMPLATE.md"
+      ]
+    },
+    {
+      "name": "dependencies",
+      "color": "0366d6",
+      "description": "Pull requests that update dependency files.",
+      "paths": [
+        "Cargo.lock",
+        "Cargo.toml",
+        "crates/**/Cargo.toml"
+      ]
+    },
+    {
+      "name": "github_actions",
+      "color": "000000",
+      "description": "Pull requests that update GitHub Actions code.",
+      "paths": [
+        ".github/workflows/**"
+      ]
+    },
+    {
+      "name": "epic",
+      "color": "d4c5f9",
+      "description": "Domain epic tracking issue."
+    },
+    {
+      "name": "mvp",
+      "color": "c5def5",
+      "description": "MVP release milestone."
+    },
+    {
+      "name": "priority:P0",
+      "color": "b60205",
+      "description": "MVP blocker."
+    },
+    {
+      "name": "priority:P1",
+      "color": "fbca04",
+      "description": "MVP important."
+    }
+  ],
+  "size_labels": [
+    {
+      "name": "size: XS",
+      "color": "c2e0c6",
+      "description": "Tiny pull request: 0-50 changed lines."
+    },
+    {
+      "name": "size: S",
+      "color": "bfd4f2",
+      "description": "Small pull request: 51-200 changed lines."
+    },
+    {
+      "name": "size: M",
+      "color": "fbca04",
+      "description": "Medium pull request: 201-500 changed lines."
+    },
+    {
+      "name": "size: L",
+      "color": "f9d0c4",
+      "description": "Large pull request: 501-1000 changed lines."
+    },
+    {
+      "name": "size: XL",
+      "color": "d93f0b",
+      "description": "Very large pull request: more than 1000 changed lines."
+    }
+  ]
+}

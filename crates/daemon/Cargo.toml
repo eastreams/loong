@@ -1,0 +1,107 @@
+[package]
+name = "loong"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+default-run = "loong"
+description = "Primary CLI crate for Loong vertical AI agents"
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+
+[lib]
+name = "loong_daemon"
+path = "src/lib.rs"
+
+[features]
+default = ["mvp"]
+mvp = ["loong-app/default", "memory-sqlite"]
+test-support = []
+channel-cli = ["loong-app/channel-cli"]
+channel-telegram = ["loong-app/channel-telegram"]
+channel-feishu = ["loong-app/channel-feishu"]
+channel-matrix = ["loong-app/channel-matrix"]
+channel-wecom = ["loong-app/channel-wecom"]
+channel-discord = ["loong-app/channel-discord"]
+channel-dingtalk = ["loong-app/channel-dingtalk"]
+channel-slack = ["loong-app/channel-slack"]
+channel-webhook = ["loong-app/channel-webhook"]
+channel-google-chat = ["loong-app/channel-google-chat"]
+channel-line = ["loong-app/channel-line"]
+channel-signal = ["loong-app/channel-signal"]
+channel-twitch = ["loong-app/channel-twitch"]
+channel-teams = ["loong-app/channel-teams"]
+channel-tlon = ["loong-app/channel-tlon"]
+channel-whatsapp = ["loong-app/channel-whatsapp"]
+channel-email = ["loong-app/channel-email"]
+channel-mattermost = ["loong-app/channel-mattermost"]
+channel-nextcloud-talk = ["loong-app/channel-nextcloud-talk"]
+channel-synology-chat = ["loong-app/channel-synology-chat"]
+channel-irc = ["loong-app/channel-irc"]
+channel-imessage = ["loong-app/channel-imessage"]
+channel-nostr = ["loong-app/channel-nostr"]
+provider-openai = ["loong-app/provider-openai"]
+provider-anthropic = ["loong-app/provider-anthropic"]
+provider-bedrock = ["loong-app/provider-bedrock"]
+provider-volcengine = ["loong-app/provider-volcengine"]
+config-toml = ["loong-app/config-toml"]
+memory-sqlite = ["loong-app/memory-sqlite"]
+tool-shell = ["loong-app/tool-shell"]
+tool-file = ["loong-app/tool-file"]
+tool-http = ["loong-app/tool-http"]
+tool-webfetch = ["loong-app/tool-webfetch"]
+tool-websearch = ["loong-app/tool-websearch"]
+tool-browser = ["loong-app/tool-browser"]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+
+[dependencies]
+async-trait.workspace = true
+axum = { workspace = true, features = ["query"] }
+clap.workspace = true
+clap_complete = "4.5"
+dialoguer.workspace = true
+kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
+loong-bench = { package = "loong-bench", version = "0.1.2-alpha.1", path = "../bench" }
+loong-app = { package = "loong-app", version = "0.1.2-alpha.1", path = "../app", default-features = false }
+loong-bridge-runtime = { version = "0.1.2-alpha.1", path = "../bridge-runtime" }
+loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
+loong-protocol = { package = "loong-protocol", version = "0.1.2-alpha.1", path = "../protocol" }
+loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec" }
+serde.workspace = true
+serde_json.workspace = true
+futures-util.workspace = true
+base64.workspace = true
+rand.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tokio-stream = { version = "0.1", features = ["sync"] }
+time.workspace = true
+toml.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+semver.workspace = true
+ed25519-dalek.workspace = true
+dunce = "1"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wait-timeout = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+loong-spec = { package = "loong-spec", version = "0.1.2-alpha.1", path = "../spec", features = ["test-hooks"] }
+syn = { version = "2", features = ["full", "visit"] }
+tower = { version = "0.5", features = ["util"] }
+wat = "1"
+
+[[bin]]
+name = "loong"
+path = "src/main.rs"
+
+[lints]
+workspace = true

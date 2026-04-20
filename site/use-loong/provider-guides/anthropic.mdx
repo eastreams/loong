@@ -1,0 +1,66 @@
+---
+title: Anthropic
+description: Configure the Anthropic provider profile in Loong.
+---
+
+# Anthropic
+
+Use this when your team already runs on Anthropic and you want that vendor family to stay explicit in Loong config instead of disappearing behind a generic compatibility route.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `anthropic` |
+| Provider group | Direct Hosted Providers |
+| Protocol family | `anthropic_messages` |
+| Feature family | `anthropic` |
+| Auth scheme | `x_api_key` |
+| Credential envs | ANTHROPIC_API_KEY |
+| Aliases | `anthropic_compatible` |
+| Default base URL | `https://api.anthropic.com` |
+| Request endpoint | `https://api.anthropic.com/v1/messages` |
+| Models endpoint | `https://api.anthropic.com/v1/models` |
+
+## Minimal Config
+
+```toml
+active_provider = "anthropic"
+
+[providers.anthropic]
+kind = "anthropic"
+api_key = { env = "ANTHROPIC_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Say hello and name the active provider."
+```
+
+If `list-models` is unreliable for this account or region, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | no |
+| Default API key env | `ANTHROPIC_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://api.anthropic.com/v1/messages` |
+| Primary model-catalog route | `https://api.anthropic.com/v1/models` |
+
+## Operator Notes
+
+- Default headers are injected automatically: `anthropic-version: 2023-06-01`.
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.
