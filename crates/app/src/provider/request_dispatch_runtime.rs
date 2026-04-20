@@ -909,9 +909,9 @@ mod tests {
             error.message
         );
         assert!(
-            error
-                .message
-                .contains("timed out before an HTTP response arrived"),
+            error.message.contains(
+                "timed out while reading the streaming response body after an HTTP response arrived"
+            ),
             "error should preserve timeout route hint: {}",
             error.message
         );

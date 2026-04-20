@@ -472,6 +472,7 @@ where
                         error_message.as_str(),
                         error.is_timeout(),
                         error.is_connect(),
+                        transport::TransportRouteHintPhase::BeforeHttpResponse,
                     )
                 {
                     message.push(' ');
@@ -758,6 +759,7 @@ where
                             error_message.as_str(),
                             error.is_timeout(),
                             error.is_connect(),
+                            transport::TransportRouteHintPhase::BeforeHttpResponse,
                         ) {
                             message.push(' ');
                             message.push_str(route_hint.as_str());
@@ -856,6 +858,7 @@ where
                             error.to_string().as_ref(),
                             error.is_timeout(),
                             error.is_connect(),
+                            transport::TransportRouteHintPhase::StreamingResponseBody,
                         )
                     {
                         message.push(' ');
