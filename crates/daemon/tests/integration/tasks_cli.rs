@@ -924,9 +924,14 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
     );
     assert!(task_id.starts_with("delegate:"));
     assert_eq!(recipes.len(), 3);
+    let task_started_immediately = task_status == "running";
     assert!(
-        matches!(task_status, "queued" | "failed"),
+        matches!(task_status, "queued" | "running" | "failed"),
         "create should surface truthful immediate task status, got: {task_status}"
+    );
+    assert!(
+        !task_started_immediately || task_next_action == "wait",
+        "running tasks should still point operators at wait as the immediate follow-up"
     );
     assert!(
         recipes[0]
