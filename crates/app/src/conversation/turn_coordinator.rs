@@ -2297,6 +2297,7 @@ impl ConversationTurnCoordinator {
             &follow_up_messages,
             binding,
             followup_request,
+            None,
         )
         .await;
         persist_reply_turns_raw_with_mode(
