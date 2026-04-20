@@ -53,7 +53,10 @@ pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub use failover::parse_provider_failover_snapshot_payload;
 pub use http_client_runtime::ProviderHttpClientRuntimeMetricsSnapshot;
 pub use rate_limit::RateLimitObservation;
-pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
+pub use request_executor::{
+    ProviderRetryProgress, ProviderRetryProgressCallback, StreamingCallbackData,
+    StreamingTokenCallback,
+};
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{
     extract_provider_turn, extract_provider_turn_with_scope,
@@ -220,6 +223,15 @@ pub async fn request_completion(
     messages: &[Value],
     binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<String> {
+    request_completion_with_retry_progress(config, messages, binding, None).await
+}
+
+pub async fn request_completion_with_retry_progress(
+    config: &LoongConfig,
+    messages: &[Value],
+    binding: ProviderRuntimeBinding<'_>,
+    retry_progress: ProviderRetryProgressCallback,
+) -> CliResult<String> {
     let session = prepare_provider_request_session(config).await?;
     request_across_model_candidates(
         &config.provider,
@@ -239,6 +251,7 @@ pub async fn request_completion(
                 &session.request_policy,
                 &session.client,
                 &session.auth_context,
+                retry_progress.clone(),
             )
         },
     )
@@ -252,24 +265,26 @@ pub async fn request_turn(
     messages: &[Value],
     binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
-    request_turn_in_view(
+    request_turn_in_view_with_retry_progress(
         config,
         session_id,
         turn_id,
         messages,
         &crate::tools::runtime_tool_view(),
         binding,
+        None,
     )
     .await
 }
 
-pub async fn request_turn_in_view(
+pub async fn request_turn_in_view_with_retry_progress(
     config: &LoongConfig,
     session_id: &str,
     turn_id: &str,
     messages: &[Value],
     tool_view: &crate::tools::ToolView,
     binding: ProviderRuntimeBinding<'_>,
+    retry_progress: ProviderRetryProgressCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
@@ -302,8 +317,23 @@ pub async fn request_turn_in_view(
                 &session.request_policy,
                 &session.client,
                 &session.auth_context,
+                retry_progress.clone(),
             )
         },
+    )
+    .await
+}
+
+pub async fn request_turn_in_view(
+    config: &LoongConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    tool_view: &crate::tools::ToolView,
+    binding: ProviderRuntimeBinding<'_>,
+) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    request_turn_in_view_with_retry_progress(
+        config, session_id, turn_id, messages, tool_view, binding, None,
     )
     .await
 }
@@ -316,7 +346,7 @@ pub async fn request_turn_streaming(
     binding: ProviderRuntimeBinding<'_>,
     on_token: crate::provider::request_executor::StreamingTokenCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
-    request_turn_streaming_in_view(
+    request_turn_streaming_in_view_with_retry_progress(
         config,
         session_id,
         turn_id,
@@ -324,16 +354,12 @@ pub async fn request_turn_streaming(
         &crate::tools::runtime_tool_view(),
         binding,
         on_token,
+        None,
     )
     .await
 }
 
-pub fn supports_turn_streaming_events(config: &LoongConfig) -> bool {
-    let runtime_contract = provider_runtime_contract(&config.provider);
-    runtime_contract.supports_turn_streaming_events()
-}
-
-pub async fn request_turn_streaming_in_view(
+pub async fn request_turn_streaming_in_view_with_retry_progress(
     config: &LoongConfig,
     session_id: &str,
     turn_id: &str,
@@ -341,6 +367,7 @@ pub async fn request_turn_streaming_in_view(
     tool_view: &crate::tools::ToolView,
     binding: ProviderRuntimeBinding<'_>,
     on_token: crate::provider::request_executor::StreamingTokenCallback,
+    retry_progress: ProviderRetryProgressCallback,
 ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
     if !supports_turn_streaming_events(config) {
         return Err("provider transport does not support live turn streaming events".to_owned());
@@ -378,8 +405,29 @@ pub async fn request_turn_streaming_in_view(
                 &session.client,
                 &session.auth_context,
                 on_token.clone(),
+                retry_progress.clone(),
             )
         },
+    )
+    .await
+}
+
+pub fn supports_turn_streaming_events(config: &LoongConfig) -> bool {
+    let runtime_contract = provider_runtime_contract(&config.provider);
+    runtime_contract.supports_turn_streaming_events()
+}
+
+pub async fn request_turn_streaming_in_view(
+    config: &LoongConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    tool_view: &crate::tools::ToolView,
+    binding: ProviderRuntimeBinding<'_>,
+    on_token: crate::provider::request_executor::StreamingTokenCallback,
+) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+    request_turn_streaming_in_view_with_retry_progress(
+        config, session_id, turn_id, messages, tool_view, binding, on_token, None,
     )
     .await
 }

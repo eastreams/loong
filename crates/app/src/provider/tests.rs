@@ -2679,6 +2679,7 @@ async fn sibling_provider_tests_can_inject_mock_transport_into_dispatch_layer() 
         &auth_context,
         &request_policy,
         &transport,
+        None,
     )
     .await
     .expect("dispatch helper should accept mock transport from sibling tests");

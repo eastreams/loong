@@ -1498,6 +1498,16 @@ pub trait ConversationRuntime: Send + Sync {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String>;
 
+    async fn request_completion_with_retry_progress(
+        &self,
+        config: &LoongConfig,
+        messages: &[Value],
+        binding: ConversationRuntimeBinding<'_>,
+        _retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> CliResult<String> {
+        self.request_completion(config, messages, binding).await
+    }
+
     async fn request_turn(
         &self,
         config: &LoongConfig,
@@ -1507,6 +1517,20 @@ pub trait ConversationRuntime: Send + Sync {
         tool_view: &ToolView,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn>;
+
+    async fn request_turn_with_retry_progress(
+        &self,
+        config: &LoongConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        _retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> CliResult<ProviderTurn> {
+        self.request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
+    }
 
     async fn request_turn_streaming(
         &self,
@@ -1518,6 +1542,23 @@ pub trait ConversationRuntime: Send + Sync {
         binding: ConversationRuntimeBinding<'_>,
         on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn>;
+
+    async fn request_turn_streaming_with_retry_progress(
+        &self,
+        config: &LoongConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+        _retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> CliResult<ProviderTurn> {
+        self.request_turn_streaming(
+            config, session_id, turn_id, messages, tool_view, binding, on_token,
+        )
+        .await
+    }
 
     async fn persist_turn(
         &self,
@@ -1913,6 +1954,22 @@ where
         provider::request_completion(config, messages, provider_runtime_binding(binding)).await
     }
 
+    async fn request_completion_with_retry_progress(
+        &self,
+        config: &LoongConfig,
+        messages: &[Value],
+        binding: ConversationRuntimeBinding<'_>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> CliResult<String> {
+        provider::request_completion_with_retry_progress(
+            config,
+            messages,
+            provider_runtime_binding(binding),
+            retry_progress,
+        )
+        .await
+    }
+
     async fn request_turn(
         &self,
         config: &LoongConfig,
@@ -1929,6 +1986,28 @@ where
             messages,
             tool_view,
             provider_runtime_binding(binding),
+        )
+        .await
+    }
+
+    async fn request_turn_with_retry_progress(
+        &self,
+        config: &LoongConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> CliResult<ProviderTurn> {
+        provider::request_turn_in_view_with_retry_progress(
+            config,
+            session_id,
+            turn_id,
+            messages,
+            tool_view,
+            provider_runtime_binding(binding),
+            retry_progress,
         )
         .await
     }
@@ -1951,6 +2030,30 @@ where
             tool_view,
             provider_runtime_binding(binding),
             on_token,
+        )
+        .await
+    }
+
+    async fn request_turn_streaming_with_retry_progress(
+        &self,
+        config: &LoongConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> CliResult<ProviderTurn> {
+        provider::request_turn_streaming_in_view_with_retry_progress(
+            config,
+            session_id,
+            turn_id,
+            messages,
+            tool_view,
+            provider_runtime_binding(binding),
+            on_token,
+            retry_progress,
         )
         .await
     }

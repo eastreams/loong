@@ -2078,8 +2078,12 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
     messages: &[Value],
     binding: ConversationRuntimeBinding<'_>,
     raw_reply: &str,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> String {
-    match runtime.request_completion(config, messages, binding).await {
+    match runtime
+        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
+        .await
+    {
         Ok(final_reply) => {
             let sanitized_reply = sanitize_reply_text(final_reply.as_str());
             if sanitized_reply.is_empty() {
