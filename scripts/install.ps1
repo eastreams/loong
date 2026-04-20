@@ -99,9 +99,18 @@ function Install-Binary([string]$SourceBinary) {
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
     $primaryBinary = Join-Path $Prefix "$BinName.exe"
     Copy-Item -Force $SourceBinary $primaryBinary
-    return @{
-        Primary = $primaryBinary
+    return $primaryBinary
+}
+
+function Remove-LegacyBinaryIfPresent {
+    $legacyBinaryName = "loongclaw.exe"
+    $legacyBinary = Join-Path $Prefix $legacyBinaryName
+    if (-not (Test-Path $legacyBinary)) {
+        return
     }
+
+    Remove-Item -Force $legacyBinary
+    Write-Host "==> Removed legacy loongclaw compatibility command from $legacyBinary"
 }
 
 function Install-FromSource {
@@ -201,9 +210,10 @@ function Resolve-NormalizedPathEntryOrNull([string]$PathEntry) {
     }
 }
 
-$installResult = if ($Source) { Install-FromSource } else { Install-FromRelease }
+$primaryBinary = if ($Source) { Install-FromSource } else { Install-FromRelease }
+Remove-LegacyBinaryIfPresent
 
-Write-Host "==> Installed loong to $($installResult.Primary)"
+Write-Host "==> Installed loong to $primaryBinary"
 
 $normalizedPrefix = $Prefix
 $pathItems = ($env:PATH -split [IO.Path]::PathSeparator) |
@@ -238,7 +248,7 @@ if (-not $alreadyInSessionPath) {
 if ($Onboard) {
     Write-Host "==> Running guided onboarding"
     try {
-        & $installResult.Primary onboard | Out-Host
+        & $primaryBinary onboard | Out-Host
         if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
             Write-Host "==> Onboarding exited with code $LASTEXITCODE"
             Write-Host "==> You can run 'loong onboard' later to complete setup"
