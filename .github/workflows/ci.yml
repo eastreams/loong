@@ -84,12 +84,8 @@ jobs:
           bash -n scripts/publish_crates_io.sh
           bash -n scripts/architecture_budget_lib.sh
           bash -n scripts/check_architecture_boundaries.sh
-          bash -n scripts/check_architecture_drift_freshness.sh
           bash -n scripts/check_public_repo_hygiene.sh
-          bash -n scripts/generate_architecture_drift_report.sh
           bash -n scripts/test_architecture_budget_scripts.sh
-          bash -n scripts/test_check_architecture_drift_freshness.sh
-          bash -n scripts/test_generate_architecture_drift_report.sh
           bash -n scripts/test_check_glibc_floor.sh
           bash -n scripts/test_install_sh.sh
           bash -n scripts/test_publish_crates_io.sh
@@ -114,8 +110,6 @@ jobs:
         run: |
           python3 scripts/sync_github_labels.py --check
           bash scripts/test_architecture_budget_scripts.sh
-          bash scripts/test_check_architecture_drift_freshness.sh
-          bash scripts/test_generate_architecture_drift_report.sh
           bash scripts/test_check_glibc_floor.sh
           bash scripts/test_install_sh.sh
           bash scripts/test_publish_crates_io.sh
@@ -129,9 +123,6 @@ jobs:
           bash scripts/test_scan_workflow_hardening.sh
           bash scripts/test_sync_github_labels.sh
           bash scripts/test_stress_daemon_tests.sh
-
-      - name: Fresh architecture drift report
-        run: bash scripts/check_architecture_drift_freshness.sh docs/releases/support/architecture-drift-$(date -u +%Y-%m).md
 
       - name: Bootstrap local release artifacts
         run: scripts/bootstrap_release_local_artifacts.sh
