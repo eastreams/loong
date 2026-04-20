@@ -285,7 +285,6 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
     Err(message)
 }
 
-
 fn ensure_tool_lease_secret_parent_dir(secret_path: &Path) -> Result<(), String> {
     let parent = secret_path.parent();
     let Some(parent) = parent else {
@@ -328,7 +327,7 @@ fn read_tool_lease_secret_file_detail(
     }
 
     let normalized_secret = trimmed_secret.to_owned();
-    Ok(normalized_secret)
+    Ok(Some(normalized_secret))
 }
 
 enum ReadToolLeaseSecretFileError {

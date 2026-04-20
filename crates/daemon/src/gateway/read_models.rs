@@ -1876,6 +1876,10 @@ mod tests {
             tools: GatewayRuntimeSnapshotToolsReadModel {
                 visible_tool_count: 0,
                 visible_tool_names: Vec::new(),
+                visible_direct_tool_names: Vec::new(),
+                hidden_tool_count: 0,
+                hidden_tool_tags: Vec::new(),
+                hidden_tool_surfaces: Vec::new(),
                 capability_snapshot_sha256: "abc123".to_owned(),
                 capability_snapshot: "{}".to_owned(),
                 tool_calling: GatewayToolCallingReadModel {
@@ -1884,6 +1888,13 @@ mod tests {
                     effective_tool_schema_mode: "enabled".to_owned(),
                     active_model: "gpt-4.1-mini".to_owned(),
                     reason: "test".to_owned(),
+                },
+                web_access: GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: false,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: false,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             runtime_plugins: serde_json::json!({}),
