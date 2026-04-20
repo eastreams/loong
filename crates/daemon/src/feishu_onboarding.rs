@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::process::Command;
 use std::time::Duration;
 
 use loong_contracts::SecretRef;
+use qrcode::QrCode;
+use qrcode::render::unicode;
 use serde_json::Value;
 
 use crate::CliResult;
@@ -182,16 +183,16 @@ pub fn apply_manual_feishu_onboarding(
 pub fn render_qr_instructions(url: &str, qr_rendered: bool) -> Vec<String> {
     if qr_rendered {
         return vec![
-            format!("Scan the QR code above, or open this URL directly: {url}"),
+            "Scan the QR code above with Feishu/Lark on your phone,".to_owned(),
+            format!("or open this link on your desktop: {url}"),
             "The command will keep polling until Feishu/Lark returns the generated bot credentials."
                 .to_owned(),
         ];
     }
 
-    vec![
-        format!("Open this URL in Feishu/Lark on your phone: {url}"),
-        "Install `qrencode` to display a scannable QR code in the terminal next time.".to_owned(),
-    ]
+    vec![format!(
+        "Open this link in Feishu/Lark to activate the bot: {url}"
+    )]
 }
 
 fn apply_onboard_result_to_config(
@@ -612,24 +613,27 @@ async fn post_registration(
 }
 
 fn render_terminal_qr(url: &str) -> bool {
-    let output = Command::new("qrencode")
-        .args(["-t", "ANSIUTF8", url])
-        .output();
-    let Ok(output) = output else {
+    let Some(rendered) = encode_terminal_qr(url) else {
         return false;
     };
-    if !output.status.success() {
-        return false;
-    }
-    let rendered = String::from_utf8(output.stdout).ok();
-    let Some(rendered) = rendered.map(|value| value.trim().to_owned()) else {
-        return false;
-    };
-    if rendered.is_empty() {
-        return false;
-    }
     println!("{rendered}");
     true
+}
+
+fn encode_terminal_qr(url: &str) -> Option<String> {
+    let code = QrCode::new(url.as_bytes()).ok()?;
+    let rendered = code
+        .render::<unicode::Dense1x2>()
+        .dark_color(unicode::Dense1x2::Light)
+        .light_color(unicode::Dense1x2::Dark)
+        .quiet_zone(true)
+        .build();
+    let trimmed = rendered.trim().to_owned();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn required_string(payload: &Value, field: &str) -> CliResult<String> {
@@ -723,11 +727,30 @@ mod tests {
     }
 
     #[test]
-    fn render_qr_instructions_switches_to_fallback_copy_when_qr_is_unavailable() {
+    fn render_qr_instructions_shows_both_scan_and_desktop_paths_when_qr_rendered() {
+        let rendered = render_qr_instructions("https://scan.example/activate", true).join("\n");
+
+        assert!(rendered.contains("Scan the QR code above"));
+        assert!(rendered.contains("open this link on your desktop"));
+        assert!(rendered.contains("https://scan.example/activate"));
+    }
+
+    #[test]
+    fn render_qr_instructions_falls_back_to_link_only_when_qr_is_unavailable() {
         let rendered = render_qr_instructions("https://scan.example/activate", false).join("\n");
 
-        assert!(rendered.contains("Open this URL in Feishu/Lark on your phone"));
-        assert!(rendered.contains("qrencode"));
+        assert!(rendered.contains("https://scan.example/activate"));
+        assert!(!rendered.contains("qrencode"));
+    }
+
+    #[test]
+    fn encode_terminal_qr_returns_non_empty_unicode_art() {
+        let rendered =
+            encode_terminal_qr("https://scan.example/activate?device=device-123&from=loong")
+                .expect("qr encoding should succeed");
+
+        assert!(!rendered.is_empty());
+        assert!(rendered.lines().count() >= 10);
     }
 
     #[test]
