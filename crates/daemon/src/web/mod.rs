@@ -747,7 +747,7 @@ pub async fn run_web_command(command: WebCommand) -> CliResult<()> {
 
 struct WebSnapshot {
     resolved_path: PathBuf,
-    config: mvp::config::LoongClawConfig,
+    config: mvp::config::LoongConfig,
     memory_config: mvp::memory::runtime_config::MemoryRuntimeConfig,
     sessions: Vec<WebSessionSummary>,
 }
@@ -825,7 +825,7 @@ fn load_visible_session_messages(
 }
 
 fn build_tool_items(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
 ) -> Vec<DashboardToolItemPayload> {
     vec![
@@ -1076,7 +1076,7 @@ async fn probe_provider_endpoint(endpoint: &str) -> (&'static str, Option<u16>) 
     }
 }
 
-fn build_provider_items(config: &mvp::config::LoongClawConfig) -> Vec<ProviderItemPayload> {
+fn build_provider_items(config: &mvp::config::LoongConfig) -> Vec<ProviderItemPayload> {
     if config.providers.is_empty() {
         return vec![provider_item_from_parts(
             config.provider.kind.profile().id.to_owned(),
@@ -1089,7 +1089,7 @@ fn build_provider_items(config: &mvp::config::LoongClawConfig) -> Vec<ProviderIt
     config
         .providers
         .iter()
-        .map(|(profile_id, profile)| {
+        .map(|(profile_id, profile): (&String, &mvp::config::ProviderProfileConfig)| {
             provider_item_from_parts(
                 profile_id.clone(),
                 &profile.provider,
@@ -1207,7 +1207,7 @@ fn mask_secret(value: &str) -> String {
 }
 
 fn resolve_local_web_token() -> Result<(String, PathBuf), WebApiError> {
-    let loongclaw_home = mvp::config::default_loongclaw_home();
+    let loongclaw_home = mvp::config::default_loong_home();
     fs::create_dir_all(&loongclaw_home)
         .map_err(|error| WebApiError::internal(format!("create loongclaw home failed: {error}")))?;
 

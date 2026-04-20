@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUN_ROOT="${HOME}/.loongclaw/run"
+RUN_ROOT="${HOME}/.loong/run"
 API_PID_FILE="${RUN_ROOT}/web-api.pid"
 DEV_PID_FILE="${RUN_ROOT}/web-dev.pid"
 

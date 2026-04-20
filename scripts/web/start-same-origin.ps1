@@ -36,7 +36,8 @@ $scriptRoot = (Resolve-Path $PSScriptRoot).Path
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot "..\..")).Path
 $webRoot = Join-Path $repoRoot "web"
 $distRoot = Join-Path $webRoot "dist"
-$logRoot = Join-Path $env:USERPROFILE ".loongclaw\logs"
+$runtimeRoot = Join-Path $env:USERPROFILE ".loong"
+$logRoot = Join-Path $runtimeRoot "logs"
 
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
@@ -50,10 +51,32 @@ if ($bindParts.Length -lt 2) {
 $port = [int]$bindParts[-1]
 Stop-PortProcesses -Port $port
 
-$daemonExe = Join-Path $repoRoot "target\debug\loongclaw.exe"
-if (-not (Test-Path $daemonExe)) {
-  throw "Missing daemon binary: $daemonExe"
+function Resolve-DaemonExe {
+  param([string]$RepoRoot)
+
+  Push-Location $RepoRoot
+  try {
+    cargo build --bin loong
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to build daemon binary with cargo build --bin loong"
+    }
+  } finally {
+    Pop-Location
+  }
+
+  $builtDaemonExe = Join-Path $RepoRoot "target\debug\loong.exe"
+  if (-not (Test-Path $builtDaemonExe)) {
+    $legacyDaemonExe = Join-Path $RepoRoot "target\debug\loongclaw.exe"
+    if (Test-Path $legacyDaemonExe) {
+      return $legacyDaemonExe
+    }
+    throw "Missing daemon binary after build: $builtDaemonExe"
+  }
+
+  return $builtDaemonExe
 }
+
+$daemonExe = Resolve-DaemonExe -RepoRoot $repoRoot
 
 if ($Build) {
   Push-Location $webRoot

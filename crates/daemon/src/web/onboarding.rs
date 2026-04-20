@@ -199,7 +199,7 @@ fn route_matches_existing_provider_route(
 
 fn load_or_default_web_config(
     state: &WebApiState,
-) -> Result<mvp::config::LoongClawConfig, WebApiError> {
+) -> Result<mvp::config::LoongConfig, WebApiError> {
     let config_path = resolve_web_config_path(state);
     if config_path.is_file() {
         let (_, loaded) = mvp::config::load(state.config_path.as_deref()).map_err(|error| {
@@ -207,12 +207,12 @@ fn load_or_default_web_config(
         })?;
         Ok(loaded)
     } else {
-        Ok(mvp::config::LoongClawConfig::default())
+        Ok(mvp::config::LoongConfig::default())
     }
 }
 
 fn apply_provider_request_to_config(
-    config: &mut mvp::config::LoongClawConfig,
+    config: &mut mvp::config::LoongConfig,
     request: &OnboardProviderWriteRequest,
 ) -> Result<(), WebApiError> {
     let kind = mvp::config::parse_provider_kind_id(request.kind.as_str()).ok_or_else(|| {
@@ -260,7 +260,7 @@ fn apply_provider_request_to_config(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(api_key.to_owned()));
+        provider.api_key = Some(loong_contracts::SecretRef::Inline(api_key.to_owned()));
     } else if kind_changed {
         provider.api_key = None;
         provider.set_api_key_env(kind.default_api_key_env().map(str::to_owned));
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn apply_provider_request_rejects_volcengine_coding_route_on_standard_kind() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let request = OnboardProviderWriteRequest {
             kind: "volcengine".to_owned(),
             model: "ark-code-latest".to_owned(),
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn apply_provider_request_accepts_volcengine_coding_route_on_coding_kind() {
-        let mut config = mvp::config::LoongClawConfig::default();
+        let mut config = mvp::config::LoongConfig::default();
         let request = OnboardProviderWriteRequest {
             kind: "volcengine_coding".to_owned(),
             model: "ark-code-latest".to_owned(),
@@ -368,7 +368,7 @@ pub(super) async fn onboard_preferences(
         })?;
         loaded
     } else {
-        mvp::config::LoongClawConfig::default()
+        mvp::config::LoongConfig::default()
     };
 
     config.cli.personality = Some(personality);
@@ -531,7 +531,7 @@ pub(super) async fn onboard_validate(
     }))
 }
 
-fn provider_is_configured(config: &mvp::config::LoongClawConfig) -> bool {
+fn provider_is_configured(config: &mvp::config::LoongConfig) -> bool {
     let provider = &config.provider;
     let item = provider_item_from_parts("active".to_owned(), provider, true, true);
     !provider.model.trim().is_empty()
@@ -592,7 +592,7 @@ async fn build_onboard_status_payload(
                     .endpoint
                     .as_deref()
                     .map(str::trim)
-                    .is_some_and(|value| !value.is_empty());
+                    .is_some_and(|value: &str| !value.is_empty());
             payload.provider_configured = provider_is_configured(&snapshot.config);
             payload.personality = crate::onboard_cli::prompt_personality_id(
                 snapshot.config.cli.resolved_personality(),

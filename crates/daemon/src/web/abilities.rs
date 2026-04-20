@@ -25,7 +25,7 @@ pub(super) async fn abilities_personalization_save(
         })?;
         loaded
     } else {
-        mvp::config::LoongClawConfig::default()
+        mvp::config::LoongConfig::default()
     };
 
     let existing_personalization = config.memory.trimmed_personalization();
@@ -265,7 +265,7 @@ fn collect_runtime_snapshot(
 }
 
 fn build_personalization_payload(
-    config: &mvp::config::LoongClawConfig,
+    config: &mvp::config::LoongConfig,
 ) -> AbilitiesPersonalizationPayload {
     match config.memory.trimmed_personalization() {
         Some(personalization) => AbilitiesPersonalizationPayload {

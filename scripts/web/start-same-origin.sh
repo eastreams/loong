@@ -8,7 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 WEB_ROOT="${REPO_ROOT}/web"
 DIST_ROOT="${WEB_ROOT}/dist"
-LOG_ROOT="${HOME}/.loongclaw/logs"
+RUNTIME_ROOT="${HOME}/.loong"
+LOG_ROOT="${RUNTIME_ROOT}/logs"
 
 mkdir -p "${LOG_ROOT}"
 
@@ -44,12 +45,27 @@ wait_for_http() {
 PORT="${BIND##*:}"
 stop_port_processes "${PORT}"
 
-DAEMON_EXE="${REPO_ROOT}/target/debug/loongclaw"
-if [[ ! -f "${DAEMON_EXE}" ]]; then
-  echo "Missing daemon binary: ${DAEMON_EXE}" >&2
-  echo "Run: cargo build --bin loongclaw" >&2
-  exit 1
-fi
+resolve_daemon_exe() {
+  (
+    cd "${REPO_ROOT}"
+    cargo build --bin loong
+  )
+
+  if [[ -f "${REPO_ROOT}/target/debug/loong" ]]; then
+    echo "${REPO_ROOT}/target/debug/loong"
+    return 0
+  fi
+
+  if [[ -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
+    echo "${REPO_ROOT}/target/debug/loongclaw"
+    return 0
+  fi
+
+  echo "Missing daemon binary after build: ${REPO_ROOT}/target/debug/loong" >&2
+  return 1
+}
+
+DAEMON_EXE="$(resolve_daemon_exe)"
 
 DIST_INDEX="${DIST_ROOT}/index.html"
 if [[ "${BUILD}" == "1" ]]; then

@@ -239,6 +239,7 @@ async fn run_command(command: Commands) -> CliResult<()> {
             invoke_connector_cli(&operation, &payload).await
         }
         Commands::AuditDemo => run_audit_demo().await,
+        Commands::Web { command } => run_web_command(command).await,
         Commands::InitSpec { output, preset } => init_spec_cli(&output, preset),
         Commands::RunSpec {
             spec,

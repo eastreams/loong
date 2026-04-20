@@ -183,6 +183,7 @@ mod tool_calling_readiness;
 pub mod trajectory_cli;
 mod turn_cli;
 pub mod update_cli;
+mod web;
 pub mod work_unit_cli;
 pub use self::acp_cli::{
     acp_backend_metadata_json, acp_binding_scope_json, acp_control_plane_json,
@@ -232,6 +233,7 @@ pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
 pub use update_cli::run_update_cli;
+pub use web::{WebCommand, run_web_command};
 #[rustfmt::skip]
 use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
@@ -502,6 +504,11 @@ pub enum Commands {
     },
     /// Demonstrate audit lifecycle with fixed clock and token revocation
     AuditDemo,
+    /// Manage the local Web Console surface
+    Web {
+        #[command(subcommand)]
+        command: WebCommand,
+    },
     /// Generate a runnable JSON spec template for quick vertical customization
     InitSpec {
         #[arg(long, default_value = "loong.spec.json")]

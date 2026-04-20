@@ -22,7 +22,7 @@ pub(super) async fn dashboard_debug_console(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardDebugConsolePayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &snapshot.config,
         None,
     );
@@ -31,7 +31,7 @@ pub(super) async fn dashboard_debug_console(
         ok: true,
         data: DashboardDebugConsolePayload {
             generated_at: format_timestamp(OffsetDateTime::now_utc().unix_timestamp()),
-            command: "$ loongclaw web debug --readonly".to_owned(),
+            command: "$ loong web debug --readonly".to_owned(),
             blocks: build_debug_console_blocks(&snapshot, &tool_runtime, &debug_state),
         },
     }))
@@ -333,7 +333,7 @@ fn is_optional_repo_note_probe_warning(line: &str) -> bool {
 }
 
 fn default_web_log_root() -> PathBuf {
-    mvp::config::default_loongclaw_home().join("logs")
+    mvp::config::default_loong_home().join("logs")
 }
 
 const LOG_TAIL_READ_BYTES: u64 = 128 * 1024;
