@@ -90,7 +90,12 @@ pub(super) fn execute_tool_search_tool_with_config(
                 )
             })
             .collect::<Vec<_>>();
-    let searchable_entries = collapse_hidden_surface_search_entries(exact_match_entries.clone());
+    let collapsible_surface_ids =
+        super::provider_visible_collapsible_hidden_surface_ids(config, &visible_tool_view);
+    let searchable_entries = collapse_hidden_surface_search_entries(
+        exact_match_entries.clone(),
+        &collapsible_surface_ids,
+    );
     let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
         let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
         let direct_tool_id = direct_tool_id.map(str::to_owned);
@@ -661,6 +666,7 @@ fn build_schema_preview(
 
 pub(super) fn collapse_hidden_surface_search_entries(
     entries: Vec<SearchableToolEntry>,
+    collapsible_surface_ids: &BTreeSet<String>,
 ) -> Vec<SearchableToolEntry> {
     let mut grouped_members = BTreeMap::<String, Vec<SearchableToolEntry>>::new();
     let mut passthrough_entries = Vec::new();
@@ -670,10 +676,7 @@ pub(super) fn collapse_hidden_surface_search_entries(
             passthrough_entries.push(entry);
             continue;
         };
-        // Collapse grouped hidden lanes into one high-signal card per surface.
-        // `channel` stays separate from `agent`/`skills`, but it is still one
-        // addon surface instead of a long tail of individual ids.
-        let collapse_surface = matches!(surface_id, "agent" | "skills" | "channel");
+        let collapse_surface = collapsible_surface_ids.contains(surface_id);
         if !collapse_surface {
             passthrough_entries.push(entry);
             continue;

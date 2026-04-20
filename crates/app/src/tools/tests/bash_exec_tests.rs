@@ -393,7 +393,7 @@ fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
 }
 
 #[cfg(all(feature = "tool-shell", unix))]
-const BASH_EMPTY_PATH_PROBE_ENV: &str = "LOONGCLAW_BASH_EMPTY_PATH_PROBE";
+const BASH_EMPTY_PATH_PROBE_ENV: &str = "LOONG_BASH_EMPTY_PATH_PROBE";
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
@@ -424,7 +424,7 @@ fn bash_exec_empty_path_probe() {
         return;
     }
 
-    let root = unique_tool_temp_dir("loongclaw-bash-empty-path-fallback");
+    let root = unique_tool_temp_dir("loong-bash-empty-path-fallback");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let mut env = ScopedEnv::new();

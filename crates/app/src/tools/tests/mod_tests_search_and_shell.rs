@@ -91,7 +91,7 @@ fn shell_exec_rejects_path_qualified_commands() {
 }
 
 #[cfg(all(feature = "tool-shell", unix))]
-const SHELL_EMPTY_PATH_PROBE_ENV: &str = "LOONGCLAW_SHELL_EMPTY_PATH_PROBE";
+const SHELL_EMPTY_PATH_PROBE_ENV: &str = "LOONG_SHELL_EMPTY_PATH_PROBE";
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
@@ -120,7 +120,7 @@ fn shell_exec_empty_path_probe() {
         return;
     }
 
-    let root = unique_tool_temp_dir("loongclaw-shell-empty-path-fallback");
+    let root = unique_tool_temp_dir("loong-shell-empty-path-fallback");
     std::fs::create_dir_all(&root).expect("create root");
 
     let mut env = ScopedEnv::new();

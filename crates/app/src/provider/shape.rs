@@ -3147,16 +3147,8 @@ mod tests {
         )
         .expect("responses turn with array-form search context");
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "file.read");
-        assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
-            json!({"path": "README.md"})
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-responses-parts"
-        );
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     }
 
     #[test]
