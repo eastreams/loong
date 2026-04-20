@@ -60,8 +60,8 @@ What success looks like:
 | --- | --- | --- |
 | managed bridge contract check | `loong doctor` | current readiness and remediation surface |
 | inventory + discovery inspection | `loong channels` | current operator inventory surface |
-| native send | `onebot-send` | planned native command; not implemented in Loong today |
-| native serve | `onebot-serve` | planned native command; runtime stays in the external bridge today |
+| bridge-backed send | `onebot-send` | executes through the selected managed bridge runtime; target contract stays `onebot:<account>:private:<user_id>` or `onebot:<account>:group:<group_id>` |
+| bridge-backed serve | `onebot-serve` | starts the selected managed bridge reply loop; upstream event-loop ownership still stays in the external bridge |
 
 ## Required Fields For Bridge Send Contract
 
@@ -94,6 +94,7 @@ Keep `<account>` stable so personal-account bridge routes stay unambiguous acros
 ## Managed Bridge Discovery Notes
 
 - OneBot is the right Loong surface when the upstream bridge already speaks OneBot v11 and you want a stable protocol contract inside Loong.
+- Managed bridge execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`.
 - Discovery ambiguity should be resolved explicitly with `managed_bridge_plugin_id` rather than by relying on whichever plugin happens to be found first.
 - Bridge setup docs and missing-field guidance flow through `loong doctor` when the compatible plugin advertises them.
 
@@ -104,6 +105,12 @@ This surface does **not** join `multi-channel-serve` or `gateway run` today. The
 ## Operator Notes
 
 - Keep `allowed_group_ids` explicit.
+- Loong validates `allowed_group_ids` locally before forwarding a managed bridge group send, so disallowed groups fail before the external bridge sees the request.
+- `onebot-serve` retries transient managed bridge runtime failures with bounded backoff; repeated failures still terminate loudly so the upstream bridge can be checked.
+- `onebot-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
+- When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
+- `onebot-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
+- While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
 - Treat the OneBot websocket URL as part of the trust boundary; do not point it at a vague shared relay unless you intend to widen that boundary.
 - Prefer stable account ids before layering more than one bridge identity into the same config.
 

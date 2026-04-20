@@ -85,15 +85,18 @@ and upstream session lifecycle stay in an external bridge or managed plugin.
 
 | Surface | What you configure first | Current operator path |
 | --- | --- | --- |
-| Weixin | `weixin.enabled`, `bridge_url`, `bridge_access_token`, `allowed_contact_ids` | `loong doctor`, `loong channels`, managed bridge discovery |
-| QQ Bot | `qqbot.enabled`, `app_id`, `client_secret`, `allowed_peer_ids` | `loong doctor`, `loong channels`, managed bridge discovery |
-| OneBot | `onebot.enabled`, `websocket_url`, `access_token`, `allowed_group_ids` | `loong doctor`, `loong channels`, managed bridge discovery |
+| Weixin | `weixin.enabled`, `bridge_url`, `bridge_access_token`, `allowed_contact_ids` | `loong doctor`, `loong channels`, `weixin-send`, `weixin-serve`, managed bridge discovery |
+| QQ Bot | `qqbot.enabled`, `app_id`, `client_secret`, `allowed_peer_ids` | `loong doctor`, `loong channels`, `qqbot-send`, `qqbot-serve`, managed bridge discovery |
+| OneBot | `onebot.enabled`, `websocket_url`, `access_token`, `allowed_group_ids` | `loong doctor`, `loong channels`, `onebot-send`, `onebot-serve`, managed bridge discovery |
 
 Operational rule:
 
 - these surfaces are actionable and operator-visible today
 - they do not join `gateway run` or `multi-channel-serve` because their runtime owner is still the external bridge
 - the important setup milestone is a passing contract + discovery result, not a native `*-serve` loop that does not exist yet
+- managed bridge command execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`
+- `*-serve` retries transient managed bridge runtime failures locally with bounded backoff before surfacing a hard failure
+- retry/failure metadata is surfaced through `loong doctor` and `loong channels`, so operators can see when a bridge is actively retrying instead of guessing from stderr
 
 ## Multi-Account Rule
 
@@ -168,6 +171,11 @@ Weixin is a bridge-first surface:
 - optional `managed_bridge_plugin_id` is the tie-breaker when several compatible managed bridges are installed
 - use `loong doctor` to verify the configured contract and the selected managed bridge
 - use `loong channels` or `loong channels --json` to inspect stable targets and discovery state
+- use `weixin-send --target contact:<id>` or `weixin-send --target weixin:<account>:room:<id>` for proactive sends
+- use `weixin-serve` to run the selected managed bridge reply loop under Loong supervision
+- use `weixin-serve --stop` to request cooperative shutdown for the selected managed bridge runtime owner
+- Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
+- use `weixin-serve --stop-duplicates` as the operator fallback when duplicate live owners persist and you want Loong to keep the preferred runtime owner while requesting cooperative shutdown for the older duplicates
 
 ### QQ Bot
 
@@ -177,6 +185,11 @@ QQ Bot is the explicit Tencent gateway / bridge lane:
 - use `allowed_peer_ids` to keep the trusted conversation boundary explicit
 - add `managed_bridge_plugin_id` only when several compatible managed bridges exist and you need one exact selection
 - keep openids and account ids stable so direct, group, and guild routes do not drift between bridge implementations
+- use `qqbot-send --target c2c:<openid>`, `group:<openid>`, or `channel:<id>` for proactive sends
+- use `qqbot-serve` to run the selected managed bridge reply loop under Loong supervision
+- use `qqbot-serve --stop` to request cooperative shutdown for the selected managed bridge runtime owner
+- Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
+- use `qqbot-serve --stop-duplicates` as the operator fallback to keep the preferred live runtime owner and cooperatively drain the duplicate owners
 
 ### OneBot
 
@@ -186,6 +199,11 @@ OneBot is the protocol-level bridge lane:
 - keep `allowed_group_ids` explicit so the bridge contract stays narrow
 - use it when the upstream bridge already speaks OneBot v11 and you want Loong to own the stable surface id and target contract
 - verify bridge discovery through `loong doctor` before you treat the surface as ready
+- use `onebot-send --target private:<user_id>` or `group:<group_id>` for proactive sends
+- use `onebot-serve` to run the selected managed bridge reply loop under Loong supervision
+- use `onebot-serve --stop` to request cooperative shutdown for the selected managed bridge runtime owner
+- Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
+- use `onebot-serve --stop-duplicates` as the operator fallback to clean up duplicate live runtime owners without fully draining the preferred owner
 
 ## Outbound-Only Surfaces
 

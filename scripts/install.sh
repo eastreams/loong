@@ -363,15 +363,14 @@ install_binary() {
 remove_legacy_binary_if_present() {
   local legacy_output_name="${1:?legacy_output_name is required}"
   local legacy_output_path="${prefix}/${legacy_output_name}"
-  local legacy_output_exists=0
 
-  if [[ -e "${legacy_output_path}" ]]; then
-    legacy_output_exists=1
-  fi
   if [[ -L "${legacy_output_path}" ]]; then
-    legacy_output_exists=1
+    rm -f "${legacy_output_path}"
+    printf '==> Removed legacy loongclaw compatibility command from %s\n' "${legacy_output_path}"
+    return 0
   fi
-  if [[ "${legacy_output_exists}" -eq 0 ]]; then
+
+  if [[ ! -f "${legacy_output_path}" ]]; then
     return 0
   fi
 

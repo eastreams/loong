@@ -4,9 +4,9 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::gateway::read_models::{
-    GatewayAcpObservabilityReadModel, GatewayOperatorSummaryReadModel,
-    build_acp_observability_read_model, build_operator_summary_read_model,
-    build_runtime_snapshot_read_model,
+    GatewayAcpObservabilityReadModel, GatewayOperatorChannelsSummaryReadModel,
+    GatewayOperatorSummaryReadModel, build_acp_observability_read_model,
+    build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
 use crate::gateway::service::default_gateway_owner_status;
 use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owner_status};
@@ -105,13 +105,15 @@ pub async fn collect_status_cli_read_model(
         build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
-    let next_actions = crate::next_actions::collect_setup_next_actions(&config, config_path_text)
-        .into_iter()
-        .map(|action| StatusCliAction {
-            label: action.label,
-            command: action.command,
-        })
-        .collect();
+    let mut next_actions = collect_status_runtime_attention_actions(config_path_text, &gateway);
+    next_actions.extend(
+        crate::next_actions::collect_setup_next_actions(&config, config_path_text)
+            .into_iter()
+            .map(|action| StatusCliAction {
+                label: action.label,
+                command: action.command,
+            }),
+    );
     let recipes = build_status_cli_recipes(config_path_text);
     let schema = StatusCliJsonSchema {
         version: STATUS_CLI_JSON_SCHEMA_VERSION,
@@ -568,6 +570,38 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 value: channels.ready_service_channel_count.to_string(),
             },
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "runtime attention surfaces".to_owned(),
+                value: channels.runtime_attention_surface_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "retrying runtime surfaces".to_owned(),
+                value: channels.retrying_runtime_surface_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "stale runtime surfaces".to_owned(),
+                value: channels.stale_runtime_surface_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "duplicate runtime surfaces".to_owned(),
+                value: channels.duplicate_runtime_surface_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "runtime attention ids".to_owned(),
+                value: render_status_channel_ids(&channels.runtime_attention_surface_ids),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "retrying runtime ids".to_owned(),
+                value: render_status_channel_ids(&channels.retrying_runtime_surface_ids),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "stale runtime ids".to_owned(),
+                value: render_status_channel_ids(&channels.stale_runtime_surface_ids),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "duplicate runtime ids".to_owned(),
+                value: render_status_channel_ids(&channels.duplicate_runtime_surface_ids),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "enabled channels".to_owned(),
                 value: render_status_channel_ids(&runtime.enabled_channel_ids),
             },
@@ -617,6 +651,13 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             },
         ],
     });
+    let runtime_attention_items = collect_status_runtime_attention_items(channels);
+    if !runtime_attention_items.is_empty() {
+        sections.push(loong_app::tui_surface::TuiSectionSpec::Checklist {
+            title: Some("channel runtime attention".to_owned()),
+            items: runtime_attention_items,
+        });
+    }
 
     if !status.recipes.is_empty() {
         sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
@@ -654,6 +695,167 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         false,
     )
     .join("\n")
+}
+
+fn collect_status_runtime_attention_actions(
+    config_path: &str,
+    gateway: &GatewayOperatorSummaryReadModel,
+) -> Vec<StatusCliAction> {
+    let attention_surfaces = gateway
+        .channels
+        .surfaces
+        .iter()
+        .filter(|surface| surface.implementation_status == "plugin_backed")
+        .filter(|surface| surface.runtime_attention_account_count > 0)
+        .collect::<Vec<_>>();
+
+    if attention_surfaces.is_empty() {
+        return Vec::new();
+    }
+
+    let command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+    let label = if attention_surfaces.len() == 1 {
+        let surface = attention_surfaces
+            .first()
+            .expect("one runtime attention surface should exist");
+        status_runtime_attention_action_label(surface)
+    } else {
+        format!(
+            "inspect managed bridge runtimes: {}",
+            attention_surfaces
+                .iter()
+                .map(|surface| format!(
+                    "{}({})",
+                    surface.channel_id,
+                    if surface.runtime_attention_reasons.is_empty() {
+                        "attention".to_owned()
+                    } else {
+                        surface.runtime_attention_reasons.join(",")
+                    }
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    vec![StatusCliAction { label, command }]
+}
+
+fn status_runtime_attention_action_label(
+    surface: &crate::gateway::read_models::GatewayOperatorChannelSurfaceReadModel,
+) -> String {
+    match surface.runtime_attention_reasons.as_slice() {
+        [reason] if reason == "retrying" => {
+            format!(
+                "inspect {} managed bridge runtime (retrying)",
+                surface.channel_id
+            )
+        }
+        [reason] if reason == "stale" => {
+            format!(
+                "recover stale {} managed bridge runtime",
+                surface.channel_id
+            )
+        }
+        [reason] if reason == "duplicate_runtime_instances" => format!(
+            "clean up duplicate {} managed bridge runtimes{}",
+            surface.channel_id,
+            render_status_runtime_keep_pid_suffix(surface)
+        ),
+        _ => {
+            let reasons = if surface.runtime_attention_reasons.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", surface.runtime_attention_reasons.join(","))
+            };
+            format!(
+                "inspect {} managed bridge runtime{}",
+                surface.channel_id, reasons
+            )
+        }
+    }
+}
+
+fn collect_status_runtime_attention_items(
+    channels: &GatewayOperatorChannelsSummaryReadModel,
+) -> Vec<loong_app::tui_surface::TuiChecklistItemSpec> {
+    channels
+        .surfaces
+        .iter()
+        .filter(|surface| surface.runtime_attention_account_count > 0)
+        .map(|surface| loong_app::tui_surface::TuiChecklistItemSpec {
+            status: loong_app::tui_surface::TuiChecklistStatus::Warn,
+            label: surface.label.clone(),
+            detail: format!(
+                "channel_id={} reasons={} remediations={} retrying={} stale={} duplicate_instances={} affected_accounts={} keep_pids={} cleanup_pids={} last_auto_reclaim_at={} auto_cleanup_pids={} incidents={}",
+                surface.channel_id,
+                if surface.runtime_attention_reasons.is_empty() {
+                    "-".to_owned()
+                } else {
+                    surface.runtime_attention_reasons.join(",")
+                },
+                if surface.runtime_attention_remediations.is_empty() {
+                    "-".to_owned()
+                } else {
+                    surface.runtime_attention_remediations.join(",")
+                },
+                surface.retrying_runtime_account_count,
+                surface.stale_runtime_account_count,
+                surface.duplicate_runtime_account_count,
+                surface.runtime_attention_account_count,
+                render_status_runtime_owner_pids(&surface.preferred_runtime_owner_pids),
+                render_status_runtime_owner_pids(&surface.duplicate_runtime_cleanup_owner_pids),
+                render_status_optional_timestamp(surface.last_duplicate_runtime_auto_reclaim_at),
+                render_status_runtime_owner_pids(
+                    &surface.last_duplicate_runtime_auto_cleanup_owner_pids,
+                ),
+                render_status_runtime_incident_summary(&surface.recent_runtime_incidents),
+            ),
+        })
+        .collect()
+}
+
+fn render_status_runtime_keep_pid_suffix(
+    surface: &crate::gateway::read_models::GatewayOperatorChannelSurfaceReadModel,
+) -> String {
+    if surface.preferred_runtime_owner_pids.len() == 1 {
+        let pid = surface
+            .preferred_runtime_owner_pids
+            .first()
+            .copied()
+            .unwrap_or_default();
+        return format!(" (keep pid {pid})");
+    }
+
+    String::new()
+}
+
+fn render_status_runtime_owner_pids(owner_pids: &[u32]) -> String {
+    if owner_pids.is_empty() {
+        return "-".to_owned();
+    }
+
+    owner_pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn render_status_optional_timestamp(timestamp_ms: Option<u64>) -> String {
+    timestamp_ms
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+fn render_status_runtime_incident_summary(
+    incidents: &[crate::gateway::read_models::GatewayOperatorRuntimeIncidentReadModel],
+) -> String {
+    let Some(incident) = incidents.first() else {
+        return "-".to_owned();
+    };
+
+    format!("{}@{}", incident.kind, incident.at_ms)
 }
 
 fn render_status_channel_ids(channel_ids: &[String]) -> String {
@@ -838,6 +1040,14 @@ mod tests {
                 enabled_outbound_only_channel_count: 0,
                 enabled_service_channel_count: 1,
                 ready_service_channel_count: 1,
+                runtime_attention_surface_count: 0,
+                retrying_runtime_surface_count: 0,
+                stale_runtime_surface_count: 0,
+                duplicate_runtime_surface_count: 0,
+                runtime_attention_surface_ids: Vec::new(),
+                retrying_runtime_surface_ids: Vec::new(),
+                stale_runtime_surface_ids: Vec::new(),
+                duplicate_runtime_surface_ids: Vec::new(),
                 surfaces: Vec::new(),
             },
             runtime: GatewayOperatorRuntimeSummaryReadModel {
@@ -922,6 +1132,11 @@ mod tests {
         assert!(rendered.contains("[OK] tool calling"));
         assert!(rendered.contains("[OK] ordinary network"));
         assert!(rendered.contains("[OK] query search"));
+        assert!(rendered.contains("configured channels"));
+        assert!(rendered.contains("enabled channels"));
+        assert!(rendered.contains("service enabled ids"));
+        assert!(rendered.contains("runtime attention surfaces"));
+        assert!(rendered.contains("runtime attention ids"));
         assert!(rendered.contains("saved runtime"));
         assert!(rendered.contains("gateway summary"));
         assert!(rendered.contains("visible tools: 4"));
@@ -941,6 +1156,437 @@ mod tests {
         assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
         assert!(rendered.contains("deep dives"));
         assert!(rendered.contains("- recipe: loong gateway status"));
+    }
+
+    #[test]
+    fn collect_status_runtime_attention_actions_prefers_managed_bridge_runtime_diagnostics() {
+        let gateway = GatewayOperatorSummaryReadModel {
+            owner: GatewayOwnerStatus {
+                runtime_dir: "/tmp/runtime".to_owned(),
+                phase: "running".to_owned(),
+                running: true,
+                stale: false,
+                pid: Some(42),
+                mode: GatewayOwnerMode::GatewayHeadless,
+                version: "0.0.0-test".to_owned(),
+                config_path: "/tmp/config.toml".to_owned(),
+                attached_cli_session: None,
+                started_at_ms: 1,
+                last_heartbeat_at: 2,
+                stopped_at_ms: None,
+                shutdown_reason: None,
+                last_error: None,
+                configured_surface_count: 1,
+                running_surface_count: 1,
+                bind_address: Some("127.0.0.1".to_owned()),
+                port: Some(7777),
+                token_path: Some("/tmp/token".to_owned()),
+            },
+            control_surface: GatewayOperatorControlSurfaceReadModel {
+                base_url: Some("http://127.0.0.1:7777".to_owned()),
+                loopback_only: true,
+            },
+            channels: GatewayOperatorChannelsSummaryReadModel {
+                catalog_channel_count: 3,
+                configured_channel_count: 1,
+                configured_account_count: 1,
+                enabled_account_count: 1,
+                misconfigured_account_count: 0,
+                runtime_backed_channel_count: 0,
+                config_backed_channel_count: 0,
+                plugin_backed_channel_count: 3,
+                catalog_only_channel_count: 0,
+                enabled_runtime_backed_channel_count: 0,
+                enabled_plugin_backed_channel_count: 1,
+                enabled_outbound_only_channel_count: 0,
+                enabled_service_channel_count: 1,
+                ready_service_channel_count: 1,
+                runtime_attention_surface_count: 1,
+                retrying_runtime_surface_count: 1,
+                stale_runtime_surface_count: 0,
+                duplicate_runtime_surface_count: 0,
+                runtime_attention_surface_ids: vec!["weixin".to_owned()],
+                retrying_runtime_surface_ids: vec!["weixin".to_owned()],
+                stale_runtime_surface_ids: Vec::new(),
+                duplicate_runtime_surface_ids: Vec::new(),
+                surfaces: vec![
+                    crate::gateway::read_models::GatewayOperatorChannelSurfaceReadModel {
+                        channel_id: "weixin".to_owned(),
+                        label: "Weixin".to_owned(),
+                        implementation_status: "plugin_backed".to_owned(),
+                        configured_account_count: 1,
+                        enabled_account_count: 1,
+                        misconfigured_account_count: 0,
+                        ready_send_account_count: 1,
+                        ready_serve_account_count: 1,
+                        conversation_gated_account_count: 0,
+                        sender_gated_account_count: 0,
+                        mention_gated_account_count: 0,
+                        default_configured_account_id: Some("default".to_owned()),
+                        plugin_bridge_account_summary: None,
+                        runtime_attention_account_count: 1,
+                        runtime_attention_reasons: vec!["retrying".to_owned()],
+                        runtime_attention_remediations: vec![
+                            "inspect_bridge_connectivity".to_owned(),
+                        ],
+                        retrying_runtime_account_count: 1,
+                        stale_runtime_account_count: 0,
+                        duplicate_runtime_account_count: 0,
+                        preferred_runtime_owner_pids: Vec::new(),
+                        duplicate_runtime_cleanup_owner_pids: Vec::new(),
+                        last_duplicate_runtime_auto_reclaim_at: None,
+                        last_duplicate_runtime_auto_cleanup_owner_pids: Vec::new(),
+                        recent_runtime_incidents: Vec::new(),
+                        service_enabled: true,
+                        service_ready: false,
+                    },
+                ],
+            },
+            runtime: GatewayOperatorRuntimeSummaryReadModel {
+                enabled_channel_ids: vec!["weixin".to_owned()],
+                enabled_runtime_backed_channel_ids: Vec::new(),
+                enabled_service_channel_ids: vec!["weixin".to_owned()],
+                enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
+                enabled_outbound_only_channel_ids: Vec::new(),
+                visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
+                capability_snapshot_sha256: "abc123".to_owned(),
+                active_provider_profile_id: Some("demo".to_owned()),
+                active_provider_label: Some("Demo".to_owned()),
+                tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
+                    availability: "ready".to_owned(),
+                    structured_tool_schema_enabled: true,
+                    effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
+                    active_model: "gpt-4.1-mini".to_owned(),
+                    reason:
+                        "provider turns include structured tool definitions for the active model"
+                            .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                },
+            },
+        };
+
+        let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
+        let action = actions.first().expect("runtime attention action");
+
+        assert_eq!(
+            action.label,
+            "inspect weixin managed bridge runtime (retrying)"
+        );
+        assert_eq!(action.command, "loong doctor --config '/tmp/config.toml'");
+    }
+
+    #[test]
+    fn collect_status_runtime_attention_actions_include_duplicate_runtime_winner() {
+        let gateway = GatewayOperatorSummaryReadModel {
+            owner: GatewayOwnerStatus {
+                runtime_dir: "/tmp/runtime".to_owned(),
+                phase: "running".to_owned(),
+                running: true,
+                stale: false,
+                pid: Some(42),
+                mode: GatewayOwnerMode::GatewayHeadless,
+                version: "0.0.0-test".to_owned(),
+                config_path: "/tmp/config.toml".to_owned(),
+                attached_cli_session: None,
+                started_at_ms: 1,
+                last_heartbeat_at: 2,
+                stopped_at_ms: None,
+                shutdown_reason: None,
+                last_error: None,
+                configured_surface_count: 1,
+                running_surface_count: 1,
+                bind_address: Some("127.0.0.1".to_owned()),
+                port: Some(7777),
+                token_path: Some("/tmp/token".to_owned()),
+            },
+            control_surface: GatewayOperatorControlSurfaceReadModel {
+                base_url: Some("http://127.0.0.1:7777".to_owned()),
+                loopback_only: true,
+            },
+            channels: GatewayOperatorChannelsSummaryReadModel {
+                catalog_channel_count: 3,
+                configured_channel_count: 1,
+                configured_account_count: 1,
+                enabled_account_count: 1,
+                misconfigured_account_count: 0,
+                runtime_backed_channel_count: 0,
+                config_backed_channel_count: 0,
+                plugin_backed_channel_count: 3,
+                catalog_only_channel_count: 0,
+                enabled_runtime_backed_channel_count: 0,
+                enabled_plugin_backed_channel_count: 1,
+                enabled_outbound_only_channel_count: 0,
+                enabled_service_channel_count: 1,
+                ready_service_channel_count: 0,
+                runtime_attention_surface_count: 1,
+                retrying_runtime_surface_count: 0,
+                stale_runtime_surface_count: 0,
+                duplicate_runtime_surface_count: 1,
+                runtime_attention_surface_ids: vec!["weixin".to_owned()],
+                retrying_runtime_surface_ids: Vec::new(),
+                stale_runtime_surface_ids: Vec::new(),
+                duplicate_runtime_surface_ids: vec!["weixin".to_owned()],
+                surfaces: vec![
+                    crate::gateway::read_models::GatewayOperatorChannelSurfaceReadModel {
+                        channel_id: "weixin".to_owned(),
+                        label: "Weixin".to_owned(),
+                        implementation_status: "plugin_backed".to_owned(),
+                        configured_account_count: 1,
+                        enabled_account_count: 1,
+                        misconfigured_account_count: 0,
+                        ready_send_account_count: 1,
+                        ready_serve_account_count: 1,
+                        conversation_gated_account_count: 0,
+                        sender_gated_account_count: 0,
+                        mention_gated_account_count: 0,
+                        default_configured_account_id: Some("default".to_owned()),
+                        plugin_bridge_account_summary: None,
+                        runtime_attention_account_count: 1,
+                        runtime_attention_reasons: vec!["duplicate_runtime_instances".to_owned()],
+                        runtime_attention_remediations: vec![
+                            "stop_duplicate_runtime_instances".to_owned(),
+                        ],
+                        retrying_runtime_account_count: 0,
+                        stale_runtime_account_count: 0,
+                        duplicate_runtime_account_count: 1,
+                        preferred_runtime_owner_pids: vec![6262],
+                        duplicate_runtime_cleanup_owner_pids: vec![5151],
+                        last_duplicate_runtime_auto_reclaim_at: Some(1_700_000_007_000),
+                        last_duplicate_runtime_auto_cleanup_owner_pids: vec![5151],
+                        recent_runtime_incidents: vec![
+                            crate::gateway::read_models::GatewayOperatorRuntimeIncidentReadModel {
+                                account_id: Some("default".to_owned()),
+                                account_label: Some("default".to_owned()),
+                                kind: "duplicate_reclaim".to_owned(),
+                                at_ms: 1_700_000_007_000,
+                                detail: Some(
+                                    "requested cooperative shutdown for duplicate runtime owners"
+                                        .to_owned(),
+                                ),
+                                owner_pids: vec![5151],
+                            },
+                        ],
+                        service_enabled: true,
+                        service_ready: false,
+                    },
+                ],
+            },
+            runtime: GatewayOperatorRuntimeSummaryReadModel {
+                enabled_channel_ids: vec!["weixin".to_owned()],
+                enabled_runtime_backed_channel_ids: Vec::new(),
+                enabled_service_channel_ids: vec!["weixin".to_owned()],
+                enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
+                enabled_outbound_only_channel_ids: Vec::new(),
+                visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
+                capability_snapshot_sha256: "abc123".to_owned(),
+                active_provider_profile_id: Some("demo".to_owned()),
+                active_provider_label: Some("Demo".to_owned()),
+                tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
+                    availability: "ready".to_owned(),
+                    structured_tool_schema_enabled: true,
+                    effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
+                    active_model: "gpt-4.1-mini".to_owned(),
+                    reason:
+                        "provider turns include structured tool definitions for the active model"
+                            .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                },
+            },
+        };
+
+        let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
+        let action = actions.first().expect("runtime attention action");
+
+        assert_eq!(
+            action.label,
+            "clean up duplicate weixin managed bridge runtimes (keep pid 6262)"
+        );
+        assert_eq!(action.command, "loong doctor --config '/tmp/config.toml'");
+    }
+
+    #[test]
+    fn render_status_cli_text_lists_channel_runtime_attention_section() {
+        let gateway = GatewayOperatorSummaryReadModel {
+            owner: GatewayOwnerStatus {
+                runtime_dir: "/tmp/runtime".to_owned(),
+                phase: "running".to_owned(),
+                running: true,
+                stale: false,
+                pid: Some(42),
+                mode: GatewayOwnerMode::GatewayHeadless,
+                version: "0.0.0-test".to_owned(),
+                config_path: "/tmp/config.toml".to_owned(),
+                attached_cli_session: None,
+                started_at_ms: 1,
+                last_heartbeat_at: 2,
+                stopped_at_ms: None,
+                shutdown_reason: None,
+                last_error: None,
+                configured_surface_count: 1,
+                running_surface_count: 1,
+                bind_address: Some("127.0.0.1".to_owned()),
+                port: Some(7777),
+                token_path: Some("/tmp/token".to_owned()),
+            },
+            control_surface: GatewayOperatorControlSurfaceReadModel {
+                base_url: Some("http://127.0.0.1:7777".to_owned()),
+                loopback_only: true,
+            },
+            channels: GatewayOperatorChannelsSummaryReadModel {
+                catalog_channel_count: 3,
+                configured_channel_count: 1,
+                configured_account_count: 1,
+                enabled_account_count: 1,
+                misconfigured_account_count: 0,
+                runtime_backed_channel_count: 0,
+                config_backed_channel_count: 0,
+                plugin_backed_channel_count: 3,
+                catalog_only_channel_count: 0,
+                enabled_runtime_backed_channel_count: 0,
+                enabled_plugin_backed_channel_count: 1,
+                enabled_outbound_only_channel_count: 0,
+                enabled_service_channel_count: 1,
+                ready_service_channel_count: 0,
+                runtime_attention_surface_count: 1,
+                retrying_runtime_surface_count: 1,
+                stale_runtime_surface_count: 0,
+                duplicate_runtime_surface_count: 0,
+                runtime_attention_surface_ids: vec!["weixin".to_owned()],
+                retrying_runtime_surface_ids: vec!["weixin".to_owned()],
+                stale_runtime_surface_ids: Vec::new(),
+                duplicate_runtime_surface_ids: Vec::new(),
+                surfaces: vec![
+                    crate::gateway::read_models::GatewayOperatorChannelSurfaceReadModel {
+                        channel_id: "weixin".to_owned(),
+                        label: "Weixin".to_owned(),
+                        implementation_status: "plugin_backed".to_owned(),
+                        configured_account_count: 1,
+                        enabled_account_count: 1,
+                        misconfigured_account_count: 0,
+                        ready_send_account_count: 1,
+                        ready_serve_account_count: 1,
+                        conversation_gated_account_count: 0,
+                        sender_gated_account_count: 0,
+                        mention_gated_account_count: 0,
+                        default_configured_account_id: Some("default".to_owned()),
+                        plugin_bridge_account_summary: None,
+                        runtime_attention_account_count: 1,
+                        runtime_attention_reasons: vec!["retrying".to_owned()],
+                        runtime_attention_remediations: vec![
+                            "inspect_bridge_connectivity".to_owned(),
+                        ],
+                        retrying_runtime_account_count: 1,
+                        stale_runtime_account_count: 0,
+                        duplicate_runtime_account_count: 0,
+                        preferred_runtime_owner_pids: Vec::new(),
+                        duplicate_runtime_cleanup_owner_pids: Vec::new(),
+                        last_duplicate_runtime_auto_reclaim_at: None,
+                        last_duplicate_runtime_auto_cleanup_owner_pids: Vec::new(),
+                        recent_runtime_incidents: Vec::new(),
+                        service_enabled: true,
+                        service_ready: false,
+                    },
+                ],
+            },
+            runtime: GatewayOperatorRuntimeSummaryReadModel {
+                enabled_channel_ids: vec!["weixin".to_owned()],
+                enabled_runtime_backed_channel_ids: Vec::new(),
+                enabled_service_channel_ids: vec!["weixin".to_owned()],
+                enabled_plugin_backed_channel_ids: vec!["weixin".to_owned()],
+                enabled_outbound_only_channel_ids: Vec::new(),
+                visible_tool_count: 4,
+                visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
+                hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
+                capability_snapshot_sha256: "abc123".to_owned(),
+                active_provider_profile_id: Some("demo".to_owned()),
+                active_provider_label: Some("Demo".to_owned()),
+                tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
+                    availability: "ready".to_owned(),
+                    structured_tool_schema_enabled: true,
+                    effective_tool_schema_mode: "enabled_with_downgrade".to_owned(),
+                    active_model: "gpt-4.1-mini".to_owned(),
+                    reason:
+                        "provider turns include structured tool definitions for the active model"
+                            .to_owned(),
+                },
+                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                    ordinary_network_access_enabled: true,
+                    query_search_enabled: false,
+                    query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_credential_ready: true,
+                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                },
+            },
+        };
+        let status = StatusCliReadModel {
+            config: "/tmp/config.toml".to_owned(),
+            schema: StatusCliJsonSchema {
+                version: STATUS_CLI_JSON_SCHEMA_VERSION,
+                surface: "status",
+                purpose: "operator_runtime_summary",
+            },
+            active_provider: "Demo [demo]".to_owned(),
+            active_model: "gpt-4.1-mini".to_owned(),
+            memory_profile: "window_only".to_owned(),
+            gateway,
+            acp: StatusCliAcpReadModel {
+                enabled: false,
+                availability: "disabled".to_owned(),
+                error: None,
+                persisted_session_count: Some(0),
+                observability: None,
+            },
+            work_units: StatusCliWorkUnitReadModel {
+                availability: "available".to_owned(),
+                error: None,
+                health: Some(WorkRuntimeHealthSnapshot {
+                    total_count: 0,
+                    ready_count: 0,
+                    leased_count: 0,
+                    running_count: 0,
+                    blocked_count: 0,
+                    retry_pending_count: 0,
+                    terminal_count: 0,
+                    archived_count: 0,
+                    expired_lease_count: 0,
+                }),
+            },
+            next_actions: vec![StatusCliAction {
+                label: "inspect weixin managed bridge runtime (retrying)".to_owned(),
+                command: "loong doctor --config '/tmp/config.toml'".to_owned(),
+            }],
+            recipes: vec!["loong gateway status".to_owned()],
+        };
+
+        let rendered = render_status_cli_text(&status);
+
+        assert!(rendered.contains("channel runtime attention"));
+        assert!(rendered.contains("[WARN] Weixin"));
+        assert!(rendered.contains("channel_id=weixin"));
+        assert!(rendered.contains("reasons=retrying"));
+        assert!(rendered.contains("remediations=inspect_bridge_connectivity"));
+        assert!(rendered.contains("retrying=1"));
+        assert!(rendered.contains("duplicate_instances=0"));
+        assert!(rendered.contains("affected_accounts=1"));
+        assert!(rendered.contains("runtime attention ids"));
+        assert!(rendered.contains("weixin"));
+        assert!(rendered.contains("ready service channels"));
     }
 
     #[test]

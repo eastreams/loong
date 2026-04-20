@@ -261,17 +261,11 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
     let mut attempt_index = 0usize;
 
     while attempt_index < retry_attempts {
-        let existing_secret = match read_tool_lease_secret_file(secret_path) {
-            Ok(existing_secret) => existing_secret,
-            Err(error)
-                if transient_tool_lease_secret_publication_error(error.as_str(), secret_path) =>
-            {
-                None
-            }
-            Err(error) => return Err(error),
-        };
-        if let Some(existing_secret) = existing_secret {
-            return Ok(existing_secret);
+        match read_tool_lease_secret_file_detail(secret_path) {
+            Ok(Some(existing_secret)) => return Ok(existing_secret),
+            Ok(None) => {}
+            Err(error) if error.is_retryable_publication_state() => {}
+            Err(error) => return Err(error.render(secret_path)),
         }
 
         attempt_index += 1;
@@ -291,19 +285,6 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
     Err(message)
 }
 
-fn transient_tool_lease_secret_publication_error(error: &str, secret_path: &Path) -> bool {
-    let secret_path = secret_path.display();
-    let empty_prefix =
-        format!("tool_lease_authority_unavailable: secret file {secret_path} is empty");
-    let invalid_hex_prefix =
-        format!("tool_lease_authority_unavailable: secret file {secret_path} is not valid hex:");
-    let wrong_length_prefix =
-        format!("tool_lease_authority_unavailable: secret file {secret_path} has ");
-    error == empty_prefix
-        || error.starts_with(invalid_hex_prefix.as_str())
-        || error.starts_with(wrong_length_prefix.as_str())
-}
-
 fn ensure_tool_lease_secret_parent_dir(secret_path: &Path) -> Result<(), String> {
     let parent = secret_path.parent();
     let Some(parent) = parent else {
@@ -319,56 +300,73 @@ fn ensure_tool_lease_secret_parent_dir(secret_path: &Path) -> Result<(), String>
 }
 
 fn read_tool_lease_secret_file(secret_path: &Path) -> Result<Option<String>, String> {
+    read_tool_lease_secret_file_detail(secret_path).map_err(|error| error.render(secret_path))
+}
+
+fn read_tool_lease_secret_file_detail(
+    secret_path: &Path,
+) -> Result<Option<String>, ReadToolLeaseSecretFileError> {
     let raw_secret = match fs::read_to_string(secret_path) {
         Ok(raw_secret) => raw_secret,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            let message = format!(
-                "tool_lease_authority_unavailable: failed to read secret file {}: {error}",
-                secret_path.display()
-            );
-            return Err(message);
-        }
+        Err(error) => return Err(ReadToolLeaseSecretFileError::Io(error)),
     };
 
     let trimmed_secret = raw_secret.trim();
     if trimmed_secret.is_empty() {
-        let message = format!(
-            "tool_lease_authority_unavailable: secret file {} is empty",
-            secret_path.display()
-        );
-        return Err(message);
+        return Err(ReadToolLeaseSecretFileError::Empty);
     }
 
-    let normalized_secret = parse_tool_lease_secret_text(trimmed_secret, secret_path)?;
-    Ok(Some(normalized_secret))
-}
-
-fn parse_tool_lease_secret_text(
-    trimmed_secret: &str,
-    secret_path: &Path,
-) -> Result<String, String> {
-    let decoded_secret = hex::decode(trimmed_secret).map_err(|error| {
-        format!(
-            "tool_lease_authority_unavailable: secret file {} is not valid hex: {error}",
-            secret_path.display()
-        )
-    })?;
+    let decoded_secret =
+        hex::decode(trimmed_secret).map_err(ReadToolLeaseSecretFileError::InvalidHex)?;
 
     let secret_length = decoded_secret.len();
     let has_expected_length = secret_length == TOOL_LEASE_SECRET_BYTES;
     if !has_expected_length {
-        let message = format!(
-            "tool_lease_authority_unavailable: secret file {} has {} bytes; expected {}",
-            secret_path.display(),
-            secret_length,
-            TOOL_LEASE_SECRET_BYTES
-        );
-        return Err(message);
+        return Err(ReadToolLeaseSecretFileError::WrongLength(secret_length));
     }
 
     let normalized_secret = trimmed_secret.to_owned();
-    Ok(normalized_secret)
+    Ok(Some(normalized_secret))
+}
+
+enum ReadToolLeaseSecretFileError {
+    Io(std::io::Error),
+    Empty,
+    InvalidHex(hex::FromHexError),
+    WrongLength(usize),
+}
+
+impl ReadToolLeaseSecretFileError {
+    fn is_retryable_publication_state(&self) -> bool {
+        matches!(
+            self,
+            Self::Empty | Self::InvalidHex(_) | Self::WrongLength(_)
+        )
+    }
+
+    fn render(&self, secret_path: &Path) -> String {
+        match self {
+            Self::Io(error) => format!(
+                "tool_lease_authority_unavailable: failed to read secret file {}: {error}",
+                secret_path.display()
+            ),
+            Self::Empty => format!(
+                "tool_lease_authority_unavailable: secret file {} is empty",
+                secret_path.display()
+            ),
+            Self::InvalidHex(error) => format!(
+                "tool_lease_authority_unavailable: secret file {} is not valid hex: {error}",
+                secret_path.display()
+            ),
+            Self::WrongLength(secret_length) => format!(
+                "tool_lease_authority_unavailable: secret file {} has {} bytes; expected {}",
+                secret_path.display(),
+                secret_length,
+                TOOL_LEASE_SECRET_BYTES
+            ),
+        }
+    }
 }
 
 fn generate_tool_lease_secret() -> String {
@@ -594,6 +592,36 @@ mod tests {
         let observed_secret =
             read_tool_lease_secret_after_competitor_publish(secret_path.as_path())
                 .expect("wait for visible secret");
+
+        publisher.join().expect("join publisher thread");
+
+        assert_eq!(observed_secret, expected_secret);
+    }
+
+    #[test]
+    fn read_tool_lease_secret_after_competitor_publish_retries_partial_secret_visibility() {
+        let _home = scoped_tool_lease_home("loong-tool-lease-partial-visibility-home");
+        let secret_path = default_tool_lease_secret_path();
+        let parent_dir = secret_path.parent().expect("secret parent").to_path_buf();
+        std::fs::create_dir_all(&parent_dir).expect("create secret parent");
+
+        let expected_secret = generate_tool_lease_secret();
+        let publisher_path = secret_path.clone();
+        let publisher_secret = expected_secret.clone();
+
+        let publisher = std::thread::spawn(move || {
+            std::fs::write(&publisher_path, "").expect("publish empty secret file");
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
+            let partial_secret = &publisher_secret[..publisher_secret.len() / 2];
+            std::fs::write(&publisher_path, partial_secret).expect("publish partial secret file");
+            std::thread::park_timeout(std::time::Duration::from_millis(10));
+            let secret_body = format!("{publisher_secret}\n");
+            std::fs::write(&publisher_path, secret_body).expect("publish complete secret file");
+        });
+
+        let observed_secret =
+            read_tool_lease_secret_after_competitor_publish(secret_path.as_path())
+                .expect("wait for fully published secret");
 
         publisher.join().expect("join publisher thread");
 

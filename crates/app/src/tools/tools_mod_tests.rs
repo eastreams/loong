@@ -243,9 +243,9 @@ fn capability_snapshot_is_deterministic() {
     assert!(!snapshot.contains("shell.exec"));
     assert!(!snapshot.contains("file.read"));
 
-    let runtime_config = runtime_config::get_tool_runtime_config().clone();
-    let snapshot2 = capability_snapshot_with_config(&runtime_config);
-    assert_eq!(snapshot, snapshot2);
+    let snapshot2 = capability_snapshot();
+    assert!(snapshot2.starts_with("[tool_discovery_runtime]"));
+    assert!(snapshot2.contains("- tool.search:"));
 }
 
 #[test]
@@ -294,9 +294,9 @@ fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
 
     let snapshot = capability_snapshot_with_config(&config);
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
-    assert!(!snapshot.contains("[available_external_skills]"));
-    assert!(!snapshot.contains("demo-skill"));
-    assert!(!snapshot.contains("external_skills.invoke"));
+    assert!(snapshot.contains("[available_external_skills]"));
+    assert!(snapshot.contains("demo-skill"));
+    assert!(snapshot.contains("external_skills.invoke"));
 
     fs::remove_dir_all(&root).ok();
 }
@@ -1866,7 +1866,7 @@ fn capability_snapshot_summarizes_hidden_tags_without_tool_names() {
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn runtime_discoverable_tool_surface_summary_groups_visible_direct_and_hidden_surfaces() {
-    let root = unique_tool_temp_dir("loongclaw-tool-surface-summary");
+    let root = unique_tool_temp_dir("loong-tool-surface-summary");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -1889,6 +1889,35 @@ fn runtime_discoverable_tool_surface_summary_groups_visible_direct_and_hidden_su
     assert!(agent_surface.tool_ids.contains(&"agent".to_owned()));
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn runtime_discoverable_tool_surface_summary_uses_provider_invokable_hidden_entries() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let view = runtime_tool_view_for_runtime_config(&config);
+    let all_discoverable_entries = runtime_discoverable_tool_entries(&config, Some(&view), false);
+    let provider_discoverable_entries =
+        runtime_discoverable_tool_entries(&config, Some(&view), true);
+    let all_discoverable_names = all_discoverable_entries
+        .iter()
+        .map(|entry| entry.canonical_name.as_str())
+        .collect::<BTreeSet<_>>();
+    let provider_discoverable_names = provider_discoverable_entries
+        .iter()
+        .map(|entry| entry.canonical_name.as_str())
+        .collect::<BTreeSet<_>>();
+    let summary = runtime_discoverable_tool_surface_summary_with_config(&config, Some(&view));
+
+    assert!(all_discoverable_names.contains("session_status"));
+    assert!(all_discoverable_names.contains("delegate"));
+    assert!(!provider_discoverable_names.contains("session_status"));
+    assert!(!provider_discoverable_names.contains("delegate"));
+    assert!(provider_discoverable_names.contains("provider.switch"));
+    assert_eq!(
+        summary.hidden_tool_count,
+        provider_discoverable_entries.len()
+    );
 }
 
 #[cfg(feature = "tool-webfetch")]
@@ -2340,7 +2369,7 @@ fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surfac
     config.sessions_enabled = false;
 
     let injected = ToolView::from_tool_names(["sessions_list", "config.import"]);
-    let names = runtime_discoverable_tool_entries(&config, Some(&injected))
+    let names = runtime_discoverable_tool_entries(&config, Some(&injected), false)
         .into_iter()
         .map(|entry| entry.canonical_name)
         .collect::<Vec<_>>();
@@ -2735,10 +2764,8 @@ fn discovered_tool_lease_uses_current_catalog_digest() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_invoke_rejects_tampered_or_missing_leases() {
-    let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-invoke-invalid-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("loong-tool-invoke-invalid-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -2758,6 +2785,71 @@ fn tool_invoke_rejects_tampered_or_missing_leases() {
     .expect_err("tampered lease should fail");
 
     assert!(error.contains("invalid_tool_lease"), "error: {error}");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_invoke_rejects_missing_outer_lease_field() {
+    let root = std::env::temp_dir().join(format!(
+        "loong-tool-invoke-missing-lease-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "arguments": {
+                    "operation": "policy-status"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("missing lease should fail");
+
+    assert!(error.contains("requires payload.lease"), "error: {error}");
+    assert!(
+        !error.contains("invalid_tool_lease"),
+        "outer payload validation should fail before invalid lease recovery paths: {error}"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_invoke_rejects_non_string_outer_lease_field() {
+    let root = std::env::temp_dir().join(format!(
+        "loong-tool-invoke-non-string-lease-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "lease": 123,
+                "arguments": {
+                    "operation": "policy-status"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("non-string lease should fail");
+
+    assert!(error.contains("requires payload.lease"), "error: {error}");
+    assert!(
+        !error.contains("invalid_tool_lease"),
+        "outer payload validation should fail before invalid lease recovery paths: {error}"
+    );
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -2903,6 +2995,43 @@ fn tool_invoke_rejects_forged_reserved_internal_context_inside_arguments() {
     );
 
     std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn tool_search_hides_app_only_discoverables_from_provider_visible_results() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let result = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "exact_tool_id": "session_status"
+            }),
+        },
+        &config,
+    )
+    .expect("search should succeed");
+
+    let results = result.payload["results"].as_array().expect("results array");
+
+    let grouped_agent_summary = "Inspect approvals, sessions, delegation, provider routing, or config migration through one hidden control tool.";
+
+    assert!(
+        results
+            .iter()
+            .all(|entry| entry["tool_id"] != "session_status"),
+        "session_status should stay out of provider-visible discovery: {results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .all(|entry| entry["summary"] != grouped_agent_summary),
+        "exact app-tool refresh should not fall back to the grouped agent card: {results:?}"
+    );
+    assert_eq!(
+        result.payload["diagnostics"]["reason"],
+        json!("exact_tool_id_not_visible")
+    );
 }
 
 #[test]

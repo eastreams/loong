@@ -90,6 +90,64 @@ fn shell_exec_rejects_path_qualified_commands() {
     }
 }
 
+#[cfg(all(feature = "tool-shell", unix))]
+const SHELL_EMPTY_PATH_PROBE_ENV: &str = "LOONG_SHELL_EMPTY_PATH_PROBE";
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn shell_exec_succeeds_when_path_is_empty_but_stable_search_path_can_find_command() {
+    let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .arg("--exact")
+        .arg("tools::tests::search_and_shell::shell_exec_empty_path_probe")
+        .arg("--nocapture")
+        .env(SHELL_EMPTY_PATH_PROBE_ENV, "1")
+        .output()
+        .expect("spawn shell empty PATH probe");
+
+    assert!(
+        output.status.success(),
+        "shell empty PATH probe failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn shell_exec_empty_path_probe() {
+    if std::env::var_os(SHELL_EMPTY_PATH_PROBE_ENV).is_none() {
+        return;
+    }
+
+    let root = unique_tool_temp_dir("loong-shell-empty-path-fallback");
+    std::fs::create_dir_all(&root).expect("create root");
+
+    let mut env = ScopedEnv::new();
+    env.set("PATH", "");
+
+    let config = test_tool_runtime_config(root.clone());
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "echo",
+                "args": ["shell-path-fallback"]
+            }),
+        },
+        &config,
+    )
+    .expect("shell.exec should succeed even when PATH is empty");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(
+        outcome.payload["stdout"].as_str(),
+        Some("shell-path-fallback")
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_rejects_cwd_outside_file_root() {
@@ -523,7 +581,7 @@ fn shell_exec_times_out_when_timeout_ms_is_small() {
 #[test]
 fn shell_exec_timeout_returns_without_waiting_for_descendant_pipe_holders() {
     let mut config = test_tool_runtime_config(std::env::temp_dir());
-    let args = vec!["-c", "sleep 5 & wait"];
+    let args = vec!["-c", "/bin/sleep 5 & wait"];
     let started_at = std::time::Instant::now();
 
     config.shell_allow.insert("sh".to_owned());

@@ -98,8 +98,8 @@ use plugin_bridge::{
     channel_surface_plugin_bridge_discovery_by_id, plugin_bridge_contract_from_descriptor,
 };
 use status_support::{
-    attach_runtime, build_invalid_dingtalk_snapshot, build_invalid_discord_snapshot,
-    build_invalid_email_snapshot, build_invalid_feishu_snapshot,
+    apply_runtime_attention, attach_runtime, build_invalid_dingtalk_snapshot,
+    build_invalid_discord_snapshot, build_invalid_email_snapshot, build_invalid_feishu_snapshot,
     build_invalid_google_chat_snapshot, build_invalid_imessage_snapshot,
     build_invalid_irc_snapshot, build_invalid_line_snapshot, build_invalid_matrix_snapshot,
     build_invalid_mattermost_snapshot, build_invalid_nextcloud_talk_snapshot,
@@ -6124,10 +6124,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             qqbot_serve_checks,
-            vec![(
-                "qqbot bridge serve contract",
-                ChannelDoctorCheckTrigger::PluginBridgeHealth,
-            )]
+            vec![
+                (
+                    "qqbot bridge serve contract",
+                    ChannelDoctorCheckTrigger::PluginBridgeHealth,
+                ),
+                (
+                    "qqbot bridge serve runtime",
+                    ChannelDoctorCheckTrigger::ReadyRuntime,
+                ),
+            ]
         );
 
         let onebot_serve =
@@ -6139,10 +6145,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             onebot_serve_checks,
-            vec![(
-                "onebot bridge serve contract",
-                ChannelDoctorCheckTrigger::PluginBridgeHealth,
-            )]
+            vec![
+                (
+                    "onebot bridge serve contract",
+                    ChannelDoctorCheckTrigger::PluginBridgeHealth,
+                ),
+                (
+                    "onebot bridge serve runtime",
+                    ChannelDoctorCheckTrigger::ReadyRuntime,
+                ),
+            ]
         );
     }
 

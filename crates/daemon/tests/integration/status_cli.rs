@@ -85,6 +85,27 @@ fn run_status_cli_process(
         .expect(context)
 }
 
+fn run_doctor_cli_process(
+    config_path: &Path,
+    home_root: &Path,
+    args: &[&str],
+    context: &str,
+) -> std::process::Output {
+    let home_root_text = home_root.to_str().expect("home root should be valid utf-8");
+    let config_path_text = config_path
+        .to_str()
+        .expect("config path should be valid utf-8");
+
+    Command::new(env!("CARGO_BIN_EXE_loong"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(config_path_text)
+        .args(args)
+        .env("LOONG_HOME", home_root_text)
+        .output()
+        .expect(context)
+}
+
 #[test]
 fn cli_status_help_mentions_operator_runtime_summary() {
     let help = render_cli_help(["status"]);
@@ -138,7 +159,9 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
     let stdout = render_output(&output.stdout);
     let payload: Value = serde_json::from_str(&stdout).expect("decode status json");
 
+    assert_eq!(payload["schema"]["version"], 2);
     assert_eq!(payload["schema"]["surface"], "status");
+    assert_eq!(payload["schema"]["purpose"], "operator_runtime_summary");
     assert_eq!(payload["gateway"]["owner"]["phase"], "stopped");
     assert_eq!(
         payload["gateway"]["runtime"]["tool_calling"]["availability"],
@@ -180,6 +203,52 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
             .map(|recipes| recipes.len() >= 4)
             .unwrap_or(false),
         "status JSON should include drill-down recipes: {payload:#?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn doctor_cli_json_includes_schema_for_machine_readable_automation() {
+    let root = unique_temp_dir("loong-doctor-cli-json");
+    let home_root = root.join("home");
+    fs::create_dir_all(&home_root).expect("create home root");
+    let config_path = write_status_config(
+        &root,
+        false,
+        mvp::config::ProviderToolSchemaModeConfig::EnabledWithDowngrade,
+    );
+    let output = run_doctor_cli_process(
+        &config_path,
+        &home_root,
+        &["--json", "--skip-model-probe"],
+        "run doctor CLI json",
+    );
+
+    if !output.status.success() {
+        let stdout = render_output(&output.stdout);
+        let stderr = render_output(&output.stderr);
+        panic!(
+            "doctor CLI json should succeed: status={:?}\nstdout={stdout}\nstderr={stderr}",
+            output.status.code()
+        );
+    }
+
+    let stdout = render_output(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("decode doctor json");
+
+    assert_eq!(payload["schema"]["version"], 1);
+    assert_eq!(payload["schema"]["surface"], "doctor");
+    assert_eq!(payload["schema"]["purpose"], "runtime_health_diagnostics");
+    assert!(
+        payload["checks"]
+            .as_array()
+            .is_some_and(|checks| !checks.is_empty()),
+        "doctor JSON should include machine-readable checks: {payload:#?}"
+    );
+    assert!(
+        payload["next_steps"].is_array(),
+        "doctor JSON should keep next steps machine-readable: {payload:#?}"
     );
 
     fs::remove_dir_all(&root).ok();

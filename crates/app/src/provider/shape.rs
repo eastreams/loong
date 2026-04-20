@@ -120,10 +120,9 @@ fn provider_tool_bridge_context_from_messages(messages: &[Value]) -> ProviderToo
         .rev()
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
         .filter_map(|message| {
-            message
-                .get("content")
-                .and_then(Value::as_str)
-                .and_then(parse_discovery_followup_leases_from_message_content)
+            let content = message.get("content")?;
+            let content_text = extract_content_text(content)?;
+            parse_discovery_followup_leases_from_message_content(content_text.as_str())
         })
         .find(|context| !context.discoverable_leases.is_empty())
         .unwrap_or_default()
@@ -175,9 +174,7 @@ fn parse_discovery_followup_leases_from_message_content(
             let Some(discoverable_tool_name) = discoverable_tool_name(tool_id) else {
                 continue;
             };
-            discoverable_leases
-                .entry(discoverable_tool_name.to_owned())
-                .or_insert_with(|| lease.to_owned());
+            discoverable_leases.insert(discoverable_tool_name.to_owned(), lease.to_owned());
         }
     }
 
@@ -2559,6 +2556,34 @@ mod tests {
         })]
     }
 
+    fn discovery_followup_part_messages(tool_id: &str, lease: &str) -> Vec<Value> {
+        let payload_summary = serde_json::to_string(&json!({
+            "results": [
+                {
+                    "tool_id": tool_id,
+                    "lease": lease,
+                }
+            ]
+        }))
+        .expect("encode search payload summary");
+        let envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": payload_summary,
+            "payload_chars": payload_summary.chars().count(),
+            "payload_truncated": false,
+        }))
+        .expect("encode search envelope");
+        vec![json!({
+            "role": "assistant",
+            "content": [{
+                "type": "input_text",
+                "text": format!("[tool_result]\n[ok] {envelope}"),
+            }],
+        })]
+    }
+
     #[test]
     fn extract_provider_turn_parses_tool_calls() {
         let body = serde_json::json!({
@@ -2869,6 +2894,134 @@ mod tests {
     }
 
     #[test]
+    fn provider_shape_discovery_followup_uses_latest_hidden_lease_in_multiline_source_order() {
+        let first_summary = serde_json::to_string(&json!({
+            "query": "external skills policy",
+            "results": [
+                {
+                    "tool_id": "skills",
+                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "argument_hint": "operation:string",
+                    "required_fields": ["operation"],
+                    "required_field_groups": [["operation"]],
+                    "lease": "lease-first"
+                }
+            ]
+        }))
+        .expect("encode first search payload summary");
+        let second_summary = serde_json::to_string(&json!({
+            "query": "external skills policy again",
+            "results": [
+                {
+                    "tool_id": "skills",
+                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "argument_hint": "operation:string",
+                    "required_fields": ["operation"],
+                    "required_field_groups": [["operation"]],
+                    "lease": "lease-second"
+                }
+            ]
+        }))
+        .expect("encode second search payload summary");
+        let first_envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search-1",
+            "payload_summary": first_summary,
+            "payload_chars": 0,
+            "payload_truncated": false,
+        }))
+        .expect("encode first search envelope");
+        let second_envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search-2",
+            "payload_summary": second_summary,
+            "payload_chars": 0,
+            "payload_truncated": false,
+        }))
+        .expect("encode second search envelope");
+        let messages = vec![json!({
+            "role": "assistant",
+            "content": format!("[tool_result]\n[ok] {first_envelope}\n[ok] {second_envelope}"),
+        })];
+
+        let context = provider_tool_bridge_context_from_messages(&messages);
+        assert_eq!(
+            context.discoverable_leases.get("skills"),
+            Some(&"lease-second".to_owned())
+        );
+    }
+
+    #[test]
+    fn provider_shape_discovery_followup_ignores_newer_mixed_content_messages() {
+        let latest_summary = serde_json::to_string(&json!({
+            "query": "external skills policy",
+            "results": [
+                {
+                    "tool_id": "skills",
+                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "argument_hint": "operation:string",
+                    "required_fields": ["operation"],
+                    "required_field_groups": [["operation"]],
+                    "lease": "lease-latest"
+                }
+            ]
+        }))
+        .expect("encode latest search payload summary");
+        let stale_summary = serde_json::to_string(&json!({
+            "query": "older external skills card",
+            "results": [
+                {
+                    "tool_id": "skills",
+                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "argument_hint": "operation:string",
+                    "required_fields": ["operation"],
+                    "required_field_groups": [["operation"]],
+                    "lease": "lease-stale"
+                }
+            ]
+        }))
+        .expect("encode stale search payload summary");
+        let latest_envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search-latest",
+            "payload_summary": latest_summary,
+            "payload_chars": 0,
+            "payload_truncated": false,
+        }))
+        .expect("encode latest search envelope");
+        let stale_envelope = serde_json::to_string(&json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search-stale",
+            "payload_summary": stale_summary,
+            "payload_chars": 0,
+            "payload_truncated": false,
+        }))
+        .expect("encode stale search envelope");
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "content": format!("[tool_result]\n[ok] {latest_envelope}"),
+            }),
+            json!({
+                "role": "assistant",
+                "content": format!(
+                    "I am quoting an older card for context.\n[tool_result]\n[ok] {stale_envelope}\nPlease refresh before reusing it."
+                ),
+            }),
+        ];
+
+        let context = provider_tool_bridge_context_from_messages(&messages);
+        assert_eq!(
+            context.discoverable_leases.get("skills"),
+            Some(&"lease-latest".to_owned())
+        );
+    }
+
+    #[test]
     fn extract_provider_turn_handles_text_only() {
         let body = serde_json::json!({
             "choices": [{
@@ -2963,6 +3116,39 @@ mod tests {
                 "args": ["hello"]
             })
         );
+    }
+
+    #[test]
+    fn extract_provider_turn_supports_responses_function_calls_with_array_followup_messages() {
+        let body = serde_json::json!({
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Reading the file."}
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "name": "file_read",
+                    "arguments": "{\"path\":\"README.md\"}",
+                    "call_id": "call_resp_1"
+                }
+            ]
+        });
+        let messages = discovery_followup_part_messages("file.read", "lease-responses-parts");
+
+        let turn = extract_provider_turn_with_scope_and_messages(
+            &body,
+            Some("session-responses"),
+            Some("turn-responses"),
+            &messages,
+        )
+        .expect("responses turn with array-form search context");
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "README.md"}));
     }
 
     #[test]

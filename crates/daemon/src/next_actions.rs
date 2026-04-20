@@ -32,6 +32,14 @@ pub struct SetupNextAction {
     pub command: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManagedBridgeRuntimeAttentionSurface {
+    id: &'static str,
+    reasons: Vec<&'static str>,
+    preferred_owner_pids: Vec<u32>,
+    cleanup_owner_pids: Vec<u32>,
+}
+
 pub fn collect_setup_next_actions(
     config: &mvp::config::LoongConfig,
     config_path: &str,
@@ -48,6 +56,8 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
     let mut actions = Vec::new();
     let channel_actions =
         crate::migration::channels::collect_channel_next_actions(config, config_path);
+    let runtime_attention_plugin_bridge_surfaces =
+        collect_runtime_attention_plugin_bridge_surfaces(config);
     let unresolved_plugin_bridge_surfaces =
         collect_unresolved_plugin_bridge_surface_ids(config, &channel_actions);
     let blocked_outbound_surfaces = collect_blocked_outbound_surface_ids(config);
@@ -83,6 +93,13 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
                 ),
             });
         }
+    }
+    if !runtime_attention_plugin_bridge_surfaces.is_empty() {
+        let doctor_action = build_managed_bridge_runtime_doctor_action(
+            config_path,
+            &runtime_attention_plugin_bridge_surfaces,
+        );
+        actions.push(doctor_action);
     }
     if !unresolved_plugin_bridge_surfaces.is_empty() {
         let doctor_action =
@@ -159,6 +176,30 @@ fn collect_unresolved_plugin_bridge_surface_ids(
     unresolved_plugin_bridge_surface_ids(config)
 }
 
+fn collect_runtime_attention_plugin_bridge_surfaces(
+    config: &mvp::config::LoongConfig,
+) -> Vec<ManagedBridgeRuntimeAttentionSurface> {
+    let inventory = mvp::channel::channel_inventory(config);
+
+    inventory
+        .channel_surfaces
+        .into_iter()
+        .filter(enabled_plugin_bridge_surface)
+        .filter_map(|surface| {
+            let reasons = plugin_bridge_surface_runtime_attention_reasons(&surface);
+            if reasons.is_empty() {
+                return None;
+            }
+            Some(ManagedBridgeRuntimeAttentionSurface {
+                id: surface.catalog.id,
+                reasons,
+                preferred_owner_pids: collect_surface_preferred_runtime_owner_pids(&surface),
+                cleanup_owner_pids: collect_surface_duplicate_runtime_cleanup_owner_pids(&surface),
+            })
+        })
+        .collect()
+}
+
 fn unresolved_plugin_bridge_surface_ids(config: &mvp::config::LoongConfig) -> Vec<&'static str> {
     let inventory = mvp::channel::channel_inventory(config);
     let channel_checks = crate::migration::channels::collect_channel_preflight_checks(config);
@@ -178,6 +219,99 @@ fn unresolved_plugin_bridge_surface_ids(config: &mvp::config::LoongConfig) -> Ve
         })
         .map(|surface| surface.catalog.id)
         .collect()
+}
+
+fn plugin_bridge_surface_runtime_attention_reasons(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<&'static str> {
+    let mut reasons = BTreeSet::new();
+
+    for snapshot in surface
+        .configured_accounts
+        .iter()
+        .filter(|snapshot| snapshot.enabled)
+    {
+        for reason in channel_snapshot_runtime_attention_reasons(snapshot) {
+            reasons.insert(reason);
+        }
+    }
+
+    reasons.into_iter().collect()
+}
+
+fn channel_snapshot_runtime_attention_reasons(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+) -> Vec<&'static str> {
+    let Some(runtime) = snapshot
+        .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+        .and_then(|operation| operation.runtime.as_ref())
+    else {
+        return Vec::new();
+    };
+
+    let mut reasons = Vec::new();
+    if runtime.consecutive_failures > 0 {
+        reasons.push("retrying");
+    }
+    if runtime.stale {
+        reasons.push("stale");
+    }
+    if runtime.running_instances > 1 {
+        reasons.push("duplicate_runtime_instances");
+    }
+
+    reasons
+}
+
+fn collect_surface_preferred_runtime_owner_pids(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<u32> {
+    let mut owner_pids = BTreeSet::new();
+
+    for snapshot in &surface.configured_accounts {
+        let Some(runtime) = snapshot
+            .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+            .and_then(|operation| operation.runtime.as_ref())
+        else {
+            continue;
+        };
+        if runtime.duplicate_owner_pids.is_empty() {
+            continue;
+        }
+        let Some(pid) = runtime.pid else {
+            continue;
+        };
+        owner_pids.insert(pid);
+    }
+
+    owner_pids.into_iter().collect()
+}
+
+fn collect_surface_duplicate_runtime_cleanup_owner_pids(
+    surface: &mvp::channel::ChannelSurface,
+) -> Vec<u32> {
+    let mut owner_pids = BTreeSet::new();
+
+    for snapshot in &surface.configured_accounts {
+        let Some(runtime) = snapshot
+            .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+            .and_then(|operation| operation.runtime.as_ref())
+        else {
+            continue;
+        };
+        if runtime.duplicate_owner_pids.is_empty() {
+            continue;
+        }
+        let preferred_pid = runtime.pid;
+        for owner_pid in &runtime.duplicate_owner_pids {
+            if Some(*owner_pid) == preferred_pid {
+                continue;
+            }
+            owner_pids.insert(*owner_pid);
+        }
+    }
+
+    owner_pids.into_iter().collect()
 }
 
 fn collect_blocked_outbound_surface_ids(config: &mvp::config::LoongConfig) -> Vec<&'static str> {
@@ -248,6 +382,22 @@ fn build_managed_bridge_doctor_action(
     }
 }
 
+fn build_managed_bridge_runtime_doctor_action(
+    config_path: &str,
+    runtime_attention_surfaces: &[ManagedBridgeRuntimeAttentionSurface],
+) -> SetupNextAction {
+    let command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+    let label = managed_bridge_runtime_doctor_action_label(runtime_attention_surfaces);
+
+    SetupNextAction {
+        kind: SetupNextActionKind::Doctor,
+        channel_action_id: None,
+        browser_preview_phase: None,
+        label,
+        command,
+    }
+}
+
 fn build_outbound_channel_doctor_action(
     config_path: &str,
     blocked_surface_ids: &[&'static str],
@@ -302,10 +452,65 @@ fn outbound_channel_doctor_action_label(blocked_surface_ids: &[&'static str]) ->
     "verify configured outbound channels".to_owned()
 }
 
+fn managed_bridge_runtime_doctor_action_label(
+    runtime_attention_surfaces: &[ManagedBridgeRuntimeAttentionSurface],
+) -> String {
+    if runtime_attention_surfaces.len() == 1 {
+        let surface = runtime_attention_surfaces.first().expect("one surface");
+        let rendered_reasons = if surface.reasons.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", surface.reasons.join(","))
+        };
+        let keep_suffix = if surface.reasons.contains(&"duplicate_runtime_instances") {
+            let keep = if surface.preferred_owner_pids.len() == 1 {
+                let pid = surface
+                    .preferred_owner_pids
+                    .first()
+                    .copied()
+                    .unwrap_or_default();
+                format!(" keep pid={pid}")
+            } else {
+                String::new()
+            };
+            let cleanup = if surface.cleanup_owner_pids.is_empty() {
+                String::new()
+            } else {
+                let rendered_cleanup = surface
+                    .cleanup_owner_pids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(" cleanup pids={rendered_cleanup}")
+            };
+            format!("{keep}{cleanup}")
+        } else {
+            String::new()
+        };
+        return format!(
+            "inspect {} managed bridge runtime{}{}",
+            surface.id, rendered_reasons, keep_suffix
+        );
+    }
+
+    if runtime_attention_surfaces.is_empty() {
+        return "inspect managed bridge runtimes".to_owned();
+    }
+
+    let rendered_surface_ids = runtime_attention_surfaces
+        .iter()
+        .map(|surface| surface.id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("inspect managed bridge runtimes: {rendered_surface_ids}")
+}
+
 pub(crate) fn is_managed_bridge_doctor_action(action: &SetupNextAction) -> bool {
     let is_doctor = action.kind == SetupNextActionKind::Doctor;
     let label = action.label.as_str();
-    let is_managed_bridge_label = label.starts_with("verify ") && label.contains("managed bridge");
+    let is_managed_bridge_label = (label.starts_with("verify ") || label.starts_with("inspect "))
+        && label.contains("managed bridge");
 
     is_doctor && is_managed_bridge_label
 }
@@ -397,11 +602,109 @@ fn should_suggest_personalization(config: &mvp::config::LoongConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::{
         fs,
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    fn write_runtime_attention_fixture(
+        channel_id: &str,
+        account_id: &str,
+        process_id: u32,
+        consecutive_failures: usize,
+    ) {
+        let runtime_dir = mvp::config::default_loong_home().join("channel-runtime");
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        let runtime_path =
+            runtime_dir.join(format!("{channel_id}-serve-{account_id}-{process_id}.json"));
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_millis() as u64;
+        let payload = serde_json::json!({
+            "running": true,
+            "busy": false,
+            "active_runs": 0,
+            "consecutive_failures": consecutive_failures,
+            "last_run_activity_at": now_ms.saturating_sub(500),
+            "last_heartbeat_at": now_ms.saturating_sub(100),
+            "last_failure_at": now_ms,
+            "last_recovery_at": serde_json::Value::Null,
+            "last_error": "temporary bridge timeout",
+            "pid": process_id,
+            "account_id": account_id,
+            "account_label": account_id,
+            "owner_token": serde_json::Value::Null
+        });
+        let encoded = serde_json::to_string_pretty(&payload).expect("encode runtime state");
+        fs::write(runtime_path, encoded).expect("write runtime attention state");
+    }
+
+    fn write_managed_bridge_runtime_manifest(root: &Path, channel_id: &str) {
+        let runtime_operations_json = serde_json::to_string(&vec![
+            mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+            mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+            mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+            mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+        ])
+        .expect("serialize runtime operations");
+        let metadata = BTreeMap::from([
+            ("bridge_kind".to_owned(), "http_json".to_owned()),
+            ("adapter_family".to_owned(), "channel-bridge".to_owned()),
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            ("target_contract".to_owned(), "weixin_reply_loop".to_owned()),
+            (
+                "channel_runtime_contract".to_owned(),
+                mvp::channel::CHANNEL_PLUGIN_BRIDGE_RUNTIME_CONTRACT_V1.to_owned(),
+            ),
+            (
+                "channel_runtime_operations_json".to_owned(),
+                runtime_operations_json,
+            ),
+        ]);
+        let plugin_id = format!("{channel_id}-managed-runtime");
+        let manifest = crate::kernel::PluginManifest {
+            api_version: Some("v1alpha1".to_owned()),
+            version: Some("1.0.0".to_owned()),
+            plugin_id: plugin_id.clone(),
+            provider_id: format!("{channel_id}-managed-runtime-provider"),
+            connector_name: format!("{channel_id}-managed-runtime-connector"),
+            channel_id: Some(channel_id.to_owned()),
+            endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
+            capabilities: BTreeSet::new(),
+            trust_tier: crate::kernel::PluginTrustTier::Unverified,
+            metadata,
+            summary: None,
+            tags: Vec::new(),
+            input_examples: Vec::new(),
+            output_examples: Vec::new(),
+            defer_loading: false,
+            setup: Some(crate::kernel::PluginSetup {
+                mode: crate::kernel::PluginSetupMode::MetadataOnly,
+                surface: Some("channel".to_owned()),
+                required_env_vars: Vec::new(),
+                recommended_env_vars: Vec::new(),
+                required_config_keys: Vec::new(),
+                default_env_var: None,
+                docs_urls: Vec::new(),
+                remediation: None,
+            }),
+            slot_claims: Vec::new(),
+            compatibility: None,
+        };
+        let plugin_directory = root.join(plugin_id);
+        let manifest_path = plugin_directory.join("loong.plugin.json");
+        let encoded_manifest =
+            serde_json::to_string_pretty(&manifest).expect("serialize runtime manifest");
+
+        fs::create_dir_all(&plugin_directory).expect("create runtime plugin directory");
+        fs::write(&manifest_path, encoded_manifest).expect("write runtime plugin manifest");
+    }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -733,6 +1036,46 @@ mod tests {
     }
 
     #[test]
+    fn collect_setup_next_actions_labels_single_runtime_attention_plugin_bridge_surface() {
+        let home = unique_temp_dir("loong-next-actions-runtime-attention");
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("LOONG_HOME", home.as_os_str());
+        write_runtime_attention_fixture("weixin", "default", 5151, 2);
+        let plugin_root = unique_temp_dir("loong-next-actions-runtime-plugin-root");
+        write_managed_bridge_runtime_manifest(plugin_root.as_path(), "weixin");
+
+        let mut config = mvp::config::LoongConfig::default();
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![plugin_root.display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+        config.weixin.enabled = true;
+        config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
+            "weixin-token".to_owned(),
+        ));
+        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loong.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+        let doctor_action = actions
+            .iter()
+            .find(|action| action.kind == SetupNextActionKind::Doctor)
+            .expect("managed bridge runtime doctor action");
+
+        assert_eq!(
+            doctor_action.label,
+            "inspect weixin managed bridge runtime (retrying)"
+        );
+        assert_eq!(
+            doctor_action.command,
+            "loong doctor --config '/tmp/loong.toml'"
+        );
+    }
+
+    #[test]
     fn collect_setup_next_actions_labels_multiple_unresolved_plugin_bridge_surfaces() {
         let mut config = mvp::config::LoongConfig::default();
         config.weixin.enabled = true;
@@ -852,6 +1195,19 @@ mod tests {
             channel_action_id: None,
             browser_preview_phase: None,
             label: "verify managed bridges: weixin, qqbot".to_owned(),
+            command: "loong doctor --config '/tmp/loong.toml'".to_owned(),
+        };
+
+        assert!(is_managed_bridge_doctor_action(&action));
+    }
+
+    #[test]
+    fn is_managed_bridge_doctor_action_matches_runtime_attention_label() {
+        let action = SetupNextAction {
+            kind: SetupNextActionKind::Doctor,
+            channel_action_id: None,
+            browser_preview_phase: None,
+            label: "inspect weixin managed bridge runtime (retrying)".to_owned(),
             command: "loong doctor --config '/tmp/loong.toml'".to_owned(),
         };
 
