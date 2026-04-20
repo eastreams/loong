@@ -3569,8 +3569,13 @@ fn persist_active_external_skills_from_followup_payload_if_needed(
         return;
     };
 
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let updates =
-        active_external_skills::collect_active_external_skills_from_tool_result_text(text);
+        active_external_skills::collect_active_external_skills_from_tool_result_text_with_config(
+            text,
+            &tool_runtime_config,
+        );
     if updates.is_empty() {
         return;
     }
@@ -6365,10 +6370,10 @@ mod tests {
     async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill_context() {
         let workspace_root =
             crate::test_support::unique_temp_dir("turn-coordinator-explicit-skill-activation");
-        std::fs::create_dir_all(workspace_root.join(".agents/skills/demo-skill"))
+        std::fs::create_dir_all(workspace_root.join(".loong/skills/demo-skill"))
             .expect("create skill root");
         std::fs::write(
-            workspace_root.join(".agents/skills/demo-skill/SKILL.md"),
+            workspace_root.join(".loong/skills/demo-skill/SKILL.md"),
             "---\nname: demo-skill\ndescription: Summarize notes with release discipline.\n---\n\n# Demo Skill\n\nFollow the managed skill instruction before answering.\n",
         )
         .expect("write skill");

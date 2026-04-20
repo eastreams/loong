@@ -37,16 +37,18 @@ const HARD_MAX_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
 const DEFAULT_SKILL_RESOURCE_LIST_LIMIT: usize = 64;
 #[cfg(test)]
 const INSTALLED_SKILL_SNAPSHOT_HINT: &str = "installed managed external skill; use external_skills.inspect or external_skills.invoke for details";
-const PROJECT_DISCOVERY_DIRS: [(&str, usize); 4] = [
-    (".agents/skills", 0),
-    (".codex/skills", 1),
-    (".claude/skills", 2),
-    ("skills", 3),
+const PROJECT_DISCOVERY_DIRS: [(&str, usize); 5] = [
+    (".loong/skills", 0),
+    (".agents/skills", 1),
+    (".codex/skills", 2),
+    (".claude/skills", 3),
+    ("skills", 4),
 ];
-const USER_DISCOVERY_DIRS: [(&str, usize); 3] = [
-    (".agents/skills", 0),
-    (".codex/skills", 1),
-    (".claude/skills", 2),
+const USER_DISCOVERY_DIRS: [(&str, usize); 4] = [
+    (".loong/skills", 0),
+    (".agents/skills", 1),
+    (".codex/skills", 2),
+    (".claude/skills", 3),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,9 +148,11 @@ impl From<DiscoveredSkillEntry> for DiscoveredSkillModelView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ModelVisibleSkillIdentity {
+pub(crate) struct ModelVisibleSkillCatalogEntry {
     pub(super) skill_id: String,
-    pub(super) display_name: String,
+    pub(super) description: String,
+    pub(super) location: String,
+    pub(super) skill_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1098,7 +1102,6 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
     let inventory = discover_skill_inventory(config)?;
     let skill = resolve_discovered_skill(&inventory, skill_id)?;
     ensure_skill_access_for_audience(&skill, SkillAudience::Model)?;
-    let raw_instructions = load_discovered_skill_markdown(config, &skill)?;
     if !skill.eligibility.available {
         return Err(format!(
             "external skill `{skill_id}` is not eligible in the current runtime: {}",
@@ -1115,42 +1118,24 @@ pub(super) fn execute_external_skills_invoke_tool_with_config(
         skill.allowed_tools.as_slice(),
         skill.blocked_tools.as_slice(),
     );
-    let skill_root = resolved_skill_root_path(&skill);
-    let resource_listing = skill_root
-        .as_deref()
-        .map(|path| list_skill_resources(path, DEFAULT_SKILL_RESOURCE_LIST_LIMIT))
-        .transpose()?
-        .unwrap_or_default();
-    let instructions = render_structured_skill_instructions(
-        &skill,
-        raw_instructions.as_str(),
-        skill_root.as_deref(),
-        &resource_listing,
+    let mut payload_object = build_external_skill_context_payload(config, &skill)?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "external skill context payload must be an object".to_owned())?;
+    payload_object.insert("adapter".to_owned(), json!("core-tools"));
+    payload_object.insert("tool_name".to_owned(), json!(request.tool_name));
+    payload_object.insert(
+        "invocation_summary".to_owned(),
+        json!(format!(
+            "Loaded external skill `{}` with invocation_policy={}. Apply the structured skill content before continuing the task{}.",
+            skill_id,
+            invocation_policy_id,
+            tool_restrictions_suffix
+        )),
     );
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
-        payload: json!({
-            "adapter": "core-tools",
-            "tool_name": request.tool_name,
-            "skill_id": skill.skill_id,
-            "display_name": skill.display_name,
-            "summary": skill.summary,
-            "scope": skill.scope,
-            "source_path": skill.source_path,
-            "install_path": skill.install_path,
-            "skill_md_path": skill.skill_md_path,
-            "skill_root": skill_root,
-            "resource_listing": resource_listing,
-            "instructions": instructions,
-            "metadata": metadata_payload_from_skill(&skill),
-            "eligibility": skill.eligibility,
-            "invocation_summary": format!(
-                "Loaded external skill `{}` with invocation_policy={}. Apply the structured skill content before continuing the task{}.",
-                skill_id,
-                invocation_policy_id,
-                tool_restrictions_suffix
-            ),
-        }),
+        payload: Value::Object(payload_object),
     })
 }
 
@@ -4232,42 +4217,45 @@ pub(super) fn installed_skill_snapshot_lines_with_config(
 pub(super) fn model_skill_catalog_section_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Option<String> {
-    let policy = resolve_effective_policy(config).ok()?;
-    if !policy.enabled {
-        return None;
-    }
-
-    let inventory = discover_skill_inventory(config).ok()?;
-    let filtered = filter_inventory_for_audience(inventory, SkillAudience::Model);
-    if filtered.skills.is_empty() {
+    let visible_skills = model_visible_skill_catalog_entries_with_config(config);
+    if visible_skills.is_empty() {
         return None;
     }
 
     let mut lines = vec![
         "[available_external_skills]".to_owned(),
         "The following external skills provide specialized instructions for specific tasks.".to_owned(),
-        "Only skills listed here are currently model-visible and invokable from the provider surface; manual-only or runtime-ineligible skills stay on the operator surface.".to_owned(),
-        "When a task matches a listed skill, use `tool.search` to lease `external_skills.invoke`, then call `tool.invoke` with the selected `skill_id` to load the full skill instructions.".to_owned(),
-        "The activation result includes the structured skill content, the skill directory, and a bundled resource listing for on-demand file reads.".to_owned(),
+        "Only skills listed here are currently model-visible and runtime-eligible; manual-only or ineligible skills stay off this list.".to_owned(),
+        "Use the read tool to load a listed skill's SKILL.md file when the task matches its description.".to_owned(),
+        "Do not use tool.search or tool.invoke for routine model-driven skill loading; skills are read-first, not tool-discovery-first.".to_owned(),
+        "When a skill file references a relative path, resolve it against the skill directory (the parent of SKILL.md) and use that absolute path in tool commands.".to_owned(),
+        "<available_skills>".to_owned(),
     ];
 
-    for skill in filtered.skills {
-        let mut line = format!("- {}: {}", skill.skill_id, skill.summary);
-        if let Some(compatibility) = skill.compatibility.as_deref()
-            && !compatibility.is_empty()
-        {
-            line.push_str(" Compatibility: ");
-            line.push_str(compatibility);
-        }
-        lines.push(line);
+    for skill in visible_skills {
+        lines.push("  <skill>".to_owned());
+        lines.push(format!(
+            "    <name>{}</name>",
+            xml_escape(skill.skill_id.as_str())
+        ));
+        lines.push(format!(
+            "    <description>{}</description>",
+            xml_escape(skill.description.as_str())
+        ));
+        lines.push(format!(
+            "    <location>{}</location>",
+            xml_escape(skill.location.as_str())
+        ));
+        lines.push("  </skill>".to_owned());
     }
+    lines.push("</available_skills>".to_owned());
 
     Some(lines.join("\n"))
 }
 
-pub(super) fn model_visible_skill_identities_with_config(
+fn model_visible_skill_entries_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Vec<ModelVisibleSkillIdentity> {
+) -> Vec<DiscoveredSkillEntry> {
     let policy = match resolve_effective_policy(config) {
         Ok(policy) => policy,
         Err(_) => return Vec::new(),
@@ -4282,18 +4270,98 @@ pub(super) fn model_visible_skill_identities_with_config(
     };
     let filtered = filter_inventory_for_audience(inventory, SkillAudience::Model);
 
-    filtered
-        .skills
+    filtered.skills
+}
+
+pub(crate) fn model_visible_skill_catalog_entries_with_config(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Vec<ModelVisibleSkillCatalogEntry> {
+    model_visible_skill_entries_with_config(config)
         .into_iter()
-        .map(|skill| ModelVisibleSkillIdentity {
-            skill_id: skill.skill_id,
-            display_name: skill.display_name,
+        .map(|skill| {
+            let skill_root = resolved_skill_root_path(&skill);
+            ModelVisibleSkillCatalogEntry {
+                skill_id: skill.skill_id,
+                description: skill.summary,
+                location: skill.skill_md_path,
+                skill_root,
+            }
         })
         .collect()
 }
 
-pub(super) fn normalize_skill_lookup_id(raw: &str) -> Option<String> {
-    normalize_skill_id(raw).ok()
+pub(crate) fn model_visible_skill_roots_with_config(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for skill in model_visible_skill_catalog_entries_with_config(config) {
+        let Some(skill_root) = skill.skill_root else {
+            continue;
+        };
+        let canonical = fs::canonicalize(&skill_root).unwrap_or(skill_root);
+        if !roots.contains(&canonical) {
+            roots.push(canonical);
+        }
+    }
+    roots
+}
+
+fn build_external_skill_context_payload(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    skill: &DiscoveredSkillEntry,
+) -> Result<Value, String> {
+    let raw_instructions = load_discovered_skill_markdown(config, skill)?;
+    let skill_root = resolved_skill_root_path(skill);
+    let resource_listing = skill_root
+        .as_deref()
+        .map(|path| list_skill_resources(path, DEFAULT_SKILL_RESOURCE_LIST_LIMIT))
+        .transpose()?
+        .unwrap_or_default();
+    let instructions = render_structured_skill_instructions(
+        skill,
+        raw_instructions.as_str(),
+        skill_root.as_deref(),
+        &resource_listing,
+    );
+
+    Ok(json!({
+        "skill_id": skill.skill_id,
+        "display_name": skill.display_name,
+        "summary": skill.summary,
+        "scope": skill.scope,
+        "source_path": skill.source_path,
+        "install_path": skill.install_path,
+        "skill_md_path": skill.skill_md_path,
+        "skill_root": skill_root,
+        "resource_listing": resource_listing,
+        "instructions": instructions,
+        "metadata": metadata_payload_from_skill(skill),
+        "eligibility": skill.eligibility,
+    }))
+}
+
+pub(crate) fn model_visible_skill_context_payload_for_path(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    raw_path: &Path,
+) -> Result<Option<Value>, String> {
+    let requested_path = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else if let Some(file_root) = config.file_root.as_deref() {
+        file_root.join(raw_path)
+    } else {
+        raw_path.to_path_buf()
+    };
+    let normalized_requested_path = fs::canonicalize(&requested_path).unwrap_or(requested_path);
+
+    for skill in model_visible_skill_entries_with_config(config) {
+        let skill_md_path = PathBuf::from(skill.skill_md_path.as_str());
+        let normalized_skill_md_path = fs::canonicalize(&skill_md_path).unwrap_or(skill_md_path);
+        if normalized_skill_md_path == normalized_requested_path {
+            return build_external_skill_context_payload(config, &skill).map(Some);
+        }
+    }
+
+    Ok(None)
 }
 
 fn discover_managed_skill_candidates(
@@ -6378,9 +6446,16 @@ Safe for model-driven activation.
                 "model catalog should still advertise invokable skills: {catalog}"
             );
             assert!(
-                catalog
-                    .contains("Only skills listed here are currently model-visible and invokable"),
-                "catalog should explain that it excludes manual-only skills: {catalog}"
+                catalog.contains("Use the read tool to load a listed skill's SKILL.md file"),
+                "catalog should describe the read-first loading path: {catalog}"
+            );
+            assert!(
+                catalog.contains("<available_skills>") && catalog.contains("<location>"),
+                "catalog should include structured skill locations for read-first loading: {catalog}"
+            );
+            assert!(
+                !catalog.contains("use `tool.search` to lease `external_skills.invoke`"),
+                "catalog should not steer routine skill loading through tool discovery leases: {catalog}"
             );
 
             fs::remove_dir_all(&root).ok();
@@ -6521,7 +6596,7 @@ Safe for model-driven activation.
             );
             write_file(
                 &root,
-                ".agents/skills/demo-skill/SKILL.md",
+                ".loong/skills/demo-skill/SKILL.md",
                 "---\nname: demo-skill\ndescription: Project-scoped demo skill.\n---\n\n# Project Demo Skill\n\nProject copy should be shadowed by managed.\n",
             );
             write_file(
@@ -6531,12 +6606,12 @@ Safe for model-driven activation.
             );
             write_file(
                 &home,
-                ".agents/skills/demo-skill/SKILL.md",
+                ".loong/skills/demo-skill/SKILL.md",
                 "---\nname: demo-skill\ndescription: User-scoped demo skill.\n---\n\n# User Demo Skill\n\nUser copy should be shadowed by managed.\n",
             );
             write_file(
                 &home,
-                ".agents/skills/user-only/SKILL.md",
+                ".loong/skills/user-only/SKILL.md",
                 "---\nname: user-only\ndescription: User-only skill.\n---\n\nUser-only instructions.\n",
             );
 
@@ -6793,7 +6868,7 @@ Safe for model-driven activation.
             let home = unique_temp_dir("loong-ext-skill-discovery-symlink-home");
             let shared = unique_temp_dir("loong-ext-skill-discovery-symlink-target");
             fs::create_dir_all(&root).expect("create fixture root");
-            fs::create_dir_all(home.join(".agents/skills")).expect("create user skills root");
+            fs::create_dir_all(home.join(".loong/skills")).expect("create user skills root");
             fs::create_dir_all(&shared).expect("create shared skill root");
             write_file(
                 &shared,
@@ -6802,7 +6877,7 @@ Safe for model-driven activation.
             );
             symlink(
                 shared.join("portable-skill"),
-                home.join(".agents/skills/portable-skill"),
+                home.join(".loong/skills/portable-skill"),
             )
             .expect("create user skill symlink");
 

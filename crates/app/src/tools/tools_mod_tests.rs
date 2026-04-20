@@ -296,7 +296,16 @@ fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("[available_external_skills]"));
     assert!(snapshot.contains("demo-skill"));
-    assert!(snapshot.contains("external_skills.invoke"));
+    assert!(snapshot.contains("Use the read tool to load a listed skill's SKILL.md file"));
+    assert!(snapshot.contains("<available_skills>"));
+    assert!(
+        snapshot.contains(
+            &root
+                .join("external-skills-installed/demo-skill/SKILL.md")
+                .display()
+                .to_string()
+        )
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -1714,96 +1723,6 @@ fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
             "expected semantic match for `{query}`, got coarse fallback: {expected_entry:?}"
         );
     }
-
-    std::fs::remove_dir_all(&root).ok();
-}
-
-#[cfg(feature = "tool-file")]
-#[test]
-fn tool_search_matches_model_visible_skill_ids_to_skills_surface() {
-    fn write_file(root: &Path, relative: &str, content: &str) {
-        let path = root.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("create parent directory");
-        }
-        std::fs::write(path, content).expect("write fixture");
-    }
-
-    let root = unique_tool_temp_dir("loongclaw-tool-search-visible-skill-id");
-    std::fs::create_dir_all(&root).expect("create fixture root");
-    write_file(
-        &root,
-        ".agents/skills/agent-browser/SKILL.md",
-        "---\nname: agent-browser\ndescription: managed browser automation.\ninvocation_policy: both\n---\n\n# Agent Browser\n\nUse this skill for browser automation.\n",
-    );
-
-    let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "tool.search".to_owned(),
-            payload: json!({
-                "query": "agent-browser",
-                "limit": 3
-            }),
-        },
-        &config,
-    )
-    .expect("tool search should succeed");
-
-    let results = outcome.payload["results"].as_array().expect("results");
-    assert!(
-        results.iter().any(|entry| entry["tool_id"] == "skills"),
-        "model-visible skill ids should route to the grouped skills surface: {results:?}"
-    );
-
-    std::fs::remove_dir_all(&root).ok();
-}
-
-#[cfg(feature = "tool-file")]
-#[test]
-fn tool_search_exact_skill_id_returns_grouped_skills_surface() {
-    fn write_file(root: &Path, relative: &str, content: &str) {
-        let path = root.join(relative);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("create parent directory");
-        }
-        std::fs::write(path, content).expect("write fixture");
-    }
-
-    let root = unique_tool_temp_dir("loongclaw-tool-search-exact-skill-id");
-    std::fs::create_dir_all(&root).expect("create fixture root");
-    write_file(
-        &root,
-        ".agents/skills/agent-browser/SKILL.md",
-        "---\nname: agent-browser\ndescription: managed browser automation.\ninvocation_policy: both\n---\n\n# Agent Browser\n\nUse this skill for browser automation.\n",
-    );
-
-    let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "tool.search".to_owned(),
-            payload: json!({
-                "exact_tool_id": "agent-browser",
-                "query": "browser automation",
-                "limit": 3
-            }),
-        },
-        &config,
-    )
-    .expect("tool search should succeed");
-
-    let results = outcome.payload["results"].as_array().expect("results");
-    assert_eq!(
-        results.len(),
-        1,
-        "exact skill id should resolve to one grouped result"
-    );
-    assert_eq!(results[0]["tool_id"], "skills");
-    assert!(
-        outcome.payload["diagnostics"].is_null(),
-        "exact model-visible skill ids should not report not-visible diagnostics: {}",
-        outcome.payload["diagnostics"]
-    );
 
     std::fs::remove_dir_all(&root).ok();
 }

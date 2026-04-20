@@ -63,6 +63,7 @@ pub struct SessionContext {
     pub tool_view: ToolView,
     pub workspace_root: Option<PathBuf>,
     pub active_external_skill_roots: Vec<PathBuf>,
+    pub visible_external_skill_roots: Vec<PathBuf>,
     pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
     pub subagent_execution: Option<ConstrainedSubagentExecution>,
     pub subagent_contract: Option<ConstrainedSubagentContractView>,
@@ -80,6 +81,7 @@ impl SessionContext {
             tool_view,
             workspace_root: None,
             active_external_skill_roots: Vec::new(),
+            visible_external_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -103,6 +105,7 @@ impl SessionContext {
             tool_view,
             workspace_root: None,
             active_external_skill_roots: Vec::new(),
+            visible_external_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -122,6 +125,18 @@ impl SessionContext {
         active_external_skill_roots: Vec<PathBuf>,
     ) -> Self {
         self.active_external_skill_roots = active_external_skill_roots
+            .into_iter()
+            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+            .collect();
+        self
+    }
+
+    #[must_use]
+    pub fn with_visible_external_skill_roots(
+        mut self,
+        visible_external_skill_roots: Vec<PathBuf>,
+    ) -> Self {
+        self.visible_external_skill_roots = visible_external_skill_roots
             .into_iter()
             .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
             .collect();
@@ -634,6 +649,12 @@ fn active_external_skill_roots_from_state(
     roots
 }
 
+fn model_visible_external_skill_roots_from_config(config: &LoongConfig) -> Vec<PathBuf> {
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    crate::tools::model_visible_external_skill_roots_for_runtime_config(&tool_runtime_config)
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn apply_active_external_skill_blocked_tools_to_tool_view(
     base_tool_view: ToolView,
@@ -724,6 +745,7 @@ fn build_session_context_from_snapshot(
     base_tool_view: ToolView,
     snapshot: PersistedSessionSnapshot,
 ) -> CliResult<SessionContext> {
+    let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
     let tool_view = apply_active_external_skill_blocked_tools_to_tool_view(
         apply_session_tool_policy_to_tool_view(
             base_tool_view,
@@ -750,6 +772,10 @@ fn build_session_context_from_snapshot(
     if !snapshot.active_external_skill_roots.is_empty() {
         session_context =
             session_context.with_active_external_skill_roots(snapshot.active_external_skill_roots);
+    }
+    if !visible_external_skill_roots.is_empty() {
+        session_context =
+            session_context.with_visible_external_skill_roots(visible_external_skill_roots);
     }
     if snapshot.is_delegate_child {
         if let Some(label) = snapshot.label {
@@ -1474,7 +1500,13 @@ pub trait ConversationRuntime: Send + Sync {
             return Ok(session_context);
         }
 
-        Ok(SessionContext::root_with_tool_view(session_id, tool_view))
+        let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
+        let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
+        if !visible_external_skill_roots.is_empty() {
+            session_context =
+                session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+        }
+        Ok(session_context)
     }
 
     fn tool_view(
@@ -1855,16 +1887,28 @@ where
                 );
             }
 
-            Ok(SessionContext::root_with_tool_view(
-                session_id,
-                base_tool_view,
-            ))
+            let visible_external_skill_roots =
+                model_visible_external_skill_roots_from_config(config);
+            let mut session_context =
+                SessionContext::root_with_tool_view(session_id, base_tool_view);
+            if !visible_external_skill_roots.is_empty() {
+                session_context =
+                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+            }
+            Ok(session_context)
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
             let tool_view = self.tool_view(config, session_id, _binding)?;
-            Ok(SessionContext::root_with_tool_view(session_id, tool_view))
+            let visible_external_skill_roots =
+                model_visible_external_skill_roots_from_config(config);
+            let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
+            if !visible_external_skill_roots.is_empty() {
+                session_context =
+                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+            }
+            Ok(session_context)
         }
     }
 

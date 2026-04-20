@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use super::turn_shared::parse_external_skill_invoke_context;
+use super::turn_shared::{
+    ToolResultLine, external_skill_invoke_context_from_payload_summary,
+    parse_external_skill_invoke_context,
+};
+use crate::tools::runtime_config::ToolRuntimeConfig;
 
 pub(crate) const ACTIVE_EXTERNAL_SKILLS_EVENT_KIND: &str = "active_external_skills_refreshed";
 const ACTIVE_EXTERNAL_SKILLS_MARKER: &str = "[active_external_skills]";
@@ -36,6 +40,65 @@ pub(crate) fn collect_active_external_skills_from_tool_result_text(
 
     for line in tool_result_text.lines() {
         let Some(skill_context) = parse_external_skill_invoke_context(line) else {
+            continue;
+        };
+
+        upsert_active_external_skill(
+            &mut active_skills,
+            ActiveExternalSkill {
+                skill_id: skill_context.skill_id,
+                display_name: skill_context.display_name,
+                instructions: skill_context.instructions,
+                skill_root: skill_context
+                    .skill_root
+                    .map(|skill_root| skill_root.display().to_string()),
+                allowed_tools: skill_context.allowed_tools,
+                blocked_tools: skill_context.blocked_tools,
+            },
+        );
+    }
+
+    active_skills
+}
+
+pub(crate) fn collect_active_external_skills_from_tool_result_text_with_config(
+    tool_result_text: &str,
+    config: &ToolRuntimeConfig,
+) -> Vec<ActiveExternalSkill> {
+    let mut active_skills = collect_active_external_skills_from_tool_result_text(tool_result_text);
+
+    for line in tool_result_text.lines() {
+        let Some(tool_result_line) = ToolResultLine::parse(line) else {
+            continue;
+        };
+        if crate::tools::canonical_tool_name(tool_result_line.tool_name()) != "file.read" {
+            continue;
+        }
+        if tool_result_line.payload_truncated() {
+            continue;
+        }
+        let Some(payload_json) = tool_result_line.payload_summary_json() else {
+            continue;
+        };
+        let Some(path) = payload_json
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Ok(Some(skill_payload)) =
+            crate::tools::model_visible_external_skill_context_payload_for_path(
+                config,
+                std::path::Path::new(path),
+            )
+        else {
+            continue;
+        };
+        let Some(skill_context) =
+            external_skill_invoke_context_from_payload_summary(&skill_payload)
+        else {
             continue;
         };
 
@@ -147,6 +210,10 @@ fn upsert_active_external_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::unique_temp_dir;
+    use crate::tools::runtime_config::{ExternalSkillsRuntimePolicy, ToolRuntimeConfig};
+    use std::collections::BTreeSet;
+    use std::fs;
 
     #[test]
     fn collect_active_external_skills_from_tool_result_text_deduplicates_by_skill_id() {
@@ -237,5 +304,70 @@ mod tests {
         assert!(rendered.contains("Allowed tools: shell.exec"));
         assert!(rendered.contains("Blocked tools: web.fetch"));
         assert!(rendered.contains("<skill_content name=\"Demo Skill\">demo</skill_content>"));
+    }
+
+    #[test]
+    fn collect_active_external_skills_from_skill_file_read_activates_visible_skill() {
+        let root = unique_temp_dir("loong-active-skill-file-read");
+        fs::create_dir_all(root.join(".loong/skills/demo-skill")).expect("create skill root");
+        let skill_path = root.join(".loong/skills/demo-skill/SKILL.md");
+        fs::write(
+            &skill_path,
+            "---\nname: demo-skill\ndescription: Use this skill for demo verification.\ninvocation_policy: both\n---\n\n# Demo Skill\n\nFollow the demo workflow.\n",
+        )
+        .expect("write skill file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root.clone()),
+            external_skills: ExternalSkillsRuntimePolicy {
+                enabled: true,
+                require_download_approval: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                install_root: None,
+                auto_expose_installed: false,
+            },
+            ..Default::default()
+        };
+        let tool_result_text = format!(
+            "[ok] {}",
+            serde_json::json!({
+                "status": "ok",
+                "tool": "file.read",
+                "tool_call_id": "call-1",
+                "payload_summary": serde_json::to_string(&serde_json::json!({
+                    "path": skill_path.display().to_string(),
+                    "content": "# Demo Skill\n\nFollow the demo workflow.\n"
+                }))
+                .expect("encode payload"),
+                "payload_chars": 180,
+                "payload_truncated": false
+            })
+        );
+
+        let active_skills = collect_active_external_skills_from_tool_result_text_with_config(
+            tool_result_text.as_str(),
+            &config,
+        );
+        let expected_skill_root = std::fs::canonicalize(root.join(".loong/skills/demo-skill"))
+            .expect("canonical skill root")
+            .display()
+            .to_string();
+
+        assert_eq!(active_skills.len(), 1);
+        assert_eq!(active_skills[0].skill_id, "demo-skill");
+        assert_eq!(active_skills[0].display_name, "Demo Skill");
+        assert_eq!(
+            active_skills[0].skill_root.as_deref(),
+            Some(expected_skill_root.as_str())
+        );
+        assert!(
+            active_skills[0]
+                .instructions
+                .contains("<skill_content name=\"Demo Skill\""),
+            "skill file reads should synthesize structured activation instructions"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }

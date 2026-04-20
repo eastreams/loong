@@ -720,6 +720,19 @@ pub(crate) fn direct_tool_name_for_hidden_tool(raw: &str) -> Option<&'static str
     tool_surface::direct_tool_name_for_hidden_tool(canonical_name)
 }
 
+pub(crate) fn model_visible_external_skill_roots_for_runtime_config(
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Vec<PathBuf> {
+    external_skills::model_visible_skill_roots_with_config(config)
+}
+
+pub(crate) fn model_visible_external_skill_context_payload_for_path(
+    config: &runtime_config::ToolRuntimeConfig,
+    raw_path: &Path,
+) -> Result<Option<Value>, String> {
+    external_skills::model_visible_skill_context_payload_for_path(config, raw_path)
+}
+
 pub fn user_visible_tool_name(raw: &str) -> String {
     let canonical_name = canonical_tool_name(raw);
 
