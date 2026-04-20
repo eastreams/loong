@@ -145,6 +145,12 @@ impl From<DiscoveredSkillEntry> for DiscoveredSkillModelView {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ModelVisibleSkillIdentity {
+    pub(super) skill_id: String,
+    pub(super) display_name: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 enum SkillModelVisibility {
@@ -4257,6 +4263,37 @@ pub(super) fn model_skill_catalog_section_with_config(
     }
 
     Some(lines.join("\n"))
+}
+
+pub(super) fn model_visible_skill_identities_with_config(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Vec<ModelVisibleSkillIdentity> {
+    let policy = match resolve_effective_policy(config) {
+        Ok(policy) => policy,
+        Err(_) => return Vec::new(),
+    };
+    if !policy.enabled {
+        return Vec::new();
+    }
+
+    let inventory = match discover_skill_inventory(config) {
+        Ok(inventory) => inventory,
+        Err(_) => return Vec::new(),
+    };
+    let filtered = filter_inventory_for_audience(inventory, SkillAudience::Model);
+
+    filtered
+        .skills
+        .into_iter()
+        .map(|skill| ModelVisibleSkillIdentity {
+            skill_id: skill.skill_id,
+            display_name: skill.display_name,
+        })
+        .collect()
+}
+
+pub(super) fn normalize_skill_lookup_id(raw: &str) -> Option<String> {
+    normalize_skill_id(raw).ok()
 }
 
 fn discover_managed_skill_candidates(

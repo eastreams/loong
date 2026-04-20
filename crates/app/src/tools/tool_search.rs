@@ -79,6 +79,8 @@ pub(super) fn execute_tool_search_tool_with_config(
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
+    let visible_external_skills =
+        super::external_skills::model_visible_skill_identities_with_config(config);
 
     let exact_match_entries =
         super::runtime_tool_search_entries(config, Some(&visible_tool_view), false)
@@ -90,7 +92,10 @@ pub(super) fn execute_tool_search_tool_with_config(
                 )
             })
             .collect::<Vec<_>>();
-    let searchable_entries = collapse_hidden_surface_search_entries(exact_match_entries.clone());
+    let searchable_entries = augment_hidden_skills_surface_with_external_skill_identities(
+        collapse_hidden_surface_search_entries(exact_match_entries.clone()),
+        visible_external_skills.as_slice(),
+    );
     let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
         let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
         let direct_tool_id = direct_tool_id.map(str::to_owned);
@@ -106,6 +111,14 @@ pub(super) fn execute_tool_search_tool_with_config(
                 canonical_match || tool_id_match || direct_match
             })
             .cloned()
+            .or_else(|| {
+                exact_tool_id_matches_visible_external_skill(
+                    exact_tool_id,
+                    visible_external_skills.as_slice(),
+                )
+                .then(|| hidden_skills_surface_entry(&searchable_entries))
+                .flatten()
+            })
             .or_else(|| {
                 exact_match_entries
                     .iter()
@@ -244,6 +257,75 @@ fn tool_search_diagnostics_json(
     }
 
     Value::Null
+}
+
+fn augment_hidden_skills_surface_with_external_skill_identities(
+    entries: Vec<SearchableToolEntry>,
+    visible_external_skills: &[super::external_skills::ModelVisibleSkillIdentity],
+) -> Vec<SearchableToolEntry> {
+    if visible_external_skills.is_empty() {
+        return entries;
+    }
+
+    let mut discovery_terms = BTreeSet::new();
+    for skill in visible_external_skills {
+        discovery_terms.insert(skill.skill_id.clone());
+        let display_name = skill.display_name.trim();
+        if !display_name.is_empty() {
+            discovery_terms.insert(display_name.to_owned());
+        }
+    }
+    if discovery_terms.is_empty() {
+        return entries;
+    }
+
+    entries
+        .into_iter()
+        .map(|entry| augment_hidden_skills_surface_entry(entry, &discovery_terms))
+        .collect()
+}
+
+fn augment_hidden_skills_surface_entry(
+    entry: SearchableToolEntry,
+    discovery_terms: &BTreeSet<String>,
+) -> SearchableToolEntry {
+    if entry.canonical_name != "skills" && entry.tool_id != "skills" {
+        return entry;
+    }
+
+    let mut merged_tags = entry.tags.iter().cloned().collect::<BTreeSet<_>>();
+    merged_tags.extend(discovery_terms.iter().cloned());
+
+    searchable_entry_from_manual_definition(
+        entry.canonical_name.as_str(),
+        entry.summary.as_str(),
+        entry.argument_hint.as_str(),
+        entry.required_fields,
+        entry.required_field_groups,
+        merged_tags.into_iter().collect(),
+    )
+}
+
+fn exact_tool_id_matches_visible_external_skill(
+    exact_tool_id: &str,
+    visible_external_skills: &[super::external_skills::ModelVisibleSkillIdentity],
+) -> bool {
+    let Some(normalized_skill_id) =
+        super::external_skills::normalize_skill_lookup_id(exact_tool_id)
+    else {
+        return false;
+    };
+
+    visible_external_skills
+        .iter()
+        .any(|skill| skill.skill_id == normalized_skill_id)
+}
+
+fn hidden_skills_surface_entry(entries: &[SearchableToolEntry]) -> Option<SearchableToolEntry> {
+    entries
+        .iter()
+        .find(|entry| entry.canonical_name == "skills" || entry.tool_id == "skills")
+        .cloned()
 }
 
 fn tool_search_query_from_payload(
