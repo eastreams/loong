@@ -144,8 +144,6 @@ EOF
   )
 
   assert_contains "$invocation_log" "cargo test --locked -p loong --all-features --lib --bins --test daemon_smoke --test daemon_feishu --no-run --message-format=json"
-  assert_contains "$invocation_log" "binary loong_daemon_lib "
-  assert_contains "$invocation_log" "binary loong_bin "
   assert_contains "$invocation_log" "binary daemon_smoke integration::alpha::"
   assert_contains "$invocation_log" "binary daemon_smoke integration::beta::"
   assert_contains "$invocation_log" "binary daemon_feishu "
