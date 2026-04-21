@@ -7394,12 +7394,13 @@ Safe for model-driven activation.
             fs::create_dir_all(&root).expect("create fixture root");
             let config_path = root.join("loong.toml");
             let mut loong_config = LoongConfig::default();
+            let current_exe = std::env::current_exe().expect("current executable path");
             loong_config.mcp.servers.insert(
                 " Filesystem ".to_owned(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::Stdio {
-                        command: "uvx".to_owned(),
-                        args: vec!["context7-mcp".to_owned()],
+                        command: current_exe.display().to_string(),
+                        args: Vec::new(),
                         env: BTreeMap::new(),
                         cwd: None,
                     },
