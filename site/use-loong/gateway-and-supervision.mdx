@@ -17,11 +17,13 @@ If you first need the shared `default_account`, `accounts.<id>`, or outbound
 trust config shape, start with
 [Configuration Patterns](/use-loong/configuration-patterns).
 
+The canonical public docs story now uses grouped shells first: `loong channels serve <surface>` for single-surface runtime loops, `loong gateway ...` for persisted ownership, and `multi-channel-serve` as the legacy compatibility wrapper when operators still want the older flat supervisor name.
+
 ## Choose The Right Owner Shape
 
 | Need | Best command | Why |
 | --- | --- | --- |
-| keep one service channel in the foreground while you verify it | `loong <surface>-serve` | simplest single-surface loop; no cross-channel supervisor yet |
+| keep one service channel in the foreground while you verify it | `loong channels serve <surface>` | simplest single-surface loop; no cross-channel supervisor yet |
 | keep several gateway-supervised runtime-backed channels attached to one foreground shell | `loong multi-channel-serve --session <name>` | compatibility wrapper for operators who want one visible CLI-first session |
 | claim the persisted owner slot and manage it from another process | `loong gateway run` | explicit owner contract with `status` and `stop` |
 | claim gateway ownership and also attach a named CLI host | `loong gateway run --session <name>` | same owner contract, plus an attached concurrent CLI session |
@@ -114,7 +116,7 @@ loong gateway stop
 ## Rollout Order
 
 1. Get `onboard`, `ask` or `chat`, and `doctor` healthy first.
-2. Bring up one gateway-supervised surface with its own `loong <surface>-serve`
+2. Bring up one gateway-supervised surface with its own `loong channels serve <surface>`
    loop before you introduce supervision.
 3. Add `default_account` plus `accounts.<id>` before you rely on multi-account
    supervision.
@@ -145,7 +147,7 @@ That combination answers four different questions:
 If the runtime still does not start cleanly:
 
 - confirm that the selected surface is actually gateway-supervised, not a
-  standalone native-serve or outbound-only lane
+  standalone native-serve `channels serve <surface>` lane or outbound-only lane
 - confirm that the selected account id exists under `accounts.<id>`
 - rerun with explicit `--channel-account` selectors when a channel family has
   more than one configured account

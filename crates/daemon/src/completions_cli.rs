@@ -27,16 +27,91 @@ fn render_completions_for_command(shell: Shell, command_name: &'static str) -> C
     let thread_builder = thread_builder.stack_size(CLI_COMPLETIONS_STACK_SIZE_BYTES);
     let join_handle = thread_builder
         .spawn(move || {
-            let mut rendered = Vec::new();
             let mut command = crate::build_cli_command(command_name);
+            let hidden_root_subcommands = command
+                .get_subcommands()
+                .filter(|subcommand| subcommand.is_hide_set())
+                .map(|subcommand| subcommand.get_name().to_owned())
+                .collect::<Vec<_>>();
+
+            let mut rendered = Vec::new();
             generate(shell, &mut command, command_name, &mut rendered);
-            rendered
+
+            if matches!(shell, Shell::Bash) && !hidden_root_subcommands.is_empty() {
+                let rendered_text =
+                    String::from_utf8(rendered).expect("bash completions should be utf8");
+                strip_hidden_root_bash_aliases(&rendered_text, &hidden_root_subcommands)
+                    .into_bytes()
+            } else {
+                rendered
+            }
         })
         .map_err(|error| format!("spawn completions render thread failed: {error}"))?;
     let rendered = join_handle
         .join()
         .map_err(|_panic| "completions render thread panicked".to_owned())?;
     Ok(rendered)
+}
+
+fn strip_hidden_root_bash_aliases(rendered: &str, hidden_root_subcommands: &[String]) -> String {
+    let hidden = hidden_root_subcommands
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let mut filtered = Vec::with_capacity(lines.len());
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        let line = lines[index];
+
+        if should_strip_hidden_root_case_block(line, &hidden) {
+            index += 1;
+            while index < lines.len() {
+                let candidate = lines[index];
+                index += 1;
+                if candidate.trim() == ";;" {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        filtered.push(filter_hidden_root_opts_line(line, &hidden));
+        index += 1;
+    }
+
+    filtered.join("\n")
+}
+
+fn should_strip_hidden_root_case_block(line: &str, hidden_root_subcommands: &[&str]) -> bool {
+    hidden_root_subcommands.iter().any(|name| {
+        line.contains(&format!("loong,{name})"))
+            || line.contains(&format!("loong__subcmd__help,{name})"))
+    })
+}
+
+fn filter_hidden_root_opts_line(line: &str, hidden_root_subcommands: &[&str]) -> String {
+    let Some(opts_index) = line.find("opts=\"") else {
+        return line.to_owned();
+    };
+    let value_start = opts_index + "opts=\"".len();
+    let Some(relative_end) = line[value_start..].find('"') else {
+        return line.to_owned();
+    };
+    let value_end = value_start + relative_end;
+    let filtered_tokens = line[value_start..value_end]
+        .split_whitespace()
+        .filter(|token| !hidden_root_subcommands.iter().any(|hidden| token == hidden))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!(
+        "{}{}{}",
+        &line[..value_start],
+        filtered_tokens,
+        &line[value_end..]
+    )
 }
 
 pub fn run_completions_cli(options: CompletionsCommandOptions) -> CliResult<()> {

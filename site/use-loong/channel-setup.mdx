@@ -18,6 +18,15 @@ If you specifically need the longer-lived owner model, foreground versus
 headless supervision, or `--channel-account` selectors, continue to
 [Gateway And Supervision](/use-loong/gateway-and-supervision).
 
+## Canonical Channel Command Story
+
+Public docs now use grouped channel shells first:
+
+- generic sends: `loong channels send <surface> ...`
+- generic serve loops: `loong channels serve <surface> ...`
+- richer family namespaces stay first-class when they expose more than thin wrappers, for example `loong feishu send` and `loong feishu serve`
+- legacy flat aliases such as `telegram-send`, `line-serve`, or `onebot-send` remain compatibility surfaces where the runtime still accepts them
+
 ## Start With The Right Question
 
 | If you need... | Start with... |
@@ -45,15 +54,15 @@ Before any channel is really ready:
 
 | Situation | Best first move | Why |
 | --- | --- | --- |
-| one Feishu or Lark app should own inbound automation | configure `feishu` and run `loong feishu-serve` | the Feishu family is the shipped runtime lane for both Feishu and Lark |
-| one Telegram bot should own a reply loop | configure `telegram` and run `loong telegram-serve` | this is the simplest runtime-backed bot lane |
-| one Matrix bot should own a room sync loop | configure `matrix` and run `loong matrix-serve` | the homeserver, room ids, and sync boundary stay explicit |
-| one WhatsApp business account should own a Cloud API reply loop | configure `whatsapp` and run `loong whatsapp-serve` | send and serve are both shipped on the verified webhook path |
-| one WeCom bot should own the official long connection | configure `wecom` and run `loong wecom-serve` | this matches the shipped AIBot contract |
-| one LINE or generic webhook lane should use a real built-in serve loop without gateway supervision yet | configure the standalone native-serve block and run `loong <surface>-serve --bind ...` | the runtime is real, but the owner is still the direct `*-serve` command |
+| one Feishu or Lark app should own inbound automation | configure `feishu` and run `loong feishu serve` | the Feishu family is the shipped runtime lane for both Feishu and Lark |
+| one Telegram bot should own a reply loop | configure `telegram` and run `loong channels serve telegram` | this is the simplest runtime-backed bot lane |
+| one Matrix bot should own a room sync loop | configure `matrix` and run `loong channels serve matrix` | the homeserver, room ids, and sync boundary stay explicit |
+| one WhatsApp business account should own a Cloud API reply loop | configure `whatsapp` and run `loong channels serve whatsapp` | send and serve are both shipped on the verified webhook path |
+| one WeCom bot should own the official long connection | configure `wecom` and run `loong channels serve wecom` | this matches the shipped AIBot contract |
+| one LINE or generic webhook lane should use a real built-in serve loop without gateway supervision yet | configure the standalone native-serve block and run `loong channels serve <surface> --bind ...` | the runtime is real, but the owner is still the direct grouped serve command |
 | one WeChat / QQ / OneBot bridge should stay external but visible | configure the plugin-backed channel block and run `loong doctor` plus `loong channels` | bridge-owned surfaces are real but should not pretend the gateway already owns the upstream login stack |
 | you need several accounts in one channel family | add `default_account` plus `accounts.<id>` before adding gateway selectors | stable account ids make later supervision and routing legible |
-| you only need governed direct sends | configure one outbound-only surface and use `loong <surface>-send` | this avoids pretending a reply loop already ships |
+| you only need governed direct sends | configure one outbound-only surface and use `loong channels send <surface>` | this avoids pretending a reply loop already ships |
 
 ## Gateway-Supervised Service Channels
 
@@ -62,21 +71,21 @@ These are the shipped reply-loop surfaces that can join `gateway run` or
 
 | Surface | What you configure first | Run loop |
 | --- | --- | --- |
-| Feishu / Lark | app credentials, trusted chats, and the selected inbound transport | `loong feishu-serve` |
-| Telegram | bot token and trusted chat ids | `loong telegram-serve` |
-| Matrix | homeserver base URL, access token, and trusted room ids | `loong matrix-serve` |
-| WhatsApp | Cloud API credentials plus verified webhook material | `loong whatsapp-serve` |
-| WeCom | bot id, secret, and trusted conversation ids | `loong wecom-serve` |
+| Feishu / Lark | app credentials, trusted chats, and the selected inbound transport | `loong feishu serve` |
+| Telegram | bot token and trusted chat ids | `loong channels serve telegram` |
+| Matrix | homeserver base URL, access token, and trusted room ids | `loong channels serve matrix` |
+| WhatsApp | Cloud API credentials plus verified webhook material | `loong channels serve whatsapp` |
+| WeCom | bot id, secret, and trusted conversation ids | `loong channels serve wecom` |
 
 ## Standalone Native-Serve Surfaces
 
 These surfaces ship real built-in serve loops, but the runtime still stays on
-the direct `*-serve` command instead of gateway supervision.
+the direct `channels serve <surface>` command instead of gateway supervision.
 
 | Surface | What you configure first | Run loop |
 | --- | --- | --- |
-| LINE | channel access token, channel secret, and a chosen local bind address | `loong line-serve --bind <HOST:PORT>` |
-| Webhook | signing secret plus a chosen local bind address | `loong webhook-serve --bind <HOST:PORT>` |
+| LINE | channel access token, channel secret, and a chosen local bind address | `loong channels serve line --bind <HOST:PORT>` |
+| Webhook | signing secret plus a chosen local bind address | `loong channels serve webhook --bind <HOST:PORT>` |
 
 ## Plugin-Backed Bridge Surfaces
 
@@ -85,17 +94,17 @@ and upstream session lifecycle stay in an external bridge or managed plugin.
 
 | Surface | What you configure first | Current operator path |
 | --- | --- | --- |
-| Weixin | `weixin.enabled`, `bridge_url`, `bridge_access_token`, `allowed_contact_ids` | `loong doctor`, `loong channels`, `weixin-send`, `weixin-serve`, managed bridge discovery |
-| QQ Bot | `qqbot.enabled`, `app_id`, `client_secret`, `allowed_peer_ids` | `loong doctor`, `loong channels`, `qqbot-send`, `qqbot-serve`, managed bridge discovery |
-| OneBot | `onebot.enabled`, `websocket_url`, `access_token`, `allowed_group_ids` | `loong doctor`, `loong channels`, `onebot-send`, `onebot-serve`, managed bridge discovery |
+| Weixin | `weixin.enabled`, `bridge_url`, `bridge_access_token`, `allowed_contact_ids` | `loong doctor`, `loong channels`, `loong channels send weixin`, `loong channels serve weixin`, managed bridge discovery |
+| QQ Bot | `qqbot.enabled`, `app_id`, `client_secret`, `allowed_peer_ids` | `loong doctor`, `loong channels`, `loong channels send qqbot`, `loong channels serve qqbot`, managed bridge discovery |
+| OneBot | `onebot.enabled`, `websocket_url`, `access_token`, `allowed_group_ids` | `loong doctor`, `loong channels`, `loong channels send onebot`, `loong channels serve onebot`, managed bridge discovery |
 
 Operational rule:
 
 - these surfaces are actionable and operator-visible today
 - they do not join `gateway run` or `multi-channel-serve` because their runtime owner is still the external bridge
-- the important setup milestone is a passing contract + discovery result, not a native `*-serve` loop that does not exist yet
+- the important setup milestone is a passing contract + discovery result, not a native runtime loop that does not exist yet
 - managed bridge command execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`
-- `*-serve` retries transient managed bridge runtime failures locally with bounded backoff before surfacing a hard failure
+- grouped `channels serve <surface>` flows and their legacy `*-serve` aliases retry transient managed bridge runtime failures locally with bounded backoff before surfacing a hard failure
 - retry/failure metadata is surfaced through `loong doctor` and `loong channels`, so operators can see when a bridge is actively retrying instead of guessing from stderr
 
 ## Multi-Account Rule
@@ -119,7 +128,7 @@ Publicly that means:
 - both modes need the base app credentials and trusted-chat boundary
 - webhook mode also needs the webhook verification material
 - websocket mode should not be documented as if webhook-only secrets are mandatory
-- `feishu-send` and `feishu-serve` are both first-class shipped commands
+- `loong feishu send` and `loong feishu serve` are the canonical first-class shipped commands; `feishu-send` and `feishu-serve` remain compatibility aliases
 
 ### Telegram
 
@@ -128,8 +137,8 @@ Telegram remains the simplest shipped bot lane:
 - enable the channel
 - provide one bot token
 - allowlist trusted chat ids
-- use `telegram-serve` for reply-loop automation
-- use `telegram-send` for direct proactive sends
+- use `loong channels serve telegram` for reply-loop automation
+- use `loong channels send telegram` for direct proactive sends
 
 ### Matrix
 
@@ -137,8 +146,8 @@ Matrix is a sync-loop surface:
 
 - configure the homeserver URL and access token
 - allowlist trusted room ids
-- use `matrix-send` for direct room delivery
-- use `matrix-serve` for the reply loop
+- use `loong channels send matrix` for direct room delivery
+- use `loong channels serve matrix` for the reply loop
 
 ### WhatsApp
 
@@ -146,8 +155,8 @@ WhatsApp is a Cloud API plus verified webhook runtime surface:
 
 - configure `access_token` and `phone_number_id` for direct sends
 - configure `verify_token` and `app_secret` for the webhook-backed serve path
-- use `whatsapp-send` for proactive sends
-- use `whatsapp-serve` for the reply loop
+- use `loong channels send whatsapp` for proactive sends
+- use `loong channels serve whatsapp` for the reply loop
 - keep `webhook_bind` and `webhook_path` explicit so the callback owner is legible
 
 ### WeCom
@@ -156,8 +165,8 @@ WeCom is documented as the official AIBot long-connection lane:
 
 - configure `bot_id` and `secret`
 - allowlist trusted conversation ids
-- use `wecom-serve` for the long-lived reply loop
-- use `wecom-send` for proactive sends
+- use `loong channels serve wecom` for the long-lived reply loop
+- use `loong channels send wecom` for proactive sends
 
 Loong should not describe a WeCom webhook callback mode as if it were the
 same shipped contract.
@@ -171,11 +180,11 @@ Weixin is a bridge-first surface:
 - optional `managed_bridge_plugin_id` is the tie-breaker when several compatible managed bridges are installed
 - use `loong doctor` to verify the configured contract and the selected managed bridge
 - use `loong channels` or `loong channels --json` to inspect stable targets and discovery state
-- use `weixin-send --target contact:<id>` or `weixin-send --target weixin:<account>:room:<id>` for proactive sends
-- use `weixin-serve` to run the selected managed bridge reply loop under Loong supervision
-- use `weixin-serve --stop` to request cooperative shutdown for the selected managed bridge runtime owner
+- use `loong channels send weixin --target contact:<id>` or `loong channels send weixin --target weixin:<account>:room:<id>` for proactive sends
+- use `loong channels serve weixin` to run the selected managed bridge reply loop under Loong supervision
+- use `loong channels serve weixin --stop` to request cooperative shutdown for the selected managed bridge runtime owner
 - Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
-- use `weixin-serve --stop-duplicates` as the operator fallback when duplicate live owners persist and you want Loong to keep the preferred runtime owner while requesting cooperative shutdown for the older duplicates
+- use `loong channels serve weixin --stop-duplicates` as the operator fallback when duplicate live owners persist and you want Loong to keep the preferred runtime owner while requesting cooperative shutdown for the older duplicates
 
 ### QQ Bot
 
@@ -185,11 +194,11 @@ QQ Bot is the explicit Tencent gateway / bridge lane:
 - use `allowed_peer_ids` to keep the trusted conversation boundary explicit
 - add `managed_bridge_plugin_id` only when several compatible managed bridges exist and you need one exact selection
 - keep openids and account ids stable so direct, group, and guild routes do not drift between bridge implementations
-- use `qqbot-send --target c2c:<openid>`, `group:<openid>`, or `channel:<id>` for proactive sends
-- use `qqbot-serve` to run the selected managed bridge reply loop under Loong supervision
-- use `qqbot-serve --stop` to request cooperative shutdown for the selected managed bridge runtime owner
+- use `loong channels send qqbot --target c2c:<openid>`, `group:<openid>`, or `channel:<id>` for proactive sends
+- use `loong channels serve qqbot` to run the selected managed bridge reply loop under Loong supervision
+- use `loong channels serve qqbot --stop` to request cooperative shutdown for the selected managed bridge runtime owner
 - Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
-- use `qqbot-serve --stop-duplicates` as the operator fallback to keep the preferred live runtime owner and cooperatively drain the duplicate owners
+- use `loong channels serve qqbot --stop-duplicates` as the operator fallback to keep the preferred live runtime owner and cooperatively drain the duplicate owners
 
 ### OneBot
 
@@ -199,11 +208,11 @@ OneBot is the protocol-level bridge lane:
 - keep `allowed_group_ids` explicit so the bridge contract stays narrow
 - use it when the upstream bridge already speaks OneBot v11 and you want Loong to own the stable surface id and target contract
 - verify bridge discovery through `loong doctor` before you treat the surface as ready
-- use `onebot-send --target private:<user_id>` or `group:<group_id>` for proactive sends
-- use `onebot-serve` to run the selected managed bridge reply loop under Loong supervision
-- use `onebot-serve --stop` to request cooperative shutdown for the selected managed bridge runtime owner
+- use `loong channels send onebot --target private:<user_id>` or `loong channels send onebot --target group:<group_id>` for proactive sends
+- use `loong channels serve onebot` to run the selected managed bridge reply loop under Loong supervision
+- use `loong channels serve onebot --stop` to request cooperative shutdown for the selected managed bridge runtime owner
 - Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
-- use `onebot-serve --stop-duplicates` as the operator fallback to clean up duplicate live runtime owners without fully draining the preferred owner
+- use `loong channels serve onebot --stop-duplicates` as the operator fallback to clean up duplicate live runtime owners without fully draining the preferred owner
 
 ## Outbound-Only Surfaces
 
@@ -212,10 +221,10 @@ metadata without claiming a full reply-loop runtime.
 
 | Surface family | Current examples | Primary command shape |
 | --- | --- | --- |
-| chat and workplace platforms | Discord, Slack, DingTalk, Microsoft Teams, Mattermost, Google Chat | `loong <surface>-send` |
-| messaging and communication bridges | Signal, IRC, iMessage / BlueBubbles, Nostr | `loong <surface>-send` |
-| generic or self-hosted delivery | Email, Nextcloud Talk, Synology Chat, Tlon | `loong <surface>-send` |
-| community-facing outbound integrations | Twitch and similar outbound-only integrations | `loong <surface>-send` |
+| chat and workplace platforms | Discord, Slack, DingTalk, Microsoft Teams, Mattermost, Google Chat | `loong channels send <surface>` |
+| messaging and communication bridges | Signal, IRC, iMessage / BlueBubbles, Nostr | `loong channels send <surface>` |
+| generic or self-hosted delivery | Email, Nextcloud Talk, Synology Chat, Tlon | `loong channels send <surface>` |
+| community-facing outbound integrations | Twitch and similar outbound-only integrations | `loong channels send <surface>` |
 
 ## Outbound HTTP Trust Rules
 
@@ -235,7 +244,7 @@ When you move beyond one local surface:
 
 - `gateway run`, `gateway status`, and `gateway stop` are the explicit owner contract
 - `multi-channel-serve` is the compatibility wrapper for the shipped gateway-supervised subset
-- standalone native-serve surfaces use their own `*-serve` loop instead of joining the same reply-loop runtime contract
+- standalone native-serve surfaces use their own `channels serve <surface>` loop instead of joining the same reply-loop runtime contract
 - plugin-backed surfaces are inspected through `doctor` and `channels`, not supervised through the same reply-loop runtime contract
 - outbound-only surfaces should not be described as if they are supervised by the same reply-loop runtime contract
 - the detailed command model, selector syntax, and recovery loop live in
@@ -245,7 +254,7 @@ When you move beyond one local surface:
 
 1. Get the local assistant path healthy first.
 2. Add one gateway-supervised service channel if you need the shortest path into `gateway run` or `multi-channel-serve`.
-3. Add one standalone native-serve surface when you need a real built-in serve loop without gateway supervision yet.
+3. Add one standalone native-serve surface when you need a real built-in `channels serve <surface>` loop without gateway supervision yet.
 4. Add one plugin-backed bridge surface when the ecosystem is real but the runtime owner should stay external.
 5. Add outbound-only surfaces when you need governed direct sends.
 6. Reach for gateway and `multi-channel-serve` only after one gateway-supervised channel already works cleanly.

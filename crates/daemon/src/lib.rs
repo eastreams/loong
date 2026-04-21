@@ -47,6 +47,7 @@ pub use self::channel_cli_specs::{
 pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
+pub use self::channels_cli::{ChannelsCommands, run_grouped_channels_cli};
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
 pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
@@ -75,6 +76,7 @@ pub use loong_bench::{
 };
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
+pub use runtime_cli::{RuntimeCommands, run_runtime_cli};
 pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
 pub fn run_memory_context_benchmark_cli(
@@ -122,6 +124,7 @@ mod channel_resolution;
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
 mod channel_serve_cli;
+pub mod channels_cli;
 mod cli_handoff;
 mod cli_json;
 mod command_kind;
@@ -163,6 +166,7 @@ mod provider_model_probe_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
+pub mod runtime_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
@@ -451,7 +455,7 @@ impl std::str::FromStr for MultiChannelServeChannelAccount {
 #[derive(Parser, Debug)]
 #[command(
     name = CLI_COMMAND_NAME,
-    about = "Loong low-level runtime daemon",
+    about = "Loong assistant and runtime CLI",
     version
 )]
 pub struct Cli {
@@ -473,6 +477,7 @@ pub enum Commands {
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
+    #[command(hide = true)]
     /// Run the original end-to-end bootstrap demo
     Demo,
     #[command(
@@ -488,11 +493,13 @@ pub enum Commands {
         #[arg(long, default_value = "{}")]
         payload: String,
     },
+    #[command(hide = true)]
     /// Run agent turns through the unified runtime entry surface
     Turn {
         #[command(subcommand)]
         command: TurnCommands,
     },
+    #[command(hide = true)]
     /// Invoke one connector operation through kernel policy gate
     InvokeConnector {
         #[arg(long)]
@@ -500,8 +507,10 @@ pub enum Commands {
         #[arg(long, default_value = "{}")]
         payload: String,
     },
+    #[command(hide = true)]
     /// Demonstrate audit lifecycle with fixed clock and token revocation
     AuditDemo,
+    #[command(hide = true)]
     /// Generate a runnable JSON spec template for quick vertical customization
     InitSpec {
         #[arg(long, default_value = "loong.spec.json")]
@@ -509,6 +518,7 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = InitSpecPreset::Default)]
         preset: InitSpecPreset,
     },
+    #[command(hide = true)]
     /// Run a full workflow from a JSON spec (task/connector/runtime/tool/memory)
     RunSpec {
         #[arg(long)]
@@ -520,6 +530,7 @@ pub enum Commands {
         #[command(flatten)]
         bridge_support: RunSpecBridgeSupportArgs,
     },
+    #[command(hide = true)]
     /// Run pressure benchmarks for programmatic orchestration and optional regression gate checks
     BenchmarkProgrammaticPressure {
         #[arg(
@@ -539,6 +550,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         preflight_fail_on_warnings: bool,
     },
+    #[command(hide = true)]
     /// Lint pressure baseline coverage without running benchmark scenarios
     BenchmarkProgrammaticPressureLint {
         #[arg(
@@ -558,6 +570,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         fail_on_warnings: bool,
     },
+    #[command(hide = true)]
     /// Benchmark Wasm compile cache behavior and enforce hot-path speedup gate
     BenchmarkWasmCache {
         #[arg(long, default_value = "examples/plugins-wasm/secure_echo.wasm")]
@@ -578,6 +591,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 1.5)]
         min_speedup_ratio: f64,
     },
+    #[command(hide = true)]
     /// Benchmark memory prompt-context hydration across window-only, rebuild, steady-state, and shrink catch-up summary paths
     BenchmarkMemoryContext {
         #[arg(
@@ -608,6 +622,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 1.2)]
         min_steady_state_speedup_ratio: f64,
     },
+    #[command(hide = true)]
     /// Validate config semantics and report structured diagnostics
     ValidateConfig {
         #[arg(long)]
@@ -837,7 +852,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: plugins_cli::PluginsCommands,
     },
-    /// List compiled channel surfaces, aliases, and readiness status
+    /// Inspect channels or run canonical grouped channel operations
     Channels {
         #[arg(long)]
         config: Option<String>,
@@ -845,6 +860,8 @@ pub enum Commands {
         resolve: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
+        #[command(subcommand)]
+        command: Option<channels_cli::ChannelsCommands>,
     },
     /// Fetch and print currently available provider model list
     ListModels {
@@ -853,6 +870,12 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Inspect runtime, ACP, MCP, snapshot, and trajectory operator surfaces
+    Runtime {
+        #[command(subcommand)]
+        command: runtime_cli::RuntimeCommands,
+    },
+    #[command(hide = true)]
     /// Print a unified runtime snapshot for experiment reproducibility and lineage capture
     RuntimeSnapshot {
         #[arg(long)]
@@ -871,6 +894,7 @@ pub enum Commands {
     #[command(
         long_about = "Restore a persisted runtime snapshot artifact into the current config and managed skill state.\n\nDry-run by default; pass --apply to mutate config or managed skills."
     )]
+    #[command(hide = true)]
     /// Restore a persisted runtime snapshot artifact into the current config and managed skill state
     RuntimeRestore {
         #[arg(long)]
@@ -882,21 +906,25 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         apply: bool,
     },
+    #[command(hide = true)]
     /// Manage snapshot-linked experiment run records
     RuntimeExperiment {
         #[command(subcommand)]
         command: runtime_experiment_cli::RuntimeExperimentCommands,
     },
+    #[command(hide = true)]
     /// Manage run-derived capability candidates, family readiness, promotion plans, and governed apply outputs
     RuntimeCapability {
         #[command(subcommand)]
         command: runtime_capability_cli::RuntimeCapabilityCommands,
     },
+    #[command(hide = true)]
     /// Manage durable work units for long-running runtime orchestration
     WorkUnit {
         #[command(subcommand)]
         command: work_unit_cli::WorkUnitCommands,
     },
+    #[command(hide = true)]
     /// List available conversation context engines and selected runtime engine
     ListContextEngines {
         #[arg(long)]
@@ -904,6 +932,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// List available memory systems and selected runtime memory system
     ListMemorySystems {
         #[arg(long)]
@@ -911,6 +940,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// List configured MCP servers and their runtime-visible inventory state
     ListMcpServers {
         #[arg(long)]
@@ -918,6 +948,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Show one configured MCP server and its runtime-visible inventory state
     ShowMcpServer {
         #[arg(long)]
@@ -927,6 +958,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// List available ACP runtime backends and current control-plane selection
     ListAcpBackends {
         #[arg(long)]
@@ -934,6 +966,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// List persisted ACP session metadata from the local control-plane store
     ListAcpSessions {
         #[arg(long)]
@@ -941,6 +974,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Inspect live ACP session status by session key or conversation identity
     AcpStatus {
         #[arg(long)]
@@ -954,6 +988,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Inspect ACP control-plane observability snapshot from the shared session manager
     AcpObservability {
         #[arg(long)]
@@ -961,6 +996,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Print ACP runtime event summary for a conversation session
     AcpEventSummary {
         #[arg(long)]
@@ -972,6 +1008,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Evaluate ACP conversation dispatch policy for a session or structured channel address
     AcpDispatch {
         #[arg(long)]
@@ -991,6 +1028,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Run ACP backend readiness diagnostics for the selected or requested backend
     AcpDoctor {
         #[arg(long)]
@@ -1001,6 +1039,7 @@ pub enum Commands {
         json: bool,
     },
     #[command(
+        hide = true,
         about = "Run the loopback-only internal control-plane skeleton",
         long_about = "Run the internal control-plane skeleton.\n\nBy default this control-plane listener binds 127.0.0.1 only. You may provide `--bind <host:port>` to override the listener address, but non-loopback binds require `--config` plus `control_plane.allow_remote=true` and a configured `control_plane.shared_token`. Baseline endpoints are `/readyz`, `/healthz`, `/control/challenge`, `/control/connect`, `/control/subscribe`, `/control/snapshot`, and `/control/events`. When `--config` is provided, repository-backed `/session/list`, `/session/read`, `/approval/list`, `/pairing/list`, `/pairing/resolve`, `/acp/session/list`, and `/acp/session/read` views become available for the selected session root."
     )]
@@ -1049,6 +1088,7 @@ pub enum Commands {
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
     },
+    #[command(hide = true)]
     /// Print safe-lane runtime event summary for a session
     SafeLaneSummary {
         #[arg(long)]
@@ -1060,6 +1100,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Search transcript turns across visible sessions
     SessionSearch {
         #[arg(long)]
@@ -1077,6 +1118,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Inspect one exported session-search artifact
     SessionSearchInspect {
         #[arg(long)]
@@ -1084,6 +1126,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Export one session trajectory artifact with transcript turns and session events
     TrajectoryExport {
         #[arg(long)]
@@ -1095,6 +1138,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Inspect one exported trajectory artifact
     TrajectoryInspect {
         #[arg(long)]
@@ -1102,11 +1146,13 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    #[command(hide = true)]
     /// Export or inspect runtime trajectory artifacts for replay, evaluation, or research workflows
     RuntimeTrajectory {
         #[command(subcommand)]
         command: runtime_trajectory_cli::RuntimeTrajectoryCommands,
     },
+    #[command(hide = true)]
     /// Send one Telegram message
     TelegramSend {
         #[arg(long)]
@@ -1124,6 +1170,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run Telegram channel polling/response loop
     TelegramServe {
         #[arg(long)]
@@ -1137,6 +1184,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one Feishu message or card
     FeishuSend {
         #[arg(long)]
@@ -1172,6 +1220,7 @@ pub enum Commands {
         #[arg(long)]
         uuid: Option<String>,
     },
+    #[command(hide = true)]
     /// Run Feishu event callback server and auto-reply via provider
     FeishuServe {
         #[arg(long)]
@@ -1187,6 +1236,7 @@ pub enum Commands {
         #[arg(long)]
         path: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one Matrix room message
     MatrixSend {
         #[arg(long)]
@@ -1204,6 +1254,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run Matrix sync reply loop
     MatrixServe {
         #[arg(long)]
@@ -1217,6 +1268,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one WeCom AIBot proactive message
     WecomSend {
         #[arg(long)]
@@ -1234,6 +1286,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run WeCom AIBot long-connection reply loop
     WecomServe {
         #[arg(long)]
@@ -1245,6 +1298,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one managed Weixin bridge message
     WeixinSend {
         #[arg(long)]
@@ -1262,6 +1316,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run one managed Weixin bridge reply loop
     WeixinServe {
         #[arg(long)]
@@ -1275,6 +1330,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one managed QQBot bridge message
     QqbotSend {
         #[arg(long)]
@@ -1292,6 +1348,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run one managed QQBot bridge reply loop
     QqbotServe {
         #[arg(long)]
@@ -1305,6 +1362,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one managed OneBot bridge message
     OnebotSend {
         #[arg(long)]
@@ -1322,6 +1380,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run one managed OneBot bridge reply loop
     OnebotServe {
         #[arg(long)]
@@ -1335,6 +1394,7 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    #[command(hide = true)]
     /// Run WhatsApp Cloud API webhook server and auto-reply via provider
     WhatsappServe {
         #[arg(long)]
@@ -1350,6 +1410,7 @@ pub enum Commands {
         #[arg(long)]
         path: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one Discord channel message
     DiscordSend {
         #[arg(long)]
@@ -1367,6 +1428,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one DingTalk custom robot webhook message
     DingtalkSend {
         #[arg(long)]
@@ -1384,6 +1446,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Slack channel message
     SlackSend {
         #[arg(long)]
@@ -1401,6 +1464,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one LINE push message
     LineSend {
         #[arg(long)]
@@ -1418,6 +1482,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run LINE webhook callback server and auto-reply via provider
     LineServe {
         #[arg(long)]
@@ -1433,6 +1498,7 @@ pub enum Commands {
         #[arg(long)]
         path: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one WhatsApp business message
     WhatsappSend {
         #[arg(long)]
@@ -1450,6 +1516,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one SMTP email message
     EmailSend {
         #[arg(long)]
@@ -1467,6 +1534,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one generic webhook POST message
     WebhookSend {
         #[arg(long)]
@@ -1484,6 +1552,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run a generic inbound webhook server and auto-reply via provider
     WebhookServe {
         #[arg(long)]
@@ -1499,6 +1568,7 @@ pub enum Commands {
         #[arg(long)]
         path: Option<String>,
     },
+    #[command(hide = true)]
     /// Send one Google Chat incoming webhook message
     GoogleChatSend {
         #[arg(long)]
@@ -1516,6 +1586,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Microsoft Teams incoming webhook message
     TeamsSend {
         #[arg(long)]
@@ -1533,6 +1604,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Tlon direct message or group post
     TlonSend {
         #[arg(long)]
@@ -1550,6 +1622,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Signal direct message
     SignalSend {
         #[arg(long)]
@@ -1567,6 +1640,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Twitch chat message
     TwitchSend {
         #[arg(long)]
@@ -1584,6 +1658,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Mattermost channel post
     MattermostSend {
         #[arg(long)]
@@ -1601,6 +1676,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Nextcloud Talk bot room message
     NextcloudTalkSend {
         #[arg(long)]
@@ -1618,6 +1694,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one Synology Chat incoming webhook message
     SynologyChatSend {
         #[arg(long)]
@@ -1635,6 +1712,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one IRC message to a channel or nick
     IrcSend {
         #[arg(long)]
@@ -1652,6 +1730,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Send one iMessage chat through BlueBubbles
     ImessageSend {
         #[arg(long)]
@@ -1669,6 +1748,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Publish one signed Nostr text note
     NostrSend {
         #[arg(long)]
@@ -1686,6 +1766,7 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    #[command(hide = true)]
     /// Run the multi-channel supervisor for coordinated runtime-backed service-channel serving
     MultiChannelServe {
         #[arg(long)]

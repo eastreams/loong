@@ -51,12 +51,12 @@ and jump straight to the matching playbook.
 
 ```bash
 loong onboard
-loong list-models
+loong runtime list models
 ```
 
 `onboard` is the supported first-run path. It should discover what it can, help you resolve credentials, and leave you with a provider profile that the rest of the runtime actually uses.
 
-Use `list-models` after credentials are healthy when you want the current catalog from the active provider.
+Use `runtime list models` after credentials are healthy when you want the current catalog from the active provider. The older `list-models` verb remains accepted as a compatibility alias while the grouped `runtime` shell becomes canonical.
 
 ## Reading Rule
 
