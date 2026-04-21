@@ -85,8 +85,6 @@ from pathlib import Path
 build_output_path = Path(sys.argv[1])
 selected_targets = sys.argv[2:]
 artifact_paths = {}
-lib_bin_paths = []
-seen_lib_bin_paths = set()
 
 for line in build_output_path.read_text(errors="ignore").splitlines():
     try:
@@ -97,13 +95,7 @@ for line in build_output_path.read_text(errors="ignore").splitlines():
         continue
     target = payload.get("target", {})
     target_name = target.get("name")
-    target_kinds = target.get("kind", [])
     executable = payload.get("executable")
-
-    if executable and ("lib" in target_kinds or "bin" in target_kinds):
-        if executable not in seen_lib_bin_paths:
-            seen_lib_bin_paths.add(executable)
-            lib_bin_paths.append(executable)
 
     if target_name in selected_targets and executable:
         artifact_paths[target_name] = executable
@@ -114,7 +106,6 @@ if missing_targets:
 
 print(json.dumps({
     "targets": artifact_paths,
-    "lib_bins": lib_bin_paths,
 }))
 PY
 )"
@@ -181,31 +172,9 @@ run_target_binary() {
   "$binary_path"
 }
 
-run_lib_or_bin_binary() {
-  local binary_path="$1"
-  echo "[loong-test] $binary_path"
-  "$binary_path"
-}
-
 if [[ -z "${LOONG_HOME:-}" ]]; then
   mkdir -p "$REPO_ROOT/target/test-loong-home"
   export LOONG_HOME="$REPO_ROOT/target/test-loong-home"
-fi
-
-if [[ "$include_lib_bins" -eq 1 ]]; then
-  while IFS= read -r binary_path; do
-    binary_path="${binary_path%$'\r'}"
-    [[ -n "$binary_path" ]] || continue
-    run_lib_or_bin_binary "$binary_path"
-  done < <("$PYTHON_BIN" - <<'PY' "$binary_payload_json"
-import json
-import sys
-
-payload = json.loads(sys.argv[1])
-for binary_path in payload["lib_bins"]:
-    print(binary_path)
-PY
-)
 fi
 
 while IFS= read -r target_name; do
