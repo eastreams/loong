@@ -3319,6 +3319,7 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-whatsapp",
     feature = "channel-webhook"
 ))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
