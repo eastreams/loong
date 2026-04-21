@@ -39,7 +39,7 @@ make_fixture_repo() {
   cat >"$fixture_root/stub/python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 "$@"
+python3 "$@" | python3 -c 'import sys; sys.stdout.write(sys.stdin.read().replace("\n", "\r\n"))'
 EOF
   chmod +x "$fixture_root/stub/python"
 

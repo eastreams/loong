@@ -123,7 +123,7 @@ run_batch_compile_and_execution_test() {
   cat >"$stub_dir/python" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 "$@"
+python3 "$@" | python3 -c 'import sys; sys.stdout.write(sys.stdin.read().replace("\n", "\r\n"))'
 EOF
   chmod +x "$stub_dir/python"
 
