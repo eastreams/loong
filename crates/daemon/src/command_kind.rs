@@ -35,6 +35,7 @@ impl Commands {
             Self::Plugins { .. } => "plugins",
             Self::Channels { .. } => "channels",
             Self::ListModels { .. } => "list_models",
+            Self::Runtime { .. } => "runtime",
             Self::RuntimeSnapshot { .. } => "runtime_snapshot",
             Self::RuntimeRestore { .. } => "runtime_restore",
             Self::RuntimeExperiment { .. } => "runtime_experiment",

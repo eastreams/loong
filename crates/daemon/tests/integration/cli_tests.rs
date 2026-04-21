@@ -1,5 +1,79 @@
 use super::*;
 
+fn try_parse_cli_slice(args: &[&str]) -> Result<Cli, clap::Error> {
+    let owned_args = args
+        .iter()
+        .map(|arg| OsString::from(*arg))
+        .collect::<Vec<OsString>>();
+    with_cli_stack("integration-cli-parse-slice", move || {
+        Cli::try_parse_from(owned_args)
+    })
+}
+
+fn cli_subcommand_names(path: &[&str], hidden: bool) -> Vec<String> {
+    let owned_path = path
+        .iter()
+        .map(|segment| (*segment).to_owned())
+        .collect::<Vec<_>>();
+    with_cli_stack("integration-cli-subcommands", move || {
+        let mut command = Cli::command();
+        let mut current = &mut command;
+        for segment in owned_path {
+            current = current
+                .find_subcommand_mut(segment.as_str())
+                .unwrap_or_else(|| panic!("missing CLI subcommand `{segment}`"));
+        }
+        current
+            .get_subcommands()
+            .filter(|subcommand| subcommand.is_hide_set() == hidden)
+            .map(|subcommand| subcommand.get_name().to_owned())
+            .collect()
+    })
+}
+
+fn cli_subcommand_is_hidden(path: &[&str], name: &str) -> bool {
+    let owned_path = path
+        .iter()
+        .map(|segment| (*segment).to_owned())
+        .collect::<Vec<_>>();
+    let owned_name = name.to_owned();
+    with_cli_stack("integration-cli-hidden-flag", move || {
+        let mut command = Cli::command();
+        let mut current = &mut command;
+        for segment in owned_path {
+            current = current
+                .find_subcommand_mut(segment.as_str())
+                .unwrap_or_else(|| panic!("missing CLI subcommand `{segment}`"));
+        }
+        current
+            .find_subcommand_mut(owned_name.as_str())
+            .unwrap_or_else(|| panic!("missing CLI subcommand `{owned_name}`"))
+            .is_hide_set()
+    })
+}
+
+fn render_bash_completions() -> String {
+    let mut rendered = Vec::new();
+    loong_daemon::completions_cli::generate_completions(clap_complete::Shell::Bash, &mut rendered)
+        .expect("generate bash completions");
+    String::from_utf8(rendered).expect("bash completions should be utf8")
+}
+
+fn parse_first_candidate(candidates: &[&[&str]]) -> Cli {
+    let mut errors = Vec::new();
+    for candidate in candidates {
+        match try_parse_cli_slice(candidate) {
+            Ok(cli) => return cli,
+            Err(error) => errors.push(format!("{} => {}", candidate.join(" "), error)),
+        }
+    }
+
+    panic!(
+        "expected one canonical candidate to parse, but all failed:\n{}",
+        errors.join("\n")
+    );
+}
+
 fn channel_catalog_command_family(
     raw: &str,
 ) -> mvp::channel::ChannelCatalogCommandFamilyDescriptor {
@@ -26,6 +100,231 @@ fn root_help_uses_onboarding_language() {
             .any(|line| line.trim_start().starts_with("setup ")),
         "root help should not advertise a standalone `setup` subcommand: {help}"
     );
+}
+
+#[test]
+fn root_help_prefers_grouped_namespaces_and_hides_flat_legacy_aliases() {
+    let help = render_cli_help([]);
+    let visible_root_subcommands = cli_subcommand_names(&[], false);
+
+    for command in [
+        "onboard",
+        "ask",
+        "chat",
+        "doctor",
+        "status",
+        "update",
+        "channels",
+        "sessions",
+        "skills",
+        "gateway",
+        "plugins",
+        "feishu",
+        "completions",
+    ] {
+        assert!(
+            visible_root_subcommands
+                .iter()
+                .any(|value| value == command),
+            "expected `{command}` to remain visible at the root: {visible_root_subcommands:?}"
+        );
+        assert!(
+            help.lines()
+                .any(|line| line.trim_start().starts_with(&format!("{command} "))),
+            "root help should advertise `{command}` as a visible root namespace: {help}"
+        );
+    }
+
+    assert!(
+        visible_root_subcommands
+            .iter()
+            .any(|value| value == "runtime" || value == "ops"),
+        "root help should expose one grouped runtime/operator namespace: {visible_root_subcommands:?}"
+    );
+
+    for legacy in [
+        "telegram-send",
+        "telegram-serve",
+        "matrix-send",
+        "matrix-serve",
+        "runtime-restore",
+        "runtime-trajectory",
+        "session-search",
+        "list-mcp-servers",
+        "acp-status",
+        "control-plane-serve",
+    ] {
+        assert!(
+            !help
+                .lines()
+                .any(|line| line.trim_start().starts_with(&format!("{legacy} "))),
+            "root help should hide flat compatibility alias `{legacy}` after the refactor: {help}"
+        );
+    }
+}
+
+#[test]
+fn root_command_tree_keeps_flat_legacy_aliases_hidden_for_compatibility() {
+    for legacy in [
+        "telegram-send",
+        "telegram-serve",
+        "runtime-restore",
+        "runtime-trajectory",
+        "session-search",
+        "list-mcp-servers",
+        "acp-status",
+        "control-plane-serve",
+    ] {
+        assert!(
+            cli_subcommand_is_hidden(&[], legacy),
+            "legacy alias `{legacy}` should remain registered but hidden at the root"
+        );
+    }
+}
+
+#[test]
+fn channels_help_mentions_grouped_send_and_serve_surfaces() {
+    let help = render_cli_help(["channels"]);
+    let visible_channels_subcommands = cli_subcommand_names(&["channels"], false);
+
+    for subcommand in ["send", "serve"] {
+        assert!(
+            visible_channels_subcommands
+                .iter()
+                .any(|value| value == subcommand),
+            "channels should expose `{subcommand}` after grouping flat channel verbs: {visible_channels_subcommands:?}"
+        );
+        assert!(
+            help.lines()
+                .any(|line| line.trim_start().starts_with(&format!("{subcommand} "))),
+            "channels help should advertise `{subcommand}` as a grouped subcommand: {help}"
+        );
+    }
+
+    for legacy in [
+        "telegram-send",
+        "telegram-serve",
+        "matrix-send",
+        "matrix-serve",
+    ] {
+        assert!(
+            !help.contains(legacy),
+            "channels help should not surface flat legacy alias `{legacy}`: {help}"
+        );
+    }
+}
+
+#[test]
+fn grouped_channels_send_accepts_a_canonical_shape() {
+    let _cli = parse_first_candidate(&[
+        &[
+            "loong",
+            "channels",
+            "send",
+            "telegram",
+            "--target",
+            "chat-42",
+            "--text",
+            "hello from grouped send",
+        ],
+        &[
+            "loong",
+            "channels",
+            "send",
+            "--channel",
+            "telegram",
+            "--target",
+            "chat-42",
+            "--text",
+            "hello from grouped send",
+        ],
+    ]);
+}
+
+#[test]
+fn grouped_channels_serve_accepts_a_canonical_shape() {
+    let _cli = parse_first_candidate(&[
+        &["loong", "channels", "serve", "telegram", "--stop"],
+        &[
+            "loong",
+            "channels",
+            "serve",
+            "--channel",
+            "telegram",
+            "--stop",
+        ],
+    ]);
+}
+
+#[test]
+fn hidden_legacy_channel_aliases_and_runtime_aliases_still_parse() {
+    try_parse_cli([
+        "loong",
+        "telegram-send",
+        "--target",
+        "chat-42",
+        "--text",
+        "compatibility send",
+    ])
+    .expect("telegram-send compatibility alias should still parse");
+
+    try_parse_cli(["loong", "telegram-serve", "--stop"])
+        .expect("telegram-serve compatibility alias should still parse");
+
+    try_parse_cli([
+        "loong",
+        "runtime-restore",
+        "--snapshot",
+        "/tmp/runtime.json",
+    ])
+    .expect("runtime-restore compatibility alias should still parse");
+
+    try_parse_cli(["loong", "session-search", "--query", "hello world"])
+        .expect("session-search compatibility alias should still parse");
+
+    try_parse_cli(["loong", "list-mcp-servers", "--json"])
+        .expect("list-mcp-servers compatibility alias should still parse");
+}
+
+#[test]
+fn bash_completions_surface_grouped_namespaces_without_flat_legacy_aliases() {
+    let completions = render_bash_completions();
+
+    for visible in [
+        "channels",
+        "send",
+        "serve",
+        "sessions",
+        "plugins",
+        "completions",
+    ] {
+        assert!(
+            completions.contains(visible),
+            "bash completions should include grouped CLI surface `{visible}`: {completions}"
+        );
+    }
+
+    assert!(
+        completions.contains("runtime") || completions.contains("ops"),
+        "bash completions should include the grouped runtime/operator namespace: {completions}"
+    );
+
+    for legacy in [
+        "telegram-send",
+        "telegram-serve",
+        "matrix-send",
+        "matrix-serve",
+        "runtime-restore",
+        "session-search",
+        "list-mcp-servers",
+        "acp-status",
+        "control-plane-serve",
+    ] {
+        assert!(
+            !completions.contains(legacy),
+            "bash completions should hide legacy flat alias `{legacy}` once the canonical namespaces land"
+        );
+    }
 }
 
 #[test]

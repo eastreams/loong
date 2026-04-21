@@ -71,6 +71,10 @@ fn command_prefers_large_tokio_worker_stack(command: &Commands) -> bool {
             | Commands::WecomServe { .. }
             | Commands::WhatsappServe { .. }
             | Commands::MultiChannelServe { .. }
+            | Commands::Channels {
+                command: Some(ChannelsCommands::Serve(_)),
+                ..
+            }
             | Commands::Feishu {
                 command: feishu_cli::FeishuCommand::Serve(_),
             }
@@ -505,8 +509,10 @@ async fn run_command(command: Commands) -> CliResult<()> {
             config,
             resolve,
             json,
-        } => run_channels_cli(config.as_deref(), resolve.as_deref(), json),
+            command,
+        } => run_grouped_channels_cli(config, resolve, json, command).await,
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
+        Commands::Runtime { command } => run_runtime_cli(command).await,
         Commands::RuntimeSnapshot {
             config,
             json,
