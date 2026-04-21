@@ -739,11 +739,14 @@ fn write_json_path<T: Serialize>(path: &Path, value: &T, context: &str) -> CliRe
         .create(true)
         .truncate(true)
         .open(temp_path.as_path());
-    let mut file = open_result.map_err(|error| {
-        format!("open {context} failed for {}: {error}", temp_path.display())
+    let mut file = open_result
+        .map_err(|error| format!("open {context} failed for {}: {error}", temp_path.display()))?;
+    file.write_all(encoded.as_bytes()).map_err(|error| {
+        format!(
+            "write {context} failed for {}: {error}",
+            temp_path.display()
+        )
     })?;
-    file.write_all(encoded.as_bytes())
-        .map_err(|error| format!("write {context} failed for {}: {error}", temp_path.display()))?;
     file.sync_all()
         .map_err(|error| format!("sync {context} failed for {}: {error}", temp_path.display()))?;
     drop(file);
