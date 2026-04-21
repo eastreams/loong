@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use loong_contracts::TaskScopeDescriptor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -509,6 +510,10 @@ pub struct ConstrainedSubagentSpawnEventPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_scope: Option<TaskScopeDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<DelegateBuiltinProfile>,
     pub execution: ConstrainedSubagentExecution,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -549,7 +554,9 @@ impl ConstrainedSubagentExecution {
     }
 
     pub fn spawn_payload(&self, task: &str, label: Option<&str>) -> Value {
-        self.spawn_payload_with_profile_and_runtime_self_continuity(task, label, None, None)
+        self.spawn_payload_with_profile_and_runtime_self_continuity(
+            task, label, None, None, None, None,
+        )
     }
 
     pub fn spawn_payload_with_profile(
@@ -558,7 +565,9 @@ impl ConstrainedSubagentExecution {
         label: Option<&str>,
         profile: Option<DelegateBuiltinProfile>,
     ) -> Value {
-        self.spawn_payload_with_profile_and_runtime_self_continuity(task, label, profile, None)
+        self.spawn_payload_with_profile_and_runtime_self_continuity(
+            task, label, profile, None, None, None,
+        )
     }
 
     pub(crate) fn spawn_payload_with_profile_and_runtime_self_continuity(
@@ -567,10 +576,18 @@ impl ConstrainedSubagentExecution {
         label: Option<&str>,
         profile: Option<DelegateBuiltinProfile>,
         runtime_self_continuity: Option<&RuntimeSelfContinuity>,
+        task_scope_task_id: Option<&str>,
+        task_session_id: Option<&str>,
     ) -> Value {
+        let task_scope = task_scope_task_id.map(|task_id| TaskScopeDescriptor {
+            task_id: task_id.to_owned(),
+        });
+        let task_session_id = task_session_id.map(ToOwned::to_owned);
         json!(ConstrainedSubagentSpawnEventPayload {
             task: task.to_owned(),
             label: label.map(ToOwned::to_owned),
+            task_scope,
+            task_session_id,
             profile,
             execution: self.clone(),
             runtime_self_continuity: runtime_self_continuity.cloned(),
@@ -700,6 +717,8 @@ mod tests {
             Some("child"),
             None,
             Some(&continuity),
+            Some("task-root"),
+            Some("child-session"),
         );
 
         assert_eq!(
@@ -714,6 +733,8 @@ mod tests {
             payload["runtime_self_continuity"]["runtime_self"]["tool_usage_policy"][0],
             "Search memory before guessing workspace facts."
         );
+        assert_eq!(payload["task_scope"]["task_id"], "task-root");
+        assert_eq!(payload["task_session_id"], "child-session");
     }
 
     #[test]

@@ -125,6 +125,7 @@ pub(crate) fn build_delegate_child_lifecycle_seed(
     child_session_id: &str,
     child_label: Option<String>,
     task: &str,
+    canonical_task_id: Option<&str>,
     runtime_self_continuity: Option<&RuntimeSelfContinuity>,
     identity: Option<ConstrainedSubagentIdentity>,
     execution_policy: DelegateChildExecutionPolicy,
@@ -143,6 +144,7 @@ pub(crate) fn build_delegate_child_lifecycle_seed(
         child_session_id,
         child_label,
         task,
+        canonical_task_id,
         runtime_self_continuity,
         &execution,
         mode,
@@ -191,6 +193,7 @@ fn build_delegate_child_request(
     child_session_id: &str,
     child_label: Option<String>,
     task: &str,
+    canonical_task_id: Option<&str>,
     runtime_self_continuity: Option<&RuntimeSelfContinuity>,
     execution: &ConstrainedSubagentExecution,
     mode: ConstrainedSubagentMode,
@@ -204,6 +207,7 @@ fn build_delegate_child_request(
         child_session_id,
         task,
         child_label.as_deref(),
+        canonical_task_id,
         runtime_self_continuity,
         execution,
         profile,
@@ -251,6 +255,7 @@ fn build_delegate_child_event_payload(
     child_session_id: &str,
     task: &str,
     child_label: Option<&str>,
+    canonical_task_id: Option<&str>,
     runtime_self_continuity: Option<&RuntimeSelfContinuity>,
     execution: &ConstrainedSubagentExecution,
     profile: Option<DelegateBuiltinProfile>,
@@ -263,6 +268,8 @@ fn build_delegate_child_event_payload(
         child_label,
         profile,
         runtime_self_continuity,
+        canonical_task_id,
+        Some(child_session_id),
     );
     let payload_with_trust =
         embed_trust_event_payload(event_payload_json.clone(), trust_event.clone());
@@ -732,6 +739,7 @@ mod tests {
             "child-session",
             Some("worker".to_owned()),
             "research",
+            Some("task-root"),
             None,
             None,
             execution_policy,
@@ -767,6 +775,7 @@ mod tests {
             "child-session",
             Some("worker".to_owned()),
             "research",
+            Some("task-root"),
             None,
             None,
             execution_policy,
@@ -774,6 +783,14 @@ mod tests {
 
         let trust_event = extract_trust_event_payload(&seed.request.event_payload_json);
         assert!(trust_event.is_some(), "expected trust event payload");
+        assert_eq!(
+            seed.request.event_payload_json["task_scope"]["task_id"],
+            "task-root"
+        );
+        assert_eq!(
+            seed.request.event_payload_json["task_session_id"],
+            "child-session"
+        );
     }
 
     #[test]

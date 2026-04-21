@@ -1688,6 +1688,7 @@ pub struct ControlPlaneSessionWorkflowBindingWorktreeView {
 pub struct ControlPlaneSessionWorkflowBindingView {
     pub session_id: String,
     pub task_id: String,
+    pub task_session_id: String,
     pub mode: String,
     pub execution_surface: String,
     pub worktree: Option<ControlPlaneSessionWorkflowBindingWorktreeView>,
@@ -1746,6 +1747,15 @@ pub struct ControlPlaneTaskListView {
     pub matched_count: usize,
     pub returned_count: usize,
     pub tasks: Vec<ControlPlaneTaskSummaryView>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
+struct BackgroundTaskCandidate {
+    task_id: String,
+    owner_session_id: String,
+    updated_at: i64,
+    view: ControlPlaneTaskSummaryView,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1849,25 +1859,22 @@ impl ControlPlaneRepositoryView {
             visible_sessions.retain(|session| session.archived_at.is_none());
         }
 
-        let mut task_views = Vec::new();
-        for session in &visible_sessions {
-            let task_view = self.build_background_task_view(&repo, session)?;
-            let Some(task_view) = task_view else {
-                continue;
-            };
-            task_views.push(task_view);
-        }
-
-        let matched_count = task_views.len();
+        let mut task_candidates =
+            self.load_background_task_candidates(&repo, visible_sessions.as_slice())?;
+        let matched_count = task_candidates.len();
         let bounded_limit = limit.clamp(1, CONTROL_PLANE_MAX_LIST_LIMIT);
-        task_views.truncate(bounded_limit);
-        let returned_count = task_views.len();
+        task_candidates.truncate(bounded_limit);
+        let returned_count = task_candidates.len();
+        let tasks = task_candidates
+            .into_iter()
+            .map(|candidate| candidate.view)
+            .collect::<Vec<_>>();
 
         Ok(ControlPlaneTaskListView {
             current_session_id: self.current_session_id.clone(),
             matched_count,
             returned_count,
-            tasks: task_views,
+            tasks,
         })
     }
 
@@ -1895,21 +1902,29 @@ impl ControlPlaneRepositoryView {
 
     pub fn read_background_task(
         &self,
-        target_session_id: &str,
+        target_task_id: &str,
     ) -> Result<Option<ControlPlaneTaskSummaryView>, String> {
-        let trimmed_session_id = target_session_id.trim();
-        if trimmed_session_id.is_empty() {
+        let trimmed_task_id = target_task_id.trim();
+        if trimmed_task_id.is_empty() {
             return Err("control_plane_session_id_missing".to_owned());
         }
 
         let repo = self.open_repo()?;
-        self.ensure_visible_session(&repo, trimmed_session_id)?;
+        let visible_sessions = self.visible_sessions(&repo)?;
+        let task_candidates =
+            self.load_background_task_candidates(&repo, visible_sessions.as_slice())?;
+        let matching_candidate = task_candidates
+            .into_iter()
+            .find(|candidate| candidate.task_id == trimmed_task_id);
+        if let Some(candidate) = matching_candidate {
+            return Ok(Some(candidate.view));
+        }
 
-        let session = repo.load_session_summary_with_legacy_fallback(trimmed_session_id)?;
+        let session = repo.load_session_summary_with_legacy_fallback(trimmed_task_id)?;
         let Some(session) = session else {
             return Ok(None);
         };
-
+        self.ensure_visible_session(&repo, &session.session_id)?;
         self.build_background_task_view(&repo, &session)
     }
 
@@ -2044,6 +2059,42 @@ impl ControlPlaneRepositoryView {
         repo: &SessionRepository,
         session: &SessionSummaryRecord,
     ) -> Result<Option<ControlPlaneTaskSummaryView>, String> {
+        let task_candidate = self.build_background_task_candidate(repo, session)?;
+        Ok(task_candidate.map(|candidate| candidate.view))
+    }
+
+    fn load_background_task_candidates(
+        &self,
+        repo: &SessionRepository,
+        sessions: &[SessionSummaryRecord],
+    ) -> Result<Vec<BackgroundTaskCandidate>, String> {
+        let mut candidates_by_id = BTreeMap::<String, BackgroundTaskCandidate>::new();
+
+        for session in sessions {
+            let task_candidate = self.build_background_task_candidate(repo, session)?;
+            let Some(task_candidate) = task_candidate else {
+                continue;
+            };
+
+            let replace_existing = candidates_by_id
+                .get(task_candidate.task_id.as_str())
+                .map(|existing| background_task_candidate_is_newer(&task_candidate, existing))
+                .unwrap_or(true);
+            if replace_existing {
+                candidates_by_id.insert(task_candidate.task_id.clone(), task_candidate);
+            }
+        }
+
+        let mut candidates = candidates_by_id.into_values().collect::<Vec<_>>();
+        candidates.sort_by(background_task_candidate_cmp_desc);
+        Ok(candidates)
+    }
+
+    fn build_background_task_candidate(
+        &self,
+        repo: &SessionRepository,
+        session: &SessionSummaryRecord,
+    ) -> Result<Option<BackgroundTaskCandidate>, String> {
         if session.kind != crate::session::repository::SessionKind::DelegateChild {
             return Ok(None);
         }
@@ -2063,6 +2114,12 @@ impl ControlPlaneRepositoryView {
 
         let workflow_record =
             load_session_workflow_record(repo, session, Some(delegate_events.as_slice()))?;
+        let task_id = control_plane_task_id_for_workflow(&workflow_record, session);
+        let updated_at = workflow_record
+            .task_progress
+            .as_ref()
+            .map(|record| record.updated_at)
+            .unwrap_or(session.updated_at);
         let workflow = control_plane_session_workflow_view(workflow_record);
         let tool_policy_payload =
             build_session_tool_policy_status_payload(repo, &session.session_id, &self.tool_config)?;
@@ -2084,7 +2141,7 @@ impl ControlPlaneRepositoryView {
         let delegate_mode = delegate_lifecycle.mode.to_owned();
 
         let task_view = ControlPlaneTaskSummaryView {
-            task_id: session.session_id.clone(),
+            task_id: task_id.clone(),
             session_id: session.session_id.clone(),
             scope_session_id: self.current_session_id.clone(),
             label: session.label.clone(),
@@ -2103,7 +2160,13 @@ impl ControlPlaneRepositoryView {
             last_error: session.last_error.clone(),
         };
 
-        Ok(Some(task_view))
+        let task_candidate = BackgroundTaskCandidate {
+            task_id,
+            owner_session_id: session.session_id.clone(),
+            updated_at,
+            view: task_view,
+        };
+        Ok(Some(task_candidate))
     }
 
     fn count_approvals(
@@ -2131,6 +2194,54 @@ fn control_plane_session_workflow_continuity_view(
         resolved_identity_present: continuity.resolved_identity_present,
         session_profile_projection_present: continuity.session_profile_projection_present,
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn background_task_candidate_is_newer(
+    candidate: &BackgroundTaskCandidate,
+    existing: &BackgroundTaskCandidate,
+) -> bool {
+    background_task_candidate_cmp_desc(candidate, existing).is_lt()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn background_task_candidate_cmp_desc(
+    left: &BackgroundTaskCandidate,
+    right: &BackgroundTaskCandidate,
+) -> std::cmp::Ordering {
+    right
+        .updated_at
+        .cmp(&left.updated_at)
+        .then_with(|| left.task_id.cmp(&right.task_id))
+        .then_with(|| left.owner_session_id.cmp(&right.owner_session_id))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_task_id_for_workflow(
+    workflow: &SessionWorkflowRecord,
+    session: &SessionSummaryRecord,
+) -> String {
+    let task_progress_task_id = workflow
+        .task_progress
+        .as_ref()
+        .map(|task_progress| task_progress.task_id.trim())
+        .filter(|task_id| !task_id.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(task_id) = task_progress_task_id {
+        return task_id;
+    }
+
+    let binding_task_id = workflow
+        .binding
+        .as_ref()
+        .map(|binding| binding.task_id.trim())
+        .filter(|task_id| !task_id.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(task_id) = binding_task_id {
+        return task_id;
+    }
+
+    session.session_id.clone()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2182,6 +2293,7 @@ fn control_plane_session_workflow_binding_view(
     ControlPlaneSessionWorkflowBindingView {
         session_id: binding.session_id,
         task_id: binding.task_id,
+        task_session_id: binding.task_session_id,
         mode: binding.mode.as_str().to_owned(),
         execution_surface: binding.execution_surface,
         worktree,
@@ -3338,6 +3450,25 @@ mod tests {
             }),
         })
         .expect("append child session event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("child-session".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-child".to_owned(),
+                    owner_kind: "delegate_async".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Waiting,
+                    intent_summary: Some("research control plane parity".to_owned()),
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 100,
+                },
+            ),
+        })
+        .expect("append child task progress event");
         repo.ensure_approval_request(NewApprovalRequestRecord {
             approval_request_id: "apr-visible".to_owned(),
             session_id: "child-session".to_owned(),
@@ -3557,8 +3688,14 @@ mod tests {
                 .execution_surface,
             "delegate.async"
         );
-        assert_eq!(observation.recent_events.len(), 1);
-        assert_eq!(observation.recent_events[0].event_kind, "delegate_started");
+        assert_eq!(observation.recent_events.len(), 2);
+        let recent_event_kinds = observation
+            .recent_events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect::<Vec<_>>();
+        assert!(recent_event_kinds.contains(&"delegate_started"));
+        assert!(recent_event_kinds.contains(&crate::task_progress::TASK_PROGRESS_EVENT_KIND));
 
         let approvals = view
             .list_approvals(None, Some(ApprovalRequestStatus::Pending), 50)
@@ -3587,7 +3724,7 @@ mod tests {
         assert_eq!(tasks.returned_count, 1);
 
         let task = tasks.tasks.first().expect("first background task");
-        assert_eq!(task.task_id, "child-session");
+        assert_eq!(task.task_id, "task-child");
         assert_eq!(task.workflow.workflow_id, "root-session");
         assert_eq!(
             task.workflow.task.as_deref(),
@@ -3596,7 +3733,8 @@ mod tests {
         assert_eq!(task.workflow.phase.as_deref(), Some("execute"));
         let binding = task.workflow.binding.as_ref().expect("workflow binding");
         assert_eq!(binding.session_id, "child-session");
-        assert_eq!(binding.task_id, "child-session");
+        assert_eq!(binding.task_id, "task-child");
+        assert_eq!(binding.task_session_id, "child-session");
         assert_eq!(binding.mode, "advisory_only");
         assert_eq!(task.delegate_mode.as_deref(), Some("async"));
         assert_eq!(task.delegate_phase.as_deref(), Some("running"));
@@ -3613,12 +3751,20 @@ mod tests {
     fn repository_view_reads_visible_background_task_detail() {
         let view = seeded_repository_view("task-read");
         let task = view
-            .read_background_task("child-session")
+            .read_background_task("task-child")
             .expect("background task read")
             .expect("background task detail");
 
-        assert_eq!(task.task_id, "child-session");
+        assert_eq!(task.task_id, "task-child");
         assert_eq!(task.workflow.workflow_id, "root-session");
+        assert_eq!(
+            task.workflow
+                .binding
+                .as_ref()
+                .expect("workflow binding")
+                .task_session_id,
+            "child-session"
+        );
         assert_eq!(
             task.workflow
                 .binding
@@ -3634,10 +3780,105 @@ mod tests {
         assert_eq!(task.session_state, "running");
         assert_eq!(task.approval_request_count, 1);
 
+        let legacy_alias = view
+            .read_background_task("child-session")
+            .expect("background task legacy alias")
+            .expect("background task legacy detail");
+        assert_eq!(legacy_alias.task_id, "task-child");
+        assert_eq!(legacy_alias.session_id, "child-session");
+
         let hidden_error = view
             .read_background_task("hidden-root")
             .expect_err("hidden session should be rejected");
         assert!(hidden_error.contains("visibility_denied"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn repository_view_deduplicates_background_tasks_by_canonical_task_id() {
+        let config = isolated_memory_config("task-deduplicate-control-plane");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+
+        for session_id in ["child-old", "child-new"] {
+            repo.create_session(NewSessionRecord {
+                session_id: session_id.to_owned(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some("root-session".to_owned()),
+                label: Some(session_id.to_owned()),
+                state: SessionState::Running,
+            })
+            .expect("create child");
+            repo.append_event(NewSessionEvent {
+                session_id: session_id.to_owned(),
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: serde_json::json!({
+                    "task": "repair durable task identity",
+                    "label": session_id,
+                    "execution": {
+                        "mode": "async",
+                        "depth": 1,
+                        "max_depth": 3,
+                        "active_children": 0,
+                        "max_active_children": 2,
+                        "timeout_seconds": 90,
+                        "allow_shell_in_child": false,
+                        "child_tool_allowlist": ["file.read"],
+                        "workspace_root": format!("/tmp/loong/control-plane/{session_id}"),
+                        "kernel_bound": false,
+                        "runtime_narrowing": {}
+                    }
+                }),
+            })
+            .expect("append delegate event");
+        }
+
+        for (session_id, updated_at) in [("child-old", 10), ("child-new", 20)] {
+            repo.append_event(NewSessionEvent {
+                session_id: session_id.to_owned(),
+                event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+                actor_session_id: Some(session_id.to_owned()),
+                payload_json: crate::task_progress::task_progress_event_payload(
+                    "unit_test",
+                    &crate::task_progress::TaskProgressRecord {
+                        task_id: "task-shared".to_owned(),
+                        owner_kind: "delegate_async".to_owned(),
+                        status: crate::task_progress::TaskProgressStatus::Waiting,
+                        intent_summary: Some(format!("owner {session_id}")),
+                        verification_state: Some(
+                            crate::task_progress::TaskVerificationState::Pending,
+                        ),
+                        active_handles: Vec::new(),
+                        resume_recipe: None,
+                        updated_at,
+                    },
+                ),
+            })
+            .expect("append task progress");
+        }
+
+        let view = ControlPlaneRepositoryView::new(config, ToolConfig::default(), "root-session");
+        let tasks = view
+            .list_background_tasks(false, 50)
+            .expect("background task list");
+        assert_eq!(tasks.matched_count, 1);
+        assert_eq!(tasks.tasks[0].task_id, "task-shared");
+        assert_eq!(tasks.tasks[0].session_id, "child-new");
+
+        let task = view
+            .read_background_task("task-shared")
+            .expect("background task read")
+            .expect("background task detail");
+        assert_eq!(task.task_id, "task-shared");
+        assert_eq!(task.session_id, "child-new");
     }
 
     #[cfg(feature = "memory-sqlite")]

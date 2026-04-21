@@ -362,6 +362,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
             child_session_id,
             parent_session_id,
             task,
+            canonical_task_id: _,
             label,
             profile,
             execution,
@@ -4180,8 +4181,18 @@ async fn handle_turn_with_runtime_records_task_progress_event() {
         .expect("task progress event should exist");
     let task_progress = crate::task_progress::task_progress_from_event_payload(&event.payload_json)
         .expect("decode task progress payload");
+    let raw_task_progress = event.payload_json["task_progress"]
+        .as_object()
+        .expect("raw task progress payload");
 
-    assert_eq!(task_progress.task_id, session_id);
+    assert_eq!(
+        raw_task_progress.get("session_id"),
+        Some(&Value::String(session_id.clone()))
+    );
+    assert_eq!(
+        raw_task_progress.get("task_id"),
+        Some(&Value::String(task_progress.task_id.clone()))
+    );
     assert_eq!(
         task_progress.status,
         crate::task_progress::TaskProgressStatus::Completed
@@ -4262,6 +4273,34 @@ async fn handle_turn_with_runtime_records_verifying_task_progress_before_complet
     assert_eq!(
         task_progress_statuses.last(),
         Some(&crate::task_progress::TaskProgressStatus::Completed)
+    );
+
+    let raw_task_progress_events = events
+        .iter()
+        .filter(|event| event.event_kind == crate::task_progress::TASK_PROGRESS_EVENT_KIND)
+        .map(|event| {
+            event.payload_json["task_progress"]
+                .as_object()
+                .expect("raw task progress payload")
+        })
+        .collect::<Vec<_>>();
+    let canonical_task_id = raw_task_progress_events[0]
+        .get("task_id")
+        .and_then(Value::as_str)
+        .expect("canonical task id")
+        .to_owned();
+
+    assert!(
+        raw_task_progress_events.iter().all(|task_progress| {
+            task_progress.get("session_id") == Some(&Value::String(session_id.clone()))
+        }),
+        "every task-progress event should retain the backing session mapping"
+    );
+    assert!(
+        raw_task_progress_events.iter().all(|task_progress| {
+            task_progress.get("task_id") == Some(&Value::String(canonical_task_id.clone()))
+        }),
+        "status transitions should stay attached to one canonical task id"
     );
 
     let _ = std::fs::remove_file(sqlite_path);
