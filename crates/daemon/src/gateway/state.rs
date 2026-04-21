@@ -60,6 +60,7 @@ pub struct GatewayOwnerStatus {
     pub running_surface_count: usize,
     pub bind_address: Option<String>,
     pub port: Option<u16>,
+    pub port_source: Option<GatewayPortSource>,
     pub token_path: Option<String>,
 }
 
@@ -67,7 +68,36 @@ pub struct GatewayOwnerStatus {
 pub struct GatewayControlSurfaceBinding {
     pub bind_address: String,
     pub port: u16,
+    pub port_source: GatewayPortSource,
     pub token_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayPortSource {
+    Default,
+    Config,
+    Env,
+    Cli,
+    EphemeralCli,
+}
+
+impl GatewayPortSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Config => "config",
+            Self::Env => "env",
+            Self::Cli => "cli",
+            Self::EphemeralCli => "ephemeral_cli",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GatewayPairingRuntimeState {
+    pub sessions: Vec<mvp::control_plane::ControlPlaneConnectionLease>,
+    pub event_bus: super::event_bus::GatewayEventBusSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +125,7 @@ struct PersistedGatewayOwnerState {
     running_surface_count: usize,
     bind_address: Option<String>,
     port: Option<u16>,
+    port_source: Option<GatewayPortSource>,
     token_path: Option<String>,
     owner_token: String,
 }
@@ -149,6 +180,7 @@ impl GatewayOwnerTracker {
             running_surface_count: 0,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
             owner_token: owner_token.clone(),
         };
@@ -240,6 +272,7 @@ impl GatewayOwnerTracker {
                 .map_err(|error| format!("gateway owner state lock poisoned: {error}"))?;
             state_guard.bind_address = Some(binding.bind_address.clone());
             state_guard.port = Some(binding.port);
+            state_guard.port_source = Some(binding.port_source);
             state_guard.token_path = Some(binding.token_path.display().to_string());
             state_guard.last_heartbeat_at = now_ms();
             state_guard.clone()
@@ -333,6 +366,7 @@ impl GatewayOwnerTracker {
             if !running {
                 state_guard.bind_address = None;
                 state_guard.port = None;
+                state_guard.port_source = None;
                 state_guard.token_path = None;
             }
             state_guard.clone()
@@ -448,6 +482,7 @@ pub(crate) fn write_gateway_owner_snapshot_for_test(
         running_surface_count: persisted_state.running_surface_count,
         bind_address: persisted_state.bind_address.clone(),
         port: persisted_state.port,
+        port_source: persisted_state.port_source,
         token_path: persisted_state.token_path.clone(),
         owner_token,
     };
@@ -498,6 +533,7 @@ fn build_gateway_owner_status(
         running_surface_count: persisted_state.running_surface_count,
         bind_address: persisted_state.bind_address.clone(),
         port: persisted_state.port,
+        port_source: persisted_state.port_source,
         token_path: persisted_state.token_path.clone(),
     }
 }
@@ -532,6 +568,25 @@ pub fn gateway_control_token_path(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join("control-token")
 }
 
+pub fn gateway_pairing_runtime_state_path(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("pairing-runtime.json")
+}
+
+pub fn load_gateway_pairing_runtime_state(
+    runtime_dir: &Path,
+) -> Option<GatewayPairingRuntimeState> {
+    let path = gateway_pairing_runtime_state_path(runtime_dir);
+    read_json_path(path.as_path())
+}
+
+pub fn write_gateway_pairing_runtime_state(
+    runtime_dir: &Path,
+    state: &GatewayPairingRuntimeState,
+) -> CliResult<()> {
+    let path = gateway_pairing_runtime_state_path(runtime_dir);
+    write_json_path(path.as_path(), state, "gateway pairing runtime state")
+}
+
 fn read_persisted_gateway_owner_state(path: &Path) -> Option<PersistedGatewayOwnerState> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str::<PersistedGatewayOwnerState>(&raw).ok()
@@ -540,6 +595,11 @@ fn read_persisted_gateway_owner_state(path: &Path) -> Option<PersistedGatewayOwn
 fn read_persisted_gateway_stop_request(path: &Path) -> Option<PersistedGatewayStopRequest> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str::<PersistedGatewayStopRequest>(&raw).ok()
+}
+
+fn read_json_path<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<T>(&raw).ok()
 }
 
 fn persisted_gateway_owner_is_stale(
@@ -673,17 +733,30 @@ fn write_status_snapshot(
 fn write_json_path<T: Serialize>(path: &Path, value: &T, context: &str) -> CliResult<()> {
     ensure_parent_dir(path, context)?;
     let encoded = serialize_json_pretty(value, context)?;
+    let temp_path = atomic_temp_path(path);
     let open_result = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(path);
-    let mut file = open_result
-        .map_err(|error| format!("open {context} failed for {}: {error}", path.display()))?;
+        .open(temp_path.as_path());
+    let mut file = open_result.map_err(|error| {
+        format!("open {context} failed for {}: {error}", temp_path.display())
+    })?;
     file.write_all(encoded.as_bytes())
-        .map_err(|error| format!("write {context} failed for {}: {error}", path.display()))?;
+        .map_err(|error| format!("write {context} failed for {}: {error}", temp_path.display()))?;
     file.sync_all()
-        .map_err(|error| format!("sync {context} failed for {}: {error}", path.display()))
+        .map_err(|error| format!("sync {context} failed for {}: {error}", temp_path.display()))?;
+    drop(file);
+
+    fs::rename(temp_path.as_path(), path).map_err(|error| {
+        let _ = fs::remove_file(temp_path.as_path());
+        format!(
+            "replace {context} failed for {} with {}: {error}",
+            path.display(),
+            temp_path.display()
+        )
+    })?;
+    sync_parent_dir(path, context)
 }
 
 fn serialize_json_pretty<T: Serialize>(value: &T, context: &str) -> CliResult<String> {
@@ -701,6 +774,39 @@ fn ensure_parent_dir(path: &Path, context: &str) -> CliResult<()> {
     }
     fs::create_dir_all(parent)
         .map_err(|error| format!("create {context} parent directory failed: {error}"))
+}
+
+fn atomic_temp_path(path: &Path) -> PathBuf {
+    let process_id = std::process::id();
+    let suffix = now_ms();
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("gateway-state");
+    let temp_file_name = format!(".{file_name}.{process_id}.{suffix}.tmp");
+    path.with_file_name(temp_file_name)
+}
+
+fn sync_parent_dir(path: &Path, context: &str) -> CliResult<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    let dir = fs::File::open(parent).map_err(|error| {
+        format!(
+            "open {context} parent directory failed for {}: {error}",
+            parent.display()
+        )
+    })?;
+    dir.sync_all().map_err(|error| {
+        format!(
+            "sync {context} parent directory failed for {}: {error}",
+            parent.display()
+        )
+    })
 }
 
 fn remove_active_owner_if_owned(path: &Path, owner_token: &str) -> CliResult<()> {
@@ -806,6 +912,7 @@ mod tests {
             running_surface_count: if running { 2 } else { 0 },
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         }
     }
@@ -887,6 +994,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
             owner_token: "stale-owner".to_owned(),
         };
@@ -940,5 +1048,63 @@ mod tests {
         let stop_request_path = gateway_stop_request_path(runtime_dir.as_path());
         assert!(stop_request_path.exists());
         drop(tracker);
+    }
+
+    #[test]
+    fn gateway_pairing_runtime_state_roundtrips_after_rewrite() {
+        let runtime_dir = temp_gateway_runtime_dir("pairing-runtime-state");
+        let first = GatewayPairingRuntimeState {
+            sessions: vec![mvp::control_plane::ControlPlaneConnectionLease {
+                token: "cpt-one".to_owned(),
+                principal: mvp::control_plane::ControlPlaneConnectionPrincipal {
+                    connection_id: "cp-1".to_owned(),
+                    client_id: "cli".to_owned(),
+                    role: "operator".to_owned(),
+                    scopes: std::collections::BTreeSet::from(["operator.read".to_owned()]),
+                    device_id: Some("device-1".to_owned()),
+                },
+                issued_at_ms: 10,
+                expires_at_ms: now_ms().saturating_add(60_000),
+                acknowledged_seq: Some(7),
+            }],
+            event_bus: super::super::event_bus::GatewayEventBusSnapshot {
+                next_seq: 7,
+                recent_events: vec![super::super::event_bus::GatewayEventRecord {
+                    seq: 7,
+                    payload: serde_json::json!({"event_type": "first"}),
+                }],
+            },
+        };
+        write_gateway_pairing_runtime_state(runtime_dir.as_path(), &first)
+            .expect("write first pairing runtime state");
+
+        let second = GatewayPairingRuntimeState {
+            sessions: vec![mvp::control_plane::ControlPlaneConnectionLease {
+                token: "cpt-two".to_owned(),
+                principal: mvp::control_plane::ControlPlaneConnectionPrincipal {
+                    connection_id: "cp-2".to_owned(),
+                    client_id: "cli".to_owned(),
+                    role: "operator".to_owned(),
+                    scopes: std::collections::BTreeSet::from(["operator.read".to_owned()]),
+                    device_id: Some("device-2".to_owned()),
+                },
+                issued_at_ms: 20,
+                expires_at_ms: now_ms().saturating_add(60_000),
+                acknowledged_seq: Some(11),
+            }],
+            event_bus: super::super::event_bus::GatewayEventBusSnapshot {
+                next_seq: 11,
+                recent_events: vec![super::super::event_bus::GatewayEventRecord {
+                    seq: 11,
+                    payload: serde_json::json!({"event_type": "second"}),
+                }],
+            },
+        };
+        write_gateway_pairing_runtime_state(runtime_dir.as_path(), &second)
+            .expect("rewrite pairing runtime state");
+
+        let loaded = load_gateway_pairing_runtime_state(runtime_dir.as_path())
+            .expect("load pairing runtime state");
+        assert_eq!(loaded, second);
     }
 }

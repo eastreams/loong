@@ -101,8 +101,16 @@ pub async fn collect_status_cli_read_model(
         config_path_text,
         owner_status_option,
     );
-    let gateway =
-        build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
+    let gateway = build_operator_summary_read_model(
+        &owner_status,
+        &channel_inventory,
+        &runtime_snapshot,
+        crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        },
+    );
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
     let mut next_actions = collect_status_runtime_attention_actions(config_path_text, &gateway);
@@ -1019,6 +1027,7 @@ mod tests {
                 running_surface_count: 1,
                 bind_address: Some("127.0.0.1".to_owned()),
                 port: Some(7777),
+                port_source: None,
                 token_path: Some("/tmp/token".to_owned()),
             },
             control_surface: GatewayOperatorControlSurfaceReadModel {
@@ -1078,6 +1087,11 @@ mod tests {
                     query_search_credential_ready: true,
                     separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
+            },
+            pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
             },
         };
         let status = StatusCliReadModel {
@@ -1180,6 +1194,7 @@ mod tests {
                 running_surface_count: 1,
                 bind_address: Some("127.0.0.1".to_owned()),
                 port: Some(7777),
+                port_source: None,
                 token_path: Some("/tmp/token".to_owned()),
             },
             control_surface: GatewayOperatorControlSurfaceReadModel {
@@ -1271,6 +1286,11 @@ mod tests {
                     separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
+            pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
+            },
         };
 
         let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
@@ -1305,6 +1325,7 @@ mod tests {
                 running_surface_count: 1,
                 bind_address: Some("127.0.0.1".to_owned()),
                 port: Some(7777),
+                port_source: None,
                 token_path: Some("/tmp/token".to_owned()),
             },
             control_surface: GatewayOperatorControlSurfaceReadModel {
@@ -1408,6 +1429,11 @@ mod tests {
                     separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
+            pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
+            },
         };
 
         let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
@@ -1442,6 +1468,7 @@ mod tests {
                 running_surface_count: 1,
                 bind_address: Some("127.0.0.1".to_owned()),
                 port: Some(7777),
+                port_source: None,
                 token_path: Some("/tmp/token".to_owned()),
             },
             control_surface: GatewayOperatorControlSurfaceReadModel {
@@ -1533,6 +1560,11 @@ mod tests {
                     separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
+            pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+                pending_request_count: 0,
+                approved_device_count: 0,
+                last_activity_ms: None,
+            },
         };
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
@@ -1611,6 +1643,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         };
 
@@ -1647,6 +1680,7 @@ mod tests {
             running_surface_count: 1,
             bind_address: None,
             port: None,
+            port_source: None,
             token_path: None,
         };
 

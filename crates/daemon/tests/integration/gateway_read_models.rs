@@ -530,6 +530,7 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         running_surface_count: 0,
         bind_address: Some("127.0.0.1".to_owned()),
         port: Some(7777),
+        port_source: None,
         token_path: Some("/tmp/loong-gateway-runtime/control-token".to_owned()),
     };
 
@@ -537,6 +538,11 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         &owner_status,
         &inventory,
         &runtime_snapshot,
+        gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        },
     );
     let encoded = serde_json::to_value(&summary).expect("serialize operator summary read model");
 

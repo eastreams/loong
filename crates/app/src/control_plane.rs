@@ -3,6 +3,7 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, broadcast};
@@ -828,7 +829,7 @@ impl ControlPlaneManager {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneConnectionPrincipal {
     pub connection_id: String,
     pub client_id: String,
@@ -837,12 +838,13 @@ pub struct ControlPlaneConnectionPrincipal {
     pub device_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneConnectionLease {
     pub token: String,
     pub principal: ControlPlaneConnectionPrincipal,
     pub issued_at_ms: u64,
     pub expires_at_ms: u64,
+    pub acknowledged_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -850,6 +852,7 @@ struct ControlPlaneConnectionRecord {
     principal: ControlPlaneConnectionPrincipal,
     issued_at_ms: u64,
     expires_at_ms: u64,
+    acknowledged_seq: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -885,7 +888,40 @@ impl ControlPlaneConnectionRegistry {
                 principal: record.principal.clone(),
                 issued_at_ms: record.issued_at_ms,
                 expires_at_ms: record.expires_at_ms,
+                acknowledged_seq: record.acknowledged_seq,
             }))
+    }
+
+    pub fn acknowledge_seq(
+        &self,
+        token: &str,
+        seq: u64,
+    ) -> Result<Option<ControlPlaneConnectionLease>, String> {
+        let token = token.trim();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        let now_ms = current_time_ms();
+        let mut connections = self
+            .connections
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        connections.retain(|_, record| record.expires_at_ms > now_ms);
+        let Some(record) = connections.get_mut(token) else {
+            return Ok(None);
+        };
+        let next_acknowledged_seq = match record.acknowledged_seq {
+            Some(existing) => existing.max(seq),
+            None => seq,
+        };
+        record.acknowledged_seq = Some(next_acknowledged_seq);
+        Ok(Some(ControlPlaneConnectionLease {
+            token: token.to_owned(),
+            principal: record.principal.clone(),
+            issued_at_ms: record.issued_at_ms,
+            expires_at_ms: record.expires_at_ms,
+            acknowledged_seq: record.acknowledged_seq,
+        }))
     }
 
     pub fn revoke(&self, token: &str) -> bool {
@@ -898,6 +934,53 @@ impl ControlPlaneConnectionRegistry {
             .unwrap_or_else(|error| error.into_inner())
             .remove(token)
             .is_some()
+    }
+
+    pub fn snapshot_leases(&self) -> Vec<ControlPlaneConnectionLease> {
+        let now_ms = current_time_ms();
+        let mut connections = self
+            .connections
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        connections.retain(|_, record| record.expires_at_ms > now_ms);
+        let mut leases = connections
+            .iter()
+            .map(|(token, record)| ControlPlaneConnectionLease {
+                token: token.clone(),
+                principal: record.principal.clone(),
+                issued_at_ms: record.issued_at_ms,
+                expires_at_ms: record.expires_at_ms,
+                acknowledged_seq: record.acknowledged_seq,
+            })
+            .collect::<Vec<_>>();
+        leases.sort_by(|left, right| left.token.cmp(&right.token));
+        leases
+    }
+
+    pub fn restore_leases(&self, leases: &[ControlPlaneConnectionLease]) -> Result<usize, String> {
+        let now_ms = current_time_ms();
+        let mut connections = self
+            .connections
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        connections.clear();
+        let mut restored = 0usize;
+        for lease in leases {
+            if lease.expires_at_ms <= now_ms {
+                continue;
+            }
+            connections.insert(
+                lease.token.clone(),
+                ControlPlaneConnectionRecord {
+                    principal: lease.principal.clone(),
+                    issued_at_ms: lease.issued_at_ms,
+                    expires_at_ms: lease.expires_at_ms,
+                    acknowledged_seq: lease.acknowledged_seq,
+                },
+            );
+            restored = restored.saturating_add(1);
+        }
+        Ok(restored)
     }
 
     fn issue_with_ttl_ms(
@@ -914,6 +997,7 @@ impl ControlPlaneConnectionRegistry {
             principal: principal.clone(),
             issued_at_ms,
             expires_at_ms,
+            acknowledged_seq: None,
         };
         self.connections
             .write()
@@ -924,6 +1008,7 @@ impl ControlPlaneConnectionRegistry {
             principal,
             issued_at_ms,
             expires_at_ms,
+            acknowledged_seq: None,
         }
     }
 }
@@ -1200,6 +1285,47 @@ impl ControlPlanePairingRegistry {
         });
         requests.truncate(limit.max(1));
         requests
+    }
+
+    pub fn pending_request_count(&self) -> usize {
+        self.requests
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter(|record| record.status == ControlPlanePairingStatus::Pending)
+            .count()
+    }
+
+    pub fn approved_device_count(&self) -> usize {
+        self.approved_devices
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .len()
+    }
+
+    pub fn last_activity_ms(&self) -> Option<u64> {
+        let request_activity = self
+            .requests
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .flat_map(|record| [Some(record.requested_at_ms), record.resolved_at_ms])
+            .flatten()
+            .max();
+        let device_activity = self
+            .approved_devices
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .map(|device| device.approved_at_ms)
+            .max();
+
+        match (request_activity, device_activity) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }
     }
 
     pub fn resolve_request(
@@ -2587,6 +2713,86 @@ mod tests {
             registry
                 .resolve(&active.token)
                 .expect("resolve revoked")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn connection_registry_tracks_monotonic_acknowledged_seq() {
+        let registry = ControlPlaneConnectionRegistry::new();
+        let lease = registry.issue(ControlPlaneConnectionPrincipal {
+            connection_id: "cp-ack".to_owned(),
+            client_id: "cli".to_owned(),
+            role: "operator".to_owned(),
+            scopes: BTreeSet::from(["operator.read".to_owned()]),
+            device_id: Some("device-1".to_owned()),
+        });
+
+        let updated = registry
+            .acknowledge_seq(&lease.token, 7)
+            .expect("acknowledge seq")
+            .expect("lease should exist");
+        assert_eq!(updated.acknowledged_seq, Some(7));
+
+        let downgraded = registry
+            .acknowledge_seq(&lease.token, 3)
+            .expect("acknowledge smaller seq")
+            .expect("lease should still exist");
+        assert_eq!(downgraded.acknowledged_seq, Some(7));
+
+        let resolved = registry
+            .resolve(&lease.token)
+            .expect("resolve lease")
+            .expect("lease should exist");
+        assert_eq!(resolved.acknowledged_seq, Some(7));
+    }
+
+    #[test]
+    fn connection_registry_restores_non_expired_leases_from_snapshot() {
+        let registry = ControlPlaneConnectionRegistry::new();
+        let future_expiry = current_time_ms().saturating_add(30_000);
+        let leases = vec![
+            ControlPlaneConnectionLease {
+                token: "cpt-restore-active".to_owned(),
+                principal: ControlPlaneConnectionPrincipal {
+                    connection_id: "cp-restore".to_owned(),
+                    client_id: "cli".to_owned(),
+                    role: "operator".to_owned(),
+                    scopes: BTreeSet::from(["operator.read".to_owned()]),
+                    device_id: Some("device-1".to_owned()),
+                },
+                issued_at_ms: current_time_ms(),
+                expires_at_ms: future_expiry,
+                acknowledged_seq: Some(9),
+            },
+            ControlPlaneConnectionLease {
+                token: "cpt-restore-expired".to_owned(),
+                principal: ControlPlaneConnectionPrincipal {
+                    connection_id: "cp-expired".to_owned(),
+                    client_id: "cli".to_owned(),
+                    role: "operator".to_owned(),
+                    scopes: BTreeSet::new(),
+                    device_id: None,
+                },
+                issued_at_ms: current_time_ms().saturating_sub(60_000),
+                expires_at_ms: current_time_ms().saturating_sub(1),
+                acknowledged_seq: None,
+            },
+        ];
+
+        let restored = registry.restore_leases(&leases).expect("restore leases");
+        assert_eq!(restored, 1);
+
+        let resolved = registry
+            .resolve("cpt-restore-active")
+            .expect("resolve restored lease")
+            .expect("active lease should exist");
+        assert_eq!(resolved.acknowledged_seq, Some(9));
+        assert_eq!(resolved.principal.device_id.as_deref(), Some("device-1"));
+        assert!(
+            registry
+                .resolve("cpt-restore-expired")
+                .expect("resolve expired restored lease")
                 .is_none()
         );
     }

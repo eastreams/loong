@@ -386,6 +386,13 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorPairingSummaryReadModel {
+    pub pending_request_count: usize,
+    pub approved_device_count: usize,
+    pub last_activity_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayToolCallingReadModel {
     pub availability: String,
     pub structured_tool_schema_enabled: bool,
@@ -400,6 +407,7 @@ pub struct GatewayOperatorSummaryReadModel {
     pub control_surface: GatewayOperatorControlSurfaceReadModel,
     pub channels: GatewayOperatorChannelsSummaryReadModel,
     pub runtime: GatewayOperatorRuntimeSummaryReadModel,
+    pub pairing: GatewayOperatorPairingSummaryReadModel,
 }
 
 pub fn build_channel_inventory_read_model(
@@ -642,6 +650,7 @@ pub fn build_operator_summary_read_model(
     owner_status: &GatewayOwnerStatus,
     channel_inventory: &GatewayChannelInventoryReadModel,
     runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+    pairing: GatewayOperatorPairingSummaryReadModel,
 ) -> GatewayOperatorSummaryReadModel {
     let owner = owner_status.clone();
     let control_surface = build_operator_control_surface_read_model(owner_status);
@@ -653,6 +662,7 @@ pub fn build_operator_summary_read_model(
         control_surface,
         channels,
         runtime,
+        pairing,
     }
 }
 

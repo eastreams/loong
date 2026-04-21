@@ -4331,6 +4331,236 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pairing_list_surfaces_approved_request_after_resolution() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+
+        let challenge = issue_challenge(&router).await;
+        let scopes = std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]);
+        let device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &challenge,
+        );
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("Loong CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes: scopes.clone(),
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device),
+        };
+
+        let pairing_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("pairing response");
+        assert_eq!(pairing_response.status(), StatusCode::FORBIDDEN);
+        let pairing_body = to_bytes(pairing_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let pairing_error: ControlPlaneConnectErrorResponse =
+            serde_json::from_slice(&pairing_body).expect("pairing error json");
+        let pairing_request_id = pairing_error
+            .pairing_request_id
+            .expect("pairing request id");
+
+        let operator_token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorPairing]),
+        )
+        .await;
+        let resolve_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/pairing/resolve")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {operator_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ControlPlanePairingResolveRequest {
+                            pairing_request_id: pairing_request_id.clone(),
+                            approve: true,
+                        })
+                        .expect("encode resolve request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("resolve response");
+        assert_eq!(resolve_response.status(), StatusCode::OK);
+        let resolve_body = to_bytes(resolve_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let resolve: ControlPlanePairingResolveResponse =
+            serde_json::from_slice(&resolve_body).expect("resolve json");
+        assert_eq!(resolve.request.status, ControlPlanePairingStatus::Approved,);
+        assert_eq!(resolve.request.pairing_request_id, pairing_request_id);
+        assert_eq!(resolve.request.requested_scopes, scopes);
+        assert!(resolve.request.resolved_at_ms.is_some());
+        assert!(resolve.device_token.is_some());
+
+        let list_response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/pairing/list?status=approved&limit=10",
+                &operator_token,
+            ))
+            .await
+            .expect("pairing list response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let list: ControlPlanePairingListResponse =
+            serde_json::from_slice(&list_body).expect("pairing list json");
+        assert_eq!(list.matched_count, 1);
+        assert_eq!(list.returned_count, 1);
+        assert_eq!(list.requests[0].status, ControlPlanePairingStatus::Approved);
+        assert_eq!(list.requests[0].pairing_request_id, pairing_request_id);
+        assert_eq!(list.requests[0].requested_scopes, scopes);
+        assert!(list.requests[0].resolved_at_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn pairing_list_surfaces_rejected_request_after_resolution() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+
+        let challenge = issue_challenge(&router).await;
+        let scopes = std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]);
+        let device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &challenge,
+        );
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("Loong CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes: scopes.clone(),
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device),
+        };
+
+        let pairing_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("pairing response");
+        assert_eq!(pairing_response.status(), StatusCode::FORBIDDEN);
+        let pairing_body = to_bytes(pairing_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let pairing_error: ControlPlaneConnectErrorResponse =
+            serde_json::from_slice(&pairing_body).expect("pairing error json");
+        let pairing_request_id = pairing_error
+            .pairing_request_id
+            .expect("pairing request id");
+
+        let operator_token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorPairing]),
+        )
+        .await;
+        let resolve_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/pairing/resolve")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {operator_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ControlPlanePairingResolveRequest {
+                            pairing_request_id: pairing_request_id.clone(),
+                            approve: false,
+                        })
+                        .expect("encode resolve request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("resolve response");
+        assert_eq!(resolve_response.status(), StatusCode::OK);
+        let resolve_body = to_bytes(resolve_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let resolve: ControlPlanePairingResolveResponse =
+            serde_json::from_slice(&resolve_body).expect("resolve json");
+        assert_eq!(resolve.request.status, ControlPlanePairingStatus::Rejected,);
+        assert_eq!(resolve.request.pairing_request_id, pairing_request_id);
+        assert_eq!(resolve.request.requested_scopes, scopes);
+        assert!(resolve.request.resolved_at_ms.is_some());
+        assert!(resolve.device_token.is_none());
+
+        let list_response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/pairing/list?status=rejected&limit=10",
+                &operator_token,
+            ))
+            .await
+            .expect("pairing list response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let list: ControlPlanePairingListResponse =
+            serde_json::from_slice(&list_body).expect("pairing list json");
+        assert_eq!(list.matched_count, 1);
+        assert_eq!(list.returned_count, 1);
+        assert_eq!(list.requests[0].status, ControlPlanePairingStatus::Rejected);
+        assert_eq!(list.requests[0].pairing_request_id, pairing_request_id);
+        assert_eq!(list.requests[0].requested_scopes, scopes);
+        assert!(list.requests[0].resolved_at_ms.is_some());
+    }
+
+    #[tokio::test]
     async fn control_snapshot_returns_snapshot_payload() {
         let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
         manager.set_runtime_ready(true);
