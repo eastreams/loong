@@ -847,7 +847,13 @@ where
                             "provider response shape invalid for model `{}` on attempt {}/{}: {error}",
                             this.model, this.attempt, this.max_attempts
                         ),
-                        _ => format!(
+                        ProviderFailoverReason::ModelMismatch
+                        | ProviderFailoverReason::RateLimited
+                        | ProviderFailoverReason::ProviderOverloaded
+                        | ProviderFailoverReason::AuthRejected
+                        | ProviderFailoverReason::PayloadIncompatible
+                        | ProviderFailoverReason::TransportFailure
+                        | ProviderFailoverReason::RequestRejected => format!(
                             "streaming response error for model `{}` on attempt {}/{}: {error}",
                             this.model, this.attempt, this.max_attempts
                         ),

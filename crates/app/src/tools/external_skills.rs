@@ -4652,6 +4652,7 @@ fn collect_skill_resource_paths(
         .unwrap_or(current_path)
         .display()
         .to_string();
+    let relative = relative.replace('\\', "/");
     if relative == DEFAULT_SKILL_FILENAME {
         return Ok(());
     }
