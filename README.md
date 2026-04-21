@@ -157,7 +157,6 @@ Loong keeps `loong` as the only public binary, but the canonical command story i
 
 - product path at root: `onboard`, `ask`, `chat`, `doctor`, `status`, `update`
 - operator shells at root: `sessions`, `skills`, `channels`, `gateway`, `runtime`, `plugins`, `feishu`, `completions`
-- compatibility aliases for older flat verbs such as `*-send`, `*-serve`, `list-*`, and `runtime-*` remain accepted where needed while scripts and docs migrate
 
 Running `onboard` is enough for the golden path — it writes a working config to `~/.loong/config.toml` without asking you to hand-edit TOML. The snippets below show what that file looks like on `dev` today, when you want to add another provider or wire up a channel.
 
@@ -210,7 +209,7 @@ loong feishu send --receive-id "ou_example_user" --text "hello from loong"
 loong feishu serve
 ```
 
-Feishu keeps its richer family namespace at `loong feishu ...`. For thinner channel families, the canonical public shape is `loong channels send <surface> ...` and `loong channels serve <surface> ...`; older flat aliases such as `feishu-send` or `telegram-serve` remain compatibility surfaces during migration.
+Feishu keeps its richer family namespace at `loong feishu ...`. For thinner channel families, the canonical public shape is `loong channels send <surface> ...` and `loong channels serve <surface> ...`.
 
 For the full provider and channel matrices, multi-account setups, and the long-running delivery model, see the [Documentation](#documentation) table below.
 

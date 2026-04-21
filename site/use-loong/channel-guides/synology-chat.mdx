@@ -29,14 +29,14 @@ incoming_url_env = "SYNOLOGY_CHAT_INCOMING_URL"
 ## Smoke Test
 
 ```bash
-loong synology-chat-send --text "hello from loong"
+loong channels send synology-chat --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| chat send | `synology-chat-send` | Usage: loong synology-chat-send [OPTIONS] --text &lt;TEXT&gt; |
+| chat send | `channels send synology-chat` | Usage: loong channels send synology-chat [OPTIONS] --text &lt;TEXT&gt; |
 | webhook service | `synology-chat-serve` | synology chat outgoing webhook serve is not implemented yet |
 
 ## Required Fields For Send
@@ -48,7 +48,7 @@ loong synology-chat-send --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Related Docs
 

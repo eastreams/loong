@@ -60,8 +60,8 @@ What success looks like:
 | --- | --- | --- |
 | managed bridge contract check | `loong doctor` | current readiness and remediation surface |
 | inventory + discovery inspection | `loong channels` | current operator inventory surface |
-| bridge-backed send | `weixin-send` | executes through the selected managed bridge runtime; target contract stays `weixin:<account>:contact:<id>` or `weixin:<account>:room:<id>` |
-| bridge-backed serve | `weixin-serve` | starts the selected managed bridge reply loop; upstream session ownership still stays in the external bridge |
+| bridge-backed send | `channels send weixin` | executes through the selected managed bridge runtime; target contract stays `weixin:<account>:contact:<id>` or `weixin:<account>:room:<id>` |
+| bridge-backed serve | `channels serve weixin` | starts the selected managed bridge reply loop; upstream session ownership still stays in the external bridge |
 
 ## Required Fields For Bridge Send Contract
 
@@ -99,7 +99,7 @@ Use these templates when you need one bridge implementation and later tooling to
 
 ## Gateway And Ownership
 
-This surface does **not** join `multi-channel-serve` or `gateway run` today. The upstream Weixin listener and login flow remain owned by the external bridge.
+This surface does **not** join `gateway run` or `gateway run` today. The upstream Weixin listener and login flow remain owned by the external bridge.
 
 Use Loong here for:
 
@@ -112,7 +112,7 @@ Use Loong here for:
 
 - Keep `allowed_contact_ids` tight. Treat it as the trust boundary, not a convenience list.
 - Loong validates `allowed_contact_ids` locally before forwarding a contact send through the managed bridge runtime.
-- `weixin-serve` retries transient managed bridge runtime failures with bounded backoff; repeated failures still surface as a hard error so the bridge can be inspected.
+- `channels serve weixin` retries transient managed bridge runtime failures with bounded backoff; repeated failures still surface as a hard error so the bridge can be inspected.
 - `weixin-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
 - When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
 - `weixin-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.

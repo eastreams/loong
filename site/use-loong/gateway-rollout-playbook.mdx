@@ -19,7 +19,7 @@ This page is not a shortcut around the earlier steps. It assumes:
 | Covered here | Not covered here |
 | --- | --- |
 | `gateway run`, `gateway status`, and `gateway stop` | provider first-run setup |
-| `multi-channel-serve` as the foreground compatibility wrapper | single-channel smoke tests from zero |
+| `gateway run` as the foreground compatibility wrapper | single-channel smoke tests from zero |
 | selector syntax such as `lark=work` or `wecom=alerts` | outbound-only surfaces pretending to join the same reply-loop owner |
 
 ## Use A Different Playbook If
@@ -94,7 +94,7 @@ Why this step exists:
 Foreground compatibility wrapper:
 
 ```bash
-loong multi-channel-serve \
+loong gateway run \
   --session cli-supervisor \
   --channel-account lark=work \
   --channel-account telegram=bot_123456 \
@@ -115,7 +115,7 @@ How to choose:
 
 | Need | Better command |
 | --- | --- |
-| one visible foreground shell while rolling out | `multi-channel-serve` |
+| one visible foreground shell while rolling out | `gateway run` |
 | one persisted owner that another process can inspect or stop | `gateway run` |
 
 ## Step 4: Control And Inspect Ownership

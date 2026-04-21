@@ -1461,7 +1461,7 @@ mod tests {
             .expect_err("active serve runtime should block proactive send");
 
         assert!(error.contains("already has an active serve runtime"));
-        assert!(error.contains("wecom-send"));
+        assert!(error.contains("channels send wecom"));
     }
 
     #[tokio::test]

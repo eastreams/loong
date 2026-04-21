@@ -5,7 +5,7 @@ description: Configure the WeCom channel surface in Loong.
 
 # WeCom
 
-This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `gateway run` or `gateway run`.
 
 ## At A Glance
 
@@ -31,16 +31,16 @@ allowed_conversation_ids = ["group_demo"]
 ## Smoke Test
 
 ```bash
-loong wecom-send --target "wmxxxxxxxxxxxxxxxx" --text "hello from loong"
-loong wecom-serve
+loong channels send wecom --target "wmxxxxxxxxxxxxxxxx" --text "hello from loong"
+loong channels serve wecom
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| proactive send | `wecom-send` | Usage: loong wecom-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
-| long connection reply loop | `wecom-serve` | Usage: loong wecom-serve [OPTIONS] |
+| proactive send | `channels send wecom` | Usage: loong channels send wecom [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| long connection reply loop | `channels serve wecom` | Usage: loong channels serve wecom [OPTIONS] |
 
 ## Required Fields For Send
 
@@ -69,7 +69,7 @@ loong wecom-serve
 
 ## Gateway And Ownership
 
-This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `gateway run` and `gateway run`.
 
 ## Operator Notes
 

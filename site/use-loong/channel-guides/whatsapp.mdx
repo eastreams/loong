@@ -5,7 +5,7 @@ description: Configure the WhatsApp channel surface in Loong.
 
 # WhatsApp
 
-This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `gateway run` or `gateway run`.
 
 ## At A Glance
 
@@ -34,16 +34,16 @@ app_secret_env = "WHATSAPP_APP_SECRET"
 ## Smoke Test
 
 ```bash
-loong whatsapp-send --target "+15551234567" --text "hello from loong"
-loong whatsapp-serve
+loong channels send whatsapp --target "+15551234567" --text "hello from loong"
+loong channels serve whatsapp
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| business send | `whatsapp-send` | Usage: loong whatsapp-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
-| cloud webhook service | `whatsapp-serve` | Usage: loong whatsapp-serve [OPTIONS] |
+| business send | `channels send whatsapp` | Usage: loong channels send whatsapp [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| cloud webhook service | `channels serve whatsapp` | Usage: loong channels serve whatsapp [OPTIONS] |
 
 ## Required Fields For Send
 
@@ -65,7 +65,7 @@ loong whatsapp-serve
 
 ## Gateway And Ownership
 
-This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `gateway run` and `gateway run`.
 
 ## Operator Notes
 

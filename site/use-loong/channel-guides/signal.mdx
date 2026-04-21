@@ -31,14 +31,14 @@ account_env = "SIGNAL_ACCOUNT"
 ## Smoke Test
 
 ```bash
-loong signal-send --target "+15551234567" --text "hello from loong"
+loong channels send signal --target "+15551234567" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| direct message send | `signal-send` | Usage: loong signal-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| direct message send | `channels send signal` | Usage: loong channels send signal [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | linked-device listener | `signal-serve` | signal serve runtime is not implemented yet |
 
 ## Required Fields For Send
@@ -51,7 +51,7 @@ loong signal-send --target "+15551234567" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

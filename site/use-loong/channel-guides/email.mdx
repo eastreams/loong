@@ -32,14 +32,14 @@ from_address = "loong@example.com"
 ## Smoke Test
 
 ```bash
-loong email-send --target "ops@example.com" --text "hello from loong"
+loong channels send email --target "ops@example.com" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| smtp send | `email-send` | Usage: loong email-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| smtp send | `channels send email` | Usage: loong channels send email [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | imap reply loop | `email-serve` | email IMAP reply-loop serve runtime is not implemented yet |
 
 ## Required Fields For Send
@@ -54,7 +54,7 @@ loong email-send --target "ops@example.com" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

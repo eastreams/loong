@@ -5,7 +5,7 @@ description: Configure the Matrix channel surface in Loong.
 
 # Matrix
 
-This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `gateway run` or `gateway run`.
 
 ## At A Glance
 
@@ -32,16 +32,16 @@ allowed_room_ids = ["!ops:example.org"]
 ## Smoke Test
 
 ```bash
-loong matrix-send --target "!ops:example.org" --text "hello from loong"
-loong matrix-serve --once
+loong channels send matrix --target "!ops:example.org" --text "hello from loong"
+loong channels serve matrix --once
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| direct send | `matrix-send` | Usage: loong matrix-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
-| sync reply loop | `matrix-serve` | Usage: loong matrix-serve [OPTIONS] |
+| direct send | `channels send matrix` | Usage: loong channels send matrix [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| sync reply loop | `channels serve matrix` | Usage: loong channels serve matrix [OPTIONS] |
 
 ## Required Fields For Send
 
@@ -63,7 +63,7 @@ loong matrix-serve --once
 
 ## Gateway And Ownership
 
-This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `gateway run` and `gateway run`.
 
 ## Operator Notes
 

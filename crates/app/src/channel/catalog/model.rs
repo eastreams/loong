@@ -256,7 +256,7 @@ mod tests {
         let operation = ChannelCatalogOperation {
             id: CHANNEL_OPERATION_SEND_ID,
             label: "direct send",
-            command: "feishu-send",
+            command: "feishu send",
             availability: ChannelCatalogOperationAvailability::Implemented,
             tracks_runtime: false,
             requirements: &[],

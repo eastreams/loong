@@ -25,7 +25,6 @@ Public docs now use grouped channel shells first:
 - generic sends: `loong channels send <surface> ...`
 - generic serve loops: `loong channels serve <surface> ...`
 - richer family namespaces stay first-class when they expose more than thin wrappers, for example `loong feishu send` and `loong feishu serve`
-- legacy flat aliases such as `telegram-send`, `line-serve`, or `onebot-send` remain compatibility surfaces where the runtime still accepts them
 
 ## Start With The Right Question
 
@@ -67,7 +66,7 @@ Before any channel is really ready:
 ## Gateway-Supervised Service Channels
 
 These are the shipped reply-loop surfaces that can join `gateway run` or
-`multi-channel-serve` today.
+`gateway run` today.
 
 | Surface | What you configure first | Run loop |
 | --- | --- | --- |
@@ -101,7 +100,7 @@ and upstream session lifecycle stay in an external bridge or managed plugin.
 Operational rule:
 
 - these surfaces are actionable and operator-visible today
-- they do not join `gateway run` or `multi-channel-serve` because their runtime owner is still the external bridge
+- they do not join `gateway run` or `gateway run` because their runtime owner is still the external bridge
 - the important setup milestone is a passing contract + discovery result, not a native runtime loop that does not exist yet
 - managed bridge command execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`
 - grouped `channels serve <surface>` flows and their legacy `*-serve` aliases retry transient managed bridge runtime failures locally with bounded backoff before surfacing a hard failure
@@ -128,7 +127,7 @@ Publicly that means:
 - both modes need the base app credentials and trusted-chat boundary
 - webhook mode also needs the webhook verification material
 - websocket mode should not be documented as if webhook-only secrets are mandatory
-- `loong feishu send` and `loong feishu serve` are the canonical first-class shipped commands; `feishu-send` and `feishu-serve` remain compatibility aliases
+- `loong feishu send` and `loong feishu serve` are the canonical first-class shipped commands
 
 ### Telegram
 
@@ -243,7 +242,7 @@ the runtime can widen that boundary explicitly instead of silently assuming it.
 When you move beyond one local surface:
 
 - `gateway run`, `gateway status`, and `gateway stop` are the explicit owner contract
-- `multi-channel-serve` is the compatibility wrapper for the shipped gateway-supervised subset
+- `gateway run` is the compatibility wrapper for the shipped gateway-supervised subset
 - standalone native-serve surfaces use their own `channels serve <surface>` loop instead of joining the same reply-loop runtime contract
 - plugin-backed surfaces are inspected through `doctor` and `channels`, not supervised through the same reply-loop runtime contract
 - outbound-only surfaces should not be described as if they are supervised by the same reply-loop runtime contract
@@ -253,11 +252,11 @@ When you move beyond one local surface:
 ## Recommended Progression
 
 1. Get the local assistant path healthy first.
-2. Add one gateway-supervised service channel if you need the shortest path into `gateway run` or `multi-channel-serve`.
+2. Add one gateway-supervised service channel if you need the shortest path into `gateway run` or `gateway run`.
 3. Add one standalone native-serve surface when you need a real built-in `channels serve <surface>` loop without gateway supervision yet.
 4. Add one plugin-backed bridge surface when the ecosystem is real but the runtime owner should stay external.
 5. Add outbound-only surfaces when you need governed direct sends.
-6. Reach for gateway and `multi-channel-serve` only after one gateway-supervised channel already works cleanly.
+6. Reach for gateway and `gateway run` only after one gateway-supervised channel already works cleanly.
 
 ## Deep References
 

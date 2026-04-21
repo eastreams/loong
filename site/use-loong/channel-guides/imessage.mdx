@@ -30,14 +30,14 @@ bridge_token_env = "IMESSAGE_BRIDGE_TOKEN"
 ## Smoke Test
 
 ```bash
-loong imessage-send --target "+15551234567" --text "hello from loong"
+loong channels send imessage --target "+15551234567" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| chat send | `imessage-send` | Usage: loong imessage-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| chat send | `channels send imessage` | Usage: loong channels send imessage [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | bridge sync service | `imessage-serve` | imessage bridge sync runtime is not implemented yet |
 
 ## Required Fields For Send
@@ -50,7 +50,7 @@ loong imessage-send --target "+15551234567" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

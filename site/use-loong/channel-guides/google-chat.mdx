@@ -29,14 +29,14 @@ webhook_url_env = "GOOGLE_CHAT_WEBHOOK_URL"
 ## Smoke Test
 
 ```bash
-loong google-chat-send --text "hello from loong"
+loong channels send google-chat --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| incoming webhook send | `google-chat-send` | Usage: loong google-chat-send [OPTIONS] --text &lt;TEXT&gt; |
+| incoming webhook send | `channels send google-chat` | Usage: loong channels send google-chat [OPTIONS] --text &lt;TEXT&gt; |
 | interactive event service | `google-chat-serve` | google chat incoming webhook surface is outbound-only |
 
 ## Required Fields For Send
@@ -48,7 +48,7 @@ loong google-chat-send --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Related Docs
 

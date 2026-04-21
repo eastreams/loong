@@ -119,7 +119,10 @@ fn cli_work_unit_parse_accepts_full_complete_command_shape() {
     .expect("work-unit complete CLI should parse");
 
     let command = cli.command.expect("CLI should parse a subcommand");
-    let Commands::WorkUnit { command } = command else {
+    let Commands::Runtime {
+        command: loong_daemon::runtime_cli::RuntimeCommands::WorkUnit { command },
+    } = command
+    else {
         panic!("unexpected CLI parse result: {command:?}");
     };
     let work_unit_runtime::WorkUnitCommands::Complete(options) = command else {
@@ -169,7 +172,10 @@ fn cli_work_unit_parse_accepts_update_command_shape() {
     .expect("work-unit update CLI should parse");
 
     let command = cli.command.expect("CLI should parse a subcommand");
-    let Commands::WorkUnit { command } = command else {
+    let Commands::Runtime {
+        command: loong_daemon::runtime_cli::RuntimeCommands::WorkUnit { command },
+    } = command
+    else {
         panic!("unexpected CLI parse result: {command:?}");
     };
     let work_unit_runtime::WorkUnitCommands::Update(options) = command else {
