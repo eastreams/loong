@@ -96,7 +96,7 @@ fn snapshot_id_from_payload(payload: &Value) -> String {
 }
 
 fn canonical_display_path(path: &Path) -> String {
-    fs::canonicalize(path)
+    dunce::canonicalize(path)
         .expect("canonicalize fixture path")
         .display()
         .to_string()
