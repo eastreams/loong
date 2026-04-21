@@ -4130,6 +4130,136 @@ async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compact
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn handle_turn_with_runtime_records_task_progress_event() {
+    let session_id = unique_acp_test_id("conversation-task-progress", "status");
+    let sqlite_path = unique_memory_sqlite_path("task-progress-event");
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(999_999);
+
+    let memory_config = session_store_config_from_config(&config);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(create_root_session_record(&session_id))
+        .expect("create root session");
+
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("task progress reply".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-task-progress");
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            &session_id,
+            "check long-running status surfaces",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "task progress reply");
+
+    let event = repo
+        .load_latest_event_by_kind(&session_id, crate::task_progress::TASK_PROGRESS_EVENT_KIND)
+        .expect("load latest task progress event")
+        .expect("task progress event should exist");
+    let task_progress = crate::task_progress::task_progress_from_event_payload(&event.payload_json)
+        .expect("decode task progress payload");
+
+    assert_eq!(task_progress.task_id, session_id);
+    assert_eq!(
+        task_progress.status,
+        crate::task_progress::TaskProgressStatus::Completed
+    );
+    assert_eq!(
+        task_progress.intent_summary.as_deref(),
+        Some("check long-running status surfaces")
+    );
+    assert_eq!(
+        task_progress.verification_state,
+        Some(crate::task_progress::TaskVerificationState::Passed)
+    );
+    assert!(
+        task_progress.active_handles.is_empty(),
+        "completed task progress should not keep active handles"
+    );
+    assert!(task_progress.resume_recipe.is_none());
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_records_verifying_task_progress_before_completion() {
+    let session_id = unique_acp_test_id("conversation-task-progress", "verifying");
+    let sqlite_path = unique_memory_sqlite_path("task-progress-verifying");
+    let workspace_root = create_runtime_self_workspace(
+        "task-progress-verifying",
+        "# Identity\n\n- Name: Workspace verification identity",
+    );
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+
+    let memory_config = session_store_config_from_config(&config);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(create_root_session_record(&session_id))
+        .expect("create root session");
+
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("verifying reply".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-task-progress-verifying");
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            &session_id,
+            "verify before completion",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "verifying reply");
+
+    let events = repo
+        .list_recent_events(&session_id, 50)
+        .expect("list recent events");
+    let task_progress_statuses = events
+        .iter()
+        .filter(|event| event.event_kind == crate::task_progress::TASK_PROGRESS_EVENT_KIND)
+        .filter_map(|event| {
+            crate::task_progress::task_progress_from_event_payload(&event.payload_json)
+        })
+        .map(|record| record.status)
+        .collect::<Vec<_>>();
+
+    assert!(task_progress_statuses.contains(&crate::task_progress::TaskProgressStatus::Active));
+    assert!(task_progress_statuses.contains(&crate::task_progress::TaskProgressStatus::Verifying));
+    assert_eq!(
+        task_progress_statuses.last(),
+        Some(&crate::task_progress::TaskProgressStatus::Completed)
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn default_runtime_build_context_fail_open_memory_derivation_preserves_recent_window_projection()
  {
     let _faults = crate::memory::ScopedMemoryOrchestratorTestFaults::set(

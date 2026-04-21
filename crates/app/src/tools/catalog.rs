@@ -65,7 +65,8 @@ use session_definition_support::{
     session_status_definition, session_tool_policy_clear_definition,
     session_tool_policy_set_definition, session_tool_policy_status_definition,
     session_wait_definition, sessions_history_definition, sessions_list_definition,
-    sessions_send_definition,
+    sessions_send_definition, task_history_definition, task_status_definition,
+    task_wait_definition, tasks_list_definition, tasks_search_definition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -635,6 +636,11 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "session_search"
         | "session_status"
         | "session_wait"
+        | "task_status"
+        | "task_wait"
+        | "task_history"
+        | "tasks_list"
+        | "tasks_search"
         | "sessions_history"
         | "sessions_list"
         | "file.read"
@@ -1217,6 +1223,76 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_wait_definition,
+        },
+        ToolDescriptor {
+            name: "task_status",
+            provider_name: "task_status",
+            aliases: &[],
+            description: "Inspect the current status of a durable task",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: task_status_definition,
+        },
+        ToolDescriptor {
+            name: "task_wait",
+            provider_name: "task_wait",
+            aliases: &[],
+            description: "Wait for a durable task to reach a stable state",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: task_wait_definition,
+        },
+        ToolDescriptor {
+            name: "task_history",
+            provider_name: "task_history",
+            aliases: &[],
+            description: "Fetch transcript history for the session currently owning a durable task",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: task_history_definition,
+        },
+        ToolDescriptor {
+            name: "tasks_list",
+            provider_name: "tasks_list",
+            aliases: &[],
+            description: "List visible durable tasks and their high-level task state",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: tasks_list_definition,
+        },
+        ToolDescriptor {
+            name: "tasks_search",
+            provider_name: "tasks_search",
+            aliases: &[],
+            description: "Search visible durable tasks by summary, state, label, or owner metadata",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: tasks_search_definition,
         },
         ToolDescriptor {
             name: "sessions_history",

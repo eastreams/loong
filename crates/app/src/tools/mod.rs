@@ -418,11 +418,14 @@ fn execute_app_tool_with_browser_companion_readiness(
             )
         }
         "sessions_list"
+        | "tasks_list"
         | "sessions_history"
+        | "task_history"
         | "session_tool_policy_status"
         | "session_tool_policy_set"
         | "session_tool_policy_clear"
         | "session_status"
+        | "task_status"
         | "session_events"
         | "session_search"
         | "session_archive"
@@ -478,6 +481,36 @@ pub async fn wait_for_session_with_config(
             return Err("app_tool_disabled: session tools are disabled by config".to_owned());
         }
         session::wait_for_session_tool_with_policies(
+            payload,
+            current_session_id,
+            memory_config,
+            tool_config,
+        )
+        .await
+    }
+}
+
+pub async fn wait_for_task_with_config(
+    payload: Value,
+    current_session_id: &str,
+    memory_config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (payload, current_session_id, memory_config, tool_config);
+        return Err(
+            "session tools require sqlite memory support (enable feature `memory-sqlite`)"
+                .to_owned(),
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if !tool_config.sessions.enabled {
+            return Err("app_tool_disabled: task tools are disabled by config".to_owned());
+        }
+        session::wait_for_task_tool_with_policies(
             payload,
             current_session_id,
             memory_config,
@@ -613,10 +646,14 @@ fn required_capabilities_for_tool_name_and_payload(
             caps.insert(Capability::FilesystemRead);
         }
         "sessions_list"
+        | "tasks_list"
         | "sessions_history"
         | "session_status"
         | "session_events"
         | "session_wait"
+        | "task_status"
+        | "task_wait"
+        | "task_history"
         | "session_search"
         | "session_tool_policy_status" => {
             caps.insert(Capability::MemoryRead);

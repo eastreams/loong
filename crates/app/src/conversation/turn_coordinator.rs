@@ -43,6 +43,11 @@ use crate::operator::delegate_runtime::{
 };
 use crate::runtime_self_continuity;
 use crate::session::store::{self, SessionStoreConfig};
+#[cfg(feature = "memory-sqlite")]
+use crate::task_progress::{
+    TASK_PROGRESS_EVENT_KIND, TaskActiveHandleRecord, TaskProgressRecord, TaskProgressStatus,
+    TaskResumeRecipeRecord, TaskVerificationState, task_progress_event_payload, unix_ts_now,
+};
 
 use self::pending_approval::*;
 use self::safe_lane_events::*;
@@ -118,20 +123,18 @@ use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
-#[cfg(test)]
-use super::turn_checkpoint::TurnCheckpointResultKind;
 use super::turn_checkpoint::{
     ContextCompactionOutcome, TurnCheckpointDiagnostics, TurnCheckpointFailure,
     TurnCheckpointFailureStep, TurnCheckpointFinalizationProgress, TurnCheckpointIdentity,
     TurnCheckpointProgressStatus, TurnCheckpointRecoveryAssessment,
-    TurnCheckpointRepairResumeInput, TurnCheckpointRequest, TurnCheckpointSnapshot,
-    TurnCheckpointStage, TurnCheckpointTailRepairOutcome, TurnCheckpointTailRepairReason,
-    TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
-    TurnCheckpointTailRepairStatus, TurnCheckpointTailRuntimeEligibility,
-    TurnFinalizationCheckpoint, TurnLaneExecutionSnapshot, TurnPreparationSnapshot,
-    TurnReplyCheckpoint, checkpoint_context_fingerprint_sha256, persist_turn_checkpoint_event,
-    persist_turn_checkpoint_event_value, restore_analytics_turn_checkpoint_progress_status,
-    turn_checkpoint_result_kind,
+    TurnCheckpointRepairResumeInput, TurnCheckpointRequest, TurnCheckpointResultKind,
+    TurnCheckpointSnapshot, TurnCheckpointStage, TurnCheckpointTailRepairOutcome,
+    TurnCheckpointTailRepairReason, TurnCheckpointTailRepairRuntimeProbe,
+    TurnCheckpointTailRepairSource, TurnCheckpointTailRepairStatus,
+    TurnCheckpointTailRuntimeEligibility, TurnFinalizationCheckpoint, TurnLaneExecutionSnapshot,
+    TurnPreparationSnapshot, TurnReplyCheckpoint, checkpoint_context_fingerprint_sha256,
+    persist_turn_checkpoint_event, persist_turn_checkpoint_event_value,
+    restore_analytics_turn_checkpoint_progress_status, turn_checkpoint_result_kind,
 };
 use super::turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionIntentStatus,
@@ -1926,6 +1929,13 @@ impl ConversationTurnCoordinator {
             {
                 return Ok((reply, false));
             }
+            #[cfg(feature = "memory-sqlite")]
+            persist_task_progress_event_best_effort(
+                config,
+                session_id,
+                "turn_started",
+                active_task_progress_record(session_id, user_input),
+            );
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
 
@@ -2059,6 +2069,13 @@ impl ConversationTurnCoordinator {
 
         match turn_result {
             Ok((reply, true)) => {
+                #[cfg(feature = "memory-sqlite")]
+                persist_task_progress_event_best_effort(
+                    config,
+                    address.session_id.as_str(),
+                    "turn_completed",
+                    completed_task_progress_record(address.session_id.as_str(), user_input),
+                );
                 observe_non_provider_turn_terminal_success_phases(observer.as_ref());
                 Ok(reply)
             }
@@ -2066,6 +2083,13 @@ impl ConversationTurnCoordinator {
             Err(error) => {
                 let failed_event = ConversationTurnPhaseEvent::failed();
                 observe_turn_phase(observer.as_ref(), failed_event);
+                #[cfg(feature = "memory-sqlite")]
+                persist_task_progress_event_best_effort(
+                    config,
+                    address.session_id.as_str(),
+                    "turn_failed",
+                    failed_task_progress_record(address.session_id.as_str(), user_input),
+                );
                 Err(error)
             }
         }
@@ -4014,6 +4038,16 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     )
     .await?;
 
+    #[cfg(feature = "memory-sqlite")]
+    if checkpoint_requires_verification_phase(checkpoint) {
+        persist_task_progress_event_best_effort(
+            config,
+            session_id,
+            "turn_verifying",
+            verifying_task_progress_record(session_id, user_input),
+        );
+    }
+
     let after_turn_status = if checkpoint.finalization.runs_after_turn() {
         if let Some(kernel_ctx) = binding.kernel_context() {
             match runtime
@@ -4102,10 +4136,200 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await?;
+
+    #[cfg(feature = "memory-sqlite")]
+    persist_task_progress_event_best_effort(
+        config,
+        session_id,
+        if checkpoint_waits_for_external_resolution(checkpoint) {
+            "turn_waiting"
+        } else {
+            "turn_completed"
+        },
+        if checkpoint_waits_for_external_resolution(checkpoint) {
+            waiting_task_progress_record(session_id, user_input)
+        } else {
+            completed_task_progress_record(session_id, user_input)
+        },
+    );
+
     Ok(ConversationTurnOutcome {
         reply: tail_phase.reply().to_owned(),
         usage,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_task_progress_event_best_effort(
+    config: &LoongConfig,
+    session_id: &str,
+    source: &str,
+    task_progress: TaskProgressRecord,
+) {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return;
+    };
+    let _ = repo.append_event(NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: TASK_PROGRESS_EVENT_KIND.to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: task_progress_event_payload(source, &task_progress),
+    });
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    TaskProgressRecord {
+        task_id: session_id.to_owned(),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Active,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::NotStarted),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "conversation_turn".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "running".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "terminal_reply_or_error".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "session_status".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Inspect session_status, session_wait, or sessions_history for durable task progress."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    TaskProgressRecord {
+        task_id: session_id.to_owned(),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Verifying,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Pending),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "turn_finalization".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "verifying".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "after_turn_and_compaction_complete".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "session_status".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Check session_status to see whether finalization verification has completed."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    TaskProgressRecord {
+        task_id: session_id.to_owned(),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Waiting,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Pending),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "approval_gate".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "waiting".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "approval_decision".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "session_status".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Use session_status or the approval control path to resolve the waiting task."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn completed_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+    TaskProgressRecord {
+        task_id: session_id.to_owned(),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Completed,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Passed),
+        active_handles: Vec::new(),
+        resume_recipe: None,
+        updated_at: unix_ts_now(),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn failed_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+    TaskProgressRecord {
+        task_id: session_id.to_owned(),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Failed,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Failed),
+        active_handles: Vec::new(),
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "sessions_history".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Inspect recent session history and session_status to diagnose the failed task."
+                    .to_owned(),
+            ),
+        }),
+        updated_at: unix_ts_now(),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn summarize_task_progress_intent(user_input: &str) -> Option<String> {
+    let normalized = user_input.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    const MAX_CHARS: usize = 160;
+    if normalized.chars().count() <= MAX_CHARS {
+        return Some(normalized.to_owned());
+    }
+
+    let mut truncated = normalized
+        .chars()
+        .take(MAX_CHARS.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('…');
+    Some(truncated)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn checkpoint_waits_for_external_resolution(checkpoint: &TurnCheckpointSnapshot) -> bool {
+    matches!(
+        checkpoint.lane.as_ref().map(|lane| lane.result_kind),
+        Some(TurnCheckpointResultKind::NeedsApproval)
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn checkpoint_requires_verification_phase(checkpoint: &TurnCheckpointSnapshot) -> bool {
+    !checkpoint_waits_for_external_resolution(checkpoint)
+        && (checkpoint.finalization.runs_after_turn()
+            || checkpoint.finalization.attempts_context_compaction())
 }
 
 async fn persist_resolved_provider_error_checkpoint<R: ConversationRuntime + ?Sized>(
@@ -10148,6 +10372,102 @@ mod tests {
         } else {
             panic!("unexpected decision: {decision:?}");
         }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn task_progress_test_checkpoint(
+        result_kind: TurnCheckpointResultKind,
+        runs_after_turn: bool,
+        attempts_context_compaction: bool,
+    ) -> TurnCheckpointSnapshot {
+        TurnCheckpointSnapshot {
+            identity: None,
+            preparation: TurnPreparationSnapshot {
+                lane: ExecutionLane::Fast,
+                max_tool_steps: 1,
+                raw_tool_output_requested: false,
+                context_message_count: 1,
+                context_fingerprint_sha256: "ctx".to_owned(),
+                estimated_tokens: None,
+            },
+            request: TurnCheckpointRequest::Continue { tool_intents: 1 },
+            lane: Some(TurnLaneExecutionSnapshot {
+                lane: ExecutionLane::Fast,
+                had_tool_intents: true,
+                tool_request_summary: None,
+                raw_tool_output_requested: false,
+                result_kind,
+                safe_lane_terminal_route: None,
+            }),
+            reply: None,
+            finalization: TurnFinalizationCheckpoint::PersistReply {
+                persistence_mode: ReplyPersistenceMode::Success,
+                runs_after_turn,
+                attempts_context_compaction,
+            },
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn checkpoint_waits_for_external_resolution_on_needs_approval() {
+        let checkpoint =
+            task_progress_test_checkpoint(TurnCheckpointResultKind::NeedsApproval, false, false);
+
+        assert!(checkpoint_waits_for_external_resolution(&checkpoint));
+        assert!(!checkpoint_requires_verification_phase(&checkpoint));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn checkpoint_requires_verification_phase_for_post_turn_work() {
+        let checkpoint =
+            task_progress_test_checkpoint(TurnCheckpointResultKind::FinalText, true, true);
+
+        assert!(!checkpoint_waits_for_external_resolution(&checkpoint));
+        assert!(checkpoint_requires_verification_phase(&checkpoint));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn waiting_task_progress_record_uses_waiting_status_and_approval_gate_handle() {
+        let record = waiting_task_progress_record("session-approval", "await approval");
+
+        assert_eq!(record.status, TaskProgressStatus::Waiting);
+        assert_eq!(
+            record.verification_state,
+            Some(TaskVerificationState::Pending)
+        );
+        assert_eq!(record.active_handles.len(), 1);
+        assert_eq!(record.active_handles[0].handle_kind, "approval_gate");
+        assert_eq!(
+            record
+                .resume_recipe
+                .as_ref()
+                .map(|value| value.recommended_tool.as_str()),
+            Some("session_status")
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn verifying_task_progress_record_uses_verifying_status_and_finalization_handle() {
+        let record = verifying_task_progress_record("session-verify", "finalize");
+
+        assert_eq!(record.status, TaskProgressStatus::Verifying);
+        assert_eq!(
+            record.verification_state,
+            Some(TaskVerificationState::Pending)
+        );
+        assert_eq!(record.active_handles.len(), 1);
+        assert_eq!(record.active_handles[0].handle_kind, "turn_finalization");
+        assert_eq!(
+            record
+                .resume_recipe
+                .as_ref()
+                .map(|value| value.recommended_tool.as_str()),
+            Some("session_status")
+        );
     }
 
     #[path = "turn_coordinator_safe_lane_route_tests.rs"]

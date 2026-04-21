@@ -24,6 +24,7 @@ mod runtime_self_continuity;
 pub(crate) mod search_text;
 mod secrets;
 pub mod session;
+pub(crate) mod task_progress;
 pub mod tools;
 pub(crate) mod trust;
 pub mod tui_surface;

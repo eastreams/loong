@@ -1754,6 +1754,15 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             )
             .await;
         }
+        if canonical_tool_name == "task_wait" {
+            return crate::tools::wait_for_task_with_config(
+                request.payload,
+                &session_context.session_id,
+                &self.memory_config,
+                &effective_tool_config,
+            )
+            .await;
+        }
         #[cfg(feature = "memory-sqlite")]
         if canonical_tool_name == "sessions_send" {
             return self
