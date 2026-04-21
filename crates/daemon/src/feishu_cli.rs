@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use loong_app as mvp;
@@ -1112,6 +1112,8 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
 }
 
 pub async fn execute_feishu_onboard(args: &FeishuOnboardArgs) -> CliResult<Value> {
+    ensure_feishu_onboard_config_exists(args.common.config.as_deref())?;
+
     let mode = args
         .mode
         .unwrap_or(FeishuOnboardModeArg::Websocket)
@@ -2984,6 +2986,24 @@ fn required_json_string(payload: &Value, field: &str) -> CliResult<String> {
 
 fn trimmed_opt(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn ensure_feishu_onboard_config_exists(raw: Option<&str>) -> CliResult<PathBuf> {
+    let path = raw
+        .map(mvp::config::expand_path)
+        .unwrap_or_else(mvp::config::default_config_path);
+    verify_feishu_onboard_config_exists(&path)
+}
+
+fn verify_feishu_onboard_config_exists(path: &Path) -> CliResult<PathBuf> {
+    if path.exists() {
+        return Ok(path.to_path_buf());
+    }
+    let cli = active_cli_command_name();
+    Err(format!(
+        "config file {} not found; run `{cli} onboard` to complete initial configuration before running `{cli} feishu onboard`",
+        path.display(),
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5069,5 +5089,82 @@ mod render_tests {
         let rendered = render_calendar_freebusy_text(&payload).expect("render calendar freebusy");
 
         assert!(rendered.contains("configured_account: work"));
+    }
+}
+
+#[cfg(test)]
+mod onboard_config_precheck_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn verify_returns_path_when_config_file_exists() {
+        let dir = TempDir::new().expect("create tempdir");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "").expect("write stub config");
+
+        let resolved = verify_feishu_onboard_config_exists(&config_path)
+            .expect("precheck should pass when the config file exists");
+
+        assert_eq!(resolved, config_path);
+    }
+
+    #[test]
+    fn verify_returns_error_hinting_onboard_when_config_file_missing() {
+        let dir = TempDir::new().expect("create tempdir");
+        let missing = dir.path().join("config.toml");
+
+        let err = verify_feishu_onboard_config_exists(&missing)
+            .expect_err("precheck should fail when the config file is missing");
+
+        assert!(
+            err.contains("config file"),
+            "error should mention config file: {err}"
+        );
+        assert!(
+            err.contains("not found"),
+            "error should mention not found: {err}"
+        );
+        assert!(
+            err.contains(&format!("`{} onboard`", active_cli_command_name())),
+            "error should reference `{} onboard` as the remediation: {err}",
+            active_cli_command_name(),
+        );
+        assert!(
+            err.contains(&missing.display().to_string()),
+            "error should surface the missing config path: {err}",
+        );
+    }
+
+    #[test]
+    fn ensure_honors_explicit_config_override_when_present() {
+        let dir = TempDir::new().expect("create tempdir");
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "").expect("write stub config");
+
+        let display = config_path.display().to_string();
+        let resolved = ensure_feishu_onboard_config_exists(Some(display.as_str()))
+            .expect("precheck should pass for an explicit existing path");
+
+        assert_eq!(resolved, config_path);
+    }
+
+    #[test]
+    fn ensure_errors_when_explicit_config_override_missing() {
+        let dir = TempDir::new().expect("create tempdir");
+        let missing = dir.path().join("does-not-exist.toml");
+        let display = missing.display().to_string();
+
+        let err = ensure_feishu_onboard_config_exists(Some(display.as_str()))
+            .expect_err("precheck should fail when the explicit path is missing");
+
+        assert!(
+            err.contains(&display),
+            "error should surface the explicit missing path: {err}",
+        );
+        assert!(
+            err.contains("onboard"),
+            "error should point the user at the onboard command: {err}",
+        );
     }
 }
