@@ -244,6 +244,8 @@ jobs:
 
       - name: Cache Cargo Artifacts
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          save-if: ${{ matrix.os != 'windows-latest' }}
 
       - name: Test
         shell: bash
