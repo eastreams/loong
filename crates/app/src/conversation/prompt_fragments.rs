@@ -67,6 +67,7 @@ pub enum PromptLane {
     RuntimeSelf,
     RuntimeIdentity,
     Continuity,
+    ExecutionDiscipline,
     CapabilitySnapshot,
     ToolDiscoveryDelta,
 }
@@ -79,6 +80,7 @@ impl PromptLane {
             PromptLane::BaseSystem,
             PromptLane::RuntimeSelf,
             PromptLane::RuntimeIdentity,
+            PromptLane::ExecutionDiscipline,
             PromptLane::CapabilitySnapshot,
             PromptLane::ToolDiscoveryDelta,
         ]
@@ -91,6 +93,7 @@ impl PromptLane {
             PromptLane::RuntimeSelf => PromptFrameLayer::StableRuntimeGuidance,
             PromptLane::RuntimeIdentity => PromptFrameLayer::SessionLatchedContext,
             PromptLane::Continuity => PromptFrameLayer::SessionLatchedContext,
+            PromptLane::ExecutionDiscipline => PromptFrameLayer::StableRuntimeGuidance,
             PromptLane::CapabilitySnapshot => PromptFrameLayer::SessionLatchedContext,
             PromptLane::ToolDiscoveryDelta => PromptFrameLayer::SessionLocalRecall,
         }
@@ -103,6 +106,7 @@ impl PromptLane {
             PromptLane::RuntimeSelf => PromptFrameAuthority::RuntimeSelf,
             PromptLane::RuntimeIdentity => PromptFrameAuthority::RuntimeIdentity,
             PromptLane::Continuity => PromptFrameAuthority::RuntimeSelf,
+            PromptLane::ExecutionDiscipline => PromptFrameAuthority::CoreSystem,
             PromptLane::CapabilitySnapshot => PromptFrameAuthority::CapabilityContract,
             PromptLane::ToolDiscoveryDelta => PromptFrameAuthority::SessionLocalRecall,
         }
@@ -128,6 +132,7 @@ impl PromptRenderPolicy {
             | PromptLane::RuntimeSelf
             | PromptLane::RuntimeIdentity
             | PromptLane::Continuity
+            | PromptLane::ExecutionDiscipline
             | PromptLane::CapabilitySnapshot => PromptRenderPolicy::TrustedLiteral,
         }
     }

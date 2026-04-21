@@ -220,6 +220,7 @@ fn build_prompt_fragments_from_runtime_self_model(
     let capability_snapshot =
         tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
     let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
+    let execution_discipline_section = render_execution_discipline_section();
     let runtime_self_section = runtime_self_model
         .as_ref()
         .and_then(runtime_self::render_runtime_self_section);
@@ -274,6 +275,17 @@ fn build_prompt_fragments_from_runtime_self_model(
         prompt_fragments.push(runtime_identity_fragment);
     }
 
+    let execution_discipline_fragment = PromptFragment::new(
+        "execution-discipline",
+        PromptLane::ExecutionDiscipline,
+        "execution-discipline",
+        execution_discipline_section,
+        ContextArtifactKind::RuntimeContract,
+    )
+    .with_cacheable(true);
+
+    prompt_fragments.push(execution_discipline_fragment);
+
     if let Some(section) = extra_section {
         let binding_fragment = PromptFragment::new(
             "governed-runtime-binding",
@@ -312,6 +324,53 @@ fn build_prompt_fragments_from_runtime_self_model(
     }
 
     prompt_fragments
+}
+
+fn render_execution_discipline_section() -> String {
+    let lines = [
+        "## Execution Discipline".to_owned(),
+        "<tool_persistence>".to_owned(),
+        "- Use tools whenever they materially improve correctness, completeness, or grounding."
+            .to_owned(),
+        "- Do not stop early when another bounded tool call would likely close an evidence gap."
+            .to_owned(),
+        "- If one retrieval path returns partial or empty results, retry with a different bounded strategy before asking the user."
+            .to_owned(),
+        "</tool_persistence>".to_owned(),
+        "<mandatory_tool_use>".to_owned(),
+        "- Do not answer live system, file-content, git-state, or current-fact questions from memory when runtime retrieval is available."
+            .to_owned(),
+        "- Prefer runtime evidence over recalled assumptions about the environment you are currently executing in."
+            .to_owned(),
+        "</mandatory_tool_use>".to_owned(),
+        "<act_dont_ask>".to_owned(),
+        "- When ambiguity does not change the next tool or runtime action, act on the obvious local interpretation."
+            .to_owned(),
+        "- Ask only when the missing detail changes the required tool, target, or side effect."
+            .to_owned(),
+        "</act_dont_ask>".to_owned(),
+        "<prerequisite_checks>".to_owned(),
+        "- Before a mutating step or a high-confidence claim, check whether discovery, inspection, or preflight lookup is still needed."
+            .to_owned(),
+        "- Treat prerequisite discovery as part of the task rather than optional ceremony."
+            .to_owned(),
+        "</prerequisite_checks>".to_owned(),
+        "<verification>".to_owned(),
+        "- Before finalizing, check correctness, grounding, output shape, and whether a real stop condition has been reached."
+            .to_owned(),
+        "- A reply is not by itself proof that a long-running task is complete."
+            .to_owned(),
+        "</verification>".to_owned(),
+        "<missing_context>".to_owned(),
+        "- If required information is retrievable, retrieve it instead of asking."
+            .to_owned(),
+        "- Ask only when the missing information is not locally or remotely retrievable."
+            .to_owned(),
+        "- If you must proceed under uncertainty, label assumptions explicitly.".to_owned(),
+        "</missing_context>".to_owned(),
+    ];
+
+    lines.join("\n")
 }
 
 fn render_deferred_tool_text_workflow_section_if_needed(config: &LoongConfig) -> Option<String> {
@@ -1272,6 +1331,61 @@ mod tests {
         let content = system["content"].as_str().expect("system content");
         assert!(content.starts_with("Stay concise and technical."));
         assert!(content.contains("[tool_discovery_runtime]"));
+    }
+
+    #[test]
+    fn build_system_message_includes_execution_discipline_section() {
+        let config = LoongConfig::default();
+
+        let system = build_system_message(&config, true).expect("system message");
+        let content = system["content"].as_str().expect("system content");
+
+        assert!(content.contains("## Execution Discipline"));
+        assert!(content.contains("<tool_persistence>"));
+        assert!(content.contains("<mandatory_tool_use>"));
+        assert!(content.contains("<act_dont_ask>"));
+        assert!(content.contains("<prerequisite_checks>"));
+        assert!(content.contains("<verification>"));
+        assert!(content.contains("<missing_context>"));
+    }
+
+    #[test]
+    fn build_system_message_orders_execution_discipline_before_tool_access() {
+        let mut config = LoongConfig::default();
+        config.provider.tool_schema_mode = crate::config::ProviderToolSchemaModeConfig::Disabled;
+        let temp_dir = tempdir().expect("tempdir");
+        std::fs::write(temp_dir.path().join("AGENTS.md"), "Keep moving.").expect("write AGENTS");
+        let tool_view = tools::runtime_tool_view();
+        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
+            file_root: Some(temp_dir.path().to_path_buf()),
+            ..tools::runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let system = build_system_message_with_tool_runtime_config(
+            &config,
+            true,
+            &tool_view,
+            &tool_runtime_config,
+        )
+        .expect("system message");
+        let content = system["content"].as_str().expect("system content");
+
+        let runtime_self_index = content
+            .find("## Runtime Self Context")
+            .expect("runtime self section");
+        let execution_discipline_index = content
+            .find("## Execution Discipline")
+            .expect("execution discipline section");
+        let tool_access_index = content.find("## Tool Access").expect("tool access section");
+
+        assert!(
+            runtime_self_index < execution_discipline_index,
+            "runtime self should come before execution discipline"
+        );
+        assert!(
+            execution_discipline_index < tool_access_index,
+            "execution discipline should come before tool access"
+        );
     }
 
     #[test]

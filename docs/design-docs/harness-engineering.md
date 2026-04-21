@@ -50,13 +50,21 @@ Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file
 
 ### Stage 4: Result Verification & Iteration
 
-- `ConversationTurnLoop`: Multi-round agent loop (max 4 rounds default)
-- `ToolLoopSupervisor`: Detects infinite loops, ping-pong, failure streaks
+- `ConversationTurnCoordinator`: Active turn-bearing runtime seam across CLI,
+  gateway, control plane, channel bridge, and daemon task paths
+- `Execution Discipline` prompt fragment: Product-owned runtime guidance for
+  tool persistence, act-don't-ask behavior, prerequisite checks, and
+  verification before stopping
+- `ToolLoopSupervisor` / provider-lane guards: Detect repeated-tool stalls,
+  ping-pong, and failure streaks
 - `FollowupPayloadBudget`: Caps tool output size per round
 
 ### Stage 5: Completion and Handoff
 
-Turn persistence to SQLite. Audit event recording. Structured progress artifacts are a gap.
+Turn persistence to SQLite and audit event recording remain in place. Runtime
+self continuity and turn checkpoint artifacts are implemented, and durable
+task-progress events now provide a session-visible MVP for long-running
+ownership and completion state.
 
 ---
 
