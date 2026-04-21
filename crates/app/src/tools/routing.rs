@@ -770,7 +770,10 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
         if invokes_skill {
             return Ok("external_skills.invoke");
         }
-        return Ok("external_skills.inspect");
+        return Err(
+            "hidden_skills_requires_operation_for_skill_id: add `operation` (`inspect` or `run`) when payload.skill_id is present"
+                .to_owned(),
+        );
     }
 
     if payload.as_object().is_some_and(|object| object.is_empty()) {

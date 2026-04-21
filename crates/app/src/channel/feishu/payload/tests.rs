@@ -6,6 +6,7 @@ use cbc::cipher::block_padding::Pkcs7;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::types::feishu_message_reply_idempotency_key;
 use super::*;
 use crate::channel::{
     ChannelOutboundTarget, ChannelOutboundTargetKind, ChannelPlatform,
@@ -142,6 +143,8 @@ fn feishu_message_event_parses_text_payload() {
     .expect("parse feishu event");
 
     let event = expect_inbound(action);
+    let expected_idempotency_key =
+        feishu_message_reply_idempotency_key("feishu_cli_a1b2c3", "om_123");
     assert_eq!(event.event_id, "evt_1");
     assert_eq!(event.session.configured_account_id.as_deref(), Some("work"));
     assert_eq!(
@@ -152,12 +155,20 @@ fn feishu_message_event_parses_text_payload() {
         event.reply_target,
         ChannelOutboundTarget::feishu_message_reply("om_123")
             .with_feishu_reply_chat_id("oc_123")
+            .with_idempotency_key(feishu_message_reply_idempotency_key(
+                "feishu_cli_a1b2c3",
+                "om_123",
+            ))
             .with_feishu_reply_in_thread(true)
     );
     assert_eq!(event.reply_target.platform, ChannelPlatform::Feishu);
     assert_eq!(
         event.reply_target.kind,
         ChannelOutboundTargetKind::MessageReply
+    );
+    assert_eq!(
+        event.reply_target.idempotency_key(),
+        Some(expected_idempotency_key.as_str())
     );
     assert_eq!(event.reply_target.feishu_reply_in_thread(), Some(true));
     assert_eq!(event.text, "hello loong");
@@ -241,6 +252,8 @@ fn feishu_websocket_message_event_parses_without_verification_token() {
     .expect("parse websocket feishu event");
 
     let event = expect_inbound(action);
+    let expected_idempotency_key =
+        feishu_message_reply_idempotency_key("feishu_cli_a1b2c3", "om_ws_123");
     assert_eq!(event.event_id, "evt_ws_1");
     assert_eq!(event.text, "hello from websocket");
     assert_eq!(event.session.configured_account_id.as_deref(), Some("work"));
@@ -248,6 +261,7 @@ fn feishu_websocket_message_event_parses_without_verification_token() {
         event.reply_target,
         ChannelOutboundTarget::feishu_message_reply("om_ws_123")
             .with_feishu_reply_chat_id("oc_123")
+            .with_idempotency_key(expected_idempotency_key)
     );
 }
 
@@ -1655,6 +1669,8 @@ fn feishu_encrypted_payload_parses_with_encrypt_key() {
     .expect("parse encrypted payload");
 
     let event = expect_inbound(parsed);
+    let expected_idempotency_key =
+        feishu_message_reply_idempotency_key("feishu_cli_a1b2c3", "om_encrypt");
     assert_eq!(event.event_id, "evt_encrypted_1");
     assert_eq!(
         event.session.session_key(),
@@ -1664,6 +1680,7 @@ fn feishu_encrypted_payload_parses_with_encrypt_key() {
         event.reply_target,
         ChannelOutboundTarget::feishu_message_reply("om_encrypt")
             .with_feishu_reply_chat_id("oc_encrypt")
+            .with_idempotency_key(expected_idempotency_key)
             .with_feishu_reply_in_thread(true)
     );
     assert_eq!(event.reply_target.feishu_reply_in_thread(), Some(true));

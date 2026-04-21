@@ -15,6 +15,7 @@ use super::crypto::decrypt_payload_if_needed;
 use super::types::{
     FeishuCardCallbackAction, FeishuCardCallbackContext, FeishuCardCallbackEvent,
     FeishuCardCallbackVersion, FeishuInboundEvent, FeishuWebhookAction,
+    feishu_message_reply_idempotency_key,
 };
 
 const FEISHU_STRUCTURED_ONLY_MESSAGE_TYPES: &[&str] = &[
@@ -236,7 +237,11 @@ pub(in crate::channel::feishu) fn parse_feishu_inbound_payload_with_access_polic
         .unwrap_or_else(|| format!("message:{message_id}"));
 
     let mut reply_target = ChannelOutboundTarget::feishu_message_reply(message_id.to_owned())
-        .with_feishu_reply_chat_id(chat_id.to_owned());
+        .with_feishu_reply_chat_id(chat_id.to_owned())
+        .with_idempotency_key(feishu_message_reply_idempotency_key(
+            account_id,
+            message_id.as_str(),
+        ));
     if thread_id.is_some() {
         reply_target = reply_target.with_feishu_reply_in_thread(true);
     }
