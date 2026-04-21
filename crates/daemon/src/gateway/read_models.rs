@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr};
 
+use loong_protocol::{
+    CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneChallengeResponse, ControlPlanePrincipal,
+    ControlPlaneRole, ControlPlaneScope,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -12,6 +16,7 @@ use crate::operator_inventory_cli::{
 };
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 
+use super::event_bus::{GatewayEventRecord, GatewayEventReplayWindow};
 use super::state::GatewayOwnerStatus;
 
 #[derive(Debug, Clone, Serialize)]
@@ -410,6 +415,66 @@ pub struct GatewayOperatorSummaryReadModel {
     pub pairing: GatewayOperatorPairingSummaryReadModel,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairingStartReadModel {
+    pub protocol: u32,
+    pub challenge: ControlPlaneChallengeResponse,
+    pub connect_path: String,
+    pub pairing_requests_path: String,
+    pub pairing_resolve_path: String,
+    pub recommended_role: ControlPlaneRole,
+    pub recommended_scopes: Vec<ControlPlaneScope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairingCompleteReadModel {
+    pub status: String,
+    pub device_id: String,
+    pub client_id: String,
+    pub role: ControlPlaneRole,
+    pub requested_scopes: Vec<ControlPlaneScope>,
+    pub lease: GatewayPairingSessionLeaseReadModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairingSessionLeaseReadModel {
+    pub connection_token: String,
+    pub connection_token_expires_at_ms: u64,
+    pub principal: ControlPlanePrincipal,
+    pub last_acknowledged_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairingReplayWindowReadModel {
+    pub oldest_retained_seq: Option<u64>,
+    pub latest_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairingSessionReadModel {
+    pub status: String,
+    pub connection_token_expires_at_ms: u64,
+    pub principal: ControlPlanePrincipal,
+    pub last_acknowledged_seq: Option<u64>,
+    pub resume_status: String,
+    pub resume_from_after_seq: u64,
+    pub earliest_resumable_after_seq: u64,
+    pub replay_window: GatewayPairingReplayWindowReadModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairingEventsReadModel {
+    pub after_seq: u64,
+    pub effective_after_seq: u64,
+    pub returned_count: usize,
+    pub last_acknowledged_seq: Option<u64>,
+    pub resume_status: String,
+    pub next_after_seq: u64,
+    pub earliest_resumable_after_seq: u64,
+    pub replay_window: GatewayPairingReplayWindowReadModel,
+    pub events: Vec<GatewayEventRecord>,
+}
+
 pub fn build_channel_inventory_read_model(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
@@ -664,6 +729,120 @@ pub fn build_operator_summary_read_model(
         runtime,
         pairing,
     }
+}
+
+pub fn build_gateway_pairing_start_read_model(
+    challenge: ControlPlaneChallengeResponse,
+) -> GatewayPairingStartReadModel {
+    GatewayPairingStartReadModel {
+        protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+        challenge,
+        connect_path: "/v1/pairing/complete".to_owned(),
+        pairing_requests_path: "/v1/pairing/requests".to_owned(),
+        pairing_resolve_path: "/v1/pairing/resolve".to_owned(),
+        recommended_role: ControlPlaneRole::Operator,
+        recommended_scopes: vec![
+            ControlPlaneScope::OperatorRead,
+            ControlPlaneScope::OperatorPairing,
+        ],
+    }
+}
+
+pub fn build_gateway_pairing_complete_read_model(
+    device_id: &str,
+    client_id: &str,
+    role: ControlPlaneRole,
+    requested_scopes: Vec<ControlPlaneScope>,
+    lease: GatewayPairingSessionLeaseReadModel,
+) -> GatewayPairingCompleteReadModel {
+    GatewayPairingCompleteReadModel {
+        status: "authorized".to_owned(),
+        device_id: device_id.to_owned(),
+        client_id: client_id.to_owned(),
+        role,
+        requested_scopes,
+        lease,
+    }
+}
+
+pub fn build_gateway_pairing_session_read_model(
+    lease: GatewayPairingSessionLeaseReadModel,
+    replay_window: GatewayEventReplayWindow,
+) -> GatewayPairingSessionReadModel {
+    let earliest_resumable_after_seq = replay_window
+        .oldest_retained_seq
+        .map(|seq| seq.saturating_sub(1))
+        .unwrap_or(0);
+    let (resume_status, resume_from_after_seq) =
+        gateway_pairing_resume_contract(lease.last_acknowledged_seq, replay_window);
+
+    GatewayPairingSessionReadModel {
+        status: "active".to_owned(),
+        connection_token_expires_at_ms: lease.connection_token_expires_at_ms,
+        principal: lease.principal,
+        last_acknowledged_seq: lease.last_acknowledged_seq,
+        resume_status: resume_status.to_owned(),
+        resume_from_after_seq,
+        earliest_resumable_after_seq,
+        replay_window: build_gateway_pairing_replay_window_read_model(replay_window),
+    }
+}
+
+pub fn build_gateway_pairing_events_read_model(
+    after_seq: u64,
+    last_acknowledged_seq: Option<u64>,
+    replay_window: GatewayEventReplayWindow,
+    events: Vec<GatewayEventRecord>,
+) -> GatewayPairingEventsReadModel {
+    let returned_count = events.len();
+    let next_after_seq = events.last().map(|event| event.seq).unwrap_or(after_seq);
+    let earliest_resumable_after_seq = replay_window
+        .oldest_retained_seq
+        .map(|seq| seq.saturating_sub(1))
+        .unwrap_or(0);
+    let resume_status = if after_seq == 0 { "fresh" } else { "resumed" };
+
+    GatewayPairingEventsReadModel {
+        after_seq,
+        effective_after_seq: after_seq,
+        returned_count,
+        last_acknowledged_seq,
+        resume_status: resume_status.to_owned(),
+        next_after_seq,
+        earliest_resumable_after_seq,
+        replay_window: build_gateway_pairing_replay_window_read_model(replay_window),
+        events,
+    }
+}
+
+pub fn build_gateway_pairing_replay_window_read_model(
+    replay_window: GatewayEventReplayWindow,
+) -> GatewayPairingReplayWindowReadModel {
+    GatewayPairingReplayWindowReadModel {
+        oldest_retained_seq: replay_window.oldest_retained_seq,
+        latest_seq: replay_window.latest_seq,
+    }
+}
+
+fn gateway_pairing_resume_contract(
+    last_acknowledged_seq: Option<u64>,
+    replay_window: GatewayEventReplayWindow,
+) -> (&'static str, u64) {
+    let earliest_resumable_after_seq = replay_window
+        .oldest_retained_seq
+        .map(|seq| seq.saturating_sub(1))
+        .unwrap_or(0);
+    let Some(last_acknowledged_seq) = last_acknowledged_seq else {
+        return ("fresh", 0);
+    };
+
+    if replay_window.oldest_retained_seq.is_some()
+        && last_acknowledged_seq < earliest_resumable_after_seq
+    {
+        return ("stale", earliest_resumable_after_seq);
+    }
+
+    ("resumed", last_acknowledged_seq)
 }
 
 fn build_acp_binding_scope_read_model(

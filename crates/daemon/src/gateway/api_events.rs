@@ -22,9 +22,9 @@ const MAX_GATEWAY_EVENT_LIMIT: usize = 256;
 #[derive(Debug, Deserialize)]
 pub(crate) struct GatewayEventsQuery {
     #[serde(default)]
-    after_seq: Option<u64>,
+    pub(crate) after_seq: Option<u64>,
     #[serde(default)]
-    limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 struct GatewayEventStreamState {
@@ -35,7 +35,7 @@ struct GatewayEventStreamState {
     replay_limit: usize,
 }
 
-fn bounded_gateway_event_limit(raw_limit: Option<usize>) -> usize {
+pub(crate) fn bounded_gateway_event_limit(raw_limit: Option<usize>) -> usize {
     let requested_limit = raw_limit.unwrap_or(DEFAULT_GATEWAY_EVENT_LIMIT);
     requested_limit.clamp(1, MAX_GATEWAY_EVENT_LIMIT)
 }
@@ -122,7 +122,7 @@ async fn next_gateway_sse_item(
     }
 }
 
-fn gateway_event_stream(
+pub(crate) fn gateway_event_stream(
     bus: GatewayEventBus,
     after_seq: Option<u64>,
     limit: usize,
