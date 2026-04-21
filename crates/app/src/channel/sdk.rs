@@ -25,6 +25,9 @@ use super::registry::WECOM_RUNTIME_COMMAND_DESCRIPTOR;
 #[cfg(feature = "channel-whatsapp")]
 use super::registry::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR;
 
+#[cfg(feature = "channel-qqbot")]
+use super::registry::QQBOT_RUNTIME_COMMAND_DESCRIPTOR;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelRuntimeKind {
     Interactive,
@@ -158,12 +161,19 @@ const WEIXIN_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     background_surface_is_enabled: None,
 };
 
+#[cfg(feature = "channel-qqbot")]
+const QQBOT_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
+    Some(QQBOT_RUNTIME_COMMAND_DESCRIPTOR);
+
+#[cfg(not(feature = "channel-qqbot"))]
+const QQBOT_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
+
 const QQBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     channel_id: "qqbot",
-    background_runtime: None,
+    background_runtime: QQBOT_BACKGROUND_RUNTIME,
     is_enabled: qqbot_channel_is_enabled,
     collect_validation_issues: collect_qqbot_channel_validation_issues,
-    background_surface_is_enabled: None,
+    background_surface_is_enabled: Some(qqbot_background_surface_is_enabled),
 };
 
 const ONEBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
@@ -959,6 +969,17 @@ fn whatsapp_background_surface_is_enabled(
         return Ok(false);
     }
     let resolved = config.whatsapp.resolve_account(account_id)?;
+    Ok(resolved.enabled)
+}
+
+fn qqbot_background_surface_is_enabled(
+    config: &LoongConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.qqbot.enabled {
+        return Ok(false);
+    }
+    let resolved = config.qqbot.resolve_account(account_id)?;
     Ok(resolved.enabled)
 }
 

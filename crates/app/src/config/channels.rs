@@ -48,9 +48,8 @@ use self::validation_support::*;
 pub(crate) use account_resolution::normalize_channel_account_id;
 #[allow(unused_imports)]
 pub use bridge::{
-    OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
-    ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
-    WeixinAccountConfig, WeixinChannelConfig,
+    OnebotAccountConfig, OnebotChannelConfig, ResolvedOnebotChannelConfig,
+    ResolvedWeixinChannelConfig, WeixinAccountConfig, WeixinChannelConfig,
 };
 pub use nostr_impl::{NostrAccountConfig, NostrChannelConfig, ResolvedNostrChannelConfig};
 pub(crate) use nostr_impl::{parse_nostr_private_key_hex, parse_nostr_public_key_hex};
@@ -163,6 +162,50 @@ pub struct ResolvedTelegramChannelConfig {
 impl ResolvedTelegramChannelConfig {
     pub fn bot_token(&self) -> Option<String> {
         resolve_secret_with_legacy_env(self.bot_token.as_ref(), self.bot_token_env.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QqbotAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub app_id: Option<SecretRef>,
+    #[serde(default)]
+    pub app_id_env: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<SecretRef>,
+    #[serde(default)]
+    pub client_secret_env: Option<String>,
+    #[serde(default)]
+    pub allowed_peer_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedQqbotChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub app_id: Option<SecretRef>,
+    pub app_id_env: Option<String>,
+    pub client_secret: Option<SecretRef>,
+    pub client_secret_env: Option<String>,
+    pub allowed_peer_ids: Vec<String>,
+}
+
+impl ResolvedQqbotChannelConfig {
+    pub fn app_id(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_id.as_ref(), self.app_id_env.as_deref())
+    }
+
+    pub fn client_secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.client_secret.as_ref(),
+            self.client_secret_env.as_deref(),
+        )
     }
 }
 
@@ -1413,6 +1456,31 @@ pub struct LineChannelConfig {
     pub api_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, LineAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct QqbotChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub managed_bridge_plugin_id: Option<String>,
+    #[serde(default)]
+    pub app_id: Option<SecretRef>,
+    #[serde(default = "default_qqbot_app_id_env")]
+    pub app_id_env: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<SecretRef>,
+    #[serde(default = "default_qqbot_client_secret_env")]
+    pub client_secret_env: Option<String>,
+    #[serde(default)]
+    pub allowed_peer_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, QqbotAccountConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3319,6 +3387,223 @@ impl LineChannelConfig {
             requested_account_id,
             self.default_account.as_deref(),
             self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
+impl QqbotChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "qqbot",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_effective_qqbot_runtime_account_ids(&mut issues, self);
+        validate_qqbot_env_pointer(
+            &mut issues,
+            "qqbot.app_id_env",
+            self.app_id_env.as_deref(),
+            "qqbot.app_id",
+        );
+        validate_qqbot_secret_ref_env_pointer(&mut issues, "qqbot.app_id", self.app_id.as_ref());
+        validate_qqbot_env_pointer(
+            &mut issues,
+            "qqbot.client_secret_env",
+            self.client_secret_env.as_deref(),
+            "qqbot.client_secret",
+        );
+        validate_qqbot_secret_ref_env_pointer(
+            &mut issues,
+            "qqbot.client_secret",
+            self.client_secret.as_ref(),
+        );
+
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = raw_account_id.as_str();
+            let app_id_field_path = format!("qqbot.accounts.{account_id}.app_id");
+            let app_id_env_field_path = format!("{app_id_field_path}_env");
+            validate_qqbot_env_pointer(
+                &mut issues,
+                app_id_env_field_path.as_str(),
+                account.app_id_env.as_deref(),
+                app_id_field_path.as_str(),
+            );
+            validate_qqbot_secret_ref_env_pointer(
+                &mut issues,
+                app_id_field_path.as_str(),
+                account.app_id.as_ref(),
+            );
+
+            let secret_field_path = format!("qqbot.accounts.{account_id}.client_secret");
+            let secret_env_field_path = format!("{secret_field_path}_env");
+            validate_qqbot_env_pointer(
+                &mut issues,
+                secret_env_field_path.as_str(),
+                account.client_secret_env.as_deref(),
+                secret_field_path.as_str(),
+            );
+            validate_qqbot_secret_ref_env_pointer(
+                &mut issues,
+                secret_field_path.as_str(),
+                account.client_secret.as_ref(),
+            );
+        }
+
+        issues
+    }
+
+    pub fn app_id(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.app_id.as_ref(), self.app_id_env.as_deref())
+    }
+
+    pub fn client_secret(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(
+            self.client_secret.as_ref(),
+            self.client_secret_env.as_deref(),
+        )
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        let fallback_account_id = self.resolved_account_identity().id;
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            fallback_account_id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        let fallback_account_id = self.resolved_account_identity().id;
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            fallback_account_id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedQqbotChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = QqbotChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            managed_bridge_plugin_id: self.managed_bridge_plugin_id.clone(),
+            app_id: account_override
+                .and_then(|account| account.app_id.clone())
+                .or_else(|| self.app_id.clone()),
+            app_id_env: account_override
+                .and_then(|account| account.app_id_env.clone())
+                .or_else(|| self.app_id_env.clone()),
+            client_secret: account_override
+                .and_then(|account| account.client_secret.clone())
+                .or_else(|| self.client_secret.clone()),
+            client_secret_env: account_override
+                .and_then(|account| account.client_secret_env.clone())
+                .or_else(|| self.client_secret_env.clone()),
+            allowed_peer_ids: account_override
+                .and_then(|account| account.allowed_peer_ids.clone())
+                .unwrap_or_else(|| self.allowed_peer_ids.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedQqbotChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            app_id: merged.app_id,
+            app_id_env: merged.app_id_env,
+            client_secret: merged.client_secret,
+            client_secret_env: merged.client_secret_env,
+            allowed_peer_ids: merged.allowed_peer_ids,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedQqbotChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let app_id = self.app_id();
+        let app_id = app_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(app_id) = app_id {
+            let normalized_account_id = normalize_channel_account_id(app_id);
+            let account_id = format!("qqbot_{normalized_account_id}");
+            let account_label = format!("qqbot:{app_id}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        let fallback_account_id = self.resolved_account_identity().id;
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            fallback_account_id.as_str(),
         )
     }
 }

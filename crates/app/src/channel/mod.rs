@@ -32,6 +32,7 @@ mod nextcloud_talk;
 mod nostr;
 #[cfg(feature = "channel-plugin-bridge")]
 mod plugin_bridge_runtime;
+mod qqbot;
 mod registry;
 mod runtime;
 pub(crate) mod sdk;
