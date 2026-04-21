@@ -1,7 +1,8 @@
 use super::{
-    ChannelCliCommandFuture, ChannelSendCliArgs, ChannelSendCliSpec,
-    default_channel_send_target_kind, parse_channel_send_target_kind, require_channel_send_target,
+    ChannelCliCommandFuture, ChannelSendCliArgs, ChannelSendCliSpec, require_channel_send_target,
 };
+#[cfg(test)]
+use super::{default_channel_send_target_kind, parse_channel_send_target_kind};
 
 pub const TLON_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: crate::mvp::channel::TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
@@ -11,7 +12,7 @@ pub const TLON_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
 pub fn run_tlon_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("tlon-send", args.target)?;
+        let target = require_channel_send_target("channels send tlon", args.target)?;
         crate::mvp::channel::run_tlon_send(
             args.config_path,
             args.account,
@@ -23,10 +24,12 @@ pub fn run_tlon_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommand
     })
 }
 
+#[cfg(test)]
 pub fn default_tlon_send_target_kind() -> crate::mvp::channel::ChannelOutboundTargetKind {
     default_channel_send_target_kind(TLON_SEND_CLI_SPEC)
 }
 
+#[cfg(test)]
 pub fn parse_tlon_send_target_kind(
     raw: &str,
 ) -> Result<crate::mvp::channel::ChannelOutboundTargetKind, String> {

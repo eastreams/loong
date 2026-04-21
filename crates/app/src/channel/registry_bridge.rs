@@ -89,7 +89,7 @@ const WEIXIN_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const WEIXIN_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "bridge send",
-    command: "weixin-send",
+    command: "channels send weixin",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: WEIXIN_SEND_REQUIREMENTS,
@@ -100,7 +100,7 @@ const WEIXIN_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const WEIXIN_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "bridge reply loop",
-    command: "weixin-serve",
+    command: "channels serve weixin",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: WEIXIN_SERVE_REQUIREMENTS,
@@ -212,7 +212,7 @@ const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "gateway send",
-    command: "qqbot-send",
+    command: "channels send qqbot",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: QQBOT_SEND_REQUIREMENTS,
@@ -223,7 +223,7 @@ const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "gateway reply loop",
-    command: "qqbot-serve",
+    command: "channels serve qqbot",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: QQBOT_SERVE_REQUIREMENTS,
@@ -341,7 +341,7 @@ const ONEBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const ONEBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "bridge send",
-    command: "onebot-send",
+    command: "channels send onebot",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: ONEBOT_SEND_REQUIREMENTS,
@@ -352,7 +352,7 @@ const ONEBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const ONEBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "bridge event loop",
-    command: "onebot-serve",
+    command: "channels serve onebot",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: ONEBOT_SERVE_REQUIREMENTS,

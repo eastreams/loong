@@ -12,7 +12,7 @@ This page is specifically about the current public contract:
 
 - WeCom is documented as the official AIBot long-connection lane
 - it is not documented as a webhook callback integration
-- `gateway run` comes after `wecom-serve`, not instead of the basic runtime
+- `gateway run` comes after `channels serve wecom`, not instead of the basic runtime
   validation
 
 ## When This Is The Right Playbook
@@ -47,7 +47,7 @@ Health loop:
 
 ```bash
 loong doctor
-loong list-models
+loong runtime models list
 loong ask --message "Confirm that the active provider path is healthy."
 ```
 
@@ -66,8 +66,8 @@ allowed_conversation_ids = ["group_demo"]
 Smoke-test it:
 
 ```bash
-loong wecom-send --target "group_demo" --text "hello wecom"
-loong wecom-serve
+loong channels send wecom --target "group_demo" --text "hello wecom"
+loong channels serve wecom
 ```
 
 Operational notes:
@@ -112,7 +112,7 @@ Why this matters:
 Foreground single-account validation:
 
 ```bash
-loong wecom-serve --account work
+loong channels serve wecom --account work
 ```
 
 Persisted owner contract:
@@ -124,7 +124,7 @@ loong gateway run \
 loong gateway status --json
 ```
 
-Use `wecom-serve` first during rollout. Use `gateway run` after the account and
+Use `channels serve wecom` first during rollout. Use `gateway run` after the account and
 conversation boundary are already trusted.
 
 ## Step 5: Keep The Public Contract Truthful
@@ -140,7 +140,7 @@ Rules that should stay explicit:
 
 | Symptom | What to check |
 | --- | --- |
-| `wecom-send` works but `wecom-serve` is unstable | tune `ping_interval_s` and `reconnect_interval_s`, then confirm the account and conversation ids are still the intended trust boundary |
+| `channels send wecom` works but `channels serve wecom` is unstable | tune `ping_interval_s` and `reconnect_interval_s`, then confirm the account and conversation ids are still the intended trust boundary |
 | `gateway run --channel-account wecom=work` fails | make sure `wecom.accounts.work` exists before using the selector |
 | replies arrive in the wrong conversation | review `allowed_conversation_ids` before changing ownership mode |
 | the team describes this as a webhook integration | fix the docs or runbook language; the shipped public contract is the AIBot long connection |

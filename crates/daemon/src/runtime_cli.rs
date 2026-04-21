@@ -27,6 +27,11 @@ pub enum RuntimeCommands {
         #[command(subcommand)]
         command: work_unit_cli::WorkUnitCommands,
     },
+    /// Inspect provider model runtime inventory
+    Models {
+        #[command(subcommand)]
+        command: RuntimeModelsCommands,
+    },
     /// Inspect context-engine runtime inventory
     Context {
         #[command(subcommand)]
@@ -67,6 +72,12 @@ pub enum RuntimeCommands {
         #[command(subcommand)]
         command: RuntimeTrajectoryCommands,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RuntimeModelsCommands {
+    /// Fetch and print currently available provider model list
+    List(RuntimeReadArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -337,6 +348,11 @@ pub async fn run_runtime_cli(command: RuntimeCommands) -> CliResult<()> {
             runtime_capability_cli::run_runtime_capability_cli(command)
         }
         RuntimeCommands::WorkUnit { command } => work_unit_cli::run_work_unit_cli(command),
+        RuntimeCommands::Models { command } => match command {
+            RuntimeModelsCommands::List(args) => {
+                crate::run_list_models_cli(args.config.as_deref(), args.json).await
+            }
+        },
         RuntimeCommands::Context { command } => match command {
             RuntimeContextCommands::Engines(args) => {
                 operator_inventory_cli::run_list_context_engines_cli(

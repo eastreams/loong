@@ -29,14 +29,14 @@ webhook_url_env = "DINGTALK_WEBHOOK_URL"
 ## Smoke Test
 
 ```bash
-loong dingtalk-send --text "hello from loong"
+loong channels send dingtalk --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| custom robot send | `dingtalk-send` | Usage: loong dingtalk-send [OPTIONS] --text &lt;TEXT&gt; |
+| custom robot send | `channels send dingtalk` | Usage: loong channels send dingtalk [OPTIONS] --text &lt;TEXT&gt; |
 | outgoing callback service | `dingtalk-serve` | dingtalk custom robot surface is outbound-only |
 
 ## Required Fields For Send
@@ -48,7 +48,7 @@ loong dingtalk-send --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

@@ -252,7 +252,7 @@ mod tests {
             telegram.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(telegram.serve_subcommand, Some("telegram-serve"));
+        assert_eq!(telegram.serve_subcommand, Some("channels serve telegram"));
 
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.id, "feishu");
@@ -262,7 +262,7 @@ mod tests {
             feishu.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
+        assert_eq!(feishu.serve_subcommand, Some("feishu serve"));
 
         let wecom = channel_descriptor("wecom").expect("wecom descriptor");
         assert_eq!(wecom.id, "wecom");
@@ -272,7 +272,7 @@ mod tests {
             wecom.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
+        assert_eq!(wecom.serve_subcommand, Some("channels serve wecom"));
 
         let weixin = channel_descriptor("wechat").expect("weixin descriptor");
         assert_eq!(weixin.id, "weixin");
@@ -332,7 +332,7 @@ mod tests {
             line.operational_model,
             ChannelOperationalModel::StandaloneRuntime
         );
-        assert_eq!(line.serve_subcommand, Some("line-serve"));
+        assert_eq!(line.serve_subcommand, Some("channels serve line"));
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
         assert_eq!(dingtalk.id, "dingtalk");
@@ -348,7 +348,7 @@ mod tests {
             whatsapp.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(whatsapp.serve_subcommand, Some("whatsapp-serve"));
+        assert_eq!(whatsapp.serve_subcommand, Some("channels serve whatsapp"));
 
         let email = channel_descriptor("email").expect("email descriptor");
         assert_eq!(email.id, "email");
@@ -364,7 +364,7 @@ mod tests {
             webhook.operational_model,
             ChannelOperationalModel::StandaloneRuntime
         );
-        assert_eq!(webhook.serve_subcommand, Some("webhook-serve"));
+        assert_eq!(webhook.serve_subcommand, Some("channels serve webhook"));
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.id, "google-chat");
@@ -498,7 +498,7 @@ mod tests {
         assert_eq!(matrix.id, "matrix");
         assert_eq!(matrix.surface_label, "matrix channel");
         assert_eq!(matrix.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
-        assert_eq!(matrix.serve_subcommand, Some("matrix-serve"));
+        assert_eq!(matrix.serve_subcommand, Some("channels serve matrix"));
     }
 
     #[test]

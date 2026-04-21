@@ -32,14 +32,14 @@ nickname_env = "IRC_NICKNAME"
 ## Smoke Test
 
 ```bash
-loong irc-send --target "#ops" --text "hello from loong"
+loong channels send irc --target "#ops" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| message send | `irc-send` | Usage: loong irc-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| message send | `channels send irc` | Usage: loong channels send irc [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | relay loop | `irc-serve` | irc relay-loop serve is not implemented yet |
 
 ## Required Fields For Send
@@ -52,7 +52,7 @@ loong irc-send --target "#ops" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

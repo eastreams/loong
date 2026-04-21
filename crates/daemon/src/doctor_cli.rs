@@ -3867,7 +3867,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "event listener",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Disabled,
                 detail: "disabled by telegram account configuration".to_owned(),
                 issues: Vec::new(),
@@ -4341,7 +4341,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "send",
                 label: "bridge send",
-                command: "weixin-send",
+                command: "channels send weixin",
                 health: ChannelOperationHealth::Unsupported,
                 detail: "weixin bridge surface is unavailable in this build".to_owned(),
                 issues: vec!["weixin bridge surface is unavailable in this build".to_owned()],
@@ -5176,7 +5176,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5238,7 +5238,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5301,7 +5301,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5363,7 +5363,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "managed bridge reply loop",
-                command: "weixin-serve",
+                command: "channels serve weixin",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5434,7 +5434,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5513,7 +5513,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5565,7 +5565,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5611,7 +5611,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5675,7 +5675,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5699,7 +5699,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),

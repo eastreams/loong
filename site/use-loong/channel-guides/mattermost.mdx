@@ -30,14 +30,14 @@ bot_token_env = "MATTERMOST_BOT_TOKEN"
 ## Smoke Test
 
 ```bash
-loong mattermost-send --target "town-square" --text "hello from loong"
+loong channels send mattermost --target "town-square" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| channel send | `mattermost-send` | Usage: loong mattermost-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| channel send | `channels send mattermost` | Usage: loong channels send mattermost [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | event websocket service | `mattermost-serve` | mattermost serve runtime is not implemented yet |
 
 ## Required Fields For Send
@@ -50,7 +50,7 @@ loong mattermost-send --target "town-square" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Related Docs
 

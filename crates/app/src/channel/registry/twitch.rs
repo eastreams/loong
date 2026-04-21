@@ -44,7 +44,7 @@ const TWITCH_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const TWITCH_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "chat send",
-    command: "twitch-send",
+    command: "channels send twitch",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TWITCH_SEND_REQUIREMENTS,
