@@ -32,7 +32,10 @@ fn read_provider_request(stream: &mut TcpStream) -> String {
         if request_len == 0 {
             break;
         }
-        request_bytes.extend_from_slice(&request_buffer[..request_len]);
+        let request_chunk = request_buffer
+            .get(..request_len)
+            .expect("provider request length should fit within the read buffer");
+        request_bytes.extend_from_slice(request_chunk);
 
         if expected_len.is_none()
             && let Some(headers_end) = request_bytes
@@ -40,7 +43,10 @@ fn read_provider_request(stream: &mut TcpStream) -> String {
                 .position(|window| window == b"\r\n\r\n")
         {
             let headers_end = headers_end + 4;
-            let headers = String::from_utf8_lossy(&request_bytes[..headers_end]);
+            let header_bytes = request_bytes
+                .get(..headers_end)
+                .expect("header boundary should fit within collected request bytes");
+            let headers = String::from_utf8_lossy(header_bytes);
             let content_length = headers
                 .lines()
                 .find_map(|line| {
