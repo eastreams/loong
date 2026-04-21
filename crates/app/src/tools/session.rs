@@ -44,7 +44,8 @@ use crate::session::{
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::task_progress::{
-    TASK_PROGRESS_EVENT_KIND, TaskProgressRecord, task_progress_from_event_payload,
+    TASK_PROGRESS_EVENT_KIND, TaskProgressRecord, resolve_task_identity_for_session,
+    task_progress_from_event_payload,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::ToolView;
@@ -164,6 +165,7 @@ pub(crate) struct SessionWorkflowRecord {
 pub(crate) struct SessionWorkflowBindingRecord {
     pub(crate) session_id: String,
     pub(crate) task_id: String,
+    pub(crate) task_session_id: String,
     pub(crate) mode: GovernedSessionMode,
     pub(crate) execution_surface: String,
     pub(crate) worktree: Option<WorktreeBindingDescriptor>,
@@ -220,6 +222,30 @@ struct TasksSearchRequest {
 struct SessionTargetRequest {
     session_ids: Vec<String>,
     legacy_single: bool,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskTargetRequest {
+    task_ids: Vec<String>,
+    legacy_single: bool,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedTaskTarget {
+    task_id: String,
+    owner_session_id: String,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VisibleTaskRecord {
+    task_id: String,
+    owner_session_id: String,
+    session_label: Option<String>,
+    session_updated_at: i64,
+    task_progress: TaskProgressRecord,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -431,67 +457,45 @@ pub fn execute_session_tool_with_policies(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn task_payload_to_session_payload(
-    payload: Value,
-    task_field: &str,
-    task_list_field: Option<&str>,
-) -> Result<Value, String> {
-    let mut payload = payload;
-    let Some(object) = payload.as_object_mut() else {
-        return Err("task_tool_invalid_payload: expected object payload".to_owned());
-    };
-
-    if let Some(task_id) = object.get(task_field).cloned() {
-        object.insert("session_id".to_owned(), task_id);
-    }
-    if let Some(task_list_field) = task_list_field
-        && let Some(task_ids) = object.get(task_list_field).cloned()
-    {
-        object.insert("session_ids".to_owned(), task_ids);
-    }
-
-    let has_single = object
-        .get("session_id")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    let has_batch = object
-        .get("session_ids")
-        .and_then(Value::as_array)
-        .is_some_and(|values| !values.is_empty());
-
-    if has_single || has_batch {
-        return Ok(payload);
-    }
-
-    Err("task_tool_missing_task_id: expected `task_id` or `task_ids`".to_owned())
-}
-
-#[cfg(feature = "memory-sqlite")]
 fn rewrite_task_payload_aliases(mut payload: Value, task_tool_name: &str) -> Value {
+    let top_level_task_id = canonical_task_id_from_value(&payload);
+    let top_level_owner_session_id = owner_session_id_from_value(&payload);
     let Some(object) = payload.as_object_mut() else {
         return payload;
     };
 
     object.insert("tool".to_owned(), Value::String(task_tool_name.to_owned()));
 
-    if let Some(session_id) = object.get("session_id").cloned() {
-        object.insert("task_id".to_owned(), session_id);
-    } else if let Some(session_id) = object
-        .get("session")
-        .and_then(|session| session.get("session_id"))
-        .cloned()
-    {
-        object.insert("task_id".to_owned(), session_id);
+    if let Some(task_id) = top_level_task_id.map(Value::String) {
+        object.insert("task_id".to_owned(), task_id);
+    }
+    if let Some(owner_session_id) = top_level_owner_session_id.map(Value::String) {
+        object.insert("owner_session_id".to_owned(), owner_session_id);
     }
 
     if let Some(Value::Array(results)) = object.get_mut("results") {
         for result in results {
+            let task_id = canonical_task_id_from_value(result);
+            let owner_session_id = owner_session_id_from_value(result);
+            let task_state = result.get("inspection").and_then(task_state_from_payload);
             let Some(result_object) = result.as_object_mut() else {
                 continue;
             };
-            if let Some(session_id) = result_object.get("session_id").cloned() {
-                result_object.insert("task_id".to_owned(), session_id);
+            if let Some(task_id) = task_id.map(Value::String) {
+                result_object.insert("task_id".to_owned(), task_id);
             }
+            if let Some(owner_session_id) = owner_session_id.map(Value::String) {
+                result_object.insert("owner_session_id".to_owned(), owner_session_id);
+            }
+            if let Some(task_state) = task_state.map(Value::String) {
+                let task_is_stable = task_state
+                    .as_str()
+                    .map(task_state_is_stable)
+                    .unwrap_or(false);
+                result_object.insert("task_state".to_owned(), task_state);
+                result_object.insert("task_is_stable".to_owned(), Value::Bool(task_is_stable));
+            }
+            result_object.remove("session_id");
         }
     }
 
@@ -499,8 +503,84 @@ fn rewrite_task_payload_aliases(mut payload: Value, task_tool_name: &str) -> Val
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn task_state_from_payload(payload: &Value) -> Option<String> {
+fn canonical_task_id_from_value(payload: &Value) -> Option<String> {
     payload
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            payload
+                .get("inspection")
+                .and_then(canonical_task_id_from_value)
+        })
+        .or_else(|| {
+            payload
+                .get("task_progress")
+                .and_then(|value| value.get("task_id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            payload
+                .get("workflow")
+                .and_then(|value| value.get("task_progress"))
+                .and_then(|value| value.get("task_id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            payload
+                .get("workflow")
+                .and_then(|value| value.get("binding"))
+                .and_then(|value| value.get("task_id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn owner_session_id_from_value(payload: &Value) -> Option<String> {
+    payload
+        .get("owner_session_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            payload
+                .get("inspection")
+                .and_then(owner_session_id_from_value)
+        })
+        .or_else(|| {
+            payload
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            payload
+                .get("session")
+                .and_then(|session| session.get("session_id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn task_state_from_payload(payload: &Value) -> Option<String> {
+    let inspection_task_state = payload.get("inspection").and_then(task_state_from_payload);
+    if inspection_task_state.is_some() {
+        return inspection_task_state;
+    }
+
+    let terminal_session_state = payload
+        .get("session")
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str)
+        .map(|value| match value {
+            "completed" => "completed".to_owned(),
+            "failed" | "timed_out" => "failed".to_owned(),
+            other => other.to_owned(),
+        });
+    let task_progress_state = payload
         .get("task_progress")
         .and_then(|value| value.get("status"))
         .and_then(Value::as_str)
@@ -512,18 +592,13 @@ fn task_state_from_payload(payload: &Value) -> Option<String> {
                 .and_then(|value| value.get("status"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
-            payload
-                .get("session")
-                .and_then(|value| value.get("state"))
-                .and_then(Value::as_str)
-                .map(|value| match value {
-                    "completed" => "completed".to_owned(),
-                    "failed" | "timed_out" => "failed".to_owned(),
-                    other => other.to_owned(),
-                })
-        })
+        });
+
+    match task_progress_state.as_deref() {
+        Some("active") | Some("verifying") => terminal_session_state.or(task_progress_state),
+        Some(_) => task_progress_state,
+        None => terminal_session_state,
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -549,10 +624,16 @@ fn decorate_task_status_payload(mut payload: Value, task_state: Option<String>) 
 
 #[cfg(feature = "memory-sqlite")]
 fn stable_task_wait_status(snapshot: &SessionInspectionSnapshot) -> Option<&'static str> {
+    let terminal_session_status = match snapshot.session.state {
+        SessionState::Completed => Some("completed"),
+        SessionState::Failed | SessionState::TimedOut => Some("failed"),
+        SessionState::Ready | SessionState::Running => None,
+    };
+
     if let Some(task_progress) = snapshot.workflow.task_progress.as_ref() {
         return match task_progress.status {
             crate::task_progress::TaskProgressStatus::Active
-            | crate::task_progress::TaskProgressStatus::Verifying => None,
+            | crate::task_progress::TaskProgressStatus::Verifying => terminal_session_status,
             crate::task_progress::TaskProgressStatus::Waiting => Some("waiting"),
             crate::task_progress::TaskProgressStatus::Blocked => Some("blocked"),
             crate::task_progress::TaskProgressStatus::Completed => Some("completed"),
@@ -560,11 +641,7 @@ fn stable_task_wait_status(snapshot: &SessionInspectionSnapshot) -> Option<&'sta
         };
     }
 
-    match snapshot.session.state {
-        SessionState::Completed => Some("completed"),
-        SessionState::Failed | SessionState::TimedOut => Some("failed"),
-        SessionState::Ready | SessionState::Running => None,
-    }
+    terminal_session_status
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -886,10 +963,10 @@ pub(super) async fn wait_for_task_tool_with_policies(
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let session_payload = task_payload_to_session_payload(payload, "task_id", None)?;
-    let target_session_id = required_payload_string(&session_payload, "session_id", "task tool")?;
-    let after_id = session_payload.get("after_id").and_then(Value::as_i64);
-    let timeout_ms = session_payload
+    let request = parse_task_target_request(&payload, "task_id", None)?;
+    let target_task_id = legacy_single_task_id(&request.task_ids)?.to_owned();
+    let after_id = payload.get("after_id").and_then(Value::as_i64);
+    let timeout_ms = payload
         .get("timeout_ms")
         .and_then(Value::as_u64)
         .unwrap_or(1_000)
@@ -897,7 +974,7 @@ pub(super) async fn wait_for_task_tool_with_policies(
     let event_limit = tool_config.sessions.history_limit.min(50);
 
     wait_for_single_task_with_policies(
-        target_session_id.as_str(),
+        target_task_id.as_str(),
         current_session_id,
         config,
         tool_config,
@@ -910,7 +987,7 @@ pub(super) async fn wait_for_task_tool_with_policies(
 
 #[cfg(feature = "memory-sqlite")]
 async fn wait_for_single_task_with_policies(
-    target_session_id: &str,
+    target_task_id: &str,
     current_session_id: &str,
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
@@ -919,14 +996,19 @@ async fn wait_for_single_task_with_policies(
     event_limit: usize,
 ) -> Result<ToolCoreOutcome, String> {
     let started_at = Instant::now();
+    let poll_interval_ms = 100_u64;
     let mut next_after_id = after_id.unwrap_or(0).max(0);
     let mut observed_events = Vec::new();
     let mailbox = mailbox_for_session(current_session_id);
     let mut mailbox_subscription = mailbox.subscribe();
 
     loop {
+        let repo = SessionRepository::new(config)?;
+        let resolved_target =
+            resolve_task_target(&repo, current_session_id, target_task_id, tool_config)?;
+        let owner_session_id = resolved_target.owner_session_id;
         let observation = observe_visible_session_with_policies(
-            target_session_id,
+            owner_session_id.as_str(),
             current_session_id,
             config,
             tool_config,
@@ -976,13 +1058,14 @@ async fn wait_for_single_task_with_policies(
         }
 
         let remaining_ms = timeout_ms - elapsed_ms;
+        let wait_window_ms = remaining_ms.min(poll_interval_ms);
         let drained: Vec<InterAgentMessage> = mailbox.drain().await;
         if !drained.is_empty() {
             continue;
         }
 
         let wait_result = timeout(
-            Duration::from_millis(remaining_ms),
+            Duration::from_millis(wait_window_ms),
             mailbox_subscription.changed(),
         )
         .await;
@@ -1099,35 +1182,33 @@ fn execute_tasks_list(
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
     let request = parse_tasks_list_request(&payload, tool_config);
-    let sessions = repo.list_visible_sessions(current_session_id)?;
+    let visible_tasks = load_visible_task_records(&repo, current_session_id)?;
 
     let mut tasks = Vec::new();
-    for session in sessions {
-        let workflow = load_session_workflow_record(&repo, &session, None)?;
-        let Some(task_progress) = workflow.task_progress.clone() else {
-            continue;
-        };
-
+    for visible_task in visible_tasks {
+        let task_progress = visible_task.task_progress;
         let task_state = task_progress.status.as_str().to_owned();
-        if request
-            .task_state
-            .as_deref()
-            .is_some_and(|expected| expected != task_state)
-        {
+        let task_is_stable = task_progress.status.is_stable();
+        let state_filter = request.task_state.as_deref();
+        let matches_state = state_filter.is_none_or(|expected| expected == task_state.as_str());
+        if !matches_state {
             continue;
         }
-        if request.stable_only && !task_progress.status.is_stable() {
+        if request.stable_only && !task_is_stable {
             continue;
         }
 
+        let verification_state = task_progress
+            .verification_state
+            .map(|value| value.as_str().to_owned());
         tasks.push(json!({
-            "task_id": task_progress.task_id,
+            "task_id": visible_task.task_id,
             "task_state": task_state,
-            "task_is_stable": task_progress.status.is_stable(),
+            "task_is_stable": task_is_stable,
             "intent_summary": task_progress.intent_summary,
-            "verification_state": task_progress.verification_state.map(|value| value.as_str().to_owned()),
-            "owner_session_id": session.session_id,
-            "session_label": session.label,
+            "verification_state": verification_state,
+            "owner_session_id": visible_task.owner_session_id,
+            "session_label": visible_task.session_label,
             "updated_at": task_progress.updated_at,
             "active_handles": task_progress.active_handles,
             "resume_recipe": task_progress.resume_recipe,
@@ -1175,33 +1256,30 @@ fn execute_tasks_search(
 ) -> Result<ToolCoreOutcome, String> {
     let repo = SessionRepository::new(config)?;
     let request = parse_tasks_search_request(&payload, tool_config)?;
-    let sessions = repo.list_visible_sessions(current_session_id)?;
+    let visible_tasks = load_visible_task_records(&repo, current_session_id)?;
     let query = request.query.to_ascii_lowercase();
 
     let mut tasks = Vec::new();
-    for session in sessions {
-        let workflow = load_session_workflow_record(&repo, &session, None)?;
-        let Some(task_progress) = workflow.task_progress.clone() else {
-            continue;
-        };
-
+    for visible_task in visible_tasks {
+        let task_progress = visible_task.task_progress;
         let task_state = task_progress.status.as_str().to_owned();
-        if request
-            .task_state
-            .as_deref()
-            .is_some_and(|expected| expected != task_state)
-        {
+        let task_is_stable = task_progress.status.is_stable();
+        let state_filter = request.task_state.as_deref();
+        let matches_state = state_filter.is_none_or(|expected| expected == task_state.as_str());
+        if !matches_state {
             continue;
         }
-        if request.stable_only && !task_progress.status.is_stable() {
+        if request.stable_only && !task_is_stable {
             continue;
         }
 
+        let session_label = visible_task.session_label.as_deref().unwrap_or_default();
         let haystack = [
-            task_progress.task_id.as_str(),
+            visible_task.task_id.as_str(),
+            visible_task.owner_session_id.as_str(),
             task_state.as_str(),
             task_progress.intent_summary.as_deref().unwrap_or_default(),
-            session.label.as_deref().unwrap_or_default(),
+            session_label,
             task_progress.owner_kind.as_str(),
         ]
         .join(" ")
@@ -1211,14 +1289,17 @@ fn execute_tasks_search(
             continue;
         }
 
+        let verification_state = task_progress
+            .verification_state
+            .map(|value| value.as_str().to_owned());
         tasks.push(json!({
-            "task_id": task_progress.task_id,
+            "task_id": visible_task.task_id,
             "task_state": task_state,
-            "task_is_stable": task_progress.status.is_stable(),
+            "task_is_stable": task_is_stable,
             "intent_summary": task_progress.intent_summary,
-            "verification_state": task_progress.verification_state.map(|value| value.as_str().to_owned()),
-            "owner_session_id": session.session_id,
-            "session_label": session.label,
+            "verification_state": verification_state,
+            "owner_session_id": visible_task.owner_session_id,
+            "session_label": visible_task.session_label,
             "updated_at": task_progress.updated_at,
             "active_handles": task_progress.active_handles,
             "resume_recipe": task_progress.resume_recipe,
@@ -1336,26 +1417,28 @@ fn execute_task_history(
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let session_payload = task_payload_to_session_payload(payload, "task_id", None)?;
-    let target_session_id = required_payload_string(&session_payload, "session_id", "task tool")?;
+    let request = parse_task_target_request(&payload, "task_id", None)?;
+    let target_task_id = legacy_single_task_id(&request.task_ids)?;
+    let repo = SessionRepository::new(config)?;
+    let resolved_target =
+        resolve_task_target(&repo, current_session_id, target_task_id, tool_config)?;
     let default_limit = tool_config.sessions.history_limit.min(50);
     let limit = optional_payload_limit(
-        &session_payload,
+        &payload,
         "limit",
         default_limit,
         tool_config.sessions.history_limit,
     );
-    let repo = SessionRepository::new(config)?;
     ensure_visible(
         &repo,
         current_session_id,
-        &target_session_id,
+        &resolved_target.owner_session_id,
         tool_config.sessions.visibility,
     )?;
-    let turns = store::window_session_turns(&target_session_id, limit, config)
+    let turns = store::window_session_turns(&resolved_target.owner_session_id, limit, config)
         .map_err(|error| format!("load task transcript failed: {error}"))?;
     let task_events = repo
-        .list_recent_events(&target_session_id, limit)?
+        .list_recent_events(&resolved_target.owner_session_id, limit)?
         .into_iter()
         .filter(|event| event.event_kind == TASK_PROGRESS_EVENT_KIND)
         .map(session_event_json)
@@ -1365,7 +1448,8 @@ fn execute_task_history(
         status: "ok".to_owned(),
         payload: json!({
             "tool": "task_history",
-            "task_id": target_session_id,
+            "task_id": resolved_target.task_id,
+            "owner_session_id": resolved_target.owner_session_id,
             "limit": limit,
             "turns": turns,
             "task_events": task_events,
@@ -1568,14 +1652,52 @@ fn execute_task_status(
     config: &SessionStoreConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let session_payload = task_payload_to_session_payload(payload, "task_id", Some("task_ids"))?;
-    let outcome = execute_session_status(session_payload, current_session_id, config, tool_config)?;
-    let task_state = task_state_from_payload(&outcome.payload);
+    let repo = SessionRepository::new(config)?;
+    let request = parse_task_target_request(&payload, "task_id", Some("task_ids"))?;
+    let resolved_targets =
+        resolve_task_targets(&repo, current_session_id, &request.task_ids, tool_config)?;
+
+    if request.legacy_single {
+        let resolved_target = legacy_single_task_target(&resolved_targets)?;
+        let snapshot = inspect_visible_session_with_policies(
+            &resolved_target.owner_session_id,
+            current_session_id,
+            config,
+            tool_config,
+            5,
+        )?;
+        let payload = session_inspection_payload(snapshot);
+        let task_state = task_state_from_payload(&payload);
+
+        return Ok(ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: decorate_task_status_payload(
+                rewrite_task_payload_aliases(payload, "task_status"),
+                task_state,
+            ),
+        });
+    }
+
+    let mut results = Vec::with_capacity(resolved_targets.len());
+    for resolved_target in &resolved_targets {
+        results.push(execute_session_status_batch_result(
+            &resolved_target.owner_session_id,
+            current_session_id,
+            config,
+            tool_config,
+        )?);
+    }
+
     Ok(ToolCoreOutcome {
-        status: outcome.status,
-        payload: decorate_task_status_payload(
-            rewrite_task_payload_aliases(outcome.payload, "task_status"),
-            task_state,
+        status: "ok".to_owned(),
+        payload: rewrite_task_payload_aliases(
+            session_batch_payload_without_dry_run(
+                "task_status",
+                current_session_id,
+                resolved_targets.len(),
+                results,
+            ),
+            "task_status",
         ),
     })
 }
@@ -2424,9 +2546,15 @@ pub(crate) fn load_session_workflow_record(
         .load_latest_event_by_kind(&session.session_id, TASK_PROGRESS_EVENT_KIND)?
         .as_ref()
         .and_then(|event| task_progress_from_event_payload(&event.payload_json));
+    let resolved_task_identity = if session.kind == SessionKind::DelegateChild {
+        Some(resolve_task_identity_for_session(repo, &session.session_id))
+    } else {
+        None
+    };
     let runtime_self_continuity =
         load_session_runtime_self_continuity_record(repo, session, delegate_events)?;
-    let binding = session_workflow_binding_record(session, delegate_events);
+    let binding =
+        session_workflow_binding_record(session, delegate_events, resolved_task_identity.as_ref());
 
     Ok(SessionWorkflowRecord {
         workflow_id,
@@ -2529,6 +2657,7 @@ fn session_workflow_task_session_id(session: &SessionSummaryRecord) -> Option<St
 fn session_workflow_binding_record(
     session: &SessionSummaryRecord,
     delegate_events: &[SessionEventRecord],
+    resolved_task_identity: Option<&crate::task_progress::ResolvedTaskIdentity>,
 ) -> Option<SessionWorkflowBindingRecord> {
     if session.kind != SessionKind::DelegateChild {
         return None;
@@ -2538,10 +2667,16 @@ fn session_workflow_binding_record(
         latest_delegate_execution_binding_components(delegate_events)?;
     let mode = session_workflow_binding_mode(&execution);
     let worktree = session_workflow_worktree_binding(session, &execution);
-    let task_id = session.session_id.clone();
+    let task_id = resolved_task_identity
+        .map(|task_identity| task_identity.task_id.clone())
+        .unwrap_or_else(|| session.session_id.clone());
+    let task_session_id = resolved_task_identity
+        .map(|task_identity| task_identity.task_session_id.clone())
+        .unwrap_or_else(|| session.session_id.clone());
     let binding = SessionWorkflowBindingRecord {
         session_id: session.session_id.clone(),
         task_id,
+        task_session_id,
         mode,
         execution_surface,
         worktree,
@@ -3939,6 +4074,15 @@ fn normalize_required_session_id(session_id: &str) -> Result<String, String> {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn normalize_required_task_id(task_id: &str, field: &str) -> Result<String, String> {
+    let trimmed = task_id.trim();
+    if trimmed.is_empty() {
+        return Err(format!("task tool requires payload.{field}"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn parse_session_target_request(payload: &Value) -> Result<SessionTargetRequest, String> {
     let single = optional_payload_string(payload, "session_id");
     let batch = optional_payload_string_array(payload, "session_ids")?;
@@ -3959,6 +4103,40 @@ fn parse_session_target_request(payload: &Value) -> Result<SessionTargetRequest,
         (None, None) => {
             Err("session tool requires payload.session_id or payload.session_ids".to_owned())
         }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_task_target_request(
+    payload: &Value,
+    task_field: &str,
+    task_list_field: Option<&str>,
+) -> Result<TaskTargetRequest, String> {
+    let single = optional_payload_string(payload, task_field);
+    let batch = match task_list_field {
+        Some(task_list_field) => optional_payload_string_array(payload, task_list_field)?,
+        None => None,
+    };
+
+    match (single, batch) {
+        (Some(task_id), None) => Ok(TaskTargetRequest {
+            task_ids: vec![normalize_required_task_id(&task_id, task_field)?],
+            legacy_single: true,
+        }),
+        (None, Some(task_ids)) => Ok(TaskTargetRequest {
+            task_ids,
+            legacy_single: false,
+        }),
+        (Some(_), Some(_)) => Err(format!(
+            "task tool requires exactly one of payload.{task_field} or payload.{}",
+            task_list_field.unwrap_or("task_ids")
+        )),
+        (None, None) => Err(format!(
+            "task tool requires payload.{task_field}{}",
+            task_list_field
+                .map(|field| format!(" or payload.{field}"))
+                .unwrap_or_default()
+        )),
     }
 }
 
@@ -4020,6 +4198,198 @@ fn parse_session_mutation_request(payload: &Value) -> Result<SessionMutationRequ
 fn legacy_single_session_id(session_ids: &[String]) -> Result<&str, String> {
     session_ids.first().map(String::as_str).ok_or_else(|| {
         "session_tool_internal_error: legacy single request missing session id".to_owned()
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn legacy_single_task_id(task_ids: &[String]) -> Result<&str, String> {
+    task_ids
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| "task_tool_internal_error: legacy single request missing task id".to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn legacy_single_task_target(
+    task_targets: &[ResolvedTaskTarget],
+) -> Result<&ResolvedTaskTarget, String> {
+    task_targets.first().ok_or_else(|| {
+        "task_tool_internal_error: legacy single request missing resolved task".to_owned()
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_task_targets(
+    repo: &SessionRepository,
+    current_session_id: &str,
+    task_ids: &[String],
+    tool_config: &ToolConfig,
+) -> Result<Vec<ResolvedTaskTarget>, String> {
+    let visible_task_records = load_visible_task_records(repo, current_session_id)?;
+
+    task_ids
+        .iter()
+        .map(|task_id| {
+            resolve_task_target_from_visible_records(
+                repo,
+                current_session_id,
+                task_id,
+                tool_config,
+                &visible_task_records,
+            )
+        })
+        .collect()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_visible_task_records(
+    repo: &SessionRepository,
+    current_session_id: &str,
+) -> Result<Vec<VisibleTaskRecord>, String> {
+    let visible_sessions = repo.list_visible_sessions(current_session_id)?;
+    let mut tasks_by_id = BTreeMap::<String, VisibleTaskRecord>::new();
+
+    for session in visible_sessions {
+        let workflow = load_session_workflow_record(repo, &session, None)?;
+        let Some(task_progress) = workflow.task_progress else {
+            continue;
+        };
+
+        let task_id = task_progress.task_id.trim().to_owned();
+        if task_id.is_empty() {
+            continue;
+        }
+
+        let candidate = VisibleTaskRecord {
+            task_id: task_id.clone(),
+            owner_session_id: session.session_id.clone(),
+            session_label: session.label.clone(),
+            session_updated_at: session.updated_at,
+            task_progress,
+        };
+        let should_replace = tasks_by_id
+            .get(task_id.as_str())
+            .map(|existing| visible_task_record_is_newer(&candidate, existing))
+            .unwrap_or(true);
+        if should_replace {
+            tasks_by_id.insert(task_id, candidate);
+        }
+    }
+
+    let mut tasks = tasks_by_id.into_values().collect::<Vec<_>>();
+    tasks.sort_by(visible_task_record_cmp_desc);
+    Ok(tasks)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn visible_task_record_is_newer(
+    candidate: &VisibleTaskRecord,
+    existing: &VisibleTaskRecord,
+) -> bool {
+    visible_task_record_cmp_desc(candidate, existing).is_lt()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn visible_task_record_cmp_desc(
+    left: &VisibleTaskRecord,
+    right: &VisibleTaskRecord,
+) -> std::cmp::Ordering {
+    right
+        .task_progress
+        .updated_at
+        .cmp(&left.task_progress.updated_at)
+        .then_with(|| right.session_updated_at.cmp(&left.session_updated_at))
+        .then_with(|| left.task_id.cmp(&right.task_id))
+        .then_with(|| left.owner_session_id.cmp(&right.owner_session_id))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_task_target(
+    repo: &SessionRepository,
+    current_session_id: &str,
+    task_id: &str,
+    tool_config: &ToolConfig,
+) -> Result<ResolvedTaskTarget, String> {
+    resolve_task_targets(repo, current_session_id, &[task_id.to_owned()], tool_config)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "task_tool_internal_error: expected a resolved task target".to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_task_target_from_visible_records(
+    repo: &SessionRepository,
+    current_session_id: &str,
+    requested_task_id: &str,
+    tool_config: &ToolConfig,
+    visible_task_records: &[VisibleTaskRecord],
+) -> Result<ResolvedTaskTarget, String> {
+    let resolved_match = visible_task_records
+        .iter()
+        .find(|visible_task| visible_task.task_id == requested_task_id);
+    if let Some(visible_task) = resolved_match {
+        return Ok(ResolvedTaskTarget {
+            task_id: visible_task.task_id.clone(),
+            owner_session_id: visible_task.owner_session_id.clone(),
+        });
+    }
+
+    let visible_sessions = repo.list_visible_sessions(current_session_id)?;
+    let mut resolved_binding_match = None::<(i64, String, String)>;
+    for session in visible_sessions {
+        let workflow = load_session_workflow_record(repo, &session, None)?;
+        let Some(binding) = workflow.binding.as_ref() else {
+            continue;
+        };
+        if binding.task_id != requested_task_id {
+            continue;
+        }
+
+        let candidate = (
+            session.updated_at,
+            binding.task_id.clone(),
+            session.session_id.clone(),
+        );
+        let should_replace = resolved_binding_match
+            .as_ref()
+            .map(|existing| candidate > *existing)
+            .unwrap_or(true);
+        if should_replace {
+            resolved_binding_match = Some(candidate);
+        }
+    }
+    if let Some((_, task_id, owner_session_id)) = resolved_binding_match {
+        return Ok(ResolvedTaskTarget {
+            task_id,
+            owner_session_id,
+        });
+    }
+
+    let session = repo
+        .load_session_summary_with_legacy_fallback(requested_task_id)?
+        .ok_or_else(|| format!("task_not_found: `{requested_task_id}`"))?;
+    ensure_visible(
+        repo,
+        current_session_id,
+        &session.session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let workflow = load_session_workflow_record(repo, &session, None)?;
+    let task_id = workflow
+        .task_progress
+        .as_ref()
+        .map(|task_progress| task_progress.task_id.clone())
+        .or_else(|| {
+            workflow
+                .binding
+                .as_ref()
+                .map(|binding| binding.task_id.clone())
+        })
+        .unwrap_or_else(|| requested_task_id.to_owned());
+
+    Ok(ResolvedTaskTarget {
+        task_id,
+        owner_session_id: session.session_id,
     })
 }
 
@@ -4589,6 +4959,7 @@ fn session_workflow_binding_json(binding: SessionWorkflowBindingRecord) -> Value
     json!({
         "session_id": binding.session_id,
         "task_id": binding.task_id,
+        "task_session_id": binding.task_session_id,
         "mode": binding.mode,
         "execution_surface": binding.execution_surface,
         "worktree": binding.worktree,
@@ -5285,6 +5656,10 @@ mod tests {
             actor_session_id: Some("root-session".to_owned()),
             payload_json: json!({
                 "task": "research release readiness",
+                "task_scope": {
+                    "task_id": "task-release-readiness"
+                },
+                "task_session_id": "child-session",
                 "label": "Research Child",
                 "execution": {
                     "mode": "async",
@@ -5330,7 +5705,14 @@ mod tests {
         assert_eq!(child["workflow"]["lineage_root_session_id"], "root-session");
         assert_eq!(child["workflow"]["lineage_depth"], 1);
         assert_eq!(child["workflow"]["binding"]["session_id"], "child-session");
-        assert_eq!(child["workflow"]["binding"]["task_id"], "child-session");
+        assert_eq!(
+            child["workflow"]["binding"]["task_id"],
+            "task-release-readiness"
+        );
+        assert_eq!(
+            child["workflow"]["binding"]["task_session_id"],
+            "child-session"
+        );
         assert_eq!(child["workflow"]["binding"]["mode"], "advisory_only");
         assert_eq!(
             child["workflow"]["binding"]["execution_surface"],
@@ -5505,6 +5887,10 @@ mod tests {
             actor_session_id: Some("root-session".to_owned()),
             payload_json: json!({
                 "task": "research continuity",
+                "task_scope": {
+                    "task_id": "task-continuity"
+                },
+                "task_session_id": "child-session",
                 "label": "Continuity Child",
                 "execution": {
                     "mode": "async",
@@ -5577,6 +5963,10 @@ mod tests {
         );
         assert_eq!(
             outcome.payload["workflow"]["binding"]["task_id"],
+            "task-continuity"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["task_session_id"],
             "child-session"
         );
         assert_eq!(
@@ -5924,11 +6314,11 @@ mod tests {
     }
 
     #[test]
-    fn task_status_uses_task_id_and_exposes_task_payload_aliases() {
+    fn task_status_resolves_canonical_task_id_and_exposes_owner_session_id() {
         let config = isolated_memory_config("task-status-aliases");
         let repo = SessionRepository::new(&config).expect("repository");
         repo.create_session(NewSessionRecord {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             kind: SessionKind::Root,
             parent_session_id: None,
             label: Some("Task Root".to_owned()),
@@ -5936,9 +6326,9 @@ mod tests {
         })
         .expect("create root");
         repo.append_event(NewSessionEvent {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
-            actor_session_id: Some("task-root".to_owned()),
+            actor_session_id: Some("task-owner".to_owned()),
             payload_json: crate::task_progress::task_progress_event_payload(
                 "unit_test",
                 &crate::task_progress::TaskProgressRecord {
@@ -5950,7 +6340,7 @@ mod tests {
                     active_handles: Vec::new(),
                     resume_recipe: Some(crate::task_progress::TaskResumeRecipeRecord {
                         recommended_tool: "task_wait".to_owned(),
-                        session_id: "task-root".to_owned(),
+                        session_id: "task-owner".to_owned(),
                         note: Some("Wait on the task surface.".to_owned()),
                     }),
                     updated_at: 123,
@@ -5966,13 +6356,15 @@ mod tests {
                     "task_id": "task-root"
                 }),
             },
-            "task-root",
+            "task-owner",
             &config,
         )
         .expect("task_status outcome");
 
         assert_eq!(outcome.payload["tool"], "task_status");
         assert_eq!(outcome.payload["task_id"], "task-root");
+        assert_eq!(outcome.payload["owner_session_id"], "task-owner");
+        assert_eq!(outcome.payload["session"]["session_id"], "task-owner");
         assert_eq!(outcome.payload["task_state"], "waiting");
         assert_eq!(outcome.payload["task_is_stable"], true);
         assert_eq!(outcome.payload["task_progress"]["status"], "waiting");
@@ -5983,11 +6375,85 @@ mod tests {
     }
 
     #[test]
-    fn task_history_reads_history_by_task_id() {
+    fn task_status_resolves_binding_only_task_identity_before_task_progress_exists() {
+        let config = isolated_memory_config("task-status-binding-only");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "binding only task",
+                "task_scope": {
+                    "task_id": "task-bind-only"
+                },
+                "task_session_id": "child-session",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 90,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "workspace_root": "/tmp/loong/task-status-binding-only/child-session",
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append delegate_queued");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "task_status".to_owned(),
+                payload: json!({
+                    "task_id": "task-bind-only"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("task_status outcome");
+
+        assert_eq!(outcome.payload["tool"], "task_status");
+        assert_eq!(outcome.payload["task_id"], "task-bind-only");
+        assert_eq!(outcome.payload["owner_session_id"], "child-session");
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["task_id"],
+            "task-bind-only"
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["binding"]["task_session_id"],
+            "child-session"
+        );
+        assert_eq!(outcome.payload["task_state"], "ready");
+        assert!(outcome.payload["task_progress"].is_null());
+    }
+
+    #[test]
+    fn task_history_reads_history_by_canonical_task_id() {
         let config = isolated_memory_config("task-history");
         let repo = SessionRepository::new(&config).expect("repository");
         repo.create_session(NewSessionRecord {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             kind: SessionKind::Root,
             parent_session_id: None,
             label: Some("Task Root".to_owned()),
@@ -5995,9 +6461,9 @@ mod tests {
         })
         .expect("create root");
         repo.append_event(NewSessionEvent {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
-            actor_session_id: Some("task-root".to_owned()),
+            actor_session_id: Some("task-owner".to_owned()),
             payload_json: crate::task_progress::task_progress_event_payload(
                 "unit_test",
                 &crate::task_progress::TaskProgressRecord {
@@ -6015,9 +6481,9 @@ mod tests {
             ),
         })
         .expect("append task progress event");
-        append_session_turn_direct("task-root", "user", "hello", &config)
+        append_session_turn_direct("task-owner", "user", "hello", &config)
             .expect("append user turn");
-        append_session_turn_direct("task-root", "assistant", "world", &config)
+        append_session_turn_direct("task-owner", "assistant", "world", &config)
             .expect("append assistant turn");
 
         let outcome = execute_session_tool_with_config(
@@ -6028,19 +6494,93 @@ mod tests {
                     "limit": 10
                 }),
             },
-            "task-root",
+            "task-owner",
             &config,
         )
         .expect("task_history outcome");
 
         assert_eq!(outcome.payload["tool"], "task_history");
         assert_eq!(outcome.payload["task_id"], "task-root");
+        assert_eq!(outcome.payload["owner_session_id"], "task-owner");
         assert_eq!(outcome.payload["turns"][0]["content"], "hello");
         assert_eq!(outcome.payload["turns"][1]["content"], "world");
         assert_eq!(
             outcome.payload["task_events"][0]["event_kind"],
             crate::task_progress::TASK_PROGRESS_EVENT_KIND
         );
+    }
+
+    #[test]
+    fn task_status_batch_reports_task_ids_without_session_id_aliases() {
+        let config = isolated_memory_config("task-status-batch");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+
+        for (session_id, task_id, updated_at) in
+            [("owner-a", "task-a", 10), ("owner-b", "task-b", 20)]
+        {
+            repo.create_session(NewSessionRecord {
+                session_id: session_id.to_owned(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some("root-session".to_owned()),
+                label: Some(session_id.to_owned()),
+                state: SessionState::Running,
+            })
+            .expect("create child");
+            repo.append_event(NewSessionEvent {
+                session_id: session_id.to_owned(),
+                event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+                actor_session_id: Some(session_id.to_owned()),
+                payload_json: crate::task_progress::task_progress_event_payload(
+                    "unit_test",
+                    &crate::task_progress::TaskProgressRecord {
+                        task_id: task_id.to_owned(),
+                        owner_kind: "conversation_turn".to_owned(),
+                        status: crate::task_progress::TaskProgressStatus::Waiting,
+                        intent_summary: Some(format!("Status for {task_id}")),
+                        verification_state: Some(
+                            crate::task_progress::TaskVerificationState::Pending,
+                        ),
+                        active_handles: Vec::new(),
+                        resume_recipe: None,
+                        updated_at,
+                    },
+                ),
+            })
+            .expect("append task progress event");
+        }
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "task_status".to_owned(),
+                payload: json!({
+                    "task_ids": ["task-a", "task-b"]
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("task_status batch outcome");
+
+        let results = outcome.payload["results"]
+            .as_array()
+            .expect("batch results");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["task_id"], "task-a");
+        assert_eq!(results[0]["owner_session_id"], "owner-a");
+        assert_eq!(results[0]["task_state"], "waiting");
+        assert_eq!(results[0]["task_is_stable"], true);
+        assert!(results[0].get("session_id").is_none());
+        assert_eq!(results[1]["task_id"], "task-b");
+        assert_eq!(results[1]["owner_session_id"], "owner-b");
+        assert!(results[1].get("session_id").is_none());
     }
 
     #[test]
@@ -6283,6 +6823,115 @@ mod tests {
 
         assert_eq!(state_match.payload["matched_count"], 1);
         assert_eq!(state_match.payload["tasks"][0]["task_id"], "task-beta");
+    }
+
+    #[test]
+    fn task_surfaces_deduplicate_shared_canonical_task_ids_to_latest_owner_session() {
+        let config = isolated_memory_config("task-deduplicate-latest-owner");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+
+        for session_id in ["owner-old", "owner-new"] {
+            repo.create_session(NewSessionRecord {
+                session_id: session_id.to_owned(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some("root-session".to_owned()),
+                label: Some(session_id.to_owned()),
+                state: SessionState::Running,
+            })
+            .expect("create child");
+        }
+
+        for (session_id, summary, updated_at) in [
+            ("owner-old", "legacy owner", 10),
+            ("owner-new", "latest owner", 20),
+        ] {
+            repo.append_event(NewSessionEvent {
+                session_id: session_id.to_owned(),
+                event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+                actor_session_id: Some(session_id.to_owned()),
+                payload_json: crate::task_progress::task_progress_event_payload(
+                    "unit_test",
+                    &crate::task_progress::TaskProgressRecord {
+                        task_id: "task-shared".to_owned(),
+                        owner_kind: "conversation_turn".to_owned(),
+                        status: crate::task_progress::TaskProgressStatus::Waiting,
+                        intent_summary: Some(summary.to_owned()),
+                        verification_state: Some(
+                            crate::task_progress::TaskVerificationState::Pending,
+                        ),
+                        active_handles: Vec::new(),
+                        resume_recipe: None,
+                        updated_at,
+                    },
+                ),
+            })
+            .expect("append task progress event");
+        }
+
+        let task_status = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "task_status".to_owned(),
+                payload: json!({
+                    "task_id": "task-shared"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("task_status outcome");
+        assert_eq!(task_status.payload["task_id"], "task-shared");
+        assert_eq!(task_status.payload["owner_session_id"], "owner-new");
+        assert_eq!(
+            task_status.payload["task_progress"]["intent_summary"],
+            "latest owner"
+        );
+
+        let tasks_list = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "tasks_list".to_owned(),
+                payload: json!({}),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("tasks_list outcome");
+        assert_eq!(tasks_list.payload["matched_count"], 1);
+        assert_eq!(tasks_list.payload["tasks"][0]["task_id"], "task-shared");
+        assert_eq!(
+            tasks_list.payload["tasks"][0]["owner_session_id"],
+            "owner-new"
+        );
+        assert_eq!(
+            tasks_list.payload["tasks"][0]["intent_summary"],
+            "latest owner"
+        );
+
+        let tasks_search = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "tasks_search".to_owned(),
+                payload: json!({
+                    "query": "task-shared",
+                    "max_results": 10
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("tasks_search outcome");
+        assert_eq!(tasks_search.payload["matched_count"], 1);
+        assert_eq!(tasks_search.payload["tasks"][0]["task_id"], "task-shared");
+        assert_eq!(
+            tasks_search.payload["tasks"][0]["owner_session_id"],
+            "owner-new"
+        );
     }
 
     #[test]
@@ -8750,35 +9399,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_wait_wakes_when_task_session_completes() {
+    async fn task_wait_wakes_when_canonical_task_owner_session_completes() {
         let config = isolated_memory_config("task-wait-mailbox-wake");
         let repo = SessionRepository::new(&config).expect("repository");
         repo.create_session(NewSessionRecord {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             kind: SessionKind::Root,
             parent_session_id: None,
             label: Some("Task Root".to_owned()),
             state: SessionState::Running,
         })
         .expect("create root");
+        repo.append_event(NewSessionEvent {
+            session_id: "task-owner".to_owned(),
+            event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("task-owner".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-root".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Active,
+                    intent_summary: Some("Mailbox wake for canonical task".to_owned()),
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 1,
+                },
+            ),
+        })
+        .expect("append task progress event");
 
         let config_for_completion = config.clone();
         let completion = tokio::spawn(async move {
             sleep(Duration::from_millis(50)).await;
             let repo = SessionRepository::new(&config_for_completion).expect("completion repo");
             repo.finalize_session_terminal(
-                "task-root",
+                "task-owner",
                 FinalizeSessionTerminalRequest {
                     state: SessionState::Completed,
                     last_error: None,
                     event_kind: "delegate_completed".to_owned(),
-                    actor_session_id: Some("task-root".to_owned()),
+                    actor_session_id: Some("task-owner".to_owned()),
                     event_payload_json: json!({
                         "result": "ok"
                     }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({
-                        "child_session_id": "task-root",
+                        "child_session_id": "task-owner",
                         "result": "ok"
                     }),
                     frozen_result: None,
@@ -8786,12 +9454,12 @@ mod tests {
             )
             .expect("finalize task");
 
-            let mailbox = mailbox_for_session("task-root");
+            let mailbox = mailbox_for_session("task-owner");
             let send_result = mailbox.send(InterAgentMessage {
                 author: AgentPath::root(),
                 recipient: AgentPath::root(),
                 content: MailboxContent::DelegateResult {
-                    session_id: "task-root".to_owned(),
+                    session_id: "task-owner".to_owned(),
                     frozen_result: json!({
                         "status": "ok"
                     }),
@@ -8806,7 +9474,7 @@ mod tests {
                 "task_id": "task-root",
                 "timeout_ms": 1_000
             }),
-            "task-root",
+            "task-owner",
             &config,
             &ToolConfig::default(),
         )
@@ -8817,17 +9485,18 @@ mod tests {
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["tool"], "task_wait");
         assert_eq!(outcome.payload["task_id"], "task-root");
+        assert_eq!(outcome.payload["owner_session_id"], "task-owner");
         assert_eq!(outcome.payload["wait_status"], "completed");
         assert_eq!(outcome.payload["task_state"], "completed");
         assert_eq!(outcome.payload["task_is_stable"], true);
     }
 
     #[tokio::test]
-    async fn task_wait_returns_immediately_for_waiting_task_state() {
+    async fn task_wait_returns_immediately_for_waiting_canonical_task_state() {
         let config = isolated_memory_config("task-wait-waiting-state");
         let repo = SessionRepository::new(&config).expect("repository");
         repo.create_session(NewSessionRecord {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             kind: SessionKind::Root,
             parent_session_id: None,
             label: Some("Task Root".to_owned()),
@@ -8835,9 +9504,9 @@ mod tests {
         })
         .expect("create root");
         repo.append_event(NewSessionEvent {
-            session_id: "task-root".to_owned(),
+            session_id: "task-owner".to_owned(),
             event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
-            actor_session_id: Some("task-root".to_owned()),
+            actor_session_id: Some("task-owner".to_owned()),
             payload_json: crate::task_progress::task_progress_event_payload(
                 "unit_test",
                 &crate::task_progress::TaskProgressRecord {
@@ -8848,14 +9517,14 @@ mod tests {
                     verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
                     active_handles: vec![crate::task_progress::TaskActiveHandleRecord {
                         handle_kind: "approval_gate".to_owned(),
-                        handle_id: "task-root".to_owned(),
+                        handle_id: "task-owner".to_owned(),
                         state: "waiting".to_owned(),
                         last_event_at: Some(123),
                         stop_condition: "approval_decision".to_owned(),
                     }],
                     resume_recipe: Some(crate::task_progress::TaskResumeRecipeRecord {
                         recommended_tool: "task_status".to_owned(),
-                        session_id: "task-root".to_owned(),
+                        session_id: "task-owner".to_owned(),
                         note: Some("Inspect task status for the approval gate.".to_owned()),
                     }),
                     updated_at: 123,
@@ -8870,21 +9539,115 @@ mod tests {
                 "task_id": "task-root",
                 "timeout_ms": 1_000
             }),
-            "task-root",
+            "task-owner",
             &config,
             &ToolConfig::default(),
         )
         .await
         .expect("task_wait outcome");
+        let immediate_resolution_budget = Duration::from_millis(500);
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["wait_status"], "waiting");
+        assert_eq!(outcome.payload["owner_session_id"], "task-owner");
         assert_eq!(outcome.payload["task_state"], "waiting");
         assert_eq!(outcome.payload["task_is_stable"], true);
         assert!(
-            started_at.elapsed() < Duration::from_millis(200),
+            started_at.elapsed() < immediate_resolution_budget,
             "waiting task state should resolve without waiting for terminal session state"
         );
+    }
+
+    #[tokio::test]
+    async fn task_wait_follows_latest_owner_session_for_reassigned_task() {
+        let config = isolated_memory_config("task-wait-reassigned-owner");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+        for session_id in ["owner-old", "owner-new"] {
+            repo.create_session(NewSessionRecord {
+                session_id: session_id.to_owned(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some("root-session".to_owned()),
+                label: Some(session_id.to_owned()),
+                state: SessionState::Running,
+            })
+            .expect("create child");
+        }
+        repo.append_event(NewSessionEvent {
+            session_id: "owner-old".to_owned(),
+            event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("owner-old".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-root".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Active,
+                    intent_summary: Some("Initial owner".to_owned()),
+                    verification_state: Some(
+                        crate::task_progress::TaskVerificationState::NotStarted,
+                    ),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 10,
+                },
+            ),
+        })
+        .expect("append old owner task progress");
+
+        let config_for_completion = config.clone();
+        let completion = tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            let repo = SessionRepository::new(&config_for_completion).expect("completion repo");
+            repo.append_event(NewSessionEvent {
+                session_id: "owner-new".to_owned(),
+                event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+                actor_session_id: Some("owner-new".to_owned()),
+                payload_json: crate::task_progress::task_progress_event_payload(
+                    "unit_test",
+                    &crate::task_progress::TaskProgressRecord {
+                        task_id: "task-root".to_owned(),
+                        owner_kind: "conversation_turn".to_owned(),
+                        status: crate::task_progress::TaskProgressStatus::Completed,
+                        intent_summary: Some("Reassigned owner".to_owned()),
+                        verification_state: Some(
+                            crate::task_progress::TaskVerificationState::Passed,
+                        ),
+                        active_handles: Vec::new(),
+                        resume_recipe: None,
+                        updated_at: 20,
+                    },
+                ),
+            })
+            .expect("append new owner task progress");
+        });
+
+        let outcome = crate::tools::wait_for_task_with_config(
+            json!({
+                "task_id": "task-root",
+                "timeout_ms": 1_000
+            }),
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .await
+        .expect("task_wait outcome");
+        completion.await.expect("completion task");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["task_id"], "task-root");
+        assert_eq!(outcome.payload["owner_session_id"], "owner-new");
+        assert_eq!(outcome.payload["wait_status"], "completed");
+        assert_eq!(outcome.payload["task_state"], "completed");
+        assert_eq!(outcome.payload["task_is_stable"], true);
     }
 
     #[test]

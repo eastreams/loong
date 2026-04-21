@@ -46,7 +46,8 @@ use crate::session::store::{self, SessionStoreConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::task_progress::{
     TASK_PROGRESS_EVENT_KIND, TaskActiveHandleRecord, TaskProgressRecord, TaskProgressStatus,
-    TaskResumeRecipeRecord, TaskVerificationState, task_progress_event_payload, unix_ts_now,
+    TaskResumeRecipeRecord, TaskVerificationState, resolve_canonical_task_id_for_session,
+    task_progress_event_payload, unix_ts_now,
 };
 
 use self::pending_approval::*;
@@ -1934,7 +1935,7 @@ impl ConversationTurnCoordinator {
                 config,
                 session_id,
                 "turn_started",
-                active_task_progress_record(session_id, user_input),
+                active_task_progress_record(config, session_id, user_input),
             );
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
@@ -2074,7 +2075,7 @@ impl ConversationTurnCoordinator {
                     config,
                     address.session_id.as_str(),
                     "turn_completed",
-                    completed_task_progress_record(address.session_id.as_str(), user_input),
+                    completed_task_progress_record(config, address.session_id.as_str(), user_input),
                 );
                 observe_non_provider_turn_terminal_success_phases(observer.as_ref());
                 Ok(reply)
@@ -2088,7 +2089,7 @@ impl ConversationTurnCoordinator {
                     config,
                     address.session_id.as_str(),
                     "turn_failed",
-                    failed_task_progress_record(address.session_id.as_str(), user_input),
+                    failed_task_progress_record(config, address.session_id.as_str(), user_input),
                 );
                 Err(error)
             }
@@ -4044,7 +4045,7 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             config,
             session_id,
             "turn_verifying",
-            verifying_task_progress_record(session_id, user_input),
+            verifying_task_progress_record(config, session_id, user_input),
         );
     }
 
@@ -4147,9 +4148,9 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             "turn_completed"
         },
         if checkpoint_waits_for_external_resolution(checkpoint) {
-            waiting_task_progress_record(session_id, user_input)
+            waiting_task_progress_record(config, session_id, user_input)
         } else {
-            completed_task_progress_record(session_id, user_input)
+            completed_task_progress_record(config, session_id, user_input)
         },
     );
 
@@ -4179,10 +4180,26 @@ fn persist_task_progress_event_best_effort(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn resolve_canonical_task_id(config: &LoongConfig, session_id: &str) -> String {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return session_id.to_owned();
+    };
+
+    resolve_canonical_task_id_for_session(&repo, session_id)
+        .unwrap_or_else(|| session_id.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn active_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id,
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Active,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4195,10 +4212,10 @@ fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgre
             stop_condition: "terminal_reply_or_error".to_owned(),
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "session_status".to_owned(),
+            recommended_tool: "task_status".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Inspect session_status, session_wait, or sessions_history for durable task progress."
+                "Inspect task_status, task_wait, or task_history for durable task progress."
                     .to_owned(),
             ),
         }),
@@ -4207,10 +4224,15 @@ fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgre
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn verifying_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id,
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Verifying,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4223,10 +4245,10 @@ fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskPro
             stop_condition: "after_turn_and_compaction_complete".to_owned(),
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "session_status".to_owned(),
+            recommended_tool: "task_status".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Check session_status to see whether finalization verification has completed."
+                "Check task_status to see whether finalization verification has completed."
                     .to_owned(),
             ),
         }),
@@ -4235,10 +4257,15 @@ fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskPro
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn waiting_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id,
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Waiting,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4251,10 +4278,10 @@ fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgr
             stop_condition: "approval_decision".to_owned(),
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "session_status".to_owned(),
+            recommended_tool: "task_status".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Use session_status or the approval control path to resolve the waiting task."
+                "Use task_status or the approval control path to resolve the waiting task."
                     .to_owned(),
             ),
         }),
@@ -4263,9 +4290,13 @@ fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgr
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn completed_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn completed_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id: resolve_canonical_task_id(config, session_id),
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Completed,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4277,19 +4308,23 @@ fn completed_task_progress_record(session_id: &str, user_input: &str) -> TaskPro
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn failed_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn failed_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id: resolve_canonical_task_id(config, session_id),
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Failed,
         intent_summary: summarize_task_progress_intent(user_input),
         verification_state: Some(TaskVerificationState::Failed),
         active_handles: Vec::new(),
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "sessions_history".to_owned(),
+            recommended_tool: "task_history".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Inspect recent session history and session_status to diagnose the failed task."
+                "Inspect recent task_history and task_status to diagnose the failed task."
                     .to_owned(),
             ),
         }),
@@ -4419,6 +4454,10 @@ impl<R> AppToolDispatcher for CoordinatorAppToolDispatcher<'_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
+    fn memory_config(&self) -> Option<&SessionStoreConfig> {
+        self.fallback.memory_config()
+    }
+
     async fn preflight_tool_intent_with_binding(
         &self,
         session_context: &SessionContext,
@@ -4665,6 +4704,8 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
         &config.memory,
     ))?;
+    let parent_task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
+        .unwrap_or_else(|| session_context.session_id.clone());
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -4704,6 +4745,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                         &child_session_id,
                         child_label.clone(),
                         &delegate_request.task,
+                        Some(parent_task_id.as_str()),
                         runtime_self_continuity.as_ref(),
                         subagent_identity.clone(),
                         execution_policy,
@@ -4878,6 +4920,8 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
     let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
+    let parent_task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
+        .unwrap_or_else(|| session_context.session_id.clone());
 
     ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
 
@@ -4911,6 +4955,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                     &child_session_id,
                     child_label.clone(),
                     &delegate_request.task,
+                    Some(parent_task_id.as_str()),
                     runtime_self_continuity.as_ref(),
                     subagent_identity.clone(),
                     execution_policy,
@@ -4943,6 +4988,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
         child_session_id: child_session_id.clone(),
         parent_session_id: session_context.session_id.clone(),
         task: delegate_request.task,
+        canonical_task_id: Some(parent_task_id),
         label: child_label,
         profile: delegate_policy.profile,
         execution: queued_execution,
@@ -10438,7 +10484,11 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn waiting_task_progress_record_uses_waiting_status_and_approval_gate_handle() {
-        let record = waiting_task_progress_record("session-approval", "await approval");
+        let record = waiting_task_progress_record(
+            &LoongConfig::default(),
+            "session-approval",
+            "await approval",
+        );
 
         assert_eq!(record.status, TaskProgressStatus::Waiting);
         assert_eq!(
@@ -10452,14 +10502,15 @@ mod tests {
                 .resume_recipe
                 .as_ref()
                 .map(|value| value.recommended_tool.as_str()),
-            Some("session_status")
+            Some("task_status")
         );
     }
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn verifying_task_progress_record_uses_verifying_status_and_finalization_handle() {
-        let record = verifying_task_progress_record("session-verify", "finalize");
+        let record =
+            verifying_task_progress_record(&LoongConfig::default(), "session-verify", "finalize");
 
         assert_eq!(record.status, TaskProgressStatus::Verifying);
         assert_eq!(
@@ -10473,7 +10524,7 @@ mod tests {
                 .resume_recipe
                 .as_ref()
                 .map(|value| value.recommended_tool.as_str()),
-            Some("session_status")
+            Some("task_status")
         );
     }
 

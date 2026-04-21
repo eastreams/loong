@@ -27,7 +27,7 @@ the fastest mental model.
 | `initialize_runtime_environment` | `crates/app/src/runtime_env.rs` | `LOONG_*` env export, runtime singleton/cache initialization | kernel bootstrap, session selection, durable turn state |
 | `initialize_cli_turn_runtime` | `crates/app/src/chat.rs` | config load, runtime env export, fresh kernel bootstrap, implicit default session allowance | channel-owned kernel reuse, ACP manager reuse |
 | `initialize_cli_turn_runtime_with_loaded_config` | `crates/app/src/chat.rs` | runtime assembly from an already loaded config, fresh kernel bootstrap | config reload from disk, kernel/ACP reuse from an outer host |
-| `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx` | `crates/app/src/chat.rs` | ACP defaults, memory/sqlite prep, session id/address derivation, `CliTurnRuntime` assembly | env export, fresh kernel bootstrap |
+| `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx` | `crates/app/src/chat.rs` | ACP defaults, memory/sqlite prep, session id/address derivation, task-scope derivation, `CliTurnRuntime` assembly | env export, fresh kernel bootstrap |
 | `load_runtime_turn_config` | `crates/app/src/agent_runtime.rs` | provider-facing config refresh for long-lived hosts | channel account re-resolution, full runtime rebuild |
 | `reload_channel_turn_config` | `crates/app/src/channel/dispatch.rs` | channel turn-time provider refresh | serve-loop account selection, serve runtime mutation |
 
