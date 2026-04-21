@@ -79,7 +79,6 @@ pub(super) fn execute_tool_search_tool_with_config(
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
-
     let exact_match_entries =
         super::runtime_tool_search_entries(config, Some(&visible_tool_view), false)
             .into_iter()

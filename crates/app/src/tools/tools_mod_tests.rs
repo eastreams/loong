@@ -296,7 +296,16 @@ fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("[available_external_skills]"));
     assert!(snapshot.contains("demo-skill"));
-    assert!(snapshot.contains("external_skills.invoke"));
+    assert!(snapshot.contains("Use the read tool to load a listed skill's SKILL.md file"));
+    assert!(snapshot.contains("<available_skills>"));
+    assert!(
+        snapshot.contains(
+            &root
+                .join("external-skills-installed/demo-skill/SKILL.md")
+                .display()
+                .to_string()
+        )
+    );
 
     fs::remove_dir_all(&root).ok();
 }

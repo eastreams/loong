@@ -63,6 +63,7 @@ pub struct SessionContext {
     pub tool_view: ToolView,
     pub workspace_root: Option<PathBuf>,
     pub active_external_skill_roots: Vec<PathBuf>,
+    pub visible_external_skill_roots: Vec<PathBuf>,
     pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
     pub subagent_execution: Option<ConstrainedSubagentExecution>,
     pub subagent_contract: Option<ConstrainedSubagentContractView>,
@@ -80,6 +81,7 @@ impl SessionContext {
             tool_view,
             workspace_root: None,
             active_external_skill_roots: Vec::new(),
+            visible_external_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -103,6 +105,7 @@ impl SessionContext {
             tool_view,
             workspace_root: None,
             active_external_skill_roots: Vec::new(),
+            visible_external_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -122,6 +125,18 @@ impl SessionContext {
         active_external_skill_roots: Vec<PathBuf>,
     ) -> Self {
         self.active_external_skill_roots = active_external_skill_roots
+            .into_iter()
+            .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+            .collect();
+        self
+    }
+
+    #[must_use]
+    pub fn with_visible_external_skill_roots(
+        mut self,
+        visible_external_skill_roots: Vec<PathBuf>,
+    ) -> Self {
+        self.visible_external_skill_roots = visible_external_skill_roots
             .into_iter()
             .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
             .collect();
@@ -478,6 +493,7 @@ struct PersistedSessionSnapshot {
     delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
     delegate_profile: Option<DelegateBuiltinProfile>,
     workspace_root: Option<PathBuf>,
+    active_external_skills: Option<active_external_skills::ActiveExternalSkillsState>,
     active_external_skill_roots: Vec<PathBuf>,
     runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
@@ -527,8 +543,10 @@ fn load_persisted_session_snapshot(
             None
         };
         let runtime_self_continuity = load_session_runtime_self_continuity(repo, session_id)?;
+        let active_external_skills =
+            load_active_external_skills_state(repo, session_id).unwrap_or_default();
         let active_external_skill_roots =
-            load_active_external_skill_roots(repo, session_id).unwrap_or_default();
+            active_external_skill_roots_from_state(active_external_skills.as_ref());
         let snapshot = PersistedSessionSnapshot {
             session_id: session.session_id,
             parent_session_id,
@@ -539,6 +557,7 @@ fn load_persisted_session_snapshot(
             delegate_runtime_narrowing,
             delegate_profile,
             workspace_root,
+            active_external_skills,
             active_external_skill_roots,
             runtime_self_continuity,
         };
@@ -576,8 +595,10 @@ fn load_persisted_session_snapshot(
         None
     };
     let runtime_self_continuity = load_session_runtime_self_continuity(repo, session_id)?;
+    let active_external_skills =
+        load_active_external_skills_state(repo, session_id).unwrap_or_default();
     let active_external_skill_roots =
-        load_active_external_skill_roots(repo, session_id).unwrap_or_default();
+        active_external_skill_roots_from_state(active_external_skills.as_ref());
     let snapshot = PersistedSessionSnapshot {
         session_id: summary.session_id,
         parent_session_id: summary.parent_session_id,
@@ -588,6 +609,7 @@ fn load_persisted_session_snapshot(
         delegate_runtime_narrowing,
         delegate_profile,
         workspace_root,
+        active_external_skills,
         active_external_skill_roots,
         runtime_self_continuity,
     };
@@ -595,17 +617,22 @@ fn load_persisted_session_snapshot(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn load_active_external_skill_roots(
+fn load_active_external_skills_state(
     repo: &SessionRepository,
     session_id: &str,
-) -> Result<Vec<PathBuf>, String> {
-    let active_skills =
-        active_external_skills::load_persisted_active_external_skills(repo, session_id)?;
+) -> Result<Option<active_external_skills::ActiveExternalSkillsState>, String> {
+    active_external_skills::load_persisted_active_external_skills(repo, session_id)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn active_external_skill_roots_from_state(
+    active_skills: Option<&active_external_skills::ActiveExternalSkillsState>,
+) -> Vec<PathBuf> {
     let Some(active_skills) = active_skills else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let mut roots = Vec::new();
-    for skill in active_skills.skills {
+    for skill in &active_skills.skills {
         let Some(skill_root) = skill.skill_root.as_deref() else {
             continue;
         };
@@ -619,7 +646,55 @@ fn load_active_external_skill_roots(
             roots.push(canonical);
         }
     }
-    Ok(roots)
+    roots
+}
+
+fn model_visible_external_skill_roots_from_config(config: &LoongConfig) -> Vec<PathBuf> {
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    crate::tools::model_visible_external_skill_roots_for_runtime_config(&tool_runtime_config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn apply_active_external_skill_blocked_tools_to_tool_view(
+    base_tool_view: ToolView,
+    active_skills: Option<&active_external_skills::ActiveExternalSkillsState>,
+) -> ToolView {
+    let Some(active_skills) = active_skills else {
+        return base_tool_view;
+    };
+
+    let mut blocked_names = BTreeSet::new();
+    for skill in &active_skills.skills {
+        for blocked_tool in &skill.blocked_tools {
+            let blocked_tool = blocked_tool.trim();
+            if blocked_tool.is_empty() {
+                continue;
+            }
+            let canonical_name = crate::tools::canonical_tool_name(blocked_tool);
+            blocked_names.insert(canonical_name.to_owned());
+            if let Some(direct_tool_name) =
+                crate::tools::direct_tool_name_for_hidden_tool(blocked_tool)
+            {
+                blocked_names.insert(direct_tool_name.to_owned());
+            }
+            if let Some(hidden_facade_tool_name) =
+                crate::tools::hidden_facade_tool_name_for_hidden_tool(blocked_tool)
+            {
+                blocked_names.insert(hidden_facade_tool_name.to_owned());
+            }
+        }
+    }
+
+    if blocked_names.is_empty() {
+        return base_tool_view;
+    }
+
+    ToolView::from_tool_names(
+        base_tool_view
+            .tool_names()
+            .filter(|tool_name| !blocked_names.contains(*tool_name)),
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -670,9 +745,13 @@ fn build_session_context_from_snapshot(
     base_tool_view: ToolView,
     snapshot: PersistedSessionSnapshot,
 ) -> CliResult<SessionContext> {
-    let tool_view = apply_session_tool_policy_to_tool_view(
-        base_tool_view,
-        snapshot.session_tool_policy.as_ref(),
+    let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
+    let tool_view = apply_active_external_skill_blocked_tools_to_tool_view(
+        apply_session_tool_policy_to_tool_view(
+            base_tool_view,
+            snapshot.session_tool_policy.as_ref(),
+        ),
+        snapshot.active_external_skills.as_ref(),
     );
     let runtime_narrowing = merge_effective_runtime_narrowing(
         snapshot.delegate_runtime_narrowing.clone(),
@@ -693,6 +772,10 @@ fn build_session_context_from_snapshot(
     if !snapshot.active_external_skill_roots.is_empty() {
         session_context =
             session_context.with_active_external_skill_roots(snapshot.active_external_skill_roots);
+    }
+    if !visible_external_skill_roots.is_empty() {
+        session_context =
+            session_context.with_visible_external_skill_roots(visible_external_skill_roots);
     }
     if snapshot.is_delegate_child {
         if let Some(label) = snapshot.label {
@@ -1417,7 +1500,13 @@ pub trait ConversationRuntime: Send + Sync {
             return Ok(session_context);
         }
 
-        Ok(SessionContext::root_with_tool_view(session_id, tool_view))
+        let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
+        let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
+        if !visible_external_skill_roots.is_empty() {
+            session_context =
+                session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+        }
+        Ok(session_context)
     }
 
     fn tool_view(
@@ -1839,16 +1928,28 @@ where
                 );
             }
 
-            Ok(SessionContext::root_with_tool_view(
-                session_id,
-                base_tool_view,
-            ))
+            let visible_external_skill_roots =
+                model_visible_external_skill_roots_from_config(config);
+            let mut session_context =
+                SessionContext::root_with_tool_view(session_id, base_tool_view);
+            if !visible_external_skill_roots.is_empty() {
+                session_context =
+                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+            }
+            Ok(session_context)
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
             let tool_view = self.tool_view(config, session_id, _binding)?;
-            Ok(SessionContext::root_with_tool_view(session_id, tool_view))
+            let visible_external_skill_roots =
+                model_visible_external_skill_roots_from_config(config);
+            let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
+            if !visible_external_skill_roots.is_empty() {
+                session_context =
+                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+            }
+            Ok(session_context)
         }
     }
 
@@ -1864,12 +1965,17 @@ where
             let snapshot = load_persisted_session_snapshot(&repo, session_id)?;
             let base_tool_view =
                 build_base_tool_view_from_snapshot(config, &repo, session_id, snapshot.as_ref())?;
-            let session_tool_policy = snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.session_tool_policy.as_ref());
-            Ok(apply_session_tool_policy_to_tool_view(
+            let tool_view = apply_session_tool_policy_to_tool_view(
                 base_tool_view,
-                session_tool_policy,
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.session_tool_policy.as_ref()),
+            );
+            Ok(apply_active_external_skill_blocked_tools_to_tool_view(
+                tool_view,
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.active_external_skills.as_ref()),
             ))
         }
 
@@ -2655,6 +2761,8 @@ mod tests {
                         display_name: "Release Guard".to_owned(),
                         instructions: "<skill_content name=\"Release Guard\">protect releases</skill_content>".to_owned(),
                         skill_root: Some("/tmp/release-guard".to_owned()),
+                        allowed_tools: vec!["shell.exec".to_owned()],
+                        blocked_tools: vec!["web.fetch".to_owned()],
                     }],
                 },
             }),
@@ -2689,6 +2797,74 @@ mod tests {
         assert!(
             system_content.contains("protect releases"),
             "expected skill instructions in system prompt, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("Allowed tools: shell.exec"),
+            "expected allowed tool summary in system prompt, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("Blocked tools: web.fetch"),
+            "expected blocked tool summary in system prompt, got: {system_content}"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_runtime_tool_view_excludes_active_external_skill_blocked_tools() {
+        let runtime = DefaultConversationRuntime::default();
+        let session_id = "session-active-external-skill-tool-block";
+        let root = unique_temp_dir("active-external-skill-tool-block");
+        let sqlite_path = root.join("memory.db");
+
+        let mut config = LoongConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+
+        let base_tool_view = crate::tools::runtime_tool_view_from_loong_config(&config);
+        assert!(
+            base_tool_view.contains("web"),
+            "default runtime should expose the direct web surface"
+        );
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: session_id.to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.append_event(NewSessionEvent {
+            session_id: session_id.to_owned(),
+            event_kind: ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+            actor_session_id: Some(session_id.to_owned()),
+            payload_json: json!({
+                "source": "test",
+                "active_external_skills": ActiveExternalSkillsState {
+                    skills: vec![ActiveExternalSkill {
+                        skill_id: "release-guard".to_owned(),
+                        display_name: "Release Guard".to_owned(),
+                        instructions: "<skill_content name=\"Release Guard\">protect releases</skill_content>".to_owned(),
+                        skill_root: Some("/tmp/release-guard".to_owned()),
+                        allowed_tools: Vec::new(),
+                        blocked_tools: vec!["web.fetch".to_owned()],
+                    }],
+                },
+            }),
+        })
+        .expect("append active skills event");
+
+        let tool_view = runtime
+            .tool_view(&config, session_id, ConversationRuntimeBinding::direct())
+            .expect("runtime tool view");
+
+        assert!(
+            !tool_view.contains("web"),
+            "blocked hidden tool should also remove its direct surface"
+        );
+        assert!(
+            tool_view.contains("read"),
+            "unrelated direct tools should remain visible"
         );
     }
 }

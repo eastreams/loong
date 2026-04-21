@@ -201,6 +201,11 @@ The direct surface should stay the normal path for common work.
 - lower-level HTTP access
 - channel-specific operator tools
 
+When the runtime advertises external skills to the model, the advertised set must
+already reflect invocation truth: hide manual-only skills and other runtime-
+ineligible skills from model-facing catalogs, lists, and inspect paths instead of
+teaching the model to invoke them and then rejecting the call later.
+
 Managed browser workflows stay under the direct `browser` surface for normal model-facing use, even when the canonical implementation routes into internal `browser.companion.*` tools.
 
 Hidden search results should prefer surface-level ids instead of spraying many

@@ -1919,12 +1919,21 @@ fn inject_active_skill_workspace_root_context_trusted(
     session_context: &SessionContext,
     preserve_existing_internal_context: bool,
 ) -> AugmentedToolPayload {
-    let Some(workspace_root) = active_skill_workspace_root_for_tool_payload(
+    let workspace_root = active_skill_workspace_root_for_tool_payload(
         canonical_tool_name,
         invoked_tool_name,
         &payload,
         session_context,
-    ) else {
+    )
+    .or_else(|| {
+        visible_skill_workspace_root_for_tool_payload(
+            canonical_tool_name,
+            invoked_tool_name,
+            &payload,
+            session_context,
+        )
+    });
+    let Some(workspace_root) = workspace_root else {
         return AugmentedToolPayload {
             payload,
             trusted_internal_context: preserve_existing_internal_context,
@@ -1961,6 +1970,49 @@ fn active_skill_workspace_root_for_tool_payload(
     } else {
         requested_file_tool_path(target_tool_name, payload)?
     };
+    if requested_path.is_absolute() {
+        let normalized_requested_path = if requested_path.exists() {
+            std::fs::canonicalize(&requested_path).unwrap_or(requested_path)
+        } else {
+            requested_path
+        };
+
+        return session_context
+            .active_external_skill_roots
+            .iter()
+            .find(|root| normalized_requested_path.starts_with(root))
+            .cloned();
+    }
+
+    resolve_active_skill_root_for_relative_path(
+        &session_context.active_external_skill_roots,
+        requested_path.as_path(),
+    )
+}
+
+fn visible_skill_workspace_root_for_tool_payload(
+    canonical_tool_name: &str,
+    invoked_tool_name: &Option<String>,
+    payload: &serde_json::Value,
+    session_context: &SessionContext,
+) -> Option<std::path::PathBuf> {
+    if session_context.visible_external_skill_roots.is_empty() {
+        return None;
+    }
+
+    let target_tool_name = invoked_tool_name.as_deref().unwrap_or(canonical_tool_name);
+    if !matches!(
+        target_tool_name,
+        "file.read" | "glob.search" | "content.search"
+    ) {
+        return None;
+    }
+
+    let requested_path = if canonical_tool_name == "tool.invoke" {
+        requested_file_tool_path("tool.invoke", payload)?
+    } else {
+        requested_file_tool_path(target_tool_name, payload)?
+    };
     if !requested_path.is_absolute() {
         return None;
     }
@@ -1972,10 +2024,25 @@ fn active_skill_workspace_root_for_tool_payload(
     };
 
     session_context
-        .active_external_skill_roots
+        .visible_external_skill_roots
         .iter()
         .find(|root| normalized_requested_path.starts_with(root))
         .cloned()
+}
+
+fn resolve_active_skill_root_for_relative_path(
+    active_skill_roots: &[std::path::PathBuf],
+    requested_path: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let mut matches = active_skill_roots
+        .iter()
+        .filter_map(|root| {
+            let candidate = root.join(requested_path);
+            candidate.exists().then(|| root.clone())
+        })
+        .collect::<Vec<_>>();
+    matches.dedup();
+    (matches.len() == 1).then(|| matches.remove(0))
 }
 
 fn requested_file_tool_path(
@@ -6758,7 +6825,7 @@ mod tests {
     fn augment_tool_payload_uses_active_skill_root_for_absolute_file_read_targets() {
         let workspace_root =
             crate::test_support::unique_temp_dir("turn-engine-active-skill-workspace");
-        let skill_root = workspace_root.join(".agents/skills/demo-skill");
+        let skill_root = workspace_root.join(".loong/skills/demo-skill");
         std::fs::create_dir_all(skill_root.join("references")).expect("create skill root");
         let reference_path = skill_root.join("references/guide.md");
         std::fs::write(&reference_path, "# Guide\n").expect("write guide");
@@ -6785,6 +6852,149 @@ mod tests {
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
                 [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
             json!(canonical_skill_root.display().to_string())
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_file_reads() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-engine-visible-skill-workspace");
+        let skill_root = workspace_root.join(".loong/skills/demo-skill");
+        std::fs::create_dir_all(&skill_root).expect("create skill root");
+        let skill_path = skill_root.join("SKILL.md");
+        std::fs::write(&skill_path, "# Demo Skill\n").expect("write skill file");
+        let canonical_skill_root =
+            std::fs::canonicalize(&skill_root).expect("canonical skill root");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+        )
+        .with_workspace_root(workspace_root)
+        .with_visible_external_skill_roots(vec![skill_root]);
+        let payload = json!({
+            "tool_id": "file.read",
+            "lease": "lease-file-read",
+            "arguments": {
+                "path": skill_path.display().to_string()
+            },
+        });
+
+        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+
+        assert_eq!(
+            augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
+            json!(canonical_skill_root.display().to_string())
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_resource_reads() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-engine-visible-skill-resource-workspace");
+        let skill_root = workspace_root.join(".loong/skills/demo-skill");
+        std::fs::create_dir_all(skill_root.join("references")).expect("create skill root");
+        let reference_path = skill_root.join("references/guide.md");
+        std::fs::write(&reference_path, "# Guide\n").expect("write guide");
+        let canonical_skill_root =
+            std::fs::canonicalize(&skill_root).expect("canonical skill root");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+        )
+        .with_workspace_root(workspace_root)
+        .with_visible_external_skill_roots(vec![skill_root]);
+        let payload = json!({
+            "tool_id": "file.read",
+            "lease": "lease-file-read",
+            "arguments": {
+                "path": reference_path.display().to_string()
+            },
+        });
+
+        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+
+        assert_eq!(
+            augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
+            json!(canonical_skill_root.display().to_string())
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_uses_unique_active_skill_root_for_relative_file_read_targets() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-engine-active-skill-relative-workspace");
+        let first_skill_root = workspace_root.join(".loong/skills/demo-skill");
+        let second_skill_root = workspace_root.join(".loong/skills/other-skill");
+        std::fs::create_dir_all(first_skill_root.join("references")).expect("create first skill");
+        std::fs::create_dir_all(second_skill_root.join("references")).expect("create second skill");
+        std::fs::write(first_skill_root.join("references/guide.md"), "# First\n")
+            .expect("write first guide");
+        std::fs::write(second_skill_root.join("references/other.md"), "# Second\n")
+            .expect("write second guide");
+        let canonical_first_skill_root =
+            std::fs::canonicalize(&first_skill_root).expect("canonical first skill root");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+        )
+        .with_workspace_root(workspace_root)
+        .with_active_external_skill_roots(vec![first_skill_root, second_skill_root]);
+        let payload = json!({
+            "tool_id": "file.read",
+            "lease": "lease-file-read",
+            "arguments": {
+                "path": "references/guide.md"
+            },
+        });
+
+        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+
+        assert_eq!(
+            augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
+            json!(canonical_first_skill_root.display().to_string())
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_does_not_guess_when_relative_file_read_matches_multiple_skill_roots() {
+        let workspace_root =
+            crate::test_support::unique_temp_dir("turn-engine-active-skill-relative-ambiguous");
+        let first_skill_root = workspace_root.join(".loong/skills/demo-skill");
+        let second_skill_root = workspace_root.join(".loong/skills/other-skill");
+        std::fs::create_dir_all(first_skill_root.join("references")).expect("create first skill");
+        std::fs::create_dir_all(second_skill_root.join("references")).expect("create second skill");
+        std::fs::write(first_skill_root.join("references/shared.md"), "# First\n")
+            .expect("write first guide");
+        std::fs::write(second_skill_root.join("references/shared.md"), "# Second\n")
+            .expect("write second guide");
+        let expected_workspace_root = workspace_root.display().to_string();
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.invoke"]),
+        )
+        .with_workspace_root(workspace_root)
+        .with_active_external_skill_roots(vec![first_skill_root, second_skill_root]);
+        let payload = json!({
+            "tool_id": "file.read",
+            "lease": "lease-file-read",
+            "arguments": {
+                "path": "references/shared.md"
+            },
+        });
+
+        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+
+        assert_eq!(
+            augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
+            json!(expected_workspace_root)
         );
     }
 }
