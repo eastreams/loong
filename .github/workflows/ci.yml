@@ -39,6 +39,7 @@ jobs:
     outputs:
       run_rust_jobs: ${{ steps.classify.outputs.run_rust_jobs }}
       run_docs_site: ${{ steps.classify.outputs.run_docs_site }}
+      touched_paths_json: ${{ steps.classify.outputs.touched_paths_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -97,7 +98,12 @@ jobs:
           bash -n scripts/test_release_workflow_hardening.sh
           bash -n scripts/test_bootstrap_release_local_artifacts.sh
           bash -n scripts/test_changed_rust_packages.sh
+          bash -n scripts/test_changed_rust_packages_runner.sh
+          bash -n scripts/run_changed_rust_ci_job.sh
+          bash -n scripts/test_run_changed_rust_ci_job.sh
           bash -n scripts/test_daemon_changed_test_targets.sh
+          bash -n scripts/run_selected_daemon_tests.sh
+          bash -n scripts/test_run_selected_daemon_tests.sh
           bash -n scripts/test_rust_changed_packages.sh
           bash -n scripts/test_ci_workflow_change_routing.sh
           bash -n scripts/test_promotion_guard_workflows.sh
@@ -124,6 +130,9 @@ jobs:
           bash scripts/test_bootstrap_release_local_artifacts.sh
           bash scripts/check_public_repo_hygiene.sh
           bash scripts/test_daemon_changed_test_targets.sh
+          bash scripts/test_changed_rust_packages_runner.sh
+          bash scripts/test_run_changed_rust_ci_job.sh
+          bash scripts/test_run_selected_daemon_tests.sh
           bash scripts/test_rust_changed_packages.sh
           bash scripts/test_ci_workflow_change_routing.sh
           bash scripts/test_promotion_guard_workflows.sh
@@ -237,7 +246,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
       - name: Test
-        run: cargo test --workspace --locked
+        shell: bash
+        env:
+          TOUCHED_PATHS_JSON: ${{ needs.changes.outputs.touched_paths_json }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: ./scripts/run_changed_rust_ci_job.sh
 
   rust-check-feature-deltas:
     needs: changes
@@ -283,7 +296,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
       - name: Test (all features)
-        run: cargo test --workspace --all-features --locked
+        shell: bash
+        env:
+          TOUCHED_PATHS_JSON: ${{ needs.changes.outputs.touched_paths_json }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: ./scripts/run_changed_rust_ci_job.sh --all-features
 
   android-termux-build:
     needs: changes

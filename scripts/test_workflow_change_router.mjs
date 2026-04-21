@@ -95,6 +95,15 @@ async function runTests() {
   const ciRenameOutputs = classifyCiJobSet(ciRenameContext);
   assert.equal(ciRenameOutputs.runRustJobs, true);
   assert.equal(ciRenameOutputs.runDocsSite, true);
+  assert.equal(
+    ciRenameOutputs.touchedPathsJson,
+    JSON.stringify([
+      "docs/runtime.md",
+      "crates/app/src/runtime.rs",
+      "README.md",
+      "site/index.mdx",
+    ]),
+  );
 
   const securityCargoConfigContext = {};
   securityCargoConfigContext.forceRun = false;

@@ -38,6 +38,11 @@ tasks:
     cmds:
       - ./scripts/test_changed_rust_packages.sh
 
+  test:changed:all-features:
+    desc: Run changed-package tests with all features enabled
+    cmds:
+      - ./scripts/test_changed_rust_packages.sh --all-features
+
   test:packages:
     desc: Run targeted package tests (example: task test:packages PACKAGES='-p loong-app -p loong-spec')
     preconditions:
@@ -71,6 +76,11 @@ tasks:
     cmds:
       - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_channels
 
+  test:daemon:feishu:
+    desc: Run the optional daemon Feishu shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_feishu
+
   test:daemon:runtime:
     desc: Run the optional daemon runtime and spec shard
     cmds:
@@ -83,6 +93,7 @@ tasks:
       - task: test:daemon:gateway
       - task: test:daemon:onboard
       - task: test:daemon:channels
+      - task: test:daemon:feishu
       - task: test:daemon:runtime
 
   test:daemon:heavy:
