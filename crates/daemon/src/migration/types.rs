@@ -386,25 +386,7 @@ pub struct DomainPreview {
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceGuidanceKind {
-    Agents,
-    Claude,
-    Gemini,
-    Opencode,
-}
-
-impl WorkspaceGuidanceKind {
-    pub const fn file_name(self) -> &'static str {
-        match self {
-            WorkspaceGuidanceKind::Agents => "AGENTS.md",
-            WorkspaceGuidanceKind::Claude => "CLAUDE.md",
-            WorkspaceGuidanceKind::Gemini => "GEMINI.md",
-            WorkspaceGuidanceKind::Opencode => "OPENCODE.md",
-        }
-    }
-}
+pub type WorkspaceGuidanceKind = mvp::workspace_guidance::WorkspaceGuidanceKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkspaceGuidanceCandidate {
