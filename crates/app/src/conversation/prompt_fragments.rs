@@ -37,6 +37,7 @@ impl std::fmt::Display for PromptFrameLayer {
 #[serde(rename_all = "snake_case")]
 pub enum PromptFrameAuthority {
     CoreSystem,
+    WorkspaceGuidance,
     RuntimeSelf,
     RuntimeIdentity,
     CapabilityContract,
@@ -49,6 +50,7 @@ impl PromptFrameAuthority {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CoreSystem => "core_system",
+            Self::WorkspaceGuidance => "workspace_guidance",
             Self::RuntimeSelf => "runtime_self",
             Self::RuntimeIdentity => "runtime_identity",
             Self::CapabilityContract => "capability_contract",
@@ -64,6 +66,7 @@ impl PromptFrameAuthority {
 pub enum PromptLane {
     TaskDirective,
     BaseSystem,
+    WorkspaceGuidance,
     RuntimeSelf,
     RuntimeIdentity,
     Continuity,
@@ -78,6 +81,7 @@ impl PromptLane {
             PromptLane::TaskDirective,
             PromptLane::Continuity,
             PromptLane::BaseSystem,
+            PromptLane::WorkspaceGuidance,
             PromptLane::RuntimeSelf,
             PromptLane::RuntimeIdentity,
             PromptLane::ExecutionDiscipline,
@@ -90,6 +94,7 @@ impl PromptLane {
         match self {
             PromptLane::TaskDirective => PromptFrameLayer::TurnEphemeralTail,
             PromptLane::BaseSystem => PromptFrameLayer::StableRuntimeGuidance,
+            PromptLane::WorkspaceGuidance => PromptFrameLayer::StableRuntimeGuidance,
             PromptLane::RuntimeSelf => PromptFrameLayer::StableRuntimeGuidance,
             PromptLane::RuntimeIdentity => PromptFrameLayer::SessionLatchedContext,
             PromptLane::Continuity => PromptFrameLayer::SessionLatchedContext,
@@ -103,6 +108,7 @@ impl PromptLane {
         match self {
             PromptLane::TaskDirective => PromptFrameAuthority::LiveTurn,
             PromptLane::BaseSystem => PromptFrameAuthority::CoreSystem,
+            PromptLane::WorkspaceGuidance => PromptFrameAuthority::WorkspaceGuidance,
             PromptLane::RuntimeSelf => PromptFrameAuthority::RuntimeSelf,
             PromptLane::RuntimeIdentity => PromptFrameAuthority::RuntimeIdentity,
             PromptLane::Continuity => PromptFrameAuthority::RuntimeSelf,
@@ -129,6 +135,7 @@ impl PromptRenderPolicy {
             },
             PromptLane::TaskDirective
             | PromptLane::BaseSystem
+            | PromptLane::WorkspaceGuidance
             | PromptLane::RuntimeSelf
             | PromptLane::RuntimeIdentity
             | PromptLane::Continuity

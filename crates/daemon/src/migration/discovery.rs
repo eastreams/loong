@@ -743,14 +743,8 @@ mod tests {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         let agents_path = workspace_root.join("AGENTS.md");
-        let claude_path = workspace_root.join("CLAUDE.md");
-        let gemini_path = workspace_root.join("GEMINI.md");
-        let opencode_path = workspace_root.join("OPENCODE.md");
 
         std::fs::write(&agents_path, "agents").expect("write AGENTS");
-        std::fs::write(&claude_path, "claude").expect("write CLAUDE");
-        std::fs::write(&gemini_path, "gemini").expect("write GEMINI");
-        std::fs::write(&opencode_path, "opencode").expect("write OPENCODE");
 
         let guidance = detect_workspace_guidance(workspace_root);
         let guidance_kinds = guidance
@@ -764,22 +758,9 @@ mod tests {
 
         assert_eq!(
             guidance_kinds,
-            vec![
-                mvp::workspace_guidance::WorkspaceGuidanceKind::Agents,
-                mvp::workspace_guidance::WorkspaceGuidanceKind::Claude,
-                mvp::workspace_guidance::WorkspaceGuidanceKind::Gemini,
-                mvp::workspace_guidance::WorkspaceGuidanceKind::Opencode,
-            ]
+            vec![mvp::workspace_guidance::WorkspaceGuidanceKind::Agents]
         );
-        assert_eq!(
-            guidance_paths,
-            vec![
-                agents_path.display().to_string(),
-                claude_path.display().to_string(),
-                gemini_path.display().to_string(),
-                opencode_path.display().to_string(),
-            ]
-        );
+        assert_eq!(guidance_paths, vec![agents_path.display().to_string()]);
     }
 
     #[test]

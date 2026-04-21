@@ -16,6 +16,7 @@ use crate::conversation::{
 use crate::runtime_identity;
 use crate::runtime_self;
 use crate::tools::{self, ToolView};
+use crate::workspace_guidance;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
@@ -106,15 +107,22 @@ fn build_base_prompt_projection_with_tool_runtime_config(
     }
 
     let workspace_root = tool_runtime_config.effective_workspace_root();
+    let workspace_guidance_model = workspace_root.map(|workspace_root| {
+        workspace_guidance::load_workspace_guidance_model_with_config(
+            workspace_root,
+            tool_runtime_config,
+        )
+    });
     let runtime_self_model = workspace_root.map(|workspace_root| {
         runtime_self::load_runtime_self_model_with_config(workspace_root, tool_runtime_config)
     });
 
-    build_base_prompt_projection_from_runtime_self_model(
+    build_base_prompt_projection_from_prompt_sources(
         config,
         include_system_prompt,
         tool_view,
         tool_runtime_config,
+        workspace_guidance_model,
         runtime_self_model,
         None,
     )
@@ -149,6 +157,17 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     }
 
     let workspace_root = tool_runtime_config.effective_workspace_root();
+    let workspace_guidance_model = match workspace_root {
+        Some(workspace_root) => Some(
+            load_workspace_guidance_model_with_binding(
+                workspace_root,
+                tool_runtime_config,
+                binding,
+            )
+            .await,
+        ),
+        None => None,
+    };
     let runtime_self_model = match workspace_root {
         Some(workspace_root) => Some(
             load_runtime_self_model_with_binding(workspace_root, tool_runtime_config, binding)
@@ -157,21 +176,23 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
         None => None,
     };
 
-    build_base_prompt_projection_from_runtime_self_model(
+    build_base_prompt_projection_from_prompt_sources(
         config,
         include_system_prompt,
         tool_view,
         tool_runtime_config,
+        workspace_guidance_model,
         runtime_self_model,
         Some(render_governed_runtime_binding_section(binding)),
     )
 }
 
-fn build_base_prompt_projection_from_runtime_self_model(
+fn build_base_prompt_projection_from_prompt_sources(
     config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+    workspace_guidance_model: Option<workspace_guidance::WorkspaceGuidanceModel>,
     runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
     extra_section: Option<String>,
 ) -> BasePromptProjection {
@@ -179,10 +200,11 @@ fn build_base_prompt_projection_from_runtime_self_model(
         return BasePromptProjection::default();
     }
 
-    let prompt_fragments = build_prompt_fragments_from_runtime_self_model(
+    let prompt_fragments = build_prompt_fragments_from_prompt_sources(
         config,
         tool_view,
         tool_runtime_config,
+        workspace_guidance_model,
         runtime_self_model,
         extra_section,
     );
@@ -208,10 +230,11 @@ fn build_base_prompt_projection_from_runtime_self_model(
     }
 }
 
-fn build_prompt_fragments_from_runtime_self_model(
+fn build_prompt_fragments_from_prompt_sources(
     config: &LoongConfig,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+    workspace_guidance_model: Option<workspace_guidance::WorkspaceGuidanceModel>,
     runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
     extra_section: Option<String>,
 ) -> Vec<PromptFragment> {
@@ -221,6 +244,9 @@ fn build_prompt_fragments_from_runtime_self_model(
         tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
     let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let execution_discipline_section = render_execution_discipline_section();
+    let workspace_guidance_section = workspace_guidance_model
+        .as_ref()
+        .and_then(workspace_guidance::render_workspace_guidance_section);
     let runtime_self_section = runtime_self_model
         .as_ref()
         .and_then(runtime_self::render_runtime_self_section);
@@ -247,6 +273,19 @@ fn build_prompt_fragments_from_runtime_self_model(
         .with_cacheable(true);
 
         prompt_fragments.push(base_fragment);
+    }
+
+    if let Some(section) = workspace_guidance_section {
+        let workspace_guidance_fragment = PromptFragment::new(
+            "workspace-guidance",
+            PromptLane::WorkspaceGuidance,
+            "workspace-guidance",
+            section,
+            ContextArtifactKind::RuntimeContract,
+        )
+        .with_cacheable(true);
+
+        prompt_fragments.push(workspace_guidance_fragment);
     }
 
     if let Some(section) = runtime_self_section {
@@ -371,6 +410,50 @@ fn render_execution_discipline_section() -> String {
     ];
 
     lines.join("\n")
+}
+
+async fn load_workspace_guidance_model_with_binding(
+    workspace_root: &Path,
+    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+    binding: ProviderRuntimeBinding<'_>,
+) -> workspace_guidance::WorkspaceGuidanceModel {
+    let Some(kernel_ctx) = binding.kernel_context() else {
+        return workspace_guidance::load_workspace_guidance_model_with_config(
+            workspace_root,
+            tool_runtime_config,
+        );
+    };
+
+    let source_candidates =
+        workspace_guidance::workspace_guidance_source_candidates(workspace_root);
+    let mut loaded_paths = BTreeSet::new();
+    let mut model = workspace_guidance::WorkspaceGuidanceModel::default();
+    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
+
+    for source_path in source_candidates {
+        let maybe_content =
+            read_workspace_guidance_source_via_kernel(workspace_root, &source_path, kernel_ctx)
+                .await;
+        let Some(content) = maybe_content else {
+            continue;
+        };
+
+        let budget_was_exhausted = remaining_total_chars == 0;
+        let appended_content = workspace_guidance::ingest_workspace_guidance_source(
+            &mut model,
+            &mut loaded_paths,
+            &mut remaining_total_chars,
+            &source_path,
+            content.as_str(),
+            tool_runtime_config,
+        );
+
+        if budget_was_exhausted && appended_content {
+            break;
+        }
+    }
+
+    model
 }
 
 fn render_deferred_tool_text_workflow_section_if_needed(config: &LoongConfig) -> Option<String> {
@@ -525,7 +608,31 @@ async fn read_runtime_self_source_via_kernel(
     path: &Path,
     kernel_ctx: &KernelContext,
 ) -> Option<String> {
-    let request_path = runtime_self::runtime_self_source_request_path(workspace_root, path)?;
+    let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
+    let request = ToolCoreRequest {
+        tool_name: "file.read".to_owned(),
+        payload: json!({
+            "path": request_path,
+        }),
+    };
+
+    let outcome = tools::execute_tool(request, kernel_ctx).await.ok()?;
+    let payload_content = outcome.payload.get("content")?;
+    let content = payload_content.as_str()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.to_owned())
+}
+
+async fn read_workspace_guidance_source_via_kernel(
+    workspace_root: &Path,
+    path: &Path,
+    kernel_ctx: &KernelContext,
+) -> Option<String> {
+    let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({
@@ -951,20 +1058,24 @@ mod tests {
     use crate::test_support::TurnTestHarness;
     use tempfile::tempdir;
 
-    fn runtime_self_system_content(messages: &[Value]) -> &str {
-        let runtime_self_message = messages
+    fn system_prompt_content(messages: &[Value]) -> &str {
+        let system_message = messages
             .iter()
-            .find(|message| {
-                message["role"] == "system"
-                    && message["content"]
-                        .as_str()
-                        .is_some_and(|content| content.contains("## Runtime Self Context"))
-            })
-            .expect("runtime self system message");
+            .find(|message| message["role"] == "system")
+            .expect("system prompt message");
 
-        runtime_self_message["content"]
+        system_message["content"]
             .as_str()
-            .expect("runtime self content")
+            .expect("system prompt content")
+    }
+
+    fn workspace_guidance_system_content(messages: &[Value]) -> &str {
+        let system_content = system_prompt_content(messages);
+        assert!(
+            system_content.contains("## Workspace Guidance"),
+            "workspace guidance section should be present"
+        );
+        system_content
     }
 
     #[test]
@@ -1127,7 +1238,7 @@ mod tests {
 
         let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
-        let system_content = runtime_self_system_content(&messages);
+        let system_content = workspace_guidance_system_content(&messages);
 
         assert!(system_content.contains(agents_text));
 
@@ -1172,7 +1283,7 @@ mod tests {
 
         let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
-        let runtime_self_content = runtime_self_system_content(&messages);
+        let runtime_self_content = workspace_guidance_system_content(&messages);
 
         assert!(runtime_self_content.contains(agents_text));
 
@@ -1253,12 +1364,11 @@ mod tests {
 
         let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
-        let runtime_self_content = runtime_self_system_content(&messages);
+        let system_content = system_prompt_content(&messages);
 
-        assert!(runtime_self_content.contains(&agents_text));
-        assert!(runtime_self_content.contains("runtime self source truncated"));
-        assert!(runtime_self_content.contains("USER.md"));
-        assert!(runtime_self_content.contains("remaining total budget"));
+        assert!(system_content.contains(&agents_text));
+        assert!(system_content.contains("workspace guidance source truncated"));
+        assert!(system_content.contains("remaining total budget"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1283,11 +1393,11 @@ mod tests {
 
         let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
         let messages = build_base_messages_with_binding(&config, true, binding).await;
-        let runtime_self_content = runtime_self_system_content(&messages);
+        let system_content = system_prompt_content(&messages);
 
-        assert!(runtime_self_content.contains(&agents_text));
-        assert!(runtime_self_content.contains("runtime self truncated"));
-        assert!(!runtime_self_content.contains(raw_user_prefix));
+        assert!(system_content.contains(&agents_text));
+        assert!(system_content.contains("workspace guidance truncated"));
+        assert!(!system_content.contains(raw_user_prefix));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1303,7 +1413,7 @@ mod tests {
 
         let advisory_messages =
             build_base_messages_with_binding(&config, true, ProviderRuntimeBinding::direct()).await;
-        let advisory_content = runtime_self_system_content(&advisory_messages);
+        let advisory_content = system_prompt_content(&advisory_messages);
         assert!(advisory_content.contains("## Governed Runtime Binding"));
         assert!(advisory_content.contains("session_mode: advisory_only"));
         assert!(advisory_content.contains("kernel_binding: absent"));
@@ -1314,7 +1424,7 @@ mod tests {
             ProviderRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await;
-        let mutating_content = runtime_self_system_content(&mutating_messages);
+        let mutating_content = system_prompt_content(&mutating_messages);
         assert!(mutating_content.contains("## Governed Runtime Binding"));
         assert!(mutating_content.contains("session_mode: mutating_capable"));
         assert!(mutating_content.contains("kernel_binding: present"));
@@ -1508,9 +1618,10 @@ mod tests {
         .expect("system message");
         let system_content = system_message["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Runtime Self Context"));
-        assert!(system_content.contains("### Standing Instructions"));
+        assert!(system_content.contains("## Workspace Guidance"));
         assert!(system_content.contains(agents_text));
+        assert!(system_content.contains("## Runtime Self Context"));
+        assert!(!system_content.contains("### Standing Instructions"));
         assert!(system_content.contains("### Tool Usage Policy"));
         assert!(system_content.contains(tools_text));
         assert!(system_content.contains("### Soul Guidance"));
@@ -1551,7 +1662,7 @@ mod tests {
         .expect("system message");
         let system_content = system_message["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Runtime Self Context"));
+        assert!(system_content.contains("## Workspace Guidance"));
         assert!(system_content.contains(agents_text));
         assert!(system_content.contains("## Resolved Runtime Identity"));
         assert!(system_content.contains("Legacy build copilot"));
@@ -2051,10 +2162,10 @@ mod tests {
         let messages = build_messages_for_session(&config, "runtime-self-budget-session", true)
             .expect("build messages");
 
-        let runtime_self_content = runtime_self_system_content(&messages);
+        let system_content = workspace_guidance_system_content(&messages);
 
-        assert!(runtime_self_content.contains(prefix));
-        assert!(runtime_self_content.contains("runtime self source truncated"));
-        assert!(!runtime_self_content.contains(tail_marker));
+        assert!(system_content.contains(prefix));
+        assert!(system_content.contains("workspace guidance source truncated"));
+        assert!(!system_content.contains(tail_marker));
     }
 }

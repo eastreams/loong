@@ -123,37 +123,32 @@ Progressive disclosure hierarchy:
 
 | Tier | Files | Loading |
 |------|-------|---------|
-| Hot | `AGENTS.md` / `CLAUDE.md` | Auto-loaded every session |
+| Hot | `AGENTS.md` | Auto-loaded every session |
 | Specialized | Design docs, domain indices | Loaded when working on that domain |
 | Cold | Roadmap, reliability, and knowledge-base specs/plans | Accessed on demand |
 
 ### Workspace Guidance Taxonomy
 
-Loong now treats workspace guidance as a named source family rather than a pile
-of unrelated filenames.
+Loong's runtime guidance contract is now explicit and narrow:
 
-- `AGENTS.md` and `CLAUDE.md` are the runtime-visible hot guidance files.
-- `GEMINI.md` and `OPENCODE.md` may still be detected by onboarding/import
-  flows, but they are not part of the runtime prompt surface.
-- runtime prompt assembly keeps using the existing runtime-self projection for
-  `AGENTS.md` / `CLAUDE.md` in the current phase, so prompt behavior does not
-  drift just because the taxonomy became explicit.
+- `AGENTS.md` is the only runtime-visible workspace-guidance file.
+- other ecosystem files such as `CLAUDE.md`, `GEMINI.md`, and `OPENCODE.md`
+  are not runtime inputs for Loong.
 - runtime-specific files such as `TOOLS.md`, `SOUL.md`, `IDENTITY.md`, and
   `USER.md` remain separate from workspace guidance even when they are loaded
   from the same workspace root.
 
 ### Current Runtime Boundary
 
-Today the shared taxonomy is used in two different ways:
+Today the runtime and daemon are aligned on one rule:
 
-- `crates/app` uses the runtime-visible subset (`AGENTS.md`, `CLAUDE.md`) while
-  preserving the current prompt assembly contract and continuity behavior.
-- `crates/daemon` uses the wider import-detection subset to describe migration
-  and onboarding surfaces without silently widening runtime prompt inputs.
+- `crates/app` loads `AGENTS.md` as the runtime workspace-guidance surface.
+- `crates/daemon` only surfaces `AGENTS.md` in onboarding/import previews for
+  workspace-guidance detection.
 
-This split is intentional. It keeps the repository's hot guidance files visible
-to the runtime while preventing tool-ecosystem compatibility files from being
-accidentally promoted into the provider-facing prompt.
+This split keeps the runtime contract simple and avoids silently promoting
+provider- or tool-specific foreign guidance files into Loong's provider-facing
+prompt.
 
 ---
 
