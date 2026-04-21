@@ -676,8 +676,11 @@ mod tests {
             profile: Some(ConstrainedSubagentProfile::for_child_depth(1, 2)),
         };
         let continuity = RuntimeSelfContinuity {
+            workspace_guidance: crate::workspace_guidance::WorkspaceGuidanceModel {
+                entries: vec!["Keep continuity explicit.".to_owned()],
+            },
             runtime_self: RuntimeSelfModel {
-                standing_instructions: vec!["Keep continuity explicit.".to_owned()],
+                standing_instructions: Vec::new(),
                 tool_usage_policy: vec!["Search memory before guessing workspace facts.".to_owned()],
                 soul_guidance: vec!["Prefer rigorous execution.".to_owned()],
                 identity_context: vec!["# Identity\n- Name: Child".to_owned()],

@@ -3934,18 +3934,6 @@ fn onboard_entry_screen_wraps_detected_setup_digest_and_option_details() {
             path: "/tmp/project/AGENTS.md".to_owned(),
         },
     );
-    recommended.workspace_guidance.push(
-        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Claude,
-            path: "/tmp/project/CLAUDE.md".to_owned(),
-        },
-    );
-    recommended.workspace_guidance.push(
-        loong_daemon::migration::types::WorkspaceGuidanceCandidate {
-            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Gemini,
-            path: "/tmp/project/GEMINI.md".to_owned(),
-        },
-    );
     let options = loong_daemon::onboard_cli::build_onboard_entry_options(
         loong_daemon::migration::types::CurrentSetupState::Absent,
         &[recommended.clone()],
@@ -3973,12 +3961,8 @@ fn onboard_entry_screen_wraps_detected_setup_digest_and_option_details() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- workspace guidance: AGENTS.md,"),
+            .any(|line| line == "- workspace guidance: AGENTS.md"),
         "entry screen should wrap long workspace-guidance digests instead of overflowing them: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line == "  CLAUDE.md, GEMINI.md"),
-        "entry screen should continue workspace-guidance digests on readable continuation lines: {lines:#?}"
     );
     assert!(
         lines

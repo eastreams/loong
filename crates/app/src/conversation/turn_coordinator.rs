@@ -8225,6 +8225,9 @@ mod tests {
         .expect("create child session");
 
         let stored_continuity = runtime_self_continuity::RuntimeSelfContinuity {
+            workspace_guidance: crate::workspace_guidance::WorkspaceGuidanceModel {
+                entries: vec!["Keep standing instructions visible.".to_owned()],
+            },
             runtime_self: crate::runtime_self::RuntimeSelfModel {
                 identity_context: vec![stored_identity_text.to_owned()],
                 ..Default::default()
