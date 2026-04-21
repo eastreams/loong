@@ -21,14 +21,47 @@ fn read_provider_request(stream: &mut TcpStream) -> String {
     stream
         .set_read_timeout(Some(MOCK_PROVIDER_STREAM_READ_TIMEOUT))
         .expect("set provider stream read timeout");
-    let mut request_buffer = [0_u8; 8192];
-    let request_len = stream
-        .read(&mut request_buffer)
-        .expect("read provider request");
-    let request_bytes = request_buffer
-        .get(..request_len)
-        .expect("provider request length should fit within the read buffer");
-    String::from_utf8_lossy(request_bytes).into_owned()
+    let mut request_bytes = Vec::new();
+    let mut request_buffer = [0_u8; 4096];
+    let mut expected_len = None;
+
+    loop {
+        let request_len = stream
+            .read(&mut request_buffer)
+            .expect("read provider request");
+        if request_len == 0 {
+            break;
+        }
+        request_bytes.extend_from_slice(&request_buffer[..request_len]);
+
+        if expected_len.is_none()
+            && let Some(headers_end) = request_bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+        {
+            let headers_end = headers_end + 4;
+            let headers = String::from_utf8_lossy(&request_bytes[..headers_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if !name.eq_ignore_ascii_case("content-length") {
+                        return None;
+                    }
+                    value.trim().parse::<usize>().ok()
+                })
+                .unwrap_or(0);
+            expected_len = Some(headers_end + content_length);
+        }
+
+        if let Some(expected_len) = expected_len
+            && request_bytes.len() >= expected_len
+        {
+            break;
+        }
+    }
+
+    String::from_utf8_lossy(&request_bytes).into_owned()
 }
 
 enum MockProviderServerControl {
