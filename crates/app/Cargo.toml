@@ -81,7 +81,7 @@ base64.workspace = true
 bech32.workspace = true
 aws-config = { version = "1.8.15", optional = true }
 aws-credential-types = { version = "1.2.14", optional = true }
-aws-sigv4 = { version = "1.4.2", optional = true }
+aws-sigv4 = { version = "1.4.3", optional = true }
 http = { version = "1.4.0", optional = true }
 time.workspace = true
 http-body = "1"
