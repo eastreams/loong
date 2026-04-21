@@ -74,9 +74,6 @@ pub(crate) fn collect_active_external_skills_from_tool_result_text_with_config(
         if crate::tools::canonical_tool_name(tool_result_line.tool_name()) != "file.read" {
             continue;
         }
-        if tool_result_line.payload_truncated() {
-            continue;
-        }
         let Some(payload_json) = tool_result_line.payload_summary_json() else {
             continue;
         };
@@ -366,6 +363,66 @@ mod tests {
                 .instructions
                 .contains("<skill_content name=\"Demo Skill\""),
             "skill file reads should synthesize structured activation instructions"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_active_external_skills_from_truncated_skill_file_read_activates_visible_skill() {
+        let root = unique_temp_dir("loong-active-skill-file-read-truncated");
+        fs::create_dir_all(root.join(".loong/skills/demo-skill")).expect("create skill root");
+        let skill_path = root.join(".loong/skills/demo-skill/SKILL.md");
+        let long_body = format!(
+            "---\nname: demo-skill\ndescription: Use this skill for demo verification.\ninvocation_policy: both\n---\n\n# Demo Skill\n\n{}\n",
+            "Follow the demo workflow.\n".repeat(40)
+        );
+        fs::write(&skill_path, long_body).expect("write skill file");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root.clone()),
+            external_skills: ExternalSkillsRuntimePolicy {
+                enabled: true,
+                require_download_approval: true,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
+                install_root: None,
+                auto_expose_installed: false,
+            },
+            ..Default::default()
+        };
+        let tool_result_text = format!(
+            "[ok] {}",
+            serde_json::json!({
+                "status": "ok",
+                "tool": "file.read",
+                "tool_call_id": "call-1",
+                "payload_summary": serde_json::to_string(&serde_json::json!({
+                    "path": skill_path.display().to_string(),
+                    "bytes": 1200,
+                    "truncated": false,
+                    "content_preview": "preview",
+                    "content_chars": 1200,
+                    "content_truncated": true
+                }))
+                .expect("encode payload"),
+                "payload_chars": 180,
+                "payload_truncated": true
+            })
+        );
+
+        let active_skills = collect_active_external_skills_from_tool_result_text_with_config(
+            tool_result_text.as_str(),
+            &config,
+        );
+
+        assert_eq!(active_skills.len(), 1);
+        assert_eq!(active_skills[0].skill_id, "demo-skill");
+        assert!(
+            active_skills[0]
+                .instructions
+                .contains("<skill_content name=\"Demo Skill\""),
+            "truncated file.read summaries should still activate visible skills from path context"
         );
 
         fs::remove_dir_all(&root).ok();
