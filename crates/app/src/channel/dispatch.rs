@@ -2904,14 +2904,16 @@ pub async fn run_background_channel_with_stop(
         "whatsapp" => {
             #[cfg(feature = "channel-whatsapp")]
             {
-                return run_whatsapp_channel_with_stop(
-                    resolved_path,
-                    config,
-                    account_id,
-                    stop,
-                    initialize_runtime_environment,
-                )
-                .await;
+                Box::pin(async move {
+                    crate::channel::whatsapp::run_whatsapp_channel_with_stop(
+                        resolved_path,
+                        config,
+                        account_id.as_deref(),
+                        stop,
+                        initialize_runtime_environment,
+                    )
+                    .await
+                })
             }
             #[cfg(not(feature = "channel-whatsapp"))]
             {
@@ -2927,7 +2929,24 @@ pub async fn run_background_channel_with_stop(
                 );
             }
         }
-        _ => Err(format!("unsupported background channel `{channel_id}`")),
+        "qqbot" => Box::pin(async move {
+            crate::channel::qqbot::run_qqbot_channel_with_stop(
+                resolved_path,
+                config,
+                account_id.as_deref(),
+                stop,
+                initialize_runtime_environment,
+            )
+            .await
+        }),
+        _ => {
+            let unsupported_channel_id = channel_id.to_owned();
+            Box::pin(async move {
+                Err(format!(
+                    "unsupported background channel `{unsupported_channel_id}`"
+                ))
+            })
+        }
     }
 }
 
@@ -3664,6 +3683,7 @@ fn resolve_channel_acp_turn_hints(
         ChannelPlatform::Onebot => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::WhatsApp => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::Irc => Ok(ChannelResolvedAcpTurnHints::default()),
+        ChannelPlatform::Qqbot => Ok(ChannelResolvedAcpTurnHints::default()),
     }
 }
 

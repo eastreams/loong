@@ -43,8 +43,7 @@ use super::{
 };
 #[allow(unused_imports)]
 pub use bridge::{
-    ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
 };
 
 #[path = "registry_bridge.rs"]
@@ -73,14 +72,15 @@ pub use super::catalog::{
     ChannelDoctorCheckTrigger, ChannelDoctorOperationSpec, ChannelOnboardingDescriptor,
     ChannelOnboardingStrategy, ChannelOperationDescriptor, ChannelRuntimeCommandDescriptor,
     FEISHU_RUNTIME_COMMAND_DESCRIPTOR, LINE_RUNTIME_COMMAND_DESCRIPTOR,
-    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
-    WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
-    WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, list_channel_catalog,
-    normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, QQBOT_RUNTIME_COMMAND_DESCRIPTOR,
+    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
+    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+    catalog_only_channel_entries, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub(crate) use super::catalog::{
     catalog_only_channel_entries_from, resolve_channel_selection_order,
@@ -576,6 +576,146 @@ const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
     status_command: "loong doctor",
     repair_command: Some("loong feishu onboard"),
 };
+
+const QQBOT_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
+pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "feishu",
+        default_send_target_kind: ChannelCatalogTargetKind::ReceiveId,
+        send: QQBOT_SEND_OPERATION,
+        serve: QQBOT_SERVE_OPERATION,
+    };
+pub const QQBOT_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: QQBOT_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const QQBOT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["qqbot.enabled", "qqbot.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const QQBOT_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_id",
+        label: "qq bot app id",
+        config_paths: &["qqbot.app_id", "qqbot.accounts.<account>.app_id"],
+        env_pointer_paths: &["qqbot.app_id_env", "qqbot.accounts.<account>.app_id_env"],
+        default_env_var: None,
+    };
+
+const QQBOT_CLIENT_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "client_secret",
+        label: "qq bot client secret",
+        config_paths: &[
+            "qqbot.client_secret",
+            "qqbot.accounts.<account>.client_secret",
+        ],
+        env_pointer_paths: &[
+            "qqbot.client_secret_env",
+            "qqbot.accounts.<account>.client_secret_env",
+        ],
+        default_env_var: None,
+    };
+
+const QQBOT_ALLOWED_PEER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_peer_ids",
+        label: "allowed peer ids",
+        config_paths: &[
+            "qqbot.allowed_peer_ids",
+            "qqbot.accounts.<account>.allowed_peer_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const QQBOT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[QQBOT_ENABLED_REQUIREMENT, QQBOT_APP_ID_REQUIREMENT];
+
+const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[QQBOT_ENABLED_REQUIREMENT, QQBOT_APP_ID_REQUIREMENT];
+
+const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "gateway send",
+    command: "qqbot-send",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: false,
+    requirements: QQBOT_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "gateway reply loop",
+    command: "qqbot-serve",
+    availability: ChannelCatalogOperationAvailability::Stub,
+    tracks_runtime: true,
+    requirements: QQBOT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "qqbot bridge send contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
+const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "qqbot bridge serve contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
+const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: QQBOT_SEND_OPERATION,
+        doctor_checks: QQBOT_SEND_DOCTOR_CHECKS,
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: QQBOT_SERVE_OPERATION,
+        doctor_checks: QQBOT_SERVE_DOCTOR_CHECKS,
+    },
+];
+
+const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "configure qqbot or lark app credentials, allowed chat ids, and either webhook secrets or mode = \"websocket\" in loongclaw.toml under qqbot or qqbot.accounts.<account>",
+    status_command: "loongclaw doctor",
+    repair_command: None,
+};
+
+pub(crate) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "qqbot",
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: QQBOT_COMMAND_FAMILY_DESCRIPTOR,
+        }),
+        snapshot_builder: None,
+        selection_order: 36,
+        selection_label: "qq gateway bot",
+        blurb: "Plugin-backed QQ Bot surface for official gateway bots and compatible bridge plugins.",
+        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+        capabilities: QQBOT_CAPABILITIES,
+        label: "QQ Bot",
+        aliases: &["qq", "qq-bot", "tencent-qq"],
+        transport: "qq_official_bot_gateway_or_plugin_bridge",
+        onboarding: QQBOT_ONBOARDING_DESCRIPTOR,
+        operations: QQBOT_OPERATIONS,
+    };
 
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,

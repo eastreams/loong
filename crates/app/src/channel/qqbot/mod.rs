@@ -1,22 +1,25 @@
 mod message_manager;
 mod token_manager;
 mod websocket_manager;
-
-use std::path::PathBuf;
-
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::commands::ChannelCommandContext;
 use crate::channel::runtime::serve::ChannelServeStopHandle;
 use crate::config::{
-    ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedQqbotChannelConfig,
+    ChannelDefaultAccountSelectionSource, LoongConfig, ResolvedQqbotChannelConfig,
 };
 use crate::context::DEFAULT_TOKEN_TTL_S;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing;
 
 use self::message_manager::QqbotMsgManager;
 use self::token_manager::QqbotTokenManager;
 use self::websocket_manager::QqbotWebsocketManager;
+
+use std::time::Duration;
 
 /// One-time send command: `loong qqbot-send`.
 pub(super) async fn run_qqbot_send(
@@ -47,7 +50,7 @@ pub(super) async fn run_qqbot_send(
 
 /// Long-running serve command: `loong qqbot-serve`.
 pub(super) async fn run_qqbot_channel(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved: &ResolvedQqbotChannelConfig,
     resolved_path: &std::path::Path,
     selected_by_default: bool,
@@ -77,16 +80,27 @@ pub(super) async fn run_qqbot_channel(
     let account_id = resolved.account.id.clone();
     let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(10);
 
-    let msg_manager = QqbotMsgManager::new(
+    let msg_manager = Arc::new(Mutex::new(QqbotMsgManager::new(
         config.clone(),
         resolved_path.to_path_buf(),
         resolved.clone(),
         kernel_ctx,
         account_id.clone(),
         outbound_tx,
-    );
+    )));
 
-    let mut ws_manager = QqbotWebsocketManager::new(
+    // Spawn a background task to drain and process the message queue.
+    // This keeps the WebSocket event loop lightweight and avoids stacking
+    // the deep AI pipeline on top of the async select! state machine.
+    let process_mgr = Arc::clone(&msg_manager);
+    tokio::spawn(async move {
+        loop {
+            process_mgr.lock().await.process_all().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    let mut ws_manager = Box::new(QqbotWebsocketManager::new(
         resolved.clone(),
         token_mgr,
         http_client,
@@ -94,7 +108,7 @@ pub(super) async fn run_qqbot_channel(
         msg_manager,
         outbound_rx,
         policy,
-    );
+    ));
 
     tokio::select! {
         result = ws_manager.run_session() => result,
@@ -119,13 +133,11 @@ pub(super) async fn run_qqbot_channel_with_context(
             Some(context.resolved_path.as_path()),
         );
     }
-
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
         "channel-qqbot",
         DEFAULT_TOKEN_TTL_S,
         &context.config,
     )?;
-
     run_qqbot_channel(
         &context.config,
         &context.resolved,
@@ -140,7 +152,7 @@ pub(super) async fn run_qqbot_channel_with_context(
 
 pub(super) async fn run_qqbot_channel_with_stop(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
@@ -151,7 +163,7 @@ pub(super) async fn run_qqbot_channel_with_stop(
 
 fn build_qqbot_command_context(
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
     let resolved = config.qqbot.resolve_account(account_id)?;

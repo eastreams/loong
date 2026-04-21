@@ -24,9 +24,8 @@ pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::bridge::{
-    OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
-    ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
-    WeixinAccountConfig, WeixinChannelConfig,
+    OnebotAccountConfig, OnebotChannelConfig, ResolvedOnebotChannelConfig,
+    ResolvedWeixinChannelConfig, WeixinAccountConfig, WeixinChannelConfig,
 };
 #[allow(unused_imports)]
 pub use channels::{
@@ -39,20 +38,20 @@ pub use channels::{
     IrcAccountConfig, IrcChannelConfig, LineAccountConfig, LineChannelConfig, MatrixAccountConfig,
     MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
     NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, NostrAccountConfig, NostrChannelConfig,
-    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
-    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
-    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
-    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
-    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, SynologyChatAccountConfig,
-    SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig, TelegramAccountConfig,
-    TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig, TlonChannelConfig,
-    TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig, WebhookChannelConfig,
-    WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig, WhatsappAccountConfig,
-    WhatsappChannelConfig,
+    QqbotAccountConfig, QqbotChannelConfig, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedQqbotChannelConfig,
+    ResolvedSignalChannelConfig, ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig,
+    ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig,
+    ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig,
+    ResolvedWhatsappChannelConfig, SignalAccountConfig, SignalChannelConfig, SlackAccountConfig,
+    SlackChannelConfig, SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig,
+    TeamsChannelConfig, TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode,
+    TlonAccountConfig, TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig,
+    WebhookAccountConfig, WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig,
+    WecomChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{

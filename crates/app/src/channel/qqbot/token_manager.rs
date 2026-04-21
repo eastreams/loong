@@ -1,12 +1,12 @@
+use std::fmt::format;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use serde_json::json;
-use tokio::sync::RwLock;
 
 use crate::CliResult;
 use crate::channel::core::http::{read_json_or_text_response, validate_outbound_http_target};
 use crate::channel::http::ChannelOutboundHttpPolicy;
+use serde_json::json;
+use tokio::sync::RwLock;
 
 /// Seconds before token expiry to proactively refresh.
 const TOKEN_REFRESH_LEEWAY_S: u64 = 50;
@@ -65,19 +65,22 @@ impl QqbotTokenManager {
             "appId": self.app_id,
             "clientSecret": self.client_secret,
         });
-
         let resp = self
             .http_client
             .post(request_url)
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("qqbot token request failed: {e}"))?;
-
+            .map_err(|e| format!("qqbot token request failed: {e}"));
+        let resp = match resp {
+            Ok(res) => res,
+            Err(e) => {
+                return Err(e);
+            }
+        };
         let (status, body, payload) = read_json_or_text_response(resp, "qqbot token").await?;
         if status.is_success() {
             let token_resp = parse_qqbot_token_response(&payload)?;
-
             let mut cache = self.current_token.write().await;
             let token_val = token_resp.access_token.clone();
             *cache = Some(token_resp);
@@ -114,9 +117,14 @@ fn parse_qqbot_token_response(payload: &serde_json::Value) -> CliResult<QqbotAcc
         .ok_or_else(|| format!("qqbot token response missing access_token: {payload}"))?;
     let expires_in = payload
         .get("expires_in")
-        .and_then(serde_json::Value::as_u64)
+        .and_then(serde_json::Value::as_str)
         .ok_or_else(|| format!("qqbot token response missing expires_in: {payload}"))?;
-    let expires_at = Instant::now() + Duration::from_secs(expires_in);
+    let expires_at = Instant::now()
+        + Duration::from_secs(
+            expires_in
+                .parse::<u64>()
+                .map_err(|e| format!("qqbot token expires_in convert err: {e}"))?,
+        );
     Ok(QqbotAccessToken {
         access_token: access_token.to_owned(),
         expires_at,

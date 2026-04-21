@@ -13,7 +13,7 @@ use crate::channel::core::types::{
 };
 use crate::channel::process_inbound_with_provider;
 use crate::channel::runtime::turn_feedback::ChannelTurnFeedbackPolicy;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 use crate::config::ResolvedQqbotChannelConfig;
 
 /// Outbound message to be sent via the WebSocket manager.
@@ -28,18 +28,19 @@ const MAX_QUEUE_CAPACITY: usize = 3;
 
 /// Manages inbound message queue and serial processing.
 pub(super) struct QqbotMsgManager {
-    config: LoongClawConfig,
+    config: LoongConfig,
     resolved_path: PathBuf,
     resolved: ResolvedQqbotChannelConfig,
     kernel_ctx: KernelContext,
     account_id: String,
     outbound_tx: mpsc::Sender<QqbotOutboundMessage>,
     queue: VecDeque<Value>,
+    ready_session_id: Option<String>,
 }
 
 impl QqbotMsgManager {
     pub(super) fn new(
-        config: LoongClawConfig,
+        config: LoongConfig,
         resolved_path: PathBuf,
         resolved: ResolvedQqbotChannelConfig,
         kernel_ctx: KernelContext,
@@ -54,6 +55,7 @@ impl QqbotMsgManager {
             account_id,
             outbound_tx,
             queue: VecDeque::with_capacity(MAX_QUEUE_CAPACITY + 1),
+            ready_session_id: None,
         }
     }
 
@@ -82,49 +84,60 @@ impl QqbotMsgManager {
         }
     }
 
+    /// Take the session_id from a ReadyEvent if one was processed.
+    pub(super) fn take_ready_session_id(&mut self) -> Option<String> {
+        self.ready_session_id.take()
+    }
+
     async fn process_single(&mut self, payload: &Value) -> CliResult<()> {
         let event = parse_qqbot_ws_frame(payload)?;
-        if !matches!(event, QqBotWsEvent::C2cMessage(_)) {
-            return Ok(());
+        match event {
+            QqBotWsEvent::C2cMessage(data) => {
+                let inbound = build_qqbot_inbound_message(&data, &self.account_id)?;
+                let reply = process_inbound_with_provider(
+                    &self.config,
+                    Some(&self.resolved_path),
+                    &inbound,
+                    &self.kernel_ctx,
+                    ChannelTurnFeedbackPolicy::final_trace_significant(),
+                )
+                .await?;
+
+                let openid = inbound.session.conversation_id.clone();
+                if self
+                    .outbound_tx
+                    .send(QqbotOutboundMessage {
+                        openid,
+                        text: reply,
+                    })
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        account_id = %self.account_id,
+                        "qqbot outbound channel closed"
+                    );
+                }
+
+                Ok(())
+            }
+            QqBotWsEvent::ReadyEvent(session_id) => {
+                self.ready_session_id = Some(session_id);
+                tracing::info!(
+                    account_id = %self.account_id,
+                    "qqbot ready event processed"
+                );
+                Ok(())
+            }
+            _ => Ok(()),
         }
-
-        let QqBotWsEvent::C2cMessage(data) = event else {
-            return Ok(());
-        };
-
-        let inbound = build_qqbot_inbound_message(&data, &self.account_id)?;
-        let reply = process_inbound_with_provider(
-            &self.config,
-            Some(&self.resolved_path),
-            &inbound,
-            &self.kernel_ctx,
-            ChannelTurnFeedbackPolicy::final_trace_significant(),
-        )
-        .await?;
-
-        let openid = inbound.session.conversation_id.clone();
-        if self
-            .outbound_tx
-            .send(QqbotOutboundMessage {
-                openid,
-                text: reply,
-            })
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                account_id = %self.account_id,
-                "qqbot outbound channel closed"
-            );
-        }
-
-        Ok(())
     }
 }
 
 /// Parsed QQBot WebSocket event.
 enum QqBotWsEvent {
     C2cMessage(Value),
+    ReadyEvent(String),
     #[allow(dead_code)]
     HeartbeatInterval(u64),
     #[allow(dead_code)]
@@ -144,6 +157,14 @@ fn parse_qqbot_ws_frame(raw: &Value) -> CliResult<QqBotWsEvent> {
             let data = raw.get("d").cloned().unwrap_or(Value::Null);
             match event_type {
                 "C2C_MESSAGE_CREATE" => Ok(QqBotWsEvent::C2cMessage(data)),
+                "READY" => {
+                    let session_id = data
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string())
+                        .ok_or("qqbot ready event missing session_id")?;
+                    Ok(QqBotWsEvent::ReadyEvent(session_id))
+                }
                 _ => Ok(QqBotWsEvent::Other),
             }
         }

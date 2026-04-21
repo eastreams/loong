@@ -145,6 +145,14 @@ pub(super) fn default_whatsapp_app_secret_env() -> Option<String> {
     Some(WHATSAPP_APP_SECRET_ENV.to_owned())
 }
 
+pub(super) fn default_qqbot_app_id_env() -> Option<String> {
+    Some(QQBOT_APP_ID_ENV.to_owned())
+}
+
+pub(super) fn default_qqbot_client_secret_env() -> Option<String> {
+    Some(QQBOT_CLIENT_SECRET_ENV.to_owned())
+}
+
 pub(super) fn default_system_prompt() -> String {
     render_default_system_prompt()
 }
