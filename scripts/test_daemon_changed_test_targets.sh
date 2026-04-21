@@ -59,6 +59,11 @@ assert_equal(
     "daemon smoke entrypoint maps to the smoke shard itself",
 )
 assert_equal(
+    resolve("crates/daemon/tests/daemon_feishu.rs"),
+    ["daemon_feishu"],
+    "daemon feishu entrypoint maps to the feishu shard itself",
+)
+assert_equal(
     resolve("crates/daemon/tests/integration/ask_and_spec_cli_root.rs"),
     ["daemon_smoke", "daemon_cli"],
     "ask and spec root tests map to smoke and cli shards",
@@ -89,6 +94,21 @@ assert_equal(
     "channel plugin bridge json tests map to the channels shard",
 )
 assert_equal(
+    resolve("crates/daemon/tests/integration/doctor_feishu.rs"),
+    ["daemon_feishu"],
+    "doctor feishu tests map to the feishu shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/feishu_cli.rs"),
+    ["daemon_feishu"],
+    "feishu cli tests map to the feishu shard",
+)
+assert_equal(
+    resolve("crates/daemon/tests/integration/feishu_test_fixtures.rs"),
+    ["daemon_feishu"],
+    "shared feishu fixtures map to the feishu shard",
+)
+assert_equal(
     resolve("crates/daemon/tests/integration/memory_surfaces.rs"),
     ["daemon_cli"],
     "memory surface root tests map to the cli shard",
@@ -106,6 +126,7 @@ assert_equal(
         "daemon_gateway",
         "daemon_onboard",
         "daemon_channels",
+        "daemon_feishu",
         "daemon_runtime",
         "integration",
     ],
@@ -119,6 +140,7 @@ assert_equal(
         "daemon_gateway",
         "daemon_onboard",
         "daemon_channels",
+        "daemon_feishu",
         "daemon_runtime",
         "integration",
     ],

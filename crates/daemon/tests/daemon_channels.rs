@@ -30,10 +30,6 @@ mod integration {
     mod channel_plugin_bridge_json;
     #[path = "channel_plugin_bridge_text.rs"]
     mod channel_plugin_bridge_text;
-    #[path = "doctor_feishu.rs"]
-    mod doctor_feishu;
-    #[path = "feishu_cli.rs"]
-    mod feishu_cli;
     #[path = "multi_channel_serve_cli.rs"]
     mod multi_channel_serve_cli;
 }

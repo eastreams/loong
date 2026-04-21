@@ -130,6 +130,11 @@ path = "tests/daemon_channels.rs"
 required-features = ["test-support"]
 
 [[test]]
+name = "daemon_feishu"
+path = "tests/daemon_feishu.rs"
+required-features = ["test-support"]
+
+[[test]]
 name = "daemon_runtime"
 path = "tests/daemon_runtime.rs"
 required-features = ["test-support"]
