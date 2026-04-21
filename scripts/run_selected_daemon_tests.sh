@@ -166,6 +166,7 @@ run_target_binary() {
   if [[ "$target_name" == "daemon_smoke" ]]; then
     local smoke_filters=()
     while IFS= read -r line; do
+      line="${line%$'\r'}"
       smoke_filters+=("$line")
     done < <(derive_smoke_filters "$binary_path")
 
@@ -193,6 +194,7 @@ fi
 
 if [[ "$include_lib_bins" -eq 1 ]]; then
   while IFS= read -r binary_path; do
+    binary_path="${binary_path%$'\r'}"
     [[ -n "$binary_path" ]] || continue
     run_lib_or_bin_binary "$binary_path"
   done < <("$PYTHON_BIN" - <<'PY' "$binary_payload_json"
@@ -216,5 +218,6 @@ target_name = sys.argv[2]
 print(artifact_paths[target_name])
 PY
 )"
+  binary_path="${binary_path%$'\r'}"
   run_target_binary "$target_name" "$binary_path"
 done < <(printf '%s\n' "${selected_targets[@]}")

@@ -69,6 +69,7 @@ collect_daemon_test_targets() {
 
 changed_files=()
 while IFS= read -r line; do
+  line="${line%$'\r'}"
   changed_files+=("$line")
 done < <(collect_changed_files | awk 'NF' | sort -u)
 if [[ "${#changed_files[@]}" -eq 0 ]]; then
@@ -78,6 +79,7 @@ fi
 
 package_names=()
 while IFS= read -r line; do
+  line="${line%$'\r'}"
   package_names+=("$line")
 done < <("$PYTHON_BIN" scripts/rust_changed_packages.py --format names "${changed_files[@]}")
 if [[ "${#package_names[@]}" -eq 0 ]]; then
@@ -111,6 +113,7 @@ fi
 if [[ "$run_daemon" -eq 1 ]]; then
   daemon_test_targets=()
   while IFS= read -r line; do
+    line="${line%$'\r'}"
     daemon_test_targets+=("$line")
   done < <(collect_daemon_test_targets "${changed_files[@]}")
 

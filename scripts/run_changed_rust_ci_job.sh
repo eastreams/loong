@@ -65,6 +65,7 @@ fi
 
 changed_paths=()
 while IFS= read -r line; do
+  line="${line%$'\r'}"
   changed_paths+=("$line")
 done < <("$PYTHON_BIN" - <<'PY'
 import json
