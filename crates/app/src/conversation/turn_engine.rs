@@ -2756,7 +2756,7 @@ fn provider_tool_denial_should_conceal_name(
     }
 
     if !descriptor.is_provider_exposed() {
-        return true;
+        return !tool_is_visible;
     }
 
     !tool_is_visible
@@ -2772,6 +2772,34 @@ fn concealed_provider_tool_denial() -> TurnFailure {
 
 fn tool_search_recovery_hint() -> &'static str {
     " If you need a non-core capability, call tool.search with a short natural-language description of the task. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; use tool.invoke with the fresh lease and put the requested operation inside payload.arguments."
+}
+
+fn browser_session_recovery_failure(tool_name: &str, reason: &str) -> Option<TurnFailure> {
+    let browser_tool_name = match tool_name {
+        "browser.extract"
+        | "browser.click"
+        | "browser.companion.navigate"
+        | "browser.companion.snapshot"
+        | "browser.companion.wait"
+        | "browser.companion.click"
+        | "browser.companion.type" => Some(tool_name),
+        _ => None,
+    }?;
+
+    let unknown_session =
+        reason.contains("unknown session") || reason.contains("browser_companion_unknown_session");
+    if !unknown_session {
+        return None;
+    }
+
+    let recovery_reason = format!(
+        "{browser_tool_name} session is no longer available. Start a fresh browser session with `browser.open` or direct `browser {{ url }}`, then retry the follow-up extract/click/type step with the newly returned `session_id`. Do not reuse older browser session ids."
+    );
+
+    Some(TurnFailure::retryable(
+        "browser_session_expired",
+        recovery_reason,
+    ))
 }
 
 fn tool_invoke_recovery_failure(reason: &str) -> Option<TurnFailure> {
@@ -2820,7 +2848,14 @@ fn tool_intent_is_visible(
 
     let provider_origin = intent.source.starts_with("provider_");
     if provider_origin {
-        return false;
+        return crate::tools::hidden_facade_tool_name_for_hidden_tool(descriptor.name).is_some_and(
+            |hidden_surface_id| {
+                crate::tools::tool_surface_visible_in_view(
+                    hidden_surface_id,
+                    &session_context.tool_view,
+                )
+            },
+        );
     }
 
     session_context.tool_view.contains(descriptor.name)
@@ -2833,14 +2868,33 @@ async fn execute_tool_intent_via_kernel(
 ) -> Result<ToolCoreOutcome, TurnFailure> {
     let requested_tool_name =
         crate::tools::canonical_tool_name(request.tool_name.as_str()).to_owned();
+    let invoked_tool_name = if requested_tool_name == "tool.invoke" {
+        request
+            .payload
+            .get("tool_id")
+            .and_then(Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .map(str::to_owned)
+    } else {
+        None
+    };
     crate::tools::execute_kernel_tool_request(kernel_ctx, request, trusted_internal_context)
         .await
         .map_err(|error| {
-            if requested_tool_name == "tool.invoke"
-                && let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
-                && let Some(recovery_failure) = tool_invoke_recovery_failure(reason)
-            {
-                return recovery_failure;
+            if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error {
+                let effective_tool_name = invoked_tool_name
+                    .as_deref()
+                    .unwrap_or(requested_tool_name.as_str());
+                if let Some(recovery_failure) =
+                    browser_session_recovery_failure(effective_tool_name, reason)
+                {
+                    return recovery_failure;
+                }
+                if requested_tool_name == "tool.invoke"
+                    && let Some(recovery_failure) = tool_invoke_recovery_failure(reason)
+                {
+                    return recovery_failure;
+                }
             }
             if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
                 && let Some(stripped) = RepairableToolPreflight::parse(reason.as_str())
@@ -4076,6 +4130,18 @@ impl TurnEngine {
                     // Lease validation happens in resolve_tool_invoke_request during execution.
                     // Internal approval-control turns also bypass provider exposure checks for
                     // the approval tools they synthesize.
+                } else if crate::tools::hidden_facade_tool_name_for_hidden_tool(descriptor.name)
+                    .is_some_and(|hidden_surface_id| {
+                        crate::tools::tool_surface_visible_in_view(
+                            hidden_surface_id,
+                            &session_context.tool_view,
+                        )
+                    })
+                {
+                    // Tolerate older or over-eager provider turns that still emit the exact
+                    // internal control-plane tool name instead of going through the grouped
+                    // hidden facade. The tool stays off the discoverable model surface, but the
+                    // runtime remains lenient enough to continue the governed flow.
                 } else if !crate::tools::is_provider_exposed_tool_name(&intent.tool_name) {
                     let reason = format!("tool_not_provider_exposed: {}", intent.tool_name);
                     return Err(TurnFailure::policy_denied(

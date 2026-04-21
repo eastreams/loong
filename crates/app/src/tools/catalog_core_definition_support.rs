@@ -157,6 +157,27 @@ pub(super) fn direct_write_definition(descriptor: &ToolDescriptor) -> Value {
                     "overwrite": {
                         "type": "boolean",
                         "description": "Allow replacing an existing file. Defaults to false."
+                    }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn direct_edit_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Target file path."
                     },
                     "edits": {
                         "type": "array",
@@ -180,9 +201,6 @@ pub(super) fn direct_write_definition(descriptor: &ToolDescriptor) -> Value {
                 },
                 "required": ["path"],
                 "anyOf": [
-                    {
-                        "required": ["content"]
-                    },
                     {
                         "required": ["edits"]
                     },

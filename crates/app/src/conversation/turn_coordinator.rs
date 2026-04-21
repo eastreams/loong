@@ -524,6 +524,7 @@ impl ProviderTurnLaneExecution {
 struct ProviderTurnLoopPolicy {
     max_total_tool_calls: usize,
     max_consecutive_same_tool: usize,
+    max_same_tool_failure_rounds: usize,
 }
 
 impl ProviderTurnLoopPolicy {
@@ -532,6 +533,7 @@ impl ProviderTurnLoopPolicy {
         Self {
             max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
             max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+            max_same_tool_failure_rounds: turn_loop.max_same_tool_failure_rounds.max(1),
         }
     }
 }
@@ -541,7 +543,9 @@ struct ProviderTurnLoopState {
     total_tool_calls: usize,
     consecutive_same_tool: usize,
     last_tool_name: Option<String>,
-    warned_same_tool_key: Option<String>,
+    consecutive_failed_same_tool: usize,
+    last_failed_tool_name: Option<String>,
+    warned_reason_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -565,11 +569,14 @@ impl ProviderTurnLoopState {
         &mut self,
         policy: &ProviderTurnLoopPolicy,
         turn: &ProviderTurn,
+        turn_result: &TurnResult,
     ) -> Option<ProviderTurnLoopVerdict> {
         let tool_intent_count = turn.tool_intents.len();
         self.total_tool_calls = self.total_tool_calls.saturating_add(tool_intent_count);
         if tool_intent_count == 0 {
-            self.warned_same_tool_key = None;
+            self.warned_reason_key = None;
+            self.consecutive_failed_same_tool = 0;
+            self.last_failed_tool_name = None;
             return None;
         }
 
@@ -579,25 +586,54 @@ impl ProviderTurnLoopState {
         } else {
             self.last_tool_name = Some(tool_name_signature.clone());
             self.consecutive_same_tool = 1;
-            self.warned_same_tool_key = None;
+            self.warned_reason_key = None;
         }
 
-        if self.consecutive_same_tool < policy.max_consecutive_same_tool {
-            self.warned_same_tool_key = None;
-            return Some(ProviderTurnLoopVerdict::Continue);
+        if self.consecutive_same_tool >= policy.max_consecutive_same_tool {
+            let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
+            let reason = format!(
+                "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
+                self.consecutive_same_tool, policy.max_consecutive_same_tool
+            );
+
+            return Some(self.resolve_reason(reason_key, reason));
         }
 
-        let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
-        let reason = format!(
-            "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
-            self.consecutive_same_tool, policy.max_consecutive_same_tool
-        );
-
-        if self.warned_same_tool_key.as_deref() == Some(reason_key.as_str()) {
-            Some(ProviderTurnLoopVerdict::HardStop { reason })
+        let failed = turn_result
+            .failure()
+            .is_some_and(|failure| failure.retryable);
+        if failed {
+            if self.last_failed_tool_name.as_deref() == Some(tool_name_signature.as_str()) {
+                self.consecutive_failed_same_tool += 1;
+            } else {
+                self.last_failed_tool_name = Some(tool_name_signature.clone());
+                self.consecutive_failed_same_tool = 1;
+            }
         } else {
-            self.warned_same_tool_key = Some(reason_key);
-            Some(ProviderTurnLoopVerdict::InjectWarning { reason })
+            self.last_failed_tool_name = None;
+            self.consecutive_failed_same_tool = 0;
+        }
+
+        if self.consecutive_failed_same_tool >= policy.max_same_tool_failure_rounds {
+            let reason_key = format!("same_tool_failure_streak:{tool_name_signature}");
+            let reason = format!(
+                "same_tool_failure_streak: {tool_name_signature} failed {} rounds in a row (limit={})",
+                self.consecutive_failed_same_tool, policy.max_same_tool_failure_rounds
+            );
+
+            return Some(self.resolve_reason(reason_key, reason));
+        }
+
+        self.warned_reason_key = None;
+        Some(ProviderTurnLoopVerdict::Continue)
+    }
+
+    fn resolve_reason(&mut self, reason_key: String, reason: String) -> ProviderTurnLoopVerdict {
+        if self.warned_reason_key.as_deref() == Some(reason_key.as_str()) {
+            ProviderTurnLoopVerdict::HardStop { reason }
+        } else {
+            self.warned_reason_key = Some(reason_key);
+            ProviderTurnLoopVerdict::InjectWarning { reason }
         }
     }
 }
@@ -2969,7 +3005,8 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         .await;
     }
     observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
-    let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
+    let loop_verdict =
+        turn_loop_state.observe_turn(turn_loop_policy, &turn, &lane_execution.turn_result);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
     ProviderTurnContinuePhase::new(
@@ -6007,7 +6044,14 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     );
     let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
         .is_some_and(|payload| {
-            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
+            matches!(
+                payload,
+                ToolDrivenFollowupPayload::DiscoveryRecovery { .. }
+                    | ToolDrivenFollowupPayload::ToolFailure {
+                        retryable: true,
+                        ..
+                    }
+            )
         });
     let malformed_parse_followup_turn =
         provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);

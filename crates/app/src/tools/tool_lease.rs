@@ -40,6 +40,15 @@ pub(crate) fn resolve_tool_invoke_request(
     }
 
     let routed_hidden_tool_name = super::route_hidden_discoverable_tool_name(tool_id, &arguments);
+    if matches!(
+        tool_id,
+        super::HIDDEN_AGENT_TOOL_NAME
+            | super::HIDDEN_SKILLS_TOOL_NAME
+            | super::HIDDEN_CHANNEL_TOOL_NAME
+    ) && let Err(error) = &routed_hidden_tool_name
+    {
+        return Err(error.clone());
+    }
     let tool_lease_id = match routed_hidden_tool_name {
         Ok(_resolved_hidden_tool_name)
             if matches!(

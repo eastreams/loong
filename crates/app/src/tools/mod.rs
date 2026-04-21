@@ -17,7 +17,7 @@ use tool_search::searchable_entry_from_provider_definition;
 use tool_search::{
     SearchableToolEntry, collapse_hidden_surface_search_entries,
     execute_tool_search_tool_with_config, searchable_entry_from_descriptor,
-    tool_search_entry_is_runtime_usable,
+    searchable_entry_from_manual_definition, tool_search_entry_is_runtime_usable,
 };
 
 use crate::KernelContext;
@@ -660,7 +660,7 @@ fn required_capabilities_for_tool_name_and_payload(
         | "session_tool_policy_status" => {
             caps.insert(Capability::MemoryRead);
         }
-        "write" | "file.write" | "file.edit" => {
+        "edit" | "write" | "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
         "exec" | BASH_EXEC_TOOL_NAME => {
@@ -920,7 +920,7 @@ pub fn execute_tool_core_with_config(
         match canonical_name {
             "tool.search" => execute_tool_search_tool_with_config(request, config),
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
-            "read" | "write" | "exec" | "web" | "browser" | "memory" => {
+            "read" | "edit" | "write" | "exec" | "web" | "browser" | "memory" => {
                 execute_direct_tool_core_with_config(request, config)
             }
             _ => execute_discoverable_tool_core_with_config(request, config),
@@ -1612,7 +1612,7 @@ fn runtime_discoverable_tool_entries(
     provider_invokable_only: bool,
 ) -> Vec<SearchableToolEntry> {
     let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
-    catalog::tool_catalog()
+    let mut entries = catalog::tool_catalog()
         .descriptors()
         .iter()
         .filter(|descriptor| {
@@ -1639,7 +1639,72 @@ fn runtime_discoverable_tool_entries(
             )
         })
         .map(searchable_entry_from_descriptor)
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+
+    entries.extend(grouped_internal_hidden_surface_entries(&visible_tool_view));
+    entries
+}
+
+fn grouped_internal_hidden_surface_entries(
+    visible_tool_view: &ToolView,
+) -> Vec<SearchableToolEntry> {
+    let mut tags_by_surface_id = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for descriptor in catalog::tool_catalog().descriptors().iter() {
+        if descriptor.exposure != catalog::ToolExposureClass::Internal {
+            continue;
+        }
+
+        if !visible_tool_view.contains(descriptor.name) {
+            continue;
+        }
+
+        let Some(surface_id) = tool_surface::tool_surface_id_for_name(descriptor.name) else {
+            continue;
+        };
+        let is_grouped_hidden_surface = matches!(
+            surface_id,
+            HIDDEN_AGENT_TOOL_NAME | HIDDEN_SKILLS_TOOL_NAME | HIDDEN_CHANNEL_TOOL_NAME
+        );
+        if !is_grouped_hidden_surface {
+            continue;
+        }
+
+        let tags = tags_by_surface_id
+            .entry(surface_id.to_owned())
+            .or_insert_with(|| BTreeSet::from([surface_id.to_owned()]));
+        tags.insert(descriptor.name.to_owned());
+        for tag in descriptor.tags() {
+            tags.insert((*tag).to_owned());
+        }
+    }
+
+    let mut entries = Vec::new();
+    for (surface_id, tags) in tags_by_surface_id {
+        if tags.len() == 1 {
+            continue;
+        }
+
+        let Some(summary) = tool_surface::hidden_surface_search_summary(surface_id.as_str()) else {
+            continue;
+        };
+        let Some(argument_hint) =
+            tool_surface::hidden_surface_search_argument_hint(surface_id.as_str())
+        else {
+            continue;
+        };
+        let entry = searchable_entry_from_manual_definition(
+            surface_id.as_str(),
+            summary,
+            argument_hint,
+            Vec::new(),
+            Vec::new(),
+            tags.into_iter().collect(),
+        );
+        entries.push(entry);
+    }
+
+    entries
 }
 
 fn hidden_surface_entry_counts(entries: &[SearchableToolEntry]) -> BTreeMap<String, usize> {

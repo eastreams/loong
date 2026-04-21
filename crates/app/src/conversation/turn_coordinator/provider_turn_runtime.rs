@@ -390,7 +390,8 @@ pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime 
         .await;
     }
     observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
-    let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
+    let loop_verdict =
+        turn_loop_state.observe_turn(turn_loop_policy, &turn, &lane_execution.turn_result);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
     ProviderTurnContinuePhase::new(
@@ -564,7 +565,7 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
                         .zip(followup_request_estimated_tokens)
                         .map(|(initial, followup)| followup.saturating_sub(initial));
                     let followup_preparation =
-                        current_preparation.for_followup_messages(follow_up_messages);
+                        current_preparation.for_followup_messages(follow_up_messages.clone());
                     let followup_tool_view = match runtime.tool_view(
                         &current_continue_phase.followup_config,
                         session_id,
@@ -724,6 +725,27 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
                                 binding,
                             )
                             .await;
+                            if requires_completion_pass {
+                                let reply = request_completion_with_raw_fallback(
+                                    runtime,
+                                    &current_continue_phase.followup_config,
+                                    &follow_up_messages,
+                                    binding,
+                                    raw_reply.as_str(),
+                                    retry_progress.clone(),
+                                )
+                                .await;
+                                let checkpoint = current_continue_phase.checkpoint(
+                                    preparation,
+                                    user_input,
+                                    reply.as_str(),
+                                );
+                                return ResolvedProviderTurn::persist_reply(
+                                    reply,
+                                    current_continue_phase.lane_execution.provider_usage.clone(),
+                                    checkpoint,
+                                );
+                            }
                             let checkpoint = current_continue_phase.checkpoint(
                                 preparation,
                                 user_input,

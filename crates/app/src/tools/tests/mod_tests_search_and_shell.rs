@@ -25,6 +25,7 @@ fn tool_search_hides_filesystem_tools_without_filesystem_capabilities() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(results.iter().all(|entry| entry["tool_id"] != "file.read"));
+    assert!(results.iter().all(|entry| entry["tool_id"] != "edit"));
     assert!(results.iter().all(|entry| entry["tool_id"] != "file.write"));
     assert!(
         results

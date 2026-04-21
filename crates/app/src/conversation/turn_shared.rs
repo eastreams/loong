@@ -28,6 +28,8 @@ pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a d
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
+pub const RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT: &str = "The previous tool call failed, but the task is not complete yet. Analyze the failure, correct the arguments or choose a better-fitting tool, and continue with the next tool call. Only answer directly after the needed tool work succeeds or you can clearly justify that no further tool call is necessary.";
+pub const TERMINAL_TOOL_FAILURE_FOLLOWUP_PROMPT: &str = "The previous tool call failed. Use the failure details and any repair guidance to choose the best next step. Retry only if a corrected or alternative tool call is likely to succeed; otherwise provide the best-effort final answer and clearly state the limitation.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 const TOOL_FOLLOWUP_REPAIR_PROMPT: &str = "Repair notice:\nThe previous reply described a next step without issuing the required tool call. Do not describe the plan again.";
 const TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT: &str = "The previous tool failure was retryable. Default to [followup_state:continue] and retry or repair the tool call unless the task is already complete or genuinely blocked.";
@@ -1707,6 +1709,32 @@ pub fn build_discovery_recovery_followup_user_prompt(
     sections.join("\n\n")
 }
 
+pub fn build_tool_failure_followup_user_prompt(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    retryable: bool,
+    repair_guidance: Option<&str>,
+) -> String {
+    let mut sections = vec![
+        if retryable {
+            RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT
+        } else {
+            TERMINAL_TOOL_FAILURE_FOLLOWUP_PROMPT
+        }
+        .to_owned(),
+    ];
+    if let Some(reason) = loop_warning_reason {
+        sections.push(format!(
+            "Loop warning:\n{reason}\nAvoid repeating the same failed tool call with unchanged arguments. Change the payload, choose a different tool, or conclude with a clearly stated limitation."
+        ));
+    }
+    if let Some(repair_guidance) = repair_guidance {
+        sections.push(repair_guidance.to_owned());
+    }
+    sections.push(format!("Original request:\n{user_input}"));
+    sections.join("\n\n")
+}
+
 fn followup_prompt_needs_truncation_hint(
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
@@ -2160,6 +2188,7 @@ where
     build_tool_failure_followup_tail_with_request_summary(
         assistant_preface,
         tool_failure_reason,
+        false,
         user_input,
         loop_warning_reason,
         tool_request_summary,
@@ -2172,6 +2201,7 @@ where
 pub fn build_tool_failure_followup_tail_with_request_summary<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
+    retryable: bool,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_request_summary: Option<&str>,
@@ -2230,16 +2260,15 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt_with_context(
+        "content": build_tool_failure_followup_user_prompt(
             user_input,
             loop_warning_reason,
-            None,
-            None,
             combine_followup_extra_context(&[
                 repair_guidance.as_deref(),
                 continuation_contract,
             ])
             .as_deref(),
+            retryable,
         ),
     }));
     messages
@@ -2345,10 +2374,11 @@ where
                 payload_mapper,
             )
         }
-        ToolDrivenFollowupPayload::ToolFailure { reason, .. } => {
+        ToolDrivenFollowupPayload::ToolFailure { reason, retryable } => {
             build_tool_failure_followup_tail_with_request_summary_and_contract(
                 assistant_preface,
                 reason.as_str(),
+                *retryable,
                 user_input,
                 loop_warning_reason,
                 tool_request_summary,
@@ -2390,8 +2420,17 @@ fn render_tool_failure_repair_guidance(
     let reason_mentions_repairable_shape = tool_failure_reason.contains("tool input needs repair")
         || tool_failure_reason.contains("payload must be an object")
         || tool_failure_reason.contains("payload.");
+    let reason_mentions_browser_session_recovery = tool_failure_reason
+        .to_ascii_lowercase()
+        .contains("session is no longer available");
+    let reason_mentions_shell_builtin_recovery = tool_failure_reason
+        .to_ascii_lowercase()
+        .contains("program not found");
 
-    if !reason_mentions_repairable_shape {
+    if !reason_mentions_repairable_shape
+        && !reason_mentions_browser_session_recovery
+        && !reason_mentions_shell_builtin_recovery
+    {
         return None;
     }
 
@@ -2403,6 +2442,15 @@ fn render_tool_failure_repair_guidance(
 
     if shell_guidance.is_some() {
         return shell_guidance;
+    }
+
+    let browser_guidance = render_browser_failure_repair_guidance(
+        repair_tool_name.as_str(),
+        request_summary_request,
+        tool_failure_reason,
+    );
+    if browser_guidance.is_some() {
+        return browser_guidance;
     }
 
     let guidance_from_request =
@@ -2476,21 +2524,117 @@ fn render_shell_failure_repair_guidance(
     let request_object = request_summary_request?.as_object()?;
     let command = request_object.get("command").and_then(Value::as_str)?;
     let has_path_separator = command.contains('/') || command.contains('\\');
+    let suggested_command = suggested_shell_command_name(command);
     let mentions_payload_command = tool_failure_reason.contains("payload.command");
     let mentions_path_separator = tool_failure_reason.contains("path separators");
-    let should_render_guidance =
-        has_path_separator || mentions_payload_command || mentions_path_separator;
+    let mentions_program_not_found = tool_failure_reason
+        .to_ascii_lowercase()
+        .contains("program not found");
+    let should_render_guidance = has_path_separator
+        || mentions_payload_command
+        || mentions_path_separator
+        || (mentions_program_not_found
+            && windows_shell_builtin_command(suggested_command.as_str()));
 
     if !should_render_guidance {
         return None;
     }
 
-    let bare_command = suggested_shell_command_name(command);
     let visible_tool_name = repair_guidance_visible_tool_name(tool_name);
+    if mentions_program_not_found && windows_shell_builtin_command(suggested_command.as_str()) {
+        let cmd_args = request_object
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut wrapped_args = vec!["/c".to_owned(), suggested_command.clone()];
+        wrapped_args.extend(cmd_args);
+        let wrapped_args_json =
+            serde_json::to_string(&wrapped_args).unwrap_or_else(|_| "[\"/c\"]".to_owned());
+        return Some(format!(
+            "Repair guidance for {visible_tool_name}:\n`{suggested_command}` is a Windows shell builtin, not a standalone executable.\nRetry with `payload.command = \"cmd\"` and `payload.args = {wrapped_args_json}`.\nIf shell-script mode is available in this runtime, `payload.script` can also wrap shell builtins."
+        ));
+    }
+
     let guidance = format!(
-        "Repair guidance for {visible_tool_name}:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
+        "Repair guidance for {visible_tool_name}:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{suggested_command}`."
     );
     Some(guidance)
+}
+
+fn render_browser_failure_repair_guidance(
+    tool_name: &str,
+    request_summary_request: Option<&Value>,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    if crate::tools::user_visible_tool_name(tool_name) != "browser" {
+        return None;
+    }
+
+    let normalized_reason = tool_failure_reason.to_ascii_lowercase();
+    let stale_session = normalized_reason.contains("unknown session")
+        || normalized_reason.contains("browser_session_expired")
+        || normalized_reason.contains("session is no longer available");
+    if !stale_session {
+        return None;
+    }
+
+    let stale_session_id = request_summary_request
+        .and_then(Value::as_object)
+        .and_then(|request| request.get("session_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("<stale session_id>");
+    let expected_shape = crate::tools::tool_catalog()
+        .resolve("browser")
+        .map(|descriptor| descriptor.argument_hint())
+        .unwrap_or("url?:string,session_id?:string,mode?:string");
+
+    Some(format!(
+        "Repair guidance for browser:\nThe previous browser session `{stale_session_id}` is stale or unavailable.\nStart a fresh browser session with `payload.url` using `browser.open` or direct `browser {{ url }}`, then continue with the newly returned `session_id`.\nDo not reuse older browser session ids.\nExpected payload shape: {expected_shape}."
+    ))
+}
+
+fn windows_shell_builtin_command(command: &str) -> bool {
+    matches!(
+        command,
+        "assoc"
+            | "break"
+            | "call"
+            | "cd"
+            | "chdir"
+            | "cls"
+            | "copy"
+            | "del"
+            | "dir"
+            | "echo"
+            | "erase"
+            | "md"
+            | "mkdir"
+            | "mklink"
+            | "move"
+            | "path"
+            | "popd"
+            | "prompt"
+            | "pushd"
+            | "rd"
+            | "ren"
+            | "rename"
+            | "rmdir"
+            | "set"
+            | "start"
+            | "title"
+            | "type"
+            | "ver"
+            | "vol"
+    )
 }
 
 fn suggested_shell_command_name(command: &str) -> String {
@@ -3573,7 +3717,7 @@ mod tests {
     fn tool_driven_followup_tail_preserves_request_summary_for_failure_payloads() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "payload.command contains path separators".to_owned(),
-            retryable: false,
+            retryable: true,
         };
         let tool_request_summary =
             r#"{"tool":"exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
@@ -3697,7 +3841,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
-            retryable: false,
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"ls -la"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3723,7 +3867,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
-            retryable: false,
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"\"ls -la\" "}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3751,7 +3895,7 @@ mod tests {
             reason:
                 "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
                     .to_owned(),
-            retryable: false,
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"read","request":{}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3864,7 +4008,7 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
                 .to_owned(),
-            retryable: false,
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"echo"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3887,6 +4031,36 @@ mod tests {
         assert!(user_prompt.contains(
             "Expected payload shape: command:string,args?:string[],timeout_ms?:integer,cwd?:string."
         ));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_guides_windows_shell_builtins_through_cmd_wrapper() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool execution failed: shell command spawn failed: program not found"
+                .to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary =
+            r#"{"tool":"exec","request":{"command":"ren","args":["a.log","aaa.log"]}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "rename the log file",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for exec"));
+        assert!(user_prompt.contains("`ren` is a Windows shell builtin"));
+        assert!(user_prompt.contains("payload.command = \"cmd\""));
+        assert!(user_prompt.contains(r#"payload.args = ["/c","ren","a.log","aaa.log"]"#));
     }
 
     #[test]

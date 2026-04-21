@@ -23,7 +23,7 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
 
     let is_direct_tool = matches!(
         canonical_name,
-        "read" | "write" | "exec" | "web" | "browser" | "memory"
+        "read" | "edit" | "write" | "exec" | "web" | "browser" | "memory"
     );
     if !is_direct_tool {
         return "-".to_owned();
@@ -87,6 +87,7 @@ pub(crate) fn route_direct_tool_name(
 ) -> Result<&'static str, String> {
     match tool_name {
         "read" => route_direct_read_tool_name(payload),
+        "edit" => route_direct_edit_tool_name(payload),
         "write" => route_direct_write_tool_name(payload),
         "exec" => route_direct_exec_tool_name(payload),
         "web" => route_direct_web_tool_name(payload),
@@ -162,6 +163,53 @@ fn command_uses_shell_syntax(command: &str) -> bool {
         || command.contains('`')
 }
 
+fn route_direct_edit_tool_name(payload: &Value) -> Result<&'static str, String> {
+    if !payload_has_non_null_field(payload, "path") {
+        return Err("direct_edit_requires_path: expected `path` for direct edit".to_owned());
+    }
+
+    let has_edits = payload_has_non_null_field(payload, "edits");
+    let has_old_string = payload_has_non_null_field(payload, "old_string");
+    let has_new_string = payload_has_non_null_field(payload, "new_string");
+    let has_content = payload_has_non_null_field(payload, "content");
+    let legacy_exact_edit_mode = has_old_string || has_new_string;
+    let mode_count = count_true([has_edits, legacy_exact_edit_mode]);
+
+    if has_content {
+        return Err(
+            "direct_edit_ambiguous: `edit` only supports exact replacement mode; use `write` for whole-file content"
+                .to_owned(),
+        );
+    }
+
+    if mode_count == 0 {
+        return Err(
+            "direct_edit_requires_one_mode: expected `path` plus `edits`, or legacy `path` plus `old_string` and `new_string`"
+                .to_owned(),
+        );
+    }
+
+    if mode_count > 1 {
+        return Err(
+            "direct_edit_ambiguous: do not mix `edits` with legacy `old_string` / `new_string` fields"
+                .to_owned(),
+        );
+    }
+
+    if has_edits {
+        return Ok("file.edit");
+    }
+
+    if !has_old_string || !has_new_string {
+        return Err(
+            "direct_edit_requires_complete_legacy_fields: expected `edits`, or legacy `old_string` and `new_string` for exact-edit mode"
+                .to_owned(),
+        );
+    }
+
+    Ok("file.edit")
+}
+
 fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> {
     let has_path = payload_has_non_null_field(payload, "path");
     let has_query = payload_has_non_null_field(payload, "query");
@@ -198,45 +246,25 @@ fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String>
     let has_edits = payload_has_non_null_field(payload, "edits");
     let has_old_string = payload_has_non_null_field(payload, "old_string");
     let has_new_string = payload_has_non_null_field(payload, "new_string");
-    let legacy_exact_edit_mode = has_old_string || has_new_string;
-    let exact_edit_mode = has_edits || legacy_exact_edit_mode;
-    let create_mode = has_content;
-    let mode_count = count_true([create_mode, exact_edit_mode]);
-
-    if mode_count == 0 {
-        return Err(
-            "direct_write_requires_one_mode: expected `path` plus `content`, `path` plus `edits`, or legacy `path` plus `old_string` and `new_string`"
-                .to_owned(),
-        );
-    }
-
-    if mode_count > 1 {
-        return Err(
-            "direct_write_ambiguous: do not mix whole-file write fields with exact-edit fields"
-                .to_owned(),
-        );
-    }
-
     if !payload_has_non_null_field(payload, "path") {
         return Err("direct_write_requires_path: expected `path` for direct write".to_owned());
     }
 
-    if create_mode {
-        return Ok("file.write");
-    }
-
-    if has_edits {
-        return Ok("file.edit");
-    }
-
-    if !has_old_string || !has_new_string {
+    if has_edits || has_old_string || has_new_string {
         return Err(
-            "direct_write_edit_requires_complete_legacy_fields: expected `edits`, or legacy `old_string` and `new_string` for exact-edit mode"
+            "direct_write_exact_edit_moved: `write` only supports whole-file content; use `edit` for exact replacements"
                 .to_owned(),
         );
     }
 
-    Ok("file.edit")
+    if !has_content {
+        return Err(
+            "direct_write_requires_content: expected `path` plus `content` for whole-file write mode"
+                .to_owned(),
+        );
+    }
+
+    Ok("file.write")
 }
 
 pub(super) fn route_direct_web_tool_name(payload: &Value) -> Result<&'static str, String> {
@@ -552,6 +580,7 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
             "approval-list" => Ok("approval_requests_list"),
             "approval-status" => Ok("approval_request_status"),
             "approval-resolve" => Ok("approval_request_resolve"),
+            "external-skills-policy" => Ok("external_skills.policy"),
             "sessions-list" => Ok("sessions_list"),
             "session-history" => Ok("sessions_history"),
             "session-events" => Ok("session_events"),
@@ -610,6 +639,11 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
     let has_stable_only = payload_has_non_null_field(payload, "stable_only");
     let has_tool_ids = payload_has_non_null_field(payload, "tool_ids");
     let has_runtime_narrowing = payload_has_non_null_field(payload, "runtime_narrowing");
+    let has_action = payload_has_non_null_field(payload, "action");
+    let has_policy_update_approved = payload_has_non_null_field(payload, "policy_update_approved");
+    let has_enabled = payload_has_non_null_field(payload, "enabled");
+    let has_allowed_domains = payload_has_non_null_field(payload, "allowed_domains");
+    let has_blocked_domains = payload_has_non_null_field(payload, "blocked_domains");
     let has_session_id = payload_has_non_null_field(payload, "session_id");
     let has_session_ids = payload_has_non_null_field(payload, "session_ids");
     let has_after_id = payload_has_non_null_field(payload, "after_id");
@@ -634,6 +668,15 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
 
     if has_selector {
         return Ok("provider.switch");
+    }
+
+    if has_action
+        || has_policy_update_approved
+        || has_enabled
+        || has_allowed_domains
+        || has_blocked_domains
+    {
+        return Ok("external_skills.policy");
     }
 
     if has_task {
@@ -737,16 +780,10 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
     if let Some(operation) = hidden_operation(payload) {
         return match operation {
             "search" => Ok("external_skills.search"),
-            "recommend" => Ok("external_skills.recommend"),
-            "source-search" => Ok("external_skills.source_search"),
             "inspect" => Ok("external_skills.inspect"),
             "install" => Ok("external_skills.install"),
             "run" | "invoke" => Ok("external_skills.invoke"),
             "list" => Ok("external_skills.list"),
-            "policy" => Ok("external_skills.policy"),
-            "fetch" => Ok("external_skills.fetch"),
-            "resolve" => Ok("external_skills.resolve"),
-            "remove" => Ok("external_skills.remove"),
             _ => Err(format!(
                 "hidden_skills_unknown_operation: unknown skills operation `{operation}`"
             )),
@@ -754,41 +791,13 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
     }
 
     let has_query = payload_has_non_null_field(payload, "query");
-    let has_sources = payload_has_non_null_field(payload, "sources");
-    let has_url = payload_has_non_null_field(payload, "url");
-    let has_reference = payload_has_non_null_field(payload, "reference");
-    let has_save_as = payload_has_non_null_field(payload, "save_as");
     let has_skill_id = payload_has_non_null_field(payload, "skill_id");
     let has_path = payload_has_non_null_field(payload, "path");
     let has_bundled_skill_id = payload_has_non_null_field(payload, "bundled_skill_id");
     let has_source_skill_id = payload_has_non_null_field(payload, "source_skill_id");
-    let has_allowed_domains = payload_has_non_null_field(payload, "allowed_domains");
-    let has_blocked_domains = payload_has_non_null_field(payload, "blocked_domains");
-    let has_enabled = payload_has_non_null_field(payload, "enabled");
-
-    if has_sources {
-        return Ok("external_skills.source_search");
-    }
-
-    if has_allowed_domains || has_blocked_domains || has_enabled {
-        return Ok("external_skills.policy");
-    }
 
     if has_path || has_bundled_skill_id || has_source_skill_id {
         return Ok("external_skills.install");
-    }
-
-    if has_url || has_save_as {
-        return Ok("external_skills.fetch");
-    }
-
-    if has_reference {
-        let fetch_by_reference = payload_has_non_null_field(payload, "approval_granted")
-            || payload_has_non_null_field(payload, "max_bytes");
-        if fetch_by_reference {
-            return Ok("external_skills.fetch");
-        }
-        return Ok("external_skills.resolve");
     }
 
     if has_query {
@@ -815,7 +824,7 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
     }
 
     Err(
-        "hidden_skills_requires_actionable_fields: expected search, inspect, install, fetch, resolve, policy, or list fields; add `operation` when the request is ambiguous"
+        "hidden_skills_requires_actionable_fields: expected search, inspect, install, run, or list fields; add `operation` when the request is ambiguous"
             .to_owned(),
     )
 }
@@ -883,21 +892,16 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
             DELEGATE_TOOL_NAME => Some("delegate".to_owned()),
             DELEGATE_ASYNC_TOOL_NAME => Some("delegate-background".to_owned()),
             "provider.switch" => Some("provider-switch".to_owned()),
+            "external_skills.policy" => Some("external-skills-policy".to_owned()),
             config_import::CONFIG_IMPORT_TOOL_NAME => Some("config-import".to_owned()),
             _ => None,
         },
         HIDDEN_SKILLS_TOOL_NAME => match canonical_name {
             "external_skills.search" => Some("search".to_owned()),
-            "external_skills.recommend" => Some("recommend".to_owned()),
-            "external_skills.source_search" => Some("source-search".to_owned()),
             "external_skills.inspect" => Some("inspect".to_owned()),
             "external_skills.install" => Some("install".to_owned()),
             "external_skills.invoke" => Some("run".to_owned()),
             "external_skills.list" => Some("list".to_owned()),
-            "external_skills.policy" => Some("policy".to_owned()),
-            "external_skills.fetch" => Some("fetch".to_owned()),
-            "external_skills.resolve" => Some("resolve".to_owned()),
-            "external_skills.remove" => Some("remove".to_owned()),
             _ => None,
         },
         HIDDEN_CHANNEL_TOOL_NAME => canonical_name.strip_prefix("feishu.").map(str::to_owned),
