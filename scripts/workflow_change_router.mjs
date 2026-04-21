@@ -310,9 +310,12 @@ export function writeRouteOutputs(core, routeOutputs) {
       continue;
     }
 
+    const normalizedOutputName = outputName.replace(/[A-Z]/g, (character) => {
+      return `_${character.toLowerCase()}`;
+    });
     const normalizedValue =
       typeof outputValue === "boolean" ? (outputValue ? "true" : "false") : outputValue;
-    core.setOutput(outputName, normalizedValue);
+    core.setOutput(normalizedOutputName, normalizedValue);
   }
 }
 
