@@ -347,17 +347,17 @@ mod tests {
             &config,
         );
         let expected_skill_root = std::fs::canonicalize(root.join(".loong/skills/demo-skill"))
-            .expect("canonical skill root")
-            .display()
-            .to_string();
+            .expect("canonical skill root");
+        let actual_skill_root = active_skills[0]
+            .skill_root
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .map(|path| std::fs::canonicalize(path).expect("canonical active skill root"));
 
         assert_eq!(active_skills.len(), 1);
         assert_eq!(active_skills[0].skill_id, "demo-skill");
         assert_eq!(active_skills[0].display_name, "Demo Skill");
-        assert_eq!(
-            active_skills[0].skill_root.as_deref(),
-            Some(expected_skill_root.as_str())
-        );
+        assert_eq!(actual_skill_root.as_ref(), Some(&expected_skill_root));
         assert!(
             active_skills[0]
                 .instructions

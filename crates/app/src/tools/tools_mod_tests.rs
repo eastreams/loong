@@ -298,13 +298,15 @@ fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
     assert!(snapshot.contains("demo-skill"));
     assert!(snapshot.contains("Use the read tool to load a listed skill's SKILL.md file"));
     assert!(snapshot.contains("<available_skills>"));
+    let expected_skill_md_path = root
+        .join("external-skills-installed")
+        .join("demo-skill")
+        .join("SKILL.md")
+        .display()
+        .to_string();
     assert!(
-        snapshot.contains(
-            &root
-                .join("external-skills-installed/demo-skill/SKILL.md")
-                .display()
-                .to_string()
-        )
+        snapshot.contains(&expected_skill_md_path),
+        "snapshot should surface installed skill path: {snapshot}"
     );
 
     fs::remove_dir_all(&root).ok();
