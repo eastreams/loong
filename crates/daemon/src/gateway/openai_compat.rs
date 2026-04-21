@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+#[cfg(test)]
 use axum::{
     Json, Router,
     extract::State,
@@ -13,6 +15,16 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
+};
+#[cfg(not(test))]
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
@@ -74,6 +86,7 @@ struct OpenAiCompatGatewayTurnSeed {
     model: String,
     run_config: LoongConfig,
     input: String,
+    resolved_path: Option<std::path::PathBuf>,
 }
 
 struct OpenAiCompatStreamObserver {
@@ -444,8 +457,18 @@ fn build_gateway_turn_seed(
         .collect::<Result<Vec<_>, _>>()?;
     let request_id = next_openai_compat_request_id(request.model.as_str());
     let mut run_config = config.clone();
-    run_config.provider = binding.provider;
-    run_config.active_provider = Some(binding.profile_id);
+    let bound_profile_id = binding.profile_id.clone();
+    let bound_provider = binding.provider;
+    run_config.provider = bound_provider.clone();
+    run_config.providers = BTreeMap::from([(
+        bound_profile_id.clone(),
+        ProviderProfileConfig {
+            default_for_kind: true,
+            provider: bound_provider,
+        },
+    )]);
+    run_config.active_provider = Some(bound_profile_id);
+    run_config.last_provider = None;
     let memory_config = crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
         &run_config.memory,
     );
@@ -455,12 +478,18 @@ fn build_gateway_turn_seed(
     )
     .map_err(|error| format!("seed gateway turn session failed: {error}"))?;
 
+    #[cfg(test)]
+    let resolved_path = Some(persist_openai_compat_turn_runtime_config(&run_config)?);
+    #[cfg(not(test))]
+    let resolved_path = None;
+
     Ok(OpenAiCompatGatewayTurnSeed {
         request_id: request_id.clone(),
         session_id: request_id,
         model: request.model.clone(),
         run_config,
         input,
+        resolved_path,
     })
 }
 
@@ -496,12 +525,11 @@ async fn complete_chat_completion(
     request: &ChatCompletionRequest,
 ) -> Result<Value, String> {
     let seed = build_gateway_turn_seed(config, request)?;
-    let result = run_gateway_turn_for_seed(
-        std::path::PathBuf::from(app_state.config_path.clone()),
-        &seed,
-        None,
-    )
-    .await?;
+    let resolved_path = seed
+        .resolved_path
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from(app_state.config_path.clone()));
+    let result = run_gateway_turn_for_seed(resolved_path, &seed, None).await?;
     Ok(json!({
         "id": seed.request_id,
         "object": "chat.completion",
@@ -549,7 +577,10 @@ async fn stream_chat_completion(
         observer.clone();
     let request_id = seed.request_id.clone();
     let model = seed.model.clone();
-    let resolved_path = std::path::PathBuf::from(app_state.config_path.clone());
+    let resolved_path = seed
+        .resolved_path
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from(app_state.config_path.clone()));
 
     tokio::spawn(async move {
         let result = run_gateway_turn_for_seed(resolved_path, &seed, Some(observer_handle)).await;
@@ -631,16 +662,74 @@ fn json_response(status: StatusCode, payload: Value) -> Response {
     (status, Json(payload)).into_response()
 }
 
+#[cfg(test)]
 #[doc(hidden)]
 pub fn build_openai_compat_test_router_no_backend(
     config: LoongConfig,
     bearer_token: String,
 ) -> Router {
     let mut app_state = GatewayControlAppState::test_minimal(bearer_token);
+    let (runtime_dir, config_path) = prepare_openai_compat_test_runtime(config.clone());
+    app_state.runtime_dir = runtime_dir;
+    app_state.config_path = config_path;
     app_state.config = Some(config);
     build_openai_compat_router(Arc::new(app_state))
 }
 
+#[cfg(test)]
+fn prepare_openai_compat_test_runtime(config: LoongConfig) -> (std::path::PathBuf, String) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let root = std::env::temp_dir().join(format!(
+        "loong-openai-compat-runtime-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).expect("create openai compat runtime root");
+
+    let config_path = root.join("loong.toml");
+    let config_path_text = config_path.display().to_string();
+    crate::mvp::config::write(Some(config_path_text.as_str()), &config, true)
+        .expect("write openai compat test config");
+
+    let session_store_config =
+        crate::mvp::session::store::session_store_config_from_memory_config(&config.memory);
+    crate::mvp::session::store::ensure_session_store_ready(
+        Some(config.memory.resolved_sqlite_path()),
+        &session_store_config,
+    )
+    .expect("initialize openai compat session store");
+
+    (root, config_path_text)
+}
+
+#[cfg(test)]
+fn persist_openai_compat_turn_runtime_config(
+    config: &LoongConfig,
+) -> Result<std::path::PathBuf, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let root = std::env::temp_dir().join(format!(
+        "loong-openai-compat-turn-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("create openai compat turn config dir failed: {error}"))?;
+
+    let config_path = root.join("loong.toml");
+    let config_path_text = config_path.display().to_string();
+    crate::mvp::config::write(Some(config_path_text.as_str()), config, true)
+        .map_err(|error| format!("write openai compat turn config failed: {error}"))?;
+
+    Ok(config_path)
+}
+
+#[cfg(test)]
 pub(crate) fn build_openai_compat_router(app_state: Arc<GatewayControlAppState>) -> Router {
     Router::new()
         .route("/v1/models", get(handle_models))
@@ -1141,7 +1230,16 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(completion_response.status(), axum::http::StatusCode::OK);
+        let completion_status = completion_response.status();
+        let completion_body = to_bytes(completion_response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            completion_status,
+            axum::http::StatusCode::OK,
+            "body={}",
+            String::from_utf8_lossy(&completion_body)
+        );
         let requests = server.join().expect("join provider server");
         assert_eq!(requests.len(), 1);
         let normalized_request = requests[0].to_ascii_lowercase();
@@ -1306,7 +1404,16 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "body={}",
+            String::from_utf8_lossy(&body)
+        );
         let requests = server.join().expect("join provider server");
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with("POST /v1/chat/completions "));
@@ -1321,9 +1428,6 @@ mod tests {
             requests[0]
         );
         assert!(requests[0].contains("hello"), "request={}", requests[0]);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body");
         let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
 
         assert_eq!(payload["object"], "chat.completion");
