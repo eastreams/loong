@@ -4,6 +4,32 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+resolve_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+      printf '%s\n' "$PYTHON_BIN"
+      return 0
+    fi
+    echo "configured PYTHON_BIN '$PYTHON_BIN' was not found in PATH" >&2
+    exit 1
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "python3"
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    printf '%s\n' "python"
+    return 0
+  fi
+
+  echo "python3 or python is required" >&2
+  exit 1
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 all_features=0
 include_lib_bins=0
 selected_targets=()
@@ -51,7 +77,7 @@ build_args+=("${target_args[@]}" --no-run --message-format=json)
 
 ./scripts/cargo-local-toolchain.sh "${build_args[@]}" >"$build_output_json"
 
-binary_payload_json="$(python3 - <<'PY' "$build_output_json" "${selected_targets[@]}"
+binary_payload_json="$("$PYTHON_BIN" - <<'PY' "$build_output_json" "${selected_targets[@]}"
 import json
 import sys
 from pathlib import Path
@@ -95,7 +121,7 @@ PY
 
 derive_smoke_filters() {
   local binary_path="$1"
-  python3 - <<'PY' "$binary_path"
+  "$PYTHON_BIN" - <<'PY' "$binary_path"
 import subprocess
 import sys
 
@@ -169,7 +195,7 @@ if [[ "$include_lib_bins" -eq 1 ]]; then
   while IFS= read -r binary_path; do
     [[ -n "$binary_path" ]] || continue
     run_lib_or_bin_binary "$binary_path"
-  done < <(python3 - <<'PY' "$binary_payload_json"
+  done < <("$PYTHON_BIN" - <<'PY' "$binary_payload_json"
 import json
 import sys
 
@@ -181,7 +207,7 @@ PY
 fi
 
 while IFS= read -r target_name; do
-  binary_path="$(python3 - <<'PY' "$binary_payload_json" "$target_name"
+  binary_path="$("$PYTHON_BIN" - <<'PY' "$binary_payload_json" "$target_name"
 import json
 import sys
 

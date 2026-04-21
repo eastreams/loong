@@ -4,6 +4,32 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+resolve_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+      printf '%s\n' "$PYTHON_BIN"
+      return 0
+    fi
+    echo "configured PYTHON_BIN '$PYTHON_BIN' was not found in PATH" >&2
+    exit 1
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "python3"
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    printf '%s\n' "python"
+    return 0
+  fi
+
+  echo "python3 or python is required" >&2
+  exit 1
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 all_features=0
 explicit_paths=()
 
@@ -38,7 +64,7 @@ collect_changed_files() {
 }
 
 collect_daemon_test_targets() {
-  python3 scripts/daemon_changed_test_targets.py --format names "$@"
+  "$PYTHON_BIN" scripts/daemon_changed_test_targets.py --format names "$@"
 }
 
 changed_files=()
@@ -53,7 +79,7 @@ fi
 package_names=()
 while IFS= read -r line; do
   package_names+=("$line")
-done < <(python3 scripts/rust_changed_packages.py --format names "${changed_files[@]}")
+done < <("$PYTHON_BIN" scripts/rust_changed_packages.py --format names "${changed_files[@]}")
 if [[ "${#package_names[@]}" -eq 0 ]]; then
   echo "[test:changed] no Rust workspace packages matched the local changes"
   exit 0

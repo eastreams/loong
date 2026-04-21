@@ -4,6 +4,32 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+resolve_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+      printf '%s\n' "$PYTHON_BIN"
+      return 0
+    fi
+    echo "configured PYTHON_BIN '$PYTHON_BIN' was not found in PATH" >&2
+    exit 1
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "python3"
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    printf '%s\n' "python"
+    return 0
+  fi
+
+  echo "python3 or python is required" >&2
+  exit 1
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 all_features=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,7 +66,7 @@ fi
 changed_paths=()
 while IFS= read -r line; do
   changed_paths+=("$line")
-done < <(python3 - <<'PY'
+done < <("$PYTHON_BIN" - <<'PY'
 import json
 import os
 
