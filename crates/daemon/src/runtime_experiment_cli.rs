@@ -879,7 +879,7 @@ fn build_snapshot_summary(
 }
 
 fn canonicalize_snapshot_artifact_path(path: &str) -> CliResult<String> {
-    fs::canonicalize(path)
+    dunce::canonicalize(path)
         .map(|resolved| resolved.display().to_string())
         .map_err(|error| {
             format!(

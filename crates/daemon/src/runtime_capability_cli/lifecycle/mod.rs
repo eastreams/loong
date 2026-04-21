@@ -340,7 +340,7 @@ fn runtime_capability_apply_temp_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn canonicalize_existing_path(path: &Path) -> CliResult<String> {
-    fs::canonicalize(path)
+    dunce::canonicalize(path)
         .map(|canonicalized| canonicalized.display().to_string())
         .map_err(|error| format!("canonicalize {} failed: {error}", path.display()))
 }
