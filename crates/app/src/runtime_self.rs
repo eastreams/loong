@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::tools;
+use crate::workspace_guidance::{self, WorkspaceGuidanceSearchScope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeSelfLane {
@@ -34,14 +35,6 @@ struct TruncatedRuntimeSelfSourceContent {
 }
 
 const RUNTIME_SELF_SOURCE_SPECS: &[RuntimeSelfSourceSpec] = &[
-    RuntimeSelfSourceSpec {
-        relative_path: "AGENTS.md",
-        lane: RuntimeSelfLane::StandingInstructions,
-    },
-    RuntimeSelfSourceSpec {
-        relative_path: "CLAUDE.md",
-        lane: RuntimeSelfLane::StandingInstructions,
-    },
     RuntimeSelfSourceSpec {
         relative_path: "TOOLS.md",
         lane: RuntimeSelfLane::ToolUsagePolicy,
@@ -161,6 +154,12 @@ pub(crate) fn runtime_self_source_candidates(
     let mut source_candidates = Vec::new();
 
     for root in candidate_roots {
+        for guidance_kind in workspace_guidance::runtime_prompt_workspace_guidance_kinds() {
+            let guidance_path = root.join(guidance_kind.file_name());
+            let guidance_candidate = (guidance_path, RuntimeSelfLane::StandingInstructions);
+            source_candidates.push(guidance_candidate);
+        }
+
         for spec in RUNTIME_SELF_SOURCE_SPECS {
             let candidate_path = root.join(spec.relative_path);
             source_candidates.push((candidate_path, spec.lane));
@@ -171,16 +170,8 @@ pub(crate) fn runtime_self_source_candidates(
 }
 
 pub(crate) fn candidate_workspace_roots(workspace_root: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    let nested_workspace_root = workspace_root.join("workspace");
-
-    roots.push(workspace_root.to_path_buf());
-
-    if nested_workspace_root.is_dir() {
-        roots.push(nested_workspace_root);
-    }
-
-    roots
+    let search_scope = WorkspaceGuidanceSearchScope::WorkspaceAndNestedWorkspace;
+    workspace_guidance::candidate_workspace_roots(workspace_root, search_scope)
 }
 
 fn read_runtime_self_source(
@@ -598,6 +589,28 @@ mod tests {
             .expect("nested tool policy should be rendered");
 
         assert!(root_index < nested_index);
+    }
+
+    #[test]
+    fn load_runtime_self_model_ignores_import_only_workspace_guidance_files() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let gemini_path = workspace_root.join("GEMINI.md");
+        let opencode_path = workspace_root.join("OPENCODE.md");
+
+        std::fs::write(&gemini_path, "gemini import-only guidance").expect("write GEMINI");
+        std::fs::write(&opencode_path, "opencode import-only guidance").expect("write OPENCODE");
+
+        let model = load_runtime_self_model(workspace_root);
+
+        assert!(
+            model.standing_instructions.is_empty(),
+            "import-only guidance files should not enter runtime_self"
+        );
+        assert!(model.tool_usage_policy.is_empty());
+        assert!(model.soul_guidance.is_empty());
+        assert!(model.identity_context.is_empty());
+        assert!(model.user_context.is_empty());
     }
 
     #[test]
