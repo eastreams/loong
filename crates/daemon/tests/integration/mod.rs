@@ -19,6 +19,7 @@ mod feishu_test_fixtures;
 mod gateway_api_acp;
 mod gateway_api_events;
 mod gateway_api_health;
+mod gateway_api_pairing;
 mod gateway_api_turn;
 mod gateway_owner_state;
 mod gateway_read_models;

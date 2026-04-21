@@ -25,6 +25,7 @@ fn gateway_owner_status_fixture() -> loong_daemon::gateway::state::GatewayOwnerS
         running_surface_count: 0,
         bind_address: Some("127.0.0.1".to_owned()),
         port: Some(31337),
+        port_source: None,
         token_path: Some("/tmp/loong.token".to_owned()),
     }
 }
@@ -99,6 +100,11 @@ fn managed_bridge_parity_keeps_summary_aligned_across_text_json_and_operator_vie
         &owner_status,
         &channels_payload,
         &runtime_snapshot,
+        loong_daemon::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        },
     );
     let weixin_channels_surface = channels_payload
         .channel_surfaces

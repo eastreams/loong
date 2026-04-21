@@ -14,6 +14,11 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use loong_protocol::{
+    ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
+    ControlPlanePairingResolveRequest, ControlPlanePairingResolveResponse,
+    ControlPlanePairingStatus, ControlPlaneRole, ControlPlaneScope,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
@@ -36,22 +41,30 @@ use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
 use super::openai_compat::{handle_chat_completions, handle_models};
 use super::read_models::{
-    GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
-    GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
-    build_acp_session_list_read_model, build_acp_status_read_model,
-    build_operator_summary_read_model, build_runtime_snapshot_read_model,
+    GatewayChannelInventoryReadModel, GatewayOperatorPairingSummaryReadModel,
+    GatewayOperatorSummaryReadModel, GatewayRuntimeSnapshotReadModel,
+    build_acp_observability_read_model, build_acp_session_list_read_model,
+    build_acp_status_read_model, build_operator_summary_read_model,
+    build_runtime_snapshot_read_model,
 };
 use super::state::{
-    GatewayControlSurfaceBinding, GatewayStopRequestOutcome, gateway_control_token_path,
-    load_gateway_owner_status, request_gateway_stop,
+    GatewayControlSurfaceBinding, GatewayPortSource, GatewayStopRequestOutcome,
+    gateway_control_token_path, load_gateway_owner_status, request_gateway_stop,
 };
 
 const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
 const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 const GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT: usize = 50;
 const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
+const GATEWAY_CONTROL_PORT_ENV: &str = "LOONGCLAW_GATEWAY_PORT";
 
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GatewayPortResolution {
+    port: u16,
+    source: GatewayPortSource,
+}
 
 #[derive(Debug, Default, Deserialize)]
 struct GatewayAcpSessionsQuery {
@@ -63,6 +76,12 @@ struct GatewayAcpStatusQuery {
     session: Option<String>,
     conversation_id: Option<String>,
     route_session_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GatewayPairingListQuery {
+    status: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -238,6 +257,7 @@ pub async fn start_gateway_control_surface(
     runtime_dir: &Path,
     loaded_config: &LoadedSupervisorConfig,
     acp_manager: Option<Arc<AcpSessionManager>>,
+    port_override: Option<u16>,
 ) -> CliResult<GatewayControlSurface> {
     let channel_inventory = build_gateway_channel_inventory_read_model(loaded_config)?;
     let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config)?;
@@ -246,7 +266,9 @@ pub async fn start_gateway_control_surface(
 
     write_gateway_control_token_file(token_path.as_path(), bearer_token.as_str())?;
 
-    let listener_address = gateway_control_listener_address();
+    let port_resolution =
+        resolve_gateway_control_listener_port(&loaded_config.config, port_override)?;
+    let listener_address = gateway_control_listener_address_from_port_resolution(port_resolution);
     let listener_result = TcpListener::bind(listener_address).await;
     let listener = match listener_result {
         Ok(listener) => listener,
@@ -275,6 +297,7 @@ pub async fn start_gateway_control_surface(
     let binding = GatewayControlSurfaceBinding {
         bind_address,
         port,
+        port_source: port_resolution.source,
         token_path: token_path.clone(),
     };
 
@@ -346,6 +369,14 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             "/api/gateway/acp/observability",
             get(handle_gateway_acp_observability),
         )
+        .route(
+            "/api/gateway/pairing/requests",
+            get(handle_gateway_pairing_requests),
+        )
+        .route(
+            "/api/gateway/pairing/resolve",
+            post(handle_gateway_pairing_resolve),
+        )
         .route("/api/gateway/stop", post(handle_gateway_stop))
         .route("/v1/status", get(handle_gateway_status))
         .route("/v1/channels", get(handle_gateway_channels))
@@ -353,6 +384,8 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/acp/status", get(handle_acp_status))
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
+        .route("/v1/pairing/requests", get(handle_gateway_pairing_requests))
+        .route("/v1/pairing/resolve", post(handle_gateway_pairing_resolve))
         .route("/v1/events", get(handle_events))
         .route("/v1/turn", post(handle_turn))
         .route("/v1/models", get(handle_models))
@@ -454,6 +487,7 @@ async fn handle_gateway_operator_summary(
         &status,
         app_state.channel_inventory.as_ref(),
         app_state.runtime_snapshot.as_ref(),
+        app_state.as_ref(),
     );
     let payload = serialize_json_value(&summary, "gateway operator summary payload");
     match payload {
@@ -663,6 +697,118 @@ async fn handle_gateway_acp_observability(
     json_response(StatusCode::OK, payload)
 }
 
+async fn handle_gateway_pairing_requests(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Query(query): Query<GatewayPairingListQuery>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+        Ok(pairing_registry) => pairing_registry,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pairing_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let status = match query.status.as_deref() {
+        Some(raw) => match parse_gateway_pairing_status(raw) {
+            Ok(status) => Some(status),
+            Err(error) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_pairing_status",
+                    error.as_str(),
+                );
+            }
+        },
+        None => None,
+    };
+    let limit = query.limit.unwrap_or(50);
+    let requests = pairing_registry.list_requests(status, limit);
+    let payload = ControlPlanePairingListResponse {
+        matched_count: requests.len(),
+        returned_count: requests.len(),
+        requests: requests
+            .into_iter()
+            .map(map_gateway_pairing_request)
+            .collect::<Vec<_>>(),
+    };
+    let payload = match serialize_json_value(&payload, "gateway pairing requests payload") {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_failed",
+                error.as_str(),
+            );
+        }
+    };
+
+    json_response(StatusCode::OK, payload)
+}
+
+async fn handle_gateway_pairing_resolve(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Json(request): Json<ControlPlanePairingResolveRequest>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+        Ok(pairing_registry) => pairing_registry,
+        Err(error) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pairing_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    match pairing_registry.resolve_request(request.pairing_request_id.as_str(), request.approve) {
+        Ok(Some(record)) => {
+            let payload = ControlPlanePairingResolveResponse {
+                request: map_gateway_pairing_request(record.clone()),
+                device_token: record.device_token,
+            };
+            let payload = match serialize_json_value(&payload, "gateway pairing resolve payload") {
+                Ok(payload) => payload,
+                Err(error) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "serialize_failed",
+                        error.as_str(),
+                    );
+                }
+            };
+            json_response(StatusCode::OK, payload)
+        }
+        Ok(None) => json_error(
+            StatusCode::NOT_FOUND,
+            "pairing_not_found",
+            format!(
+                "pairing request `{}` not found",
+                request.pairing_request_id.trim()
+            )
+            .as_str(),
+        ),
+        Err(error) => json_error(
+            StatusCode::BAD_REQUEST,
+            "pairing_resolve_failed",
+            error.as_str(),
+        ),
+    }
+}
+
 async fn handle_gateway_stop(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
@@ -762,15 +908,34 @@ fn build_gateway_operator_summary_read_model(
     status: &super::state::GatewayOwnerStatus,
     channel_inventory: &GatewayChannelInventoryReadModel,
     runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+    app_state: &GatewayControlAppState,
 ) -> GatewayOperatorSummaryReadModel {
-    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot)
+    let pairing = build_gateway_pairing_summary_read_model(app_state);
+    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot, pairing)
+}
+
+fn build_gateway_pairing_summary_read_model(
+    app_state: &GatewayControlAppState,
+) -> GatewayOperatorPairingSummaryReadModel {
+    match gateway_pairing_registry(app_state) {
+        Ok(pairing_registry) => GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: pairing_registry.pending_request_count(),
+            approved_device_count: pairing_registry.approved_device_count(),
+            last_activity_ms: pairing_registry.last_activity_ms(),
+        },
+        Err(_) => GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        },
+    }
 }
 
 fn gateway_control_config(app_state: &GatewayControlAppState) -> CliResult<&LoongConfig> {
     let config = app_state
         .config
         .as_ref()
-        .ok_or_else(|| "gateway ACP config is unavailable".to_owned())?;
+        .ok_or_else(|| "gateway config is unavailable".to_owned())?;
     Ok(config)
 }
 
@@ -803,10 +968,136 @@ fn serialize_json_value<T: Serialize>(value: &T, context: &str) -> CliResult<Val
     serde_json::to_value(value).map_err(|error| format!("serialize {context} failed: {error}"))
 }
 
-fn gateway_control_listener_address() -> SocketAddrV4 {
+fn default_gateway_control_listener_address(config: &LoongConfig) -> SocketAddrV4 {
+    SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.gateway.port)
+}
+
+fn gateway_control_listener_address_from_port_resolution(
+    resolution: GatewayPortResolution,
+) -> SocketAddrV4 {
     let bind_address = Ipv4Addr::LOCALHOST;
-    let bind_port = 0_u16;
+    let bind_port = resolution.port;
     SocketAddrV4::new(bind_address, bind_port)
+}
+
+fn resolve_gateway_control_listener_port(
+    config: &LoongConfig,
+    port_override: Option<u16>,
+) -> CliResult<GatewayPortResolution> {
+    if let Some(port_override) = port_override {
+        return Ok(GatewayPortResolution {
+            port: port_override,
+            source: if port_override == 0 {
+                GatewayPortSource::EphemeralCli
+            } else {
+                GatewayPortSource::Cli
+            },
+        });
+    }
+
+    if let Some(port) = resolve_gateway_control_listener_port_from_env()? {
+        return Ok(GatewayPortResolution {
+            port,
+            source: GatewayPortSource::Env,
+        });
+    }
+
+    if config.gateway.port != mvp::config::GatewayConfig::default().port {
+        return Ok(GatewayPortResolution {
+            port: config.gateway.port,
+            source: GatewayPortSource::Config,
+        });
+    }
+
+    let default_port = default_gateway_control_listener_address(config).port();
+    Ok(GatewayPortResolution {
+        port: default_port,
+        source: GatewayPortSource::Default,
+    })
+}
+
+fn resolve_gateway_control_listener_port_from_env() -> CliResult<Option<u16>> {
+    let Some(raw_value) = std::env::var_os(GATEWAY_CONTROL_PORT_ENV) else {
+        return Ok(None);
+    };
+    let raw_value = raw_value.to_string_lossy();
+    let trimmed_value = raw_value.trim();
+    if trimmed_value.is_empty() {
+        return Ok(None);
+    }
+    let port = trimmed_value.parse::<u16>().map_err(|error| {
+        format!("parse {GATEWAY_CONTROL_PORT_ENV}=`{trimmed_value}` failed: {error}")
+    })?;
+    Ok(Some(port))
+}
+
+fn gateway_pairing_registry(
+    app_state: &GatewayControlAppState,
+) -> CliResult<mvp::control_plane::ControlPlanePairingRegistry> {
+    let config = gateway_control_config(app_state)?;
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let memory_config =
+            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+                &config.memory,
+            );
+        mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)
+    }
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = config;
+        Err("gateway pairing requires sqlite memory support".to_owned())
+    }
+}
+
+fn map_gateway_pairing_status(
+    status: mvp::control_plane::ControlPlanePairingStatus,
+) -> ControlPlanePairingStatus {
+    match status {
+        mvp::control_plane::ControlPlanePairingStatus::Pending => {
+            ControlPlanePairingStatus::Pending
+        }
+        mvp::control_plane::ControlPlanePairingStatus::Approved => {
+            ControlPlanePairingStatus::Approved
+        }
+        mvp::control_plane::ControlPlanePairingStatus::Rejected => {
+            ControlPlanePairingStatus::Rejected
+        }
+    }
+}
+
+fn map_gateway_pairing_request(
+    request: mvp::control_plane::ControlPlanePairingRequestRecord,
+) -> ControlPlanePairingRequestSummary {
+    ControlPlanePairingRequestSummary {
+        pairing_request_id: request.pairing_request_id,
+        device_id: request.device_id,
+        client_id: request.client_id,
+        public_key: request.public_key,
+        role: match request.role.as_str() {
+            "operator" => ControlPlaneRole::Operator,
+            _ => ControlPlaneRole::Node,
+        },
+        requested_scopes: request
+            .requested_scopes
+            .into_iter()
+            .filter_map(|scope| ControlPlaneScope::parse(scope.as_str()))
+            .collect::<std::collections::BTreeSet<_>>(),
+        status: map_gateway_pairing_status(request.status),
+        requested_at_ms: request.requested_at_ms,
+        resolved_at_ms: request.resolved_at_ms,
+    }
+}
+
+fn parse_gateway_pairing_status(
+    raw: &str,
+) -> Result<mvp::control_plane::ControlPlanePairingStatus, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "pending" => Ok(mvp::control_plane::ControlPlanePairingStatus::Pending),
+        "approved" => Ok(mvp::control_plane::ControlPlanePairingStatus::Approved),
+        "rejected" => Ok(mvp::control_plane::ControlPlanePairingStatus::Rejected),
+        _ => Err(format!("unknown pairing status `{raw}`")),
+    }
 }
 
 fn new_gateway_control_bearer_token() -> String {
@@ -1034,4 +1325,92 @@ pub fn build_gateway_acp_test_router(
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
         .with_state(app_state)
+}
+
+/// Minimal router for gateway pairing endpoint integration tests.
+#[doc(hidden)]
+pub fn build_gateway_pairing_test_router(bearer_token: String, config: LoongConfig) -> Router {
+    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    state.config = Some(config);
+    let app_state = Arc::new(state);
+    Router::new()
+        .route("/v1/pairing/requests", get(handle_gateway_pairing_requests))
+        .route("/v1/pairing/resolve", post(handle_gateway_pairing_resolve))
+        .with_state(app_state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GATEWAY_CONTROL_PORT_ENV, gateway_control_listener_address_from_port_resolution,
+        resolve_gateway_control_listener_port,
+    };
+    use crate::gateway::state::GatewayPortSource;
+    use crate::mvp::config::LoongConfig;
+    use crate::test_support::ScopedEnv;
+
+    #[test]
+    fn gateway_control_listener_port_defaults_to_26306() {
+        let mut env = ScopedEnv::new();
+        env.remove(GATEWAY_CONTROL_PORT_ENV);
+
+        let config = LoongConfig::default();
+        let resolution = resolve_gateway_control_listener_port(&config, None).expect("resolution");
+        let listener_address = gateway_control_listener_address_from_port_resolution(resolution);
+
+        assert_eq!(*listener_address.ip(), std::net::Ipv4Addr::LOCALHOST);
+        assert_eq!(listener_address.port(), 26_306);
+        assert_eq!(resolution.source, GatewayPortSource::Default);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_uses_env_override() {
+        let mut env = ScopedEnv::new();
+        env.set(GATEWAY_CONTROL_PORT_ENV, "26316");
+
+        let config = LoongConfig::default();
+        let resolution = resolve_gateway_control_listener_port(&config, None).expect("resolution");
+
+        assert_eq!(resolution.port, 26_316);
+        assert_eq!(resolution.source, GatewayPortSource::Env);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_uses_config_value_without_override() {
+        let mut env = ScopedEnv::new();
+        env.remove(GATEWAY_CONTROL_PORT_ENV);
+
+        let mut config = LoongConfig::default();
+        config.gateway.port = 26_346;
+        let resolution = resolve_gateway_control_listener_port(&config, None).expect("resolution");
+
+        assert_eq!(resolution.port, 26_346);
+        assert_eq!(resolution.source, GatewayPortSource::Config);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_prefers_cli_override() {
+        let mut env = ScopedEnv::new();
+        env.set(GATEWAY_CONTROL_PORT_ENV, "26316");
+
+        let config = LoongConfig::default();
+        let resolution =
+            resolve_gateway_control_listener_port(&config, Some(26_326)).expect("resolution");
+
+        assert_eq!(resolution.port, 26_326);
+        assert_eq!(resolution.source, GatewayPortSource::Cli);
+    }
+
+    #[test]
+    fn gateway_control_listener_port_accepts_explicit_ephemeral_zero() {
+        let mut env = ScopedEnv::new();
+        env.remove(GATEWAY_CONTROL_PORT_ENV);
+
+        let config = LoongConfig::default();
+        let resolution =
+            resolve_gateway_control_listener_port(&config, Some(0)).expect("resolution");
+
+        assert_eq!(resolution.port, 0);
+        assert_eq!(resolution.source, GatewayPortSource::EphemeralCli);
+    }
 }

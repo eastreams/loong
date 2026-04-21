@@ -185,10 +185,36 @@ pub struct LoongConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default, skip_serializing_if = "GatewayConfig::is_default")]
+    pub gateway: GatewayConfig,
     #[serde(default, skip_serializing_if = "ControlPlaneConfig::is_default")]
     pub control_plane: ControlPlaneConfig,
     #[serde(default)]
     pub acp: AcpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GatewayConfig {
+    #[serde(default = "default_gateway_port")]
+    pub port: u16,
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            port: default_gateway_port(),
+        }
+    }
+}
+
+impl GatewayConfig {
+    fn is_default(config: &Self) -> bool {
+        *config == Self::default()
+    }
+}
+
+fn default_gateway_port() -> u16 {
+    26_306
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
