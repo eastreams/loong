@@ -4,7 +4,34 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+all_features=0
+explicit_paths=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all-features)
+      all_features=1
+      shift
+      ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do
+        explicit_paths+=("$1")
+        shift
+      done
+      ;;
+    *)
+      explicit_paths+=("$1")
+      shift
+      ;;
+  esac
+done
+
 collect_changed_files() {
+  if [[ "${#explicit_paths[@]}" -gt 0 ]]; then
+    printf '%s\n' "${explicit_paths[@]}"
+    return
+  fi
   git diff --name-only --relative HEAD
   git diff --name-only --cached --relative
   git ls-files --others --exclude-standard
@@ -12,24 +39,6 @@ collect_changed_files() {
 
 collect_daemon_test_targets() {
   python3 scripts/daemon_changed_test_targets.py --format names "$@"
-}
-
-run_daemon_test_target() {
-  local target_name="$1"
-
-  echo "[test:changed] daemon target: ${target_name}"
-
-  if [[ "$target_name" == "daemon_smoke" ]]; then
-    ./scripts/test_daemon_smoke.sh
-    return
-  fi
-
-  if [[ "$target_name" == "integration" ]]; then
-    ./scripts/cargo-local-toolchain.sh test --locked -p loong --test integration
-    return
-  fi
-
-  ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test "$target_name"
 }
 
 changed_files=()
@@ -65,7 +74,12 @@ for package_name in "${package_names[@]}"; do
 done
 
 if [[ "${#other_packages[@]}" -gt 0 ]]; then
-  ./scripts/cargo-local-toolchain.sh test --locked "${other_packages[@]}" --lib --tests
+  cargo_args=(test --locked)
+  if [[ "$all_features" -eq 1 ]]; then
+    cargo_args+=(--all-features)
+  fi
+  cargo_args+=("${other_packages[@]}" --lib --tests)
+  ./scripts/cargo-local-toolchain.sh "${cargo_args[@]}"
 fi
 
 if [[ "$run_daemon" -eq 1 ]]; then
@@ -80,9 +94,11 @@ if [[ "$run_daemon" -eq 1 ]]; then
 
   echo "[test:changed] daemon targets: ${daemon_test_targets[*]}"
 
-  ./scripts/cargo-local-toolchain.sh test --locked -p loong --lib --bins
-
-  for target_name in "${daemon_test_targets[@]}"; do
-    run_daemon_test_target "$target_name"
-  done
+  daemon_runner_args=()
+  if [[ "$all_features" -eq 1 ]]; then
+    daemon_runner_args+=(--all-features)
+  fi
+  daemon_runner_args+=(--include-lib-bins)
+  daemon_runner_args+=("${daemon_test_targets[@]}")
+  ./scripts/run_selected_daemon_tests.sh "${daemon_runner_args[@]}"
 fi

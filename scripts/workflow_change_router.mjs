@@ -245,12 +245,14 @@ export async function collectChangedFileContext(runtime, options) {
 export function classifyCiJobSet(changedFileContext) {
   const shouldForceRun = changedFileContext.forceRun;
   const touchedPaths = collectTouchedPaths(changedFileContext.files);
+  const touchedPathsJson = JSON.stringify(touchedPaths);
 
   if (shouldForceRun) {
     const forcedOutputs = {};
     forcedOutputs.runRustJobs = true;
     forcedOutputs.runDocsSite = true;
     forcedOutputs.touchedPaths = touchedPaths;
+    forcedOutputs.touchedPathsJson = touchedPathsJson;
     return forcedOutputs;
   }
 
@@ -260,6 +262,7 @@ export function classifyCiJobSet(changedFileContext) {
   routeOutputs.runRustJobs = runRustJobs;
   routeOutputs.runDocsSite = runDocsSite;
   routeOutputs.touchedPaths = touchedPaths;
+  routeOutputs.touchedPathsJson = touchedPathsJson;
   return routeOutputs;
 }
 
@@ -307,7 +310,8 @@ export function writeRouteOutputs(core, routeOutputs) {
       continue;
     }
 
-    const normalizedValue = outputValue ? "true" : "false";
+    const normalizedValue =
+      typeof outputValue === "boolean" ? (outputValue ? "true" : "false") : outputValue;
     core.setOutput(outputName, normalizedValue);
   }
 }
