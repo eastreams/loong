@@ -2981,10 +2981,8 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let request = read_local_provider_request(
-                &mut stream,
-                Instant::now() + Duration::from_secs(1),
-            );
+            let request =
+                read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("POST /v1/responses ") {
@@ -3065,10 +3063,8 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let request = read_local_provider_request(
-                &mut stream,
-                Instant::now() + Duration::from_secs(1),
-            );
+            let request =
+                read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("POST /v1/responses ") {
@@ -3151,10 +3147,8 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
         let mut requests = Vec::new();
         for _ in 0..3 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let request = read_local_provider_request(
-                &mut stream,
-                Instant::now() + Duration::from_secs(1),
-            );
+            let request =
+                read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
             requests.push(request.clone());
 
             let body =
@@ -3218,10 +3212,8 @@ async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         let (mut stream, _) = listener.accept().expect("accept local provider request");
-        let request = read_local_provider_request(
-            &mut stream,
-            Instant::now() + Duration::from_secs(1),
-        );
+        let request =
+            read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
         requests.push(request);
 
         let body = r#"{"error":{"message":"unsupported google route request"}}"#;
