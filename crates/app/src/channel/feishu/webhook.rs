@@ -531,7 +531,7 @@ pub(super) async fn handle_feishu_parsed_action(
             );
             {
                 let mut dedupe = state.seen_events.lock().await;
-                let reservation = dedupe.begin_processing(&event.event_id);
+                let reservation = dedupe.begin_processing(event.delivery_dedupe_key());
                 if !matches!(reservation, RecentIdReservation::Accepted) {
                     tracing::debug!(
                         target: "loong.channel.feishu",
@@ -574,7 +574,7 @@ pub(super) async fn handle_feishu_parsed_action(
             );
             {
                 let mut dedupe = state.seen_events.lock().await;
-                let reservation = dedupe.begin_processing(&event.event_id);
+                let reservation = dedupe.begin_processing(event.delivery_dedupe_key());
                 if !matches!(reservation, RecentIdReservation::Accepted) {
                     tracing::debug!(
                         target: "loong.channel.feishu",
@@ -582,6 +582,8 @@ pub(super) async fn handle_feishu_parsed_action(
                         action = "inbound",
                         configured_account_id = %state.configured_account_id,
                         event_id = %event.event_id,
+                        message_id = %event.message_id,
+                        dedupe_key = %event.delivery_dedupe_key(),
                         reservation = ?reservation,
                         "deduplicated feishu inbound event"
                     );
@@ -591,15 +593,15 @@ pub(super) async fn handle_feishu_parsed_action(
                 }
             }
 
-            let event_id = event.event_id.clone();
+            let delivery_dedupe_key = event.delivery_dedupe_key().to_owned();
             let result = handle_feishu_inbound_event(state, event).await;
 
             {
                 let mut dedupe = state.seen_events.lock().await;
                 if result.is_ok() {
-                    dedupe.mark_completed(&event_id);
+                    dedupe.mark_completed(&delivery_dedupe_key);
                 } else {
-                    dedupe.release(&event_id);
+                    dedupe.release(&delivery_dedupe_key);
                 }
             }
 
@@ -2229,6 +2231,122 @@ data: [DONE]\n\n",
             feishu_requests.iter().all(|request| request.path
                 != "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply"),
             "failed inbound handling must not send a reply"
+        );
+
+        provider_server.abort();
+        feishu_server.abort();
+    }
+
+    #[test]
+    fn feishu_webhook_deduplicates_same_message_id_across_replayed_event_ids() {
+        run_feishu_webhook_test_on_large_stack(
+            "feishu-webhook-message-replay-dedupe",
+            || async move {
+                feishu_webhook_deduplicates_same_message_id_across_replayed_event_ids_impl().await;
+            },
+        );
+    }
+
+    async fn feishu_webhook_deduplicates_same_message_id_across_replayed_event_ids_impl() {
+        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let (provider_base_url, provider_server) =
+            spawn_mock_provider_server(provider_requests.clone()).await;
+        let (feishu_base_url, feishu_server) =
+            spawn_mock_feishu_api_server(feishu_requests.clone(), "om_reply_dedupe").await;
+
+        let config = test_webhook_config(&provider_base_url, &feishu_base_url);
+        let resolved = config
+            .feishu
+            .resolve_account(None)
+            .expect("resolve feishu account");
+        let mut adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
+        adapter
+            .refresh_tenant_token()
+            .await
+            .expect("refresh tenant token before webhook test");
+        let kernel_ctx = bootstrap_test_kernel_context(
+            "feishu-webhook-message-replay-dedupe",
+            DEFAULT_TOKEN_TTL_S,
+        )
+        .expect("bootstrap kernel context");
+        let runtime = Arc::new(
+            ChannelOperationRuntimeTracker::start(
+                ChannelPlatform::Feishu,
+                "serve",
+                resolved.account.id.as_str(),
+                resolved.account.label.as_str(),
+            )
+            .await
+            .expect("start runtime tracker"),
+        );
+        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
+
+        let payload = |event_id: &str| {
+            json!({
+                "token": "verify-token",
+                "header": {
+                    "event_id": event_id,
+                    "event_type": "im.message.receive_v1"
+                },
+                "event": {
+                    "sender": {
+                        "sender_type": "user",
+                        "sender_id": {
+                            "open_id": "ou_sender_replay"
+                        }
+                    },
+                    "message": {
+                        "chat_id": "oc_demo",
+                        "message_id": "om_inbound_replayed_1",
+                        "message_type": "text",
+                        "content": "{\"text\":\"dedupe this replay\"}"
+                    }
+                }
+            })
+        };
+
+        let first_payload = payload("evt_message_replay_1");
+        let first_raw_body = serde_json::to_string(&first_payload).expect("serialize payload");
+        let first_headers = signed_headers(&first_raw_body, "encrypt-key");
+        let first_response = handle_feishu_webhook_payload(
+            state.clone(),
+            &first_headers,
+            first_raw_body.as_str(),
+            serde_json::from_str(first_raw_body.as_str()).expect("payload value"),
+        )
+        .await
+        .expect("first webhook request should succeed");
+        assert_eq!(first_response.body(), &json!({"code": 0, "msg": "ok"}));
+
+        let replay_payload = payload("evt_message_replay_2");
+        let replay_raw_body = serde_json::to_string(&replay_payload).expect("serialize payload");
+        let replay_headers = signed_headers(&replay_raw_body, "encrypt-key");
+        let replay_response = handle_feishu_webhook_payload(
+            state,
+            &replay_headers,
+            replay_raw_body.as_str(),
+            serde_json::from_str(replay_raw_body.as_str()).expect("payload value"),
+        )
+        .await
+        .expect("replayed webhook request should be deduplicated");
+        assert_eq!(
+            replay_response.body(),
+            &json!({"code": 0, "msg": "duplicate_event"})
+        );
+
+        let provider_requests = wait_for_request_count(&provider_requests, 1).await;
+        assert_eq!(provider_requests.len(), 1);
+
+        let feishu_requests = wait_for_request_count(&feishu_requests, 2).await;
+        assert_eq!(
+            feishu_requests
+                .iter()
+                .filter(|request| request.path
+                    == "/open-apis/im/v1/messages/om_inbound_replayed_1/reply")
+                .count(),
+            1,
+            "replayed inbound message ids must not trigger a second reply send"
         );
 
         provider_server.abort();

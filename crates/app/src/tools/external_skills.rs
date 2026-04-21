@@ -292,6 +292,13 @@ struct RankedBlockedSkillDiscoveryResult {
     match_reasons: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SkillDiscoveryToolHint {
+    pub(super) skill_id: String,
+    pub(super) display_name: String,
+    pub(super) summary: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SkillAudience {
     Model,
@@ -1502,6 +1509,66 @@ fn build_skill_search_summary(skill: &DiscoveredSkillEntry) -> String {
     }
 
     format!("{display_name}. {summary}")
+}
+
+pub(super) fn exact_model_visible_skill_hint(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    skill_id: &str,
+) -> Result<Option<SkillDiscoveryToolHint>, String> {
+    if !config.external_skills.enabled {
+        return Ok(None);
+    }
+
+    let requested_skill_id = skill_id.trim();
+    if requested_skill_id.is_empty() {
+        return Ok(None);
+    }
+
+    let inventory = discover_skill_inventory(config)?;
+    let filtered = filter_inventory_for_audience(inventory, SkillAudience::Model);
+    let matched = filtered
+        .skills
+        .into_iter()
+        .find(|entry| entry.skill_id.eq_ignore_ascii_case(requested_skill_id));
+
+    Ok(matched.map(skill_discovery_tool_hint_from_entry))
+}
+
+pub(super) fn ranked_model_visible_skill_hints(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SkillDiscoveryToolHint>, String> {
+    if !config.external_skills.enabled {
+        return Ok(Vec::new());
+    }
+
+    let trimmed_query = query.trim();
+    if trimmed_query.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let inventory = discover_skill_inventory(config)?;
+    let filtered = filter_inventory_for_audience(inventory, SkillAudience::Model);
+    let results = build_ranked_skill_discovery_results(
+        filtered.skills.as_slice(),
+        trimmed_query,
+        limit,
+        SkillDiscoveryResolution::Active,
+    );
+
+    Ok(results
+        .into_iter()
+        .map(|result| skill_discovery_tool_hint_from_entry(result.skill))
+        .collect())
+}
+
+fn skill_discovery_tool_hint_from_entry(entry: DiscoveredSkillEntry) -> SkillDiscoveryToolHint {
+    SkillDiscoveryToolHint {
+        skill_id: entry.skill_id,
+        display_name: entry.display_name,
+        summary: entry.summary,
+    }
 }
 
 fn build_skill_search_argument_hint(

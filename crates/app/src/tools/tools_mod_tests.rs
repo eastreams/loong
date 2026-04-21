@@ -3035,6 +3035,131 @@ fn tool_search_hides_app_only_discoverables_from_provider_visible_results() {
 }
 
 #[test]
+fn tool_search_exact_skill_id_returns_skills_surface_with_run_guidance() {
+    use std::fs;
+
+    let root = unique_temp_dir("loongclaw-tool-search-skill-exact");
+    fs::create_dir_all(&root).expect("create fixture root");
+    let skill_root = root.join("skills").join("agent-browser");
+    fs::create_dir_all(&skill_root).expect("create skill root");
+    fs::write(
+        skill_root.join("SKILL.md"),
+        "# Agent Browser\n\nUse this skill for managed browser automation.\n",
+    )
+    .expect("write skill fixture");
+
+    let config = test_tool_runtime_config(&root);
+    execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "external_skills.install".to_owned(),
+            payload: json!({
+                "path": "skills/agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("install should succeed");
+
+    let search = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "exact_tool_id": "agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("tool search should succeed");
+
+    let results = search.payload["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["tool_id"], "skills");
+    assert_eq!(search.payload["exact_tool_id"], "agent-browser");
+    assert!(search.payload["diagnostics"].is_null());
+    assert!(
+        results[0]["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("Matching installed skills: agent-browser")),
+        "search result should mention the matched installed skill: {results:?}"
+    );
+    assert!(
+        results[0]["usage_guidance"].as_str().is_some_and(
+            |guidance| guidance.contains(r#"{"operation":"run","skill_id":"agent-browser"}"#)
+        ),
+        "skills surface should advertise the explicit run flow: {results:?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn tool_invoke_skills_surface_requires_operation_when_skill_id_is_present() {
+    use std::fs;
+
+    let root = unique_temp_dir("loongclaw-tool-search-skill-operation");
+    fs::create_dir_all(&root).expect("create fixture root");
+    let skill_root = root.join("skills").join("agent-browser");
+    fs::create_dir_all(&skill_root).expect("create skill root");
+    fs::write(
+        skill_root.join("SKILL.md"),
+        "# Agent Browser\n\nUse this skill for managed browser automation.\n",
+    )
+    .expect("write skill fixture");
+
+    let config = test_tool_runtime_config(&root);
+    execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "external_skills.install".to_owned(),
+            payload: json!({
+                "path": "skills/agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("install should succeed");
+
+    let search = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "query": "agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("tool search should succeed");
+    let lease = search.payload["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .find(|entry| entry["tool_id"] == "skills")
+        .and_then(|entry| entry["lease"].as_str())
+        .expect("skills lease");
+
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "lease": lease,
+                "arguments": {
+                    "skill_id": "agent-browser"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("skill_id without operation should fail closed");
+
+    assert!(
+        error.contains("tool_not_found:") && error.contains("skills"),
+        "skill_id without operation should fail closed instead of silently inspecting: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn tool_search_hides_tools_exceeding_granted_capabilities() {
     let created_at = std::time::SystemTime::now();
     let duration = created_at
