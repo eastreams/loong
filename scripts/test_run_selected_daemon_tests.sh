@@ -120,6 +120,13 @@ run_batch_compile_and_execution_test() {
   : >"$invocation_log"
   make_fake_cargo "$stub_dir"
 
+  cat >"$stub_dir/python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec python3 "$@"
+EOF
+  chmod +x "$stub_dir/python"
+
   cat >"$fixture_root/scripts/cargo-local-toolchain.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -130,6 +137,7 @@ EOF
   (
     cd "$fixture_root"
     PATH="$stub_dir:$PATH" \
+      PYTHON_BIN=python \
       FAKE_INVOCATION_LOG="$invocation_log" \
       FAKE_BUILD_DIR="$build_dir" \
       ./scripts/run_selected_daemon_tests.sh --all-features --include-lib-bins daemon_smoke daemon_feishu >"$output_file" 2>&1

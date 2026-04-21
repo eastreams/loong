@@ -30,11 +30,18 @@ make_fixture_repo() {
   local selected_packages_json="$2"
   local daemon_targets="$3"
 
-  mkdir -p "$fixture_root/scripts"
+  mkdir -p "$fixture_root/scripts" "$fixture_root/stub"
   cp "$SCRIPT_SOURCE" "$fixture_root/scripts/test_changed_rust_packages.sh"
   cp "$DAEMON_RUNNER_SOURCE" "$fixture_root/scripts/run_selected_daemon_tests.sh"
   chmod +x "$fixture_root/scripts/test_changed_rust_packages.sh"
   chmod +x "$fixture_root/scripts/run_selected_daemon_tests.sh"
+
+  cat >"$fixture_root/stub/python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec python3 "$@"
+EOF
+  chmod +x "$fixture_root/stub/python"
 
   cat >"$fixture_root/scripts/rust_changed_packages.py" <<EOF
 #!/usr/bin/env python3
@@ -128,6 +135,8 @@ run_explicit_paths_all_features_test() {
 
   (
     cd "$fixture_root"
+    PATH="$fixture_root/stub:$PATH" \
+      PYTHON_BIN=python \
     FAKE_INVOCATION_LOG="$invocation_log" \
       FAKE_BUILD_DIR="$build_dir" \
       ./scripts/test_changed_rust_packages.sh --all-features crates/daemon/src/gateway/openai_compat.rs >"$output_file" 2>&1
@@ -157,6 +166,8 @@ run_explicit_paths_mixed_package_test() {
 
   (
     cd "$fixture_root"
+    PATH="$fixture_root/stub:$PATH" \
+      PYTHON_BIN=python \
     FAKE_INVOCATION_LOG="$invocation_log" \
       FAKE_BUILD_DIR="$build_dir" \
       ./scripts/test_changed_rust_packages.sh crates/app/src/lib.rs >"$output_file" 2>&1

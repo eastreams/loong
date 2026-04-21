@@ -43,6 +43,13 @@ set -euo pipefail
 printf 'cargo %s\n' "$*" >>"$FAKE_INVOCATION_LOG"
 EOF
   chmod +x "$fixture_root/stub/cargo"
+
+  cat >"$fixture_root/stub/python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec python3 "$@"
+EOF
+  chmod +x "$fixture_root/stub/python"
 }
 
 run_pull_request_fast_lane_test() {
@@ -58,6 +65,7 @@ run_pull_request_fast_lane_test() {
   (
     cd "$fixture_root"
     PATH="$fixture_root/stub:$PATH" \
+      PYTHON_BIN=python \
       FAKE_INVOCATION_LOG="$invocation_log" \
       GITHUB_EVENT_NAME=pull_request \
       TOUCHED_PATHS_JSON='["crates/daemon/src/gateway/openai_compat.rs","Taskfile.yml"]' \
