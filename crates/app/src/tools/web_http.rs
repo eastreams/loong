@@ -119,6 +119,7 @@ pub(crate) fn validate_http_target(
 /// - Current-thread runtime: run future on a dedicated worker thread
 /// - No runtime: create a temporary current-thread runtime
 #[cfg(any(
+    feature = "tool-browser",
     feature = "tool-http",
     feature = "tool-webfetch",
     feature = "tool-websearch"
