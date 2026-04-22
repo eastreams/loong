@@ -136,6 +136,16 @@ fn automation_serve_lock_path(loong_home: &Path) -> PathBuf {
     loong_home.join("automation").join("serve.lock")
 }
 
+fn automation_runner_status_snapshot_path(loong_home: &Path) -> PathBuf {
+    loong_home.join("automation").join("serve.status.json")
+}
+
+fn automation_runner_stop_request_path(loong_home: &Path) -> PathBuf {
+    loong_home
+        .join("automation")
+        .join("serve.stop-request.json")
+}
+
 fn wait_for_path(path: &Path, description: &str) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
@@ -147,6 +157,72 @@ fn wait_for_path(path: &Path, description: &str) {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+fn wait_for_path_absent(path: &Path, description: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if !path.exists() {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for {description} to disappear at {}",
+                path.display()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+fn seed_stale_automation_runner_state(loong_home: &Path, config_path: &Path, owner_token: &str) {
+    let stale_runner_state = json!({
+        "phase": "running",
+        "running": true,
+        "pid": 4242,
+        "version": "test",
+        "config_path": config_path.display().to_string(),
+        "bind_address": Value::Null,
+        "event_path": "/automation/events",
+        "poll_ms": 250,
+        "started_at_ms": 1,
+        "last_heartbeat_at": 1,
+        "stopped_at_ms": Value::Null,
+        "shutdown_reason": Value::Null,
+        "last_error": Value::Null,
+        "owner_token": owner_token,
+    });
+    let encoded_runner_state =
+        serde_json::to_string_pretty(&stale_runner_state).expect("encode stale runner state");
+    let encoded_runner_state = format!("{encoded_runner_state}\n");
+    let automation_dir = loong_home.join("automation");
+    fs::create_dir_all(&automation_dir).expect("create automation dir");
+    fs::write(
+        automation_serve_lock_path(loong_home).as_path(),
+        encoded_runner_state.as_bytes(),
+    )
+    .expect("write stale serve lock");
+    fs::write(
+        automation_runner_status_snapshot_path(loong_home).as_path(),
+        encoded_runner_state.as_bytes(),
+    )
+    .expect("write stale serve status snapshot");
+}
+
+fn seed_automation_runner_stop_request(loong_home: &Path, owner_token: &str) {
+    let stop_request = json!({
+        "requested_at_ms": 2,
+        "requested_by_pid": 4242,
+        "target_owner_token": owner_token,
+    });
+    let encoded_stop_request =
+        serde_json::to_string_pretty(&stop_request).expect("encode stale stop request");
+    let encoded_stop_request = format!("{encoded_stop_request}\n");
+    fs::write(
+        automation_runner_stop_request_path(loong_home).as_path(),
+        encoded_stop_request.as_bytes(),
+    )
+    .expect("write stale stop request");
 }
 
 fn wait_for_serve_lock(child: &mut Child, path: &Path) {
@@ -854,6 +930,153 @@ async fn automation_runner_stop_requests_shutdown_for_running_owner() {
     .expect("inspect automation runner after stop");
     assert_eq!(status_payload["status"]["running"], false);
 
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_runner_inspect_reports_stale_lease_metadata() {
+    let guard = lock_automation_integration().await;
+    let root = TempDirGuard::new("loong-automation-runner-stale-inspect");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let _env = MigrationEnvironmentGuard::set(&[("LOONG_HOME", Some(loong_home_text.as_str()))]);
+
+    seed_stale_automation_runner_state(&loong_home, &config_path, "owner-stale-inspect");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Inspect(
+                        loong_daemon::automation_cli::AutomationRunnerInspectCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inspect stale automation runner");
+
+    assert_eq!(payload["command"], "runner_inspect");
+    assert_eq!(payload["status"]["running"], true);
+    assert_eq!(payload["status"]["stale"], true);
+    assert_eq!(payload["status"]["lease_timeout_ms"], 15_000);
+    assert_eq!(payload["status"]["lease_expires_at_ms"], 15_001);
+
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_runner_reclaim_marks_stale_owner_stopped_and_clears_slot() {
+    let guard = lock_automation_integration().await;
+    let root = TempDirGuard::new("loong-automation-runner-reclaim");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let _env = MigrationEnvironmentGuard::set(&[("LOONG_HOME", Some(loong_home_text.as_str()))]);
+
+    let owner_token = "owner-stale-reclaim";
+    seed_stale_automation_runner_state(&loong_home, &config_path, owner_token);
+    seed_automation_runner_stop_request(&loong_home, owner_token);
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Reclaim(
+                        loong_daemon::automation_cli::AutomationRunnerReclaimCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("reclaim stale automation runner");
+
+    assert_eq!(payload["command"], "runner_reclaim");
+    assert_eq!(payload["outcome"], "reclaimed");
+    assert_eq!(payload["status"]["running"], false);
+    assert_eq!(payload["status"]["shutdown_reason"], "stale_reclaimed");
+    assert!(!automation_serve_lock_path(&loong_home).exists());
+    assert!(!automation_runner_stop_request_path(&loong_home).exists());
+
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_serve_reclaims_stale_owner_slot_before_start() {
+    let guard = lock_automation_integration().await;
+    let root = TempDirGuard::new("loong-automation-runner-stale-start");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    let owner_token = "owner-stale-start";
+    seed_stale_automation_runner_state(&loong_home, &config_path, owner_token);
+    seed_automation_runner_stop_request(&loong_home, owner_token);
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve after stale owner");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+    wait_for_path_absent(
+        automation_runner_stop_request_path(&loong_home).as_path(),
+        "stale automation runner stop request",
+    );
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Inspect(
+                        loong_daemon::automation_cli::AutomationRunnerInspectCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inspect automation runner after stale reclaim");
+
+    assert_eq!(payload["status"]["running"], true);
+    assert_eq!(payload["status"]["stale"], false);
+
+    serve.kill().expect("stop automation serve");
+    let _ = serve.wait();
     drop(guard);
 }
 

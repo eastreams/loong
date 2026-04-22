@@ -120,6 +120,30 @@ without a long-running `automation serve` owner. The long-term target is
 journal-first consumption, with the callback bridge demoted to compatibility or
 removed entirely.
 
+## Automation Runner Ownership
+
+`automation serve` now operates as a leased singleton owner, not just a
+best-effort background loop.
+
+- the active owner is published through `serve.lock`
+- the latest observable runner state is published through `serve.status.json`
+- cooperative shutdown requests are published through `serve.stop-request.json`
+- runner state is keyed by an `owner_token`, so cleanup only removes lock or
+  stop-request state that still belongs to the same owner
+- the runner emits a heartbeat roughly every 5 seconds and becomes reclaimable
+  after roughly 15 seconds without a heartbeat
+- `automation runner inspect` now surfaces lease timeout and lease expiry so
+  operators can see whether a slot is live or stale
+- `automation runner stop` is for graceful shutdown of a live owner
+- `automation runner reclaim` is for explicitly reclaiming a stale owner slot;
+  it marks the snapshot as stopped with a `stale_reclaimed` reason before
+  clearing the stale owner file
+- startup rejects a live owner, but it may reclaim a stale owner before
+  acquiring the slot for the new serve process
+
+This remains a leased singleton model. Multi-owner scheduling or standby/failover
+coordination is still future work.
+
 ## Why Not Full Cron First
 
 We deliberately did not start with a full cron expression engine in this slice.
@@ -212,6 +236,8 @@ set of sources that proves the model:
   trigger/runtime efficiency without increasing LLM token usage
   provenance so consumers can distinguish app/runtime sources from daemon-side
   bridges
+- the immediate callback bridge is only used when there is no live non-stale
+  `automation serve` owner
 - failed fires keep their trigger record and retry on a bounded later tick
 - webhook ingress requires an explicit token when configured
 
@@ -222,7 +248,8 @@ The intentionally reserved next steps are:
 - move remaining daemon-side bridges onto the same app-owned internal event
   substrate
 - runtime lifecycle emitters for hook-style events
-- singleton ownership and lease-backed serving for multi-process automation
+- multi-owner scheduling or standby/failover behavior beyond the current leased
+  singleton owner model
 - broader retention policy and GC beyond the current minimal “older sealed
   segments only” pruning rule
 - richer operator-facing journal health and repair/reporting surfaces

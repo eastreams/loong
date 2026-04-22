@@ -2586,8 +2586,7 @@ data: [DONE]\n\n",
             feishu_requests
                 .iter()
                 .filter(|request| {
-                    request.path
-                        == "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply"
+                    request.path == "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply"
                 })
                 .count()
                 == 1,

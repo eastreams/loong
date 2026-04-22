@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -195,6 +196,8 @@ pub enum AutomationRunnerCommands {
     Inspect(AutomationRunnerInspectCommandOptions),
     /// Request graceful shutdown for the current automation runner owner
     Stop(AutomationRunnerStopCommandOptions),
+    /// Reclaim a stale automation runner owner slot
+    Reclaim(AutomationRunnerReclaimCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -202,6 +205,9 @@ pub struct AutomationRunnerInspectCommandOptions {}
 
 #[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
 pub struct AutomationRunnerStopCommandOptions {}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationRunnerReclaimCommandOptions {}
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct AutomationJournalCommandOptions {
@@ -370,6 +376,8 @@ struct AutomationRunnerStatus {
     bind_address: Option<String>,
     event_path: Option<String>,
     poll_ms: u64,
+    lease_timeout_ms: u64,
+    lease_expires_at_ms: u64,
     started_at_ms: u64,
     last_heartbeat_at: u64,
     stopped_at_ms: Option<u64>,
@@ -407,6 +415,13 @@ enum AutomationRunnerStopRequestOutcome {
     Requested,
     AlreadyRequested,
     AlreadyStopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutomationRunnerReclaimOutcome {
+    Reclaimed,
+    AlreadyClean,
+    OwnerActive,
 }
 
 struct AutomationRunnerTracker {
@@ -510,7 +525,10 @@ fn automation_serve_lock_path() -> PathBuf {
 }
 
 pub(crate) fn automation_serve_owner_is_active() -> bool {
-    automation_serve_lock_path().exists()
+    let status = load_automation_runner_status();
+    status
+        .as_ref()
+        .is_some_and(|status| status.running && !status.stale)
 }
 
 fn automation_event_cursor_path() -> PathBuf {
@@ -537,6 +555,22 @@ fn automation_journal_state_path() -> PathBuf {
 
 fn automation_active_segment_marker_path() -> PathBuf {
     crate::mvp::internal_events::internal_event_active_segment_id_path()
+}
+
+fn automation_runner_lease_expires_at_ms(last_heartbeat_at: u64) -> u64 {
+    last_heartbeat_at.saturating_add(AUTOMATION_RUNTIME_STALE_MS)
+}
+
+fn automation_runner_state_is_stale(
+    persisted_state: &PersistedAutomationRunnerState,
+    now_ms: u64,
+) -> bool {
+    if !persisted_state.running {
+        return false;
+    }
+    let lease_expires_at_ms =
+        automation_runner_lease_expires_at_ms(persisted_state.last_heartbeat_at);
+    now_ms > lease_expires_at_ms
 }
 
 fn now_ms() -> i64 {
@@ -824,18 +858,27 @@ impl AutomationRunnerTracker {
         let active_owner_path = automation_serve_lock_path();
         let status_snapshot_path = automation_runner_status_snapshot_path();
         let stop_request_path = automation_runner_stop_request_path();
-        if active_owner_path.exists()
-            && let Some(status) = load_automation_runner_status()
-        {
+        if active_owner_path.exists() {
+            let status = load_automation_runner_status();
+            let Some(status) = status else {
+                return Err(format!(
+                    "automation serve owner state at {} is unreadable; reclaim it before starting a new owner",
+                    active_owner_path.display()
+                ));
+            };
             if status.running && !status.stale {
                 return Err(format!(
                     "automation serve owner already active at {}",
                     active_owner_path.display()
                 ));
             }
-            let _ = fs::remove_file(active_owner_path.as_path());
-            let _ = fs::remove_file(status_snapshot_path.as_path());
-            let _ = fs::remove_file(stop_request_path.as_path());
+            let reclaim_outcome = reclaim_stale_automation_runner_owner()?;
+            if reclaim_outcome != AutomationRunnerReclaimOutcome::Reclaimed {
+                return Err(format!(
+                    "automation serve owner slot at {} could not be reclaimed",
+                    active_owner_path.display()
+                ));
+            }
         }
 
         let owner_token = new_automation_runner_owner_token(std::process::id());
@@ -856,7 +899,7 @@ impl AutomationRunnerTracker {
             last_error: None,
             owner_token: owner_token.clone(),
         };
-        write_json_path(
+        create_json_path_exclusive(
             active_owner_path.as_path(),
             &initial_state,
             "automation serve owner",
@@ -887,14 +930,15 @@ impl AutomationRunnerTracker {
             .map_err(|error| format!("automation runner state lock poisoned: {error}"))?;
         state.phase = phase.to_owned();
         state.last_heartbeat_at = u64::try_from(now_ms()).unwrap_or_default();
-        write_json_path(
+        let persisted_state = state.clone();
+        write_automation_runner_active_owner_if_owned(
             self.active_owner_path.as_path(),
-            &*state,
-            "automation serve owner",
+            &persisted_state,
+            self.owner_token.as_str(),
         )?;
         write_json_path(
             self.status_snapshot_path.as_path(),
-            &*state,
+            &persisted_state,
             "automation serve status snapshot",
         )
     }
@@ -909,19 +953,31 @@ impl AutomationRunnerTracker {
             .state
             .lock()
             .map_err(|error| format!("automation runner state lock poisoned: {error}"))?;
+        let current_owner_token =
+            current_automation_runner_owner_token(self.active_owner_path.as_path());
+        if current_owner_token.as_deref() != Some(self.owner_token.as_str()) {
+            return Ok(());
+        }
         state.phase = phase.to_owned();
         state.running = false;
         state.last_heartbeat_at = u64::try_from(now_ms()).unwrap_or_default();
         state.stopped_at_ms = Some(u64::try_from(now_ms()).unwrap_or_default());
         state.shutdown_reason = shutdown_reason.map(ToOwned::to_owned);
         state.last_error = last_error.map(ToOwned::to_owned);
+        let persisted_state = state.clone();
         write_json_path(
             self.status_snapshot_path.as_path(),
-            &*state,
+            &persisted_state,
             "automation serve status snapshot",
         )?;
-        let _ = fs::remove_file(self.active_owner_path.as_path());
-        let _ = fs::remove_file(self.stop_request_path.as_path());
+        remove_automation_runner_active_owner_if_owned(
+            self.active_owner_path.as_path(),
+            self.owner_token.as_str(),
+        )?;
+        remove_automation_runner_stop_request_if_owned(
+            self.stop_request_path.as_path(),
+            self.owner_token.as_str(),
+        )?;
         Ok(())
     }
 }
@@ -946,8 +1002,9 @@ fn load_automation_runner_status() -> Option<AutomationRunnerStatus> {
         (None, None) => return None,
     };
     let now_ms = u64::try_from(now_ms()).unwrap_or_default();
-    let stale = persisted_state.running
-        && now_ms.saturating_sub(persisted_state.last_heartbeat_at) > AUTOMATION_RUNTIME_STALE_MS;
+    let stale = automation_runner_state_is_stale(&persisted_state, now_ms);
+    let lease_expires_at_ms =
+        automation_runner_lease_expires_at_ms(persisted_state.last_heartbeat_at);
     Some(AutomationRunnerStatus {
         runtime_dir: crate::mvp::config::default_loong_home()
             .join("automation")
@@ -962,6 +1019,8 @@ fn load_automation_runner_status() -> Option<AutomationRunnerStatus> {
         bind_address: persisted_state.bind_address,
         event_path: persisted_state.event_path,
         poll_ms: persisted_state.poll_ms,
+        lease_timeout_ms: AUTOMATION_RUNTIME_STALE_MS,
+        lease_expires_at_ms,
         started_at_ms: persisted_state.started_at_ms,
         last_heartbeat_at: persisted_state.last_heartbeat_at,
         stopped_at_ms: persisted_state.stopped_at_ms,
@@ -1012,6 +1071,127 @@ fn automation_runner_stop_requested(owner_token: &str) -> bool {
     request
         .as_ref()
         .is_some_and(|request| request.target_owner_token == owner_token)
+}
+
+fn current_automation_runner_owner_token(path: &Path) -> Option<String> {
+    let persisted_state = read_json_path::<PersistedAutomationRunnerState>(path);
+    persisted_state.map(|persisted_state| persisted_state.owner_token)
+}
+
+fn create_json_path_exclusive<T>(path: &Path, value: &T, label: &str) -> CliResult<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create {label} directory {} failed: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let encoded = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("serialize {label} failed: {error}"))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("create {label} {} failed: {error}", path.display()))?;
+    file.write_all(format!("{encoded}\n").as_bytes())
+        .map_err(|error| format!("write {label} {} failed: {error}", path.display()))
+}
+
+fn write_automation_runner_active_owner_if_owned(
+    path: &Path,
+    persisted_state: &PersistedAutomationRunnerState,
+    owner_token: &str,
+) -> CliResult<()> {
+    let current_owner_token = current_automation_runner_owner_token(path);
+    if current_owner_token.as_deref() != Some(owner_token) {
+        return Err(
+            "automation runner ownership changed while the serve loop was still active".to_owned(),
+        );
+    }
+    write_json_path(path, persisted_state, "automation serve owner")
+}
+
+fn remove_automation_runner_active_owner_if_owned(path: &Path, owner_token: &str) -> CliResult<()> {
+    let current_owner_token = current_automation_runner_owner_token(path);
+    if current_owner_token.as_deref() != Some(owner_token) {
+        return Ok(());
+    }
+    fs::remove_file(path).map_err(|error| {
+        format!(
+            "remove automation serve owner {} failed: {error}",
+            path.display()
+        )
+    })
+}
+
+fn remove_automation_runner_stop_request_if_owned(path: &Path, owner_token: &str) -> CliResult<()> {
+    let stop_request = read_json_path::<PersistedAutomationStopRequest>(path);
+    let Some(stop_request) = stop_request else {
+        return Ok(());
+    };
+    if stop_request.target_owner_token != owner_token {
+        return Ok(());
+    }
+    fs::remove_file(path).map_err(|error| {
+        format!(
+            "remove automation serve stop request {} failed: {error}",
+            path.display()
+        )
+    })
+}
+
+fn reclaim_stale_automation_runner_owner() -> CliResult<AutomationRunnerReclaimOutcome> {
+    let active_owner_path = automation_serve_lock_path();
+    let status_snapshot_path = automation_runner_status_snapshot_path();
+    let stop_request_path = automation_runner_stop_request_path();
+    let active_owner =
+        read_json_path::<PersistedAutomationRunnerState>(active_owner_path.as_path());
+    let status = load_automation_runner_status();
+
+    let Some(status) = status else {
+        return Ok(AutomationRunnerReclaimOutcome::AlreadyClean);
+    };
+    if status.running && !status.stale {
+        return Ok(AutomationRunnerReclaimOutcome::OwnerActive);
+    }
+
+    let Some(mut persisted_state) = active_owner.or_else(|| {
+        read_json_path::<PersistedAutomationRunnerState>(status_snapshot_path.as_path())
+    }) else {
+        return Ok(AutomationRunnerReclaimOutcome::AlreadyClean);
+    };
+
+    let reclaimed_at_ms = u64::try_from(now_ms()).unwrap_or_default();
+    persisted_state.phase = "stopped".to_owned();
+    persisted_state.running = false;
+    persisted_state.last_heartbeat_at = reclaimed_at_ms;
+    persisted_state.stopped_at_ms = Some(reclaimed_at_ms);
+    persisted_state.shutdown_reason = Some("stale_reclaimed".to_owned());
+    persisted_state.last_error = None;
+
+    write_json_path(
+        status_snapshot_path.as_path(),
+        &persisted_state,
+        "automation serve status snapshot",
+    )?;
+    remove_automation_runner_active_owner_if_owned(
+        active_owner_path.as_path(),
+        persisted_state.owner_token.as_str(),
+    )?;
+    if stop_request_path.exists() {
+        fs::remove_file(stop_request_path.as_path()).map_err(|error| {
+            format!(
+                "remove stale automation serve stop request {} failed: {error}",
+                stop_request_path.display()
+            )
+        })?;
+    }
+    Ok(AutomationRunnerReclaimOutcome::Reclaimed)
 }
 
 fn read_json_path<T>(path: &Path) -> Option<T>
@@ -1400,6 +1580,7 @@ fn execute_runner_command(options: AutomationRunnerCommandOptions) -> CliResult<
     match options.command {
         AutomationRunnerCommands::Inspect(_command) => execute_runner_inspect_command(),
         AutomationRunnerCommands::Stop(_command) => execute_runner_stop_command(),
+        AutomationRunnerCommands::Reclaim(_command) => execute_runner_reclaim_command(),
     }
 }
 
@@ -1569,6 +1750,23 @@ fn execute_runner_stop_command() -> CliResult<Value> {
             AutomationRunnerStopRequestOutcome::AlreadyStopped => "already_stopped",
         },
         "status": status,
+        "stop_request_path": automation_runner_stop_request_path().display().to_string(),
+    }))
+}
+
+fn execute_runner_reclaim_command() -> CliResult<Value> {
+    let outcome = reclaim_stale_automation_runner_owner()?;
+    let status = load_automation_runner_status();
+    Ok(json!({
+        "command": "runner_reclaim",
+        "outcome": match outcome {
+            AutomationRunnerReclaimOutcome::Reclaimed => "reclaimed",
+            AutomationRunnerReclaimOutcome::AlreadyClean => "already_clean",
+            AutomationRunnerReclaimOutcome::OwnerActive => "owner_active",
+        },
+        "status": status,
+        "active_owner_path": automation_serve_lock_path().display().to_string(),
+        "status_snapshot_path": automation_runner_status_snapshot_path().display().to_string(),
         "stop_request_path": automation_runner_stop_request_path().display().to_string(),
     }))
 }
@@ -2133,6 +2331,9 @@ fn render_automation_text(payload: &Value) -> CliResult<String> {
         "journal_rotate" => render_journal_rotate(payload),
         "journal_prune" => render_journal_prune(payload),
         "journal_repair" => render_journal_repair(payload),
+        "runner_inspect" => render_runner_inspect(payload),
+        "runner_stop" => render_runner_stop(payload),
+        "runner_reclaim" => render_runner_reclaim(payload),
         "serve" => Ok("Automation runner stopped.".to_owned()),
         other => Err(format!("unsupported automation render command `{other}`")),
     }
@@ -2254,6 +2455,70 @@ fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
         lines.push(format!("run_history_count: {}", run_history.len()));
     }
     Ok(lines.join("\n"))
+}
+
+fn render_runner_inspect(payload: &Value) -> CliResult<String> {
+    let status = payload
+        .get("status")
+        .ok_or_else(|| "automation runner inspect payload missing status".to_owned())?;
+    if status.is_null() {
+        return Ok("No automation runner owner is active.".to_owned());
+    }
+
+    let phase = json_pointer_str(status, "/phase").unwrap_or("unknown");
+    let running = json_pointer_value(status, "/running")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let stale = json_pointer_value(status, "/stale")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let poll_ms = json_pointer_u64(status, "/poll_ms").unwrap_or_default();
+    let lease_timeout_ms = json_pointer_u64(status, "/lease_timeout_ms").unwrap_or_default();
+    let lease_expires_at_ms = json_pointer_u64(status, "/lease_expires_at_ms").unwrap_or_default();
+    let last_heartbeat_at = json_pointer_u64(status, "/last_heartbeat_at").unwrap_or_default();
+
+    let mut lines = vec![
+        "Automation runner".to_owned(),
+        String::new(),
+        format!("phase: {phase}"),
+        format!("running: {running}"),
+        format!("stale: {stale}"),
+        format!("poll_ms: {poll_ms}"),
+        format!("lease_timeout_ms: {lease_timeout_ms}"),
+        format!("lease_expires_at_ms: {lease_expires_at_ms}"),
+        format!("last_heartbeat_at: {last_heartbeat_at}"),
+    ];
+
+    if let Some(bind_address) = json_pointer_str(status, "/bind_address") {
+        lines.push(format!("bind_address: {bind_address}"));
+    }
+    if let Some(event_path) = json_pointer_str(status, "/event_path") {
+        lines.push(format!("event_path: {event_path}"));
+    }
+    if let Some(shutdown_reason) = json_pointer_str(status, "/shutdown_reason") {
+        lines.push(format!("shutdown_reason: {shutdown_reason}"));
+    }
+    if let Some(last_error) = json_pointer_str(status, "/last_error") {
+        lines.push(format!("last_error: {last_error}"));
+    }
+
+    Ok(lines.join("\n"))
+}
+
+fn render_runner_stop(payload: &Value) -> CliResult<String> {
+    let outcome = payload
+        .get("outcome")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "automation runner stop payload missing outcome".to_owned())?;
+    Ok(format!("Automation runner stop outcome: {outcome}."))
+}
+
+fn render_runner_reclaim(payload: &Value) -> CliResult<String> {
+    let outcome = payload
+        .get("outcome")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "automation runner reclaim payload missing outcome".to_owned())?;
+    Ok(format!("Automation runner reclaim outcome: {outcome}."))
 }
 
 fn render_fire_result(result: &Value) -> CliResult<String> {
@@ -2417,6 +2682,69 @@ fn render_journal_repair(payload: &Value) -> CliResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::test_support::ScopedEnv;
+
+    struct TempHomeGuard {
+        path: PathBuf,
+    }
+
+    impl TempHomeGuard {
+        fn new(prefix: &str) -> Self {
+            static NEXT_TEMP_HOME_SEED: AtomicUsize = AtomicUsize::new(1);
+            let seed = NEXT_TEMP_HOME_SEED.fetch_add(1, Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            let process_id = std::process::id();
+            let path = std::env::temp_dir().join(format!("{prefix}-{process_id}-{seed}-{nanos}"));
+            fs::create_dir_all(&path).expect("create temp home");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempHomeGuard {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.path).ok();
+        }
+    }
+
+    fn isolated_automation_home(prefix: &str) -> (ScopedEnv, TempHomeGuard) {
+        let mut env = ScopedEnv::new();
+        let temp_home = TempHomeGuard::new(prefix);
+        env.set("LOONG_HOME", temp_home.path().as_os_str());
+        (env, temp_home)
+    }
+
+    fn sample_runner_state(
+        owner_token: &str,
+        last_heartbeat_at: u64,
+    ) -> PersistedAutomationRunnerState {
+        PersistedAutomationRunnerState {
+            phase: "running".to_owned(),
+            running: true,
+            pid: Some(42),
+            version: "test".to_owned(),
+            config_path: Some("/tmp/loong.toml".to_owned()),
+            bind_address: None,
+            event_path: Some("/automation/events".to_owned()),
+            poll_ms: 250,
+            started_at_ms: last_heartbeat_at.saturating_sub(500),
+            last_heartbeat_at,
+            stopped_at_ms: None,
+            shutdown_reason: None,
+            last_error: None,
+            owner_token: owner_token.to_owned(),
+        }
+    }
 
     fn sample_schedule_trigger(interval_ms: Option<u64>) -> AutomationTriggerRecord {
         AutomationTriggerRecord {
@@ -2638,5 +2966,98 @@ mod tests {
     fn normalize_event_path_rejects_root_path() {
         let error = normalize_event_path("/").expect_err("root should fail");
         assert!(error.contains("must not be `/`"));
+    }
+
+    #[test]
+    fn automation_runner_status_reports_stale_lease_expiry() {
+        let (_env, _temp_home) = isolated_automation_home("loong-automation-runner-status");
+        let last_heartbeat_at = 1;
+        let stale_state = sample_runner_state("owner-a", last_heartbeat_at);
+        write_json_path(
+            automation_serve_lock_path().as_path(),
+            &stale_state,
+            "automation serve owner",
+        )
+        .expect("write active owner");
+
+        let status = load_automation_runner_status().expect("load automation runner status");
+        assert!(status.stale);
+        assert_eq!(status.lease_timeout_ms, AUTOMATION_RUNTIME_STALE_MS);
+        assert_eq!(
+            status.lease_expires_at_ms,
+            automation_runner_lease_expires_at_ms(last_heartbeat_at)
+        );
+    }
+
+    #[test]
+    fn automation_runner_reclaim_clears_stale_owner_and_stop_request() {
+        let (_env, _temp_home) = isolated_automation_home("loong-automation-runner-reclaim");
+        let stale_state = sample_runner_state("owner-stale", 1);
+        write_json_path(
+            automation_serve_lock_path().as_path(),
+            &stale_state,
+            "automation serve owner",
+        )
+        .expect("write stale owner");
+        write_json_path(
+            automation_runner_status_snapshot_path().as_path(),
+            &stale_state,
+            "automation serve status snapshot",
+        )
+        .expect("write stale snapshot");
+        let stop_request = PersistedAutomationStopRequest {
+            requested_at_ms: 2,
+            requested_by_pid: 77,
+            target_owner_token: "owner-stale".to_owned(),
+        };
+        write_json_path(
+            automation_runner_stop_request_path().as_path(),
+            &stop_request,
+            "automation serve stop request",
+        )
+        .expect("write stop request");
+
+        let outcome = reclaim_stale_automation_runner_owner().expect("reclaim stale runner");
+        assert_eq!(outcome, AutomationRunnerReclaimOutcome::Reclaimed);
+        assert!(!automation_serve_lock_path().exists());
+        assert!(!automation_runner_stop_request_path().exists());
+
+        let status = load_automation_runner_status().expect("load reclaimed status");
+        assert!(!status.running);
+        assert_eq!(status.shutdown_reason.as_deref(), Some("stale_reclaimed"));
+        assert!(!status.stale);
+    }
+
+    #[test]
+    fn automation_runner_heartbeat_rejects_lost_ownership() {
+        let (_env, _temp_home) = isolated_automation_home("loong-automation-runner-heartbeat");
+        let options = AutomationServeCommandOptions {
+            bind: None,
+            auth_token: None,
+            path: AUTOMATION_DEFAULT_EVENT_PATH.to_owned(),
+            poll_ms: 250,
+        };
+        let tracker = AutomationRunnerTracker::acquire(Some("/tmp/loong.toml"), &options)
+            .expect("acquire tracker");
+
+        let mut foreign_state = {
+            let state_guard = tracker
+                .state
+                .lock()
+                .expect("automation runner state lock should not be poisoned");
+            state_guard.clone()
+        };
+        foreign_state.owner_token = "owner-foreign".to_owned();
+        write_json_path(
+            automation_serve_lock_path().as_path(),
+            &foreign_state,
+            "automation serve owner",
+        )
+        .expect("replace owner slot");
+
+        let error = tracker
+            .heartbeat("running")
+            .expect_err("lost ownership should fail heartbeat");
+        assert!(error.contains("ownership changed"));
     }
 }
