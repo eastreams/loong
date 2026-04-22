@@ -12593,6 +12593,95 @@ async fn handle_turn_with_runtime_hidden_agent_followup_includes_operation_guida
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_hidden_channel_followup_includes_operation_guidance() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let lease = crate::tools::issue_tool_lease("channel", &serde_json::Map::new())
+        .expect("issue grouped channel lease");
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I'll handle the channel action now.".to_owned(),
+                tool_intents: vec![ToolIntent {
+                    tool_name: "tool.invoke".to_owned(),
+                    args_json: json!({
+                        "tool_id": "channel",
+                        "lease": lease,
+                        "arguments": {
+                            "account_id": "default"
+                        }
+                    }),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-hidden-channel-followup".to_owned(),
+                    turn_id: "turn-hidden-channel-followup".to_owned(),
+                    tool_call_id: "call-hidden-channel-followup".to_owned(),
+                }],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "MODEL_CHANNEL_REPAIR_REPLY".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-hidden-channel-followup",
+            "send a message through the channel",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        )
+        .await
+        .expect("hidden channel repair followup should continue with provider followup");
+
+    assert_eq!(reply, "MODEL_CHANNEL_REPAIR_REPLY");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 2);
+    let followup_messages = &requested_turn_messages[1];
+    assert!(
+        followup_messages.iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            role == Some("assistant")
+                && content.is_some_and(|value| value.starts_with("[tool_request]\n"))
+                && content.is_some_and(|value| value.contains("\"tool\":\"channel\""))
+        }),
+        "provider followup should include the grouped channel request: {followup_messages:?}"
+    );
+    assert!(
+        followup_messages.iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            role == Some("user")
+                && content.is_some_and(|value| value.contains("Repair guidance for channel"))
+                && content.is_some_and(|value| value.contains("messages.send"))
+        }),
+        "provider followup should include grouped channel repair guidance: {followup_messages:?}"
+    );
+}
+
 #[tokio::test]
 async fn handle_turn_with_runtime_auth_rejected_provider_error_marks_rejected_trust_state() {
     let runtime = FakeRuntime::new(vec![], Err(provider_auth_rejected_error_fixture()));
