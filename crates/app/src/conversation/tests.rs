@@ -25760,16 +25760,16 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
         .expect("nested delegate denial reply");
 
     assert!(
-        reply.contains("tool_not_found: requested tool is not available"),
-        "reply should surface generic nested delegate denial, got: {reply}"
+        reply.contains("[ok]"),
+        "raw-output mode should preserve the delegate tool result envelope, got: {reply}"
     );
     assert!(
-        reply.contains("tool.search"),
-        "reply should include discovery recovery guidance, got: {reply}"
+        reply.contains("delegate_depth_exceeded"),
+        "reply should surface the nested delegate depth failure, got: {reply}"
     );
     assert!(
         !reply.contains("tool_not_visible: delegate"),
-        "reply should not leak the nested delegate tool id in the denial reason, got: {reply}"
+        "reply should not leak a hidden-tool visibility denial, got: {reply}"
     );
 }
 
@@ -26215,12 +26215,12 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
         .as_str()
         .expect("delegate child final output");
     assert!(
-        final_output.contains("tool_not_found: requested tool is not available"),
-        "child terminal output should surface generic nested delegate_async denial, got: {waited:?}"
+        final_output.contains("delegate_depth_exceeded"),
+        "child terminal output should surface the nested delegate_async depth denial, got: {waited:?}"
     );
     assert!(
-        final_output.contains("tool.search"),
-        "child terminal output should include discovery recovery guidance, got: {waited:?}"
+        final_output.contains("max_depth 1"),
+        "child terminal output should include the configured depth boundary, got: {waited:?}"
     );
     assert!(
         !final_output.contains("delegate_async"),
