@@ -1061,6 +1061,67 @@ fn debug_show_cli_parses() {
 }
 
 #[test]
+fn debug_watch_cli_parses() {
+    let cli = try_parse_cli([
+        "loong",
+        "debug",
+        "--config",
+        "/tmp/loong.toml",
+        "--session",
+        "root-session",
+        "watch",
+        "--session-id",
+        "target-session",
+        "--refresh-ms",
+        "2200",
+        "--audit-limit",
+        "16",
+        "--session-event-limit",
+        "24",
+        "--acp-event-limit",
+        "80",
+        "--tail-limit",
+        "6",
+        "--no-clear",
+        "--max-frames",
+        "3",
+    ])
+    .expect("`debug watch` should parse");
+
+    match cli.command {
+        Some(Commands::Debug {
+            config,
+            json,
+            session,
+            command:
+                crate::debug_cli::DebugCommands::Watch {
+                    session_id,
+                    refresh_ms,
+                    audit_limit,
+                    session_event_limit,
+                    acp_event_limit,
+                    tail_limit,
+                    no_clear,
+                    max_frames,
+                },
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loong.toml"));
+            assert!(!json);
+            assert_eq!(session, "root-session");
+            assert_eq!(session_id.as_deref(), Some("target-session"));
+            assert_eq!(refresh_ms, 2200);
+            assert_eq!(audit_limit, 16);
+            assert_eq!(session_event_limit, 24);
+            assert_eq!(acp_event_limit, 80);
+            assert_eq!(tail_limit, 6);
+            assert!(no_clear);
+            assert_eq!(max_frames, Some(3));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn runtime_restore_cli_parses() {
     let cli = try_parse_cli([
         "loong",

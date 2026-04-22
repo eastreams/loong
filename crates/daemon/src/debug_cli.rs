@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +16,11 @@ use crate::sessions_cli::{self, SessionsCommandOptions, SessionsCommands};
 use crate::status_cli;
 
 const DEBUG_BUNDLE_SCHEMA_VERSION: u32 = 1;
+const DEBUG_WATCH_SCHEMA_VERSION: u32 = 1;
+const DEBUG_WATCH_REFRESH_MS_DEFAULT: u64 = 1_500;
+const DEBUG_WATCH_REFRESH_MS_MIN: u64 = 500;
+const DEBUG_WATCH_REFRESH_MS_MAX: u64 = 60_000;
+const DEBUG_WATCH_TAIL_LIMIT_DEFAULT: usize = 8;
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DebugCommands {
@@ -40,6 +46,25 @@ pub enum DebugCommands {
         #[arg(long)]
         artifact: String,
     },
+    /// Stream a continuously refreshed developer observability view
+    Watch {
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long, default_value_t = DEBUG_WATCH_REFRESH_MS_DEFAULT)]
+        refresh_ms: u64,
+        #[arg(long, default_value_t = 12)]
+        audit_limit: usize,
+        #[arg(long, default_value_t = 20)]
+        session_event_limit: usize,
+        #[arg(long, default_value_t = 200)]
+        acp_event_limit: usize,
+        #[arg(long, default_value_t = DEBUG_WATCH_TAIL_LIMIT_DEFAULT)]
+        tail_limit: usize,
+        #[arg(long, default_value_t = false)]
+        no_clear: bool,
+        #[arg(long)]
+        max_frames: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +84,10 @@ pub struct DebugCommandExecution {
 }
 
 pub async fn run_debug_cli(options: DebugCommandOptions) -> CliResult<()> {
+    if matches!(options.command, DebugCommands::Watch { .. }) {
+        return run_debug_watch_cli(options).await;
+    }
+
     let as_json = options.json;
     let execution = execute_debug_command(options).await?;
     if as_json {
@@ -71,6 +100,63 @@ pub async fn run_debug_cli(options: DebugCommandOptions) -> CliResult<()> {
     let rendered = render_debug_cli_text(&execution)?;
     println!("{rendered}");
     Ok(())
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DebugWatchCounters {
+    provider_failover_total: u64,
+    provider_failover_exhausted: u64,
+    acp_active_sessions: u64,
+    acp_turn_queue_depth: u64,
+    acp_turn_failures: u64,
+    session_turn_count: u64,
+    audit_provider_failover_events: u64,
+    audit_authorization_denied_events: u64,
+    attention_count: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DebugWatchDelta {
+    provider_failover_total: i64,
+    provider_failover_exhausted: i64,
+    acp_active_sessions: i64,
+    acp_turn_queue_depth: i64,
+    acp_turn_failures: i64,
+    session_turn_count: i64,
+    audit_provider_failover_events: i64,
+    audit_authorization_denied_events: i64,
+    attention_count: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DebugWatchSessionEvent {
+    id: i64,
+    event_kind: String,
+    ts: i64,
+}
+
+#[derive(Debug, Clone)]
+struct DebugWatchFrame {
+    frame_index: usize,
+    captured_at: String,
+    refresh_ms: u64,
+    scope_session_id: String,
+    target_session_id: Option<String>,
+    counters: DebugWatchCounters,
+    delta: Option<DebugWatchDelta>,
+    latest_provider_failover: Option<String>,
+    latest_authorization_denied: Option<String>,
+    session_tail: Vec<DebugWatchSessionEvent>,
+    attention_hints: Vec<String>,
+    errors: Vec<String>,
+    bundle: Value,
+}
+
+#[derive(Debug, Default)]
+struct DebugWatchState {
+    previous_counters: Option<DebugWatchCounters>,
+    next_session_after_id: Option<i64>,
+    session_tail: VecDeque<DebugWatchSessionEvent>,
 }
 
 pub async fn execute_debug_command(
@@ -94,6 +180,7 @@ pub async fn execute_debug_command(
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
         DebugCommands::Show { artifact } => Some(artifact.clone()),
+        DebugCommands::Watch { .. } => None,
     };
 
     let payload = match command {
@@ -128,6 +215,9 @@ pub async fn execute_debug_command(
             Ok(payload)
         })?,
         DebugCommands::Show { artifact } => load_debug_bundle_artifact(Path::new(&artifact))?,
+        DebugCommands::Watch { .. } => {
+            return Err("debug watch must run through the streaming watch entrypoint".to_owned());
+        }
     };
 
     Ok(DebugCommandExecution {
@@ -136,6 +226,107 @@ pub async fn execute_debug_command(
         payload,
         artifact_path,
     })
+}
+
+async fn run_debug_watch_cli(options: DebugCommandOptions) -> CliResult<()> {
+    let DebugCommandOptions {
+        config,
+        json,
+        session,
+        command,
+    } = options;
+    let DebugCommands::Watch {
+        session_id,
+        refresh_ms,
+        audit_limit,
+        session_event_limit,
+        acp_event_limit,
+        tail_limit,
+        no_clear,
+        max_frames,
+    } = command
+    else {
+        return Err("debug watch command dispatch mismatch".to_owned());
+    };
+
+    let (resolved_path, loaded_config) = mvp::config::load(config.as_deref())?;
+    mvp::runtime_env::initialize_runtime_environment(&loaded_config, Some(&resolved_path));
+
+    let resolved_config_path = resolved_path.display().to_string();
+    let current_session_id = normalize_session_scope(session.as_str());
+    let normalized_refresh_ms = normalize_debug_watch_refresh_ms(refresh_ms);
+    let normalized_tail_limit = tail_limit.clamp(1, 32);
+    let normalized_session_event_limit = session_event_limit.clamp(1, 200);
+    let normalized_max_frames = max_frames.filter(|value| *value > 0);
+    let should_clear = !no_clear && io::stdout().is_terminal();
+    let target_session_id = session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+
+    let mut state = DebugWatchState::default();
+    let mut frame_index = 0_usize;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(normalized_refresh_ms));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker.tick().await;
+
+    loop {
+        frame_index = frame_index.saturating_add(1);
+
+        let bundle = collect_debug_bundle(
+            resolved_config_path.as_str(),
+            &loaded_config,
+            &current_session_id,
+            target_session_id.as_deref(),
+            audit_limit,
+            normalized_session_event_limit,
+            0,
+            acp_event_limit,
+            false,
+        )
+        .await?;
+        let frame = collect_debug_watch_frame(
+            frame_index,
+            normalized_refresh_ms,
+            current_session_id.as_str(),
+            target_session_id.as_deref(),
+            resolved_config_path.as_str(),
+            normalized_session_event_limit,
+            normalized_tail_limit,
+            &bundle,
+            &mut state,
+        )
+        .await?;
+
+        if json {
+            let encoded = serde_json::to_string(&debug_watch_frame_json(&frame))
+                .map_err(|error| format!("serialize debug watch frame failed: {error}"))?;
+            println!("{encoded}");
+        } else {
+            let rendered = render_debug_watch_text(&frame)?;
+            if should_clear {
+                print!("\x1b[2J\x1b[H");
+            }
+            println!("{rendered}");
+            io::stdout()
+                .flush()
+                .map_err(|error| format!("flush debug watch output failed: {error}"))?;
+        }
+
+        if normalized_max_frames.is_some_and(|value| frame_index >= value) {
+            break;
+        }
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
+            _ = ticker.tick() => {}
+        }
+    }
+
+    Ok(())
 }
 
 async fn collect_debug_bundle(
@@ -360,6 +551,132 @@ async fn collect_debug_bundle(
         "recipes": recipes,
         "errors": errors,
     }))
+}
+
+async fn collect_debug_watch_frame(
+    frame_index: usize,
+    refresh_ms: u64,
+    current_session_id: &str,
+    target_session_id: Option<&str>,
+    resolved_config_path: &str,
+    session_event_limit: usize,
+    tail_limit: usize,
+    bundle: &Value,
+    state: &mut DebugWatchState,
+) -> CliResult<DebugWatchFrame> {
+    let current_counters = extract_debug_watch_counters(bundle);
+    let delta = state
+        .previous_counters
+        .as_ref()
+        .map(|previous| build_debug_watch_delta(previous, &current_counters));
+    state.previous_counters = Some(current_counters.clone());
+
+    let mut errors = bundle
+        .get("errors")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| {
+                    let section = entry.get("section").and_then(Value::as_str).unwrap_or("-");
+                    let error = entry.get("error").and_then(Value::as_str).unwrap_or("-");
+                    format!("section={section} error={error}")
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if frame_index == 1 {
+        let seeded_events =
+            parse_debug_watch_session_events(bundle.pointer("/session_events/events"));
+        append_debug_watch_session_tail(&mut state.session_tail, seeded_events, tail_limit);
+        state.next_session_after_id = bundle
+            .pointer("/session_events/next_after_id")
+            .and_then(Value::as_i64);
+    } else if let Some(target_session_id) = target_session_id {
+        match collect_incremental_session_events(
+            resolved_config_path,
+            current_session_id,
+            target_session_id,
+            state.next_session_after_id,
+            session_event_limit,
+        )
+        .await
+        {
+            Ok(events_payload) => {
+                let incremental_events =
+                    parse_debug_watch_session_events(events_payload.get("events"));
+                append_debug_watch_session_tail(
+                    &mut state.session_tail,
+                    incremental_events,
+                    tail_limit,
+                );
+                state.next_session_after_id = events_payload
+                    .get("next_after_id")
+                    .and_then(Value::as_i64)
+                    .or(state.next_session_after_id);
+            }
+            Err(error) => {
+                errors.push(format!("section=session_events_incremental error={error}"));
+            }
+        }
+    }
+
+    let attention_hints = bundle
+        .get("debug")
+        .and_then(|value| value.get("attention_hints"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let latest_provider_failover =
+        latest_provider_failover_line(bundle.pointer("/audit_provider_failover_recent/events"));
+    let latest_authorization_denied = latest_authorization_denied_line(
+        bundle.pointer("/audit_authorization_denied_recent/events"),
+    );
+    let captured_at = format_debug_watch_timestamp(SystemTime::now())?;
+
+    Ok(DebugWatchFrame {
+        frame_index,
+        captured_at,
+        refresh_ms,
+        scope_session_id: current_session_id.to_owned(),
+        target_session_id: target_session_id.map(str::to_owned),
+        counters: current_counters,
+        delta,
+        latest_provider_failover,
+        latest_authorization_denied,
+        session_tail: state.session_tail.iter().cloned().collect(),
+        attention_hints,
+        errors,
+        bundle: bundle.clone(),
+    })
+}
+
+async fn collect_incremental_session_events(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    target_session_id: &str,
+    after_id: Option<i64>,
+    limit: usize,
+) -> CliResult<Value> {
+    let execution = sessions_cli::execute_sessions_command(SessionsCommandOptions {
+        config: Some(resolved_config_path.to_owned()),
+        json: false,
+        session: current_session_id.to_owned(),
+        command: SessionsCommands::Events {
+            session_id: target_session_id.to_owned(),
+            after_id,
+            limit,
+        },
+    })
+    .await?;
+    Ok(execution.payload)
 }
 
 async fn collect_session_section(
@@ -664,6 +981,426 @@ fn build_debug_attention_hints(
     json!(hints)
 }
 
+fn normalize_debug_watch_refresh_ms(refresh_ms: u64) -> u64 {
+    refresh_ms.clamp(DEBUG_WATCH_REFRESH_MS_MIN, DEBUG_WATCH_REFRESH_MS_MAX)
+}
+
+fn extract_debug_watch_counters(payload: &Value) -> DebugWatchCounters {
+    DebugWatchCounters {
+        provider_failover_total: json_path_u64(
+            payload,
+            &[
+                "runtime_snapshot",
+                "provider",
+                "transport_runtime",
+                "failover_total_events",
+            ],
+        )
+        .unwrap_or(0),
+        provider_failover_exhausted: json_path_u64(
+            payload,
+            &[
+                "runtime_snapshot",
+                "provider",
+                "transport_runtime",
+                "failover_exhausted_events",
+            ],
+        )
+        .unwrap_or(0),
+        acp_active_sessions: json_path_u64(
+            payload,
+            &[
+                "acp_observability",
+                "snapshot",
+                "runtime_cache",
+                "active_sessions",
+            ],
+        )
+        .unwrap_or(0),
+        acp_turn_queue_depth: json_path_u64(
+            payload,
+            &["acp_observability", "snapshot", "turns", "queue_depth"],
+        )
+        .unwrap_or(0),
+        acp_turn_failures: json_path_u64(
+            payload,
+            &["acp_observability", "snapshot", "turns", "failed"],
+        )
+        .unwrap_or(0),
+        session_turn_count: json_path_u64(payload, &["session_status", "session", "turn_count"])
+            .unwrap_or(0),
+        audit_provider_failover_events: count_json_array(
+            payload.pointer("/audit_provider_failover_recent/events"),
+        ) as u64,
+        audit_authorization_denied_events: count_json_array(
+            payload.pointer("/audit_authorization_denied_recent/events"),
+        ) as u64,
+        attention_count: (payload
+            .get("errors")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0)
+            + payload
+                .pointer("/debug/attention_hints")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0)) as u64,
+    }
+}
+
+fn build_debug_watch_delta(
+    previous: &DebugWatchCounters,
+    current: &DebugWatchCounters,
+) -> DebugWatchDelta {
+    DebugWatchDelta {
+        provider_failover_total: current.provider_failover_total as i64
+            - previous.provider_failover_total as i64,
+        provider_failover_exhausted: current.provider_failover_exhausted as i64
+            - previous.provider_failover_exhausted as i64,
+        acp_active_sessions: current.acp_active_sessions as i64
+            - previous.acp_active_sessions as i64,
+        acp_turn_queue_depth: current.acp_turn_queue_depth as i64
+            - previous.acp_turn_queue_depth as i64,
+        acp_turn_failures: current.acp_turn_failures as i64 - previous.acp_turn_failures as i64,
+        session_turn_count: current.session_turn_count as i64 - previous.session_turn_count as i64,
+        audit_provider_failover_events: current.audit_provider_failover_events as i64
+            - previous.audit_provider_failover_events as i64,
+        audit_authorization_denied_events: current.audit_authorization_denied_events as i64
+            - previous.audit_authorization_denied_events as i64,
+        attention_count: current.attention_count as i64 - previous.attention_count as i64,
+    }
+}
+
+fn parse_debug_watch_session_events(value: Option<&Value>) -> Vec<DebugWatchSessionEvent> {
+    let Some(events) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    events
+        .iter()
+        .map(|event| DebugWatchSessionEvent {
+            id: event.get("id").and_then(Value::as_i64).unwrap_or_default(),
+            event_kind: event
+                .get("event_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned(),
+            ts: event.get("ts").and_then(Value::as_i64).unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn append_debug_watch_session_tail(
+    tail: &mut VecDeque<DebugWatchSessionEvent>,
+    events: Vec<DebugWatchSessionEvent>,
+    tail_limit: usize,
+) {
+    for event in events {
+        let already_present = tail.iter().any(|existing| existing.id == event.id);
+        if already_present {
+            continue;
+        }
+        tail.push_back(event);
+        while tail.len() > tail_limit {
+            tail.pop_front();
+        }
+    }
+}
+
+fn format_debug_watch_timestamp(now: SystemTime) -> CliResult<String> {
+    let duration = now
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("debug watch timestamp underflow: {error}"))?;
+    let timestamp = OffsetDateTime::from_unix_timestamp_nanos(duration.as_nanos() as i128)
+        .map_err(|error| format!("format debug watch timestamp failed: {error}"))?;
+    timestamp
+        .format(&Rfc3339)
+        .map_err(|error| format!("encode debug watch timestamp failed: {error}"))
+}
+
+fn format_signed_delta(value: i64) -> String {
+    if value > 0 {
+        return format!("+{value}");
+    }
+    value.to_string()
+}
+
+fn build_debug_watch_delta_lines(delta: Option<&DebugWatchDelta>) -> Vec<String> {
+    let Some(delta) = delta else {
+        return vec!["baseline frame".to_owned()];
+    };
+
+    let mut lines = Vec::new();
+    let entries = [
+        ("provider_failover_total", delta.provider_failover_total),
+        (
+            "provider_failover_exhausted",
+            delta.provider_failover_exhausted,
+        ),
+        ("acp_active_sessions", delta.acp_active_sessions),
+        ("acp_turn_queue_depth", delta.acp_turn_queue_depth),
+        ("acp_turn_failures", delta.acp_turn_failures),
+        ("session_turn_count", delta.session_turn_count),
+        (
+            "audit_provider_failover_events",
+            delta.audit_provider_failover_events,
+        ),
+        (
+            "audit_authorization_denied_events",
+            delta.audit_authorization_denied_events,
+        ),
+        ("attention_count", delta.attention_count),
+    ];
+
+    for (label, value) in entries {
+        if value == 0 {
+            continue;
+        }
+        lines.push(format!("{label} {}", format_signed_delta(value)));
+    }
+
+    if lines.is_empty() {
+        lines.push("no counter changes since last frame".to_owned());
+    }
+
+    lines
+}
+
+fn debug_watch_frame_json(frame: &DebugWatchFrame) -> Value {
+    json!({
+        "schema": {
+            "version": DEBUG_WATCH_SCHEMA_VERSION,
+            "surface": "debug_watch_frame",
+            "purpose": "developer_realtime_observability",
+        },
+        "frame_index": frame.frame_index,
+        "captured_at": frame.captured_at,
+        "refresh_ms": frame.refresh_ms,
+        "scope_session_id": frame.scope_session_id,
+        "target_session_id": frame.target_session_id,
+        "counters": {
+            "provider_failover_total": frame.counters.provider_failover_total,
+            "provider_failover_exhausted": frame.counters.provider_failover_exhausted,
+            "acp_active_sessions": frame.counters.acp_active_sessions,
+            "acp_turn_queue_depth": frame.counters.acp_turn_queue_depth,
+            "acp_turn_failures": frame.counters.acp_turn_failures,
+            "session_turn_count": frame.counters.session_turn_count,
+            "audit_provider_failover_events": frame.counters.audit_provider_failover_events,
+            "audit_authorization_denied_events": frame.counters.audit_authorization_denied_events,
+            "attention_count": frame.counters.attention_count,
+        },
+        "delta": frame.delta.as_ref().map(|delta| json!({
+            "provider_failover_total": delta.provider_failover_total,
+            "provider_failover_exhausted": delta.provider_failover_exhausted,
+            "acp_active_sessions": delta.acp_active_sessions,
+            "acp_turn_queue_depth": delta.acp_turn_queue_depth,
+            "acp_turn_failures": delta.acp_turn_failures,
+            "session_turn_count": delta.session_turn_count,
+            "audit_provider_failover_events": delta.audit_provider_failover_events,
+            "audit_authorization_denied_events": delta.audit_authorization_denied_events,
+            "attention_count": delta.attention_count,
+        })),
+        "latest_provider_failover": frame.latest_provider_failover,
+        "latest_authorization_denied": frame.latest_authorization_denied,
+        "session_tail": frame
+            .session_tail
+            .iter()
+            .map(|event| json!({
+                "id": event.id,
+                "event_kind": event.event_kind,
+                "ts": event.ts,
+            }))
+            .collect::<Vec<_>>(),
+        "attention_hints": frame.attention_hints,
+        "errors": frame.errors,
+        "status": frame.bundle.get("status").cloned().unwrap_or(Value::Null),
+        "runtime_snapshot": frame.bundle.get("runtime_snapshot").cloned().unwrap_or(Value::Null),
+        "acp_observability": frame.bundle.get("acp_observability").cloned().unwrap_or(Value::Null),
+        "session_status": frame.bundle.get("session_status").cloned().unwrap_or(Value::Null),
+        "audit_summary": frame.bundle.get("audit_summary").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn render_debug_watch_text(frame: &DebugWatchFrame) -> CliResult<String> {
+    let target_session_id = frame.target_session_id.as_deref().unwrap_or("-");
+    let progress_line = format!(
+        "frame={} refresh={}ms updated_at={} ctrl-c stops",
+        frame.frame_index, frame.refresh_ms, frame.captured_at
+    );
+    let intro_lines = vec![format!(
+        "scope_session={} target_session={}",
+        crate::sessions_cli::sanitize_terminal_text(frame.scope_session_id.as_str()),
+        crate::sessions_cli::sanitize_terminal_text(target_session_id),
+    )];
+    let status = frame.bundle.get("status").unwrap_or(&Value::Null);
+    let session_status = frame.bundle.get("session_status").unwrap_or(&Value::Null);
+
+    let summary_items = vec![
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "active_provider".to_owned(),
+            value: crate::sessions_cli::sanitize_terminal_text(
+                json_path_str(status, &["active_provider"]).unwrap_or("-"),
+            ),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "active_model".to_owned(),
+            value: crate::sessions_cli::sanitize_terminal_text(
+                json_path_str(status, &["active_model"]).unwrap_or("-"),
+            ),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "memory_profile".to_owned(),
+            value: crate::sessions_cli::sanitize_terminal_text(
+                json_path_str(status, &["memory_profile"]).unwrap_or("-"),
+            ),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "session_state".to_owned(),
+            value: crate::sessions_cli::sanitize_terminal_text(
+                json_path_str(session_status, &["session", "state"]).unwrap_or("-"),
+            ),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "session_turns".to_owned(),
+            value: frame.counters.session_turn_count.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "provider_failover_total".to_owned(),
+            value: frame.counters.provider_failover_total.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "provider_failover_exhausted".to_owned(),
+            value: frame.counters.provider_failover_exhausted.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "acp_active_sessions".to_owned(),
+            value: frame.counters.acp_active_sessions.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "acp_turn_queue_depth".to_owned(),
+            value: frame.counters.acp_turn_queue_depth.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "acp_turn_failures".to_owned(),
+            value: frame.counters.acp_turn_failures.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "audit_provider_failover_events".to_owned(),
+            value: frame.counters.audit_provider_failover_events.to_string(),
+        },
+        mvp::tui_surface::TuiKeyValueSpec::Plain {
+            key: "audit_authorization_denied_events".to_owned(),
+            value: frame.counters.audit_authorization_denied_events.to_string(),
+        },
+    ];
+
+    let mut sections = vec![
+        mvp::tui_surface::TuiSectionSpec::KeyValues {
+            title: Some("🧭 live summary".to_owned()),
+            items: summary_items,
+        },
+        mvp::tui_surface::TuiSectionSpec::Narrative {
+            title: Some("📈 deltas".to_owned()),
+            lines: build_debug_watch_delta_lines(frame.delta.as_ref()),
+        },
+    ];
+
+    let mut recent_lines = Vec::new();
+    if let Some(provider_failover) = frame.latest_provider_failover.as_deref() {
+        recent_lines.push(format!(
+            "provider_failover {}",
+            crate::sessions_cli::sanitize_terminal_text(provider_failover),
+        ));
+    }
+    if let Some(authorization_denied) = frame.latest_authorization_denied.as_deref() {
+        recent_lines.push(format!(
+            "authorization_denied {}",
+            crate::sessions_cli::sanitize_terminal_text(authorization_denied),
+        ));
+    }
+    if !recent_lines.is_empty() {
+        sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
+            title: Some("🔌 recent failure signals".to_owned()),
+            lines: recent_lines,
+        });
+    }
+
+    if !frame.session_tail.is_empty() {
+        let session_lines = frame
+            .session_tail
+            .iter()
+            .map(|event| {
+                let sanitized_event_kind =
+                    crate::sessions_cli::sanitize_terminal_text(event.event_kind.as_str());
+                format!("#{} {} ts={}", event.id, sanitized_event_kind, event.ts)
+            })
+            .collect::<Vec<_>>();
+        sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
+            title: Some("🪵 session event tail".to_owned()),
+            lines: session_lines,
+        });
+    }
+
+    let mut attention_lines = frame
+        .attention_hints
+        .iter()
+        .map(|hint| crate::sessions_cli::sanitize_terminal_text(hint))
+        .collect::<Vec<_>>();
+    attention_lines.extend(
+        frame
+            .errors
+            .iter()
+            .map(|error| crate::sessions_cli::sanitize_terminal_text(error)),
+    );
+    if !attention_lines.is_empty() {
+        sections.push(mvp::tui_surface::TuiSectionSpec::Callout {
+            tone: mvp::tui_surface::TuiCalloutTone::Warning,
+            title: Some("⚠️ attention".to_owned()),
+            lines: attention_lines,
+        });
+    }
+
+    let footer_lines = vec![
+        "Use `loong debug bundle --output <path>` when you need a point-in-time artifact to share or diff.".to_owned(),
+        "Stop the live view with Ctrl-C.".to_owned(),
+    ];
+    let screen = mvp::tui_surface::TuiScreenSpec {
+        header_style: mvp::tui_surface::TuiHeaderStyle::Compact,
+        subtitle: Some("real-time observability".to_owned()),
+        title: Some("debug watch".to_owned()),
+        progress_line: Some(progress_line),
+        intro_lines,
+        sections,
+        choices: Vec::new(),
+        footer_lines,
+    };
+    let width = mvp::presentation::detect_render_width();
+    let rendered = mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, width, false);
+    Ok(rendered.join("\n"))
+}
+
+fn latest_authorization_denied_line(value: Option<&Value>) -> Option<String> {
+    let event = value.and_then(Value::as_array)?.last()?;
+    Some(format!(
+        "pack_id={} token_id={} reason={}",
+        event
+            .pointer("/kind/AuthorizationDenied/pack_id")
+            .or_else(|| event.get("pack_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("-"),
+        event
+            .pointer("/kind/AuthorizationDenied/token_id")
+            .or_else(|| event.get("token_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("-"),
+        event
+            .pointer("/kind/AuthorizationDenied/reason")
+            .or_else(|| event.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("-"),
+    ))
+}
+
 pub fn render_debug_cli_text(execution: &DebugCommandExecution) -> CliResult<String> {
     render_debug_payload_text(
         &execution.payload,
@@ -942,8 +1679,10 @@ mod tests {
     use std::fs;
 
     use super::{
-        DebugCommandExecution, build_debug_correlation_index, load_debug_bundle_artifact,
-        normalize_session_scope, render_debug_cli_text,
+        DebugCommandExecution, DebugWatchCounters, DebugWatchDelta, DebugWatchFrame,
+        DebugWatchSessionEvent, build_debug_correlation_index, build_debug_watch_delta_lines,
+        load_debug_bundle_artifact, normalize_debug_watch_refresh_ms, normalize_session_scope,
+        render_debug_cli_text, render_debug_watch_text,
     };
     use serde_json::json;
     use tempfile::tempdir;
@@ -953,6 +1692,13 @@ mod tests {
         assert_eq!(normalize_session_scope(""), "default");
         assert_eq!(normalize_session_scope("  "), "default");
         assert_eq!(normalize_session_scope("debug-session"), "debug-session");
+    }
+
+    #[test]
+    fn normalize_debug_watch_refresh_ms_clamps_bounds() {
+        assert_eq!(normalize_debug_watch_refresh_ms(10), 500);
+        assert_eq!(normalize_debug_watch_refresh_ms(1_500), 1_500);
+        assert_eq!(normalize_debug_watch_refresh_ms(120_000), 60_000);
     }
 
     #[test]
@@ -1108,6 +1854,110 @@ mod tests {
         assert_eq!(correlation["provider_request_ids"], json!(["req-123"]));
         assert_eq!(correlation["auth_error_codes"], json!(["token_expired"]));
         assert_eq!(correlation["audit_event_ids"], json!(["evt-1"]));
+    }
+
+    #[test]
+    fn build_debug_watch_delta_lines_skips_zero_entries() {
+        let lines = build_debug_watch_delta_lines(Some(&DebugWatchDelta {
+            provider_failover_total: 2,
+            provider_failover_exhausted: 0,
+            acp_active_sessions: -1,
+            acp_turn_queue_depth: 0,
+            acp_turn_failures: 1,
+            session_turn_count: 0,
+            audit_provider_failover_events: 0,
+            audit_authorization_denied_events: 0,
+            attention_count: 0,
+        }));
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "provider_failover_total +2")
+        );
+        assert!(lines.iter().any(|line| line == "acp_active_sessions -1"));
+        assert!(lines.iter().any(|line| line == "acp_turn_failures +1"));
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("provider_failover_exhausted"))
+        );
+    }
+
+    #[test]
+    fn render_debug_watch_text_uses_live_sections_and_tail() {
+        let frame = DebugWatchFrame {
+            frame_index: 3,
+            captured_at: "2026-04-22T12:34:56Z".to_owned(),
+            refresh_ms: 1_500,
+            scope_session_id: "root-session".to_owned(),
+            target_session_id: Some("target-session".to_owned()),
+            counters: DebugWatchCounters {
+                provider_failover_total: 4,
+                provider_failover_exhausted: 1,
+                acp_active_sessions: 2,
+                acp_turn_queue_depth: 3,
+                acp_turn_failures: 1,
+                session_turn_count: 8,
+                audit_provider_failover_events: 2,
+                audit_authorization_denied_events: 1,
+                attention_count: 2,
+            },
+            delta: Some(DebugWatchDelta {
+                provider_failover_total: 1,
+                provider_failover_exhausted: 0,
+                acp_active_sessions: 0,
+                acp_turn_queue_depth: -1,
+                acp_turn_failures: 1,
+                session_turn_count: 2,
+                audit_provider_failover_events: 1,
+                audit_authorization_denied_events: 0,
+                attention_count: 1,
+            }),
+            latest_provider_failover: Some(
+                "provider_id=openai reason=rate_limited model=gpt-5 request_id=req-123 auth_error_code=token_expired"
+                    .to_owned(),
+            ),
+            latest_authorization_denied: Some(
+                "pack_id=pack-1 token_id=token-1 reason=capability_missing".to_owned(),
+            ),
+            session_tail: vec![
+                DebugWatchSessionEvent {
+                    id: 10,
+                    event_kind: "delegate_started".to_owned(),
+                    ts: 100,
+                },
+                DebugWatchSessionEvent {
+                    id: 11,
+                    event_kind: "delegate_completed".to_owned(),
+                    ts: 101,
+                },
+            ],
+            attention_hints: vec!["provider_failover_present".to_owned()],
+            errors: vec!["section=session_events_incremental error=timeout".to_owned()],
+            bundle: json!({
+                "status": {
+                    "active_provider": "openai",
+                    "active_model": "gpt-5",
+                    "memory_profile": "window_plus_summary"
+                },
+                "session_status": {
+                    "session": {
+                        "state": "running"
+                    }
+                }
+            }),
+        };
+
+        let rendered = render_debug_watch_text(&frame).expect("render debug watch");
+        assert!(rendered.contains("debug watch"));
+        assert!(rendered.contains("real-time observability"));
+        assert!(rendered.contains("scope_session=root-session"));
+        assert!(rendered.contains("provider_failover_total +1"));
+        assert!(rendered.contains("#10 delegate_started ts=100"));
+        assert!(rendered.contains("request_id=req-123"));
+        assert!(rendered.contains("capability_missing"));
+        assert!(rendered.contains("Ctrl-C"));
     }
 
     #[test]
