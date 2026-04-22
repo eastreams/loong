@@ -40,28 +40,25 @@ pub(crate) fn resolve_tool_invoke_request(
     }
 
     let routed_hidden_tool_name = super::route_hidden_discoverable_tool_name(tool_id, &arguments);
-    let tool_lease_id = match routed_hidden_tool_name {
-        Ok(_resolved_hidden_tool_name)
-            if matches!(
-                tool_id,
-                super::HIDDEN_AGENT_TOOL_NAME
-                    | super::HIDDEN_SKILLS_TOOL_NAME
-                    | super::HIDDEN_CHANNEL_TOOL_NAME
-            ) =>
-        {
-            tool_id
-        }
-        _ => tool_id,
-    };
-    tool_lease_authority::validate_tool_lease(tool_lease_id, lease, payload)?;
-
-    if matches!(
+    let grouped_hidden_surface = matches!(
         tool_id,
         super::HIDDEN_AGENT_TOOL_NAME
             | super::HIDDEN_SKILLS_TOOL_NAME
             | super::HIDDEN_CHANNEL_TOOL_NAME
-    ) && let Some(arguments_object) = arguments.as_object_mut()
+    );
+    let tool_lease_id = match routed_hidden_tool_name {
+        Ok(_resolved_hidden_tool_name) if grouped_hidden_surface => tool_id,
+        _ => tool_id,
+    };
+    tool_lease_authority::validate_tool_lease(tool_lease_id, lease, payload)?;
+
+    if let Err(route_error) = &routed_hidden_tool_name
+        && grouped_hidden_surface
     {
+        return Err(route_error.clone());
+    }
+
+    if grouped_hidden_surface && let Some(arguments_object) = arguments.as_object_mut() {
         arguments_object.remove("operation");
     }
 

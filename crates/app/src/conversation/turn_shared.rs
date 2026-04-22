@@ -2137,33 +2137,37 @@ fn render_direct_routing_failure_repair_guidance(
     request_summary_request: Option<&Value>,
     tool_failure_reason: &str,
 ) -> Option<String> {
-    let guidance = if tool_failure_reason.starts_with("direct_read_requires_one_of:") {
+    let normalized_reason = tool_failure_reason
+        .strip_prefix("tool execution failed: ")
+        .unwrap_or(tool_failure_reason);
+
+    let guidance = if normalized_reason.starts_with("direct_read_requires_one_of:") {
         "Provide exactly one of `path`, `query`, or `pattern`. Use `path` to read one file, `query` to search file contents, or `pattern` to run a glob search.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_read_ambiguous:") {
+    } else if normalized_reason.starts_with("direct_read_ambiguous:") {
         "Remove the extra fields and keep only one of `path`, `query`, or `pattern`.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_exec_requires_command:") {
+    } else if normalized_reason.starts_with("direct_exec_requires_command:") {
         "Add `command` for direct program execution. If the request is really a shell string, switch to `bash` instead.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_exec_shell_moved_to_bash:")
-        || tool_failure_reason.starts_with("direct_exec_shell_syntax_moved_to_bash:")
+    } else if normalized_reason.starts_with("direct_exec_shell_moved_to_bash:")
+        || normalized_reason.starts_with("direct_exec_shell_syntax_moved_to_bash:")
     {
         "Use `bash` for shell command strings, pipelines, redirects, chaining, or shell builtins. Keep `exec` only for direct argv-style program execution.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_bash_argv_moved_to_exec:") {
+    } else if normalized_reason.starts_with("direct_bash_argv_moved_to_exec:") {
         "Use `exec` when you already have a program plus argv-style arguments. Keep `bash` for a single shell command string.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_bash_requires_command_or_script:") {
+    } else if normalized_reason.starts_with("direct_bash_requires_command_or_script:") {
         "Provide `command` for a shell command string, or legacy `script` if you are replaying an older payload.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_write_requires_content:") {
+    } else if normalized_reason.starts_with("direct_write_requires_content:") {
         "Add whole-file `content`, or switch to `edit` if you meant an exact replacement instead of rewriting the entire file.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_web_requires_query_or_url:") {
+    } else if normalized_reason.starts_with("direct_web_requires_query_or_url:") {
         "Provide `query` for search mode, or `url` for fetch/request mode.".to_owned()
-    } else if tool_failure_reason.starts_with("direct_web_ambiguous:") {
+    } else if normalized_reason.starts_with("direct_web_ambiguous:") {
         "Choose either search mode (`query`) or request/fetch mode (`url` plus optional request fields), but not both at once.".to_owned()
-    } else if tool_failure_reason.starts_with("hidden_agent_requires_operation:") {
+    } else if normalized_reason.starts_with("hidden_agent_requires_operation:") {
         "Add `operation` for grouped agent/runtime control requests such as session archive, cancel, recover, or approval workflows.".to_owned()
-    } else if tool_failure_reason.starts_with("hidden_agent_requires_actionable_fields:") {
+    } else if normalized_reason.starts_with("hidden_agent_requires_actionable_fields:") {
         "Add the concrete session / approval / delegate / provider / config fields needed for the request, or set `operation` when the grouped `tool.invoke` request is ambiguous.".to_owned()
-    } else if tool_failure_reason.starts_with("hidden_skills_requires_actionable_fields:") {
+    } else if normalized_reason.starts_with("hidden_skills_requires_actionable_fields:") {
         "Add search, inspect, install, run, or list fields for the grouped `skills` surface, or provide `operation` to make the request explicit.".to_owned()
-    } else if tool_failure_reason.starts_with("hidden_channel_requires_operation:") {
+    } else if normalized_reason.starts_with("hidden_channel_requires_operation:") {
         "Add `operation` for the grouped channel surface, for example `messages.send`, `messages.reply`, `card.update`, or `feishu.whoami`.".to_owned()
     } else {
         return None;

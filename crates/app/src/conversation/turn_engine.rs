@@ -2465,6 +2465,14 @@ fn tool_intent_is_visible(
         if descriptor.name != "tool.invoke" {
             return true;
         }
+        let grouped_hidden_surface = intent
+            .args_json
+            .get("tool_id")
+            .and_then(Value::as_str)
+            .is_some_and(|tool_id| matches!(tool_id, "agent" | "skills" | "channel"));
+        if grouped_hidden_surface {
+            return true;
+        }
         let effective_name = effective_visible_tool_name(intent, descriptor);
         return effective_name == descriptor.name
             || session_context.tool_view.contains(effective_name.as_str());
