@@ -49,6 +49,62 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     ))
 }
 
+fn read_provider_request(stream: &mut std::net::TcpStream) -> String {
+    stream
+        .set_nonblocking(false)
+        .expect("set provider stream blocking");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set provider stream read timeout");
+    let mut request_bytes = Vec::new();
+    let mut request_buffer = [0_u8; 4096];
+    let mut expected_len = None;
+
+    loop {
+        let request_len = stream
+            .read(&mut request_buffer)
+            .expect("read provider request");
+        if request_len == 0 {
+            break;
+        }
+        let request_chunk = request_buffer
+            .get(..request_len)
+            .expect("provider request length should fit within the read buffer");
+        request_bytes.extend_from_slice(request_chunk);
+
+        if expected_len.is_none()
+            && let Some(headers_end) = request_bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+        {
+            let headers_end = headers_end + 4;
+            let header_bytes = request_bytes
+                .get(..headers_end)
+                .expect("header boundary should fit within collected request bytes");
+            let headers = String::from_utf8_lossy(header_bytes);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if !name.eq_ignore_ascii_case("content-length") {
+                        return None;
+                    }
+                    value.trim().parse::<usize>().ok()
+                })
+                .unwrap_or(0);
+            expected_len = Some(headers_end + content_length);
+        }
+
+        if let Some(expected_len) = expected_len
+            && request_bytes.len() >= expected_len
+        {
+            break;
+        }
+    }
+
+    String::from_utf8_lossy(&request_bytes).into_owned()
+}
+
 fn isolated_import_runtime_env_guard(temp_root: &std::path::Path) -> ImportEnvironmentGuard {
     let home = temp_root.join("home");
     std::fs::create_dir_all(&home).expect("create fake home dir");
@@ -1496,9 +1552,7 @@ async fn import_cli_applies_codex_source_and_imported_config_is_usable() {
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request = read_provider_request(&mut stream);
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("GET /v1/models ") {
@@ -1642,9 +1696,7 @@ async fn import_cli_applies_codex_source_with_custom_chat_completions_path() {
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request = read_provider_request(&mut stream);
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("GET /proxy/models ") {
@@ -1772,9 +1824,7 @@ async fn import_cli_applies_codex_source_and_imported_turn_falls_back_from_respo
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request = read_provider_request(&mut stream);
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("GET /v1/models ") {
@@ -1895,9 +1945,7 @@ async fn import_cli_applies_codex_source_and_imported_turn_falls_back_from_respo
         let mut requests = Vec::new();
         for _ in 0..4 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request = read_provider_request(&mut stream);
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("POST /v1/responses ") {

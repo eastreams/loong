@@ -98,6 +98,46 @@ function formatPromptMode(
   }
 }
 
+function formatAutonomyProfile(
+  autonomyProfile: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!autonomyProfile) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (autonomyProfile) {
+    case "discovery_only":
+      return t("dashboard.values.autonomyDiscoveryOnly");
+    case "guided_acquisition":
+      return t("dashboard.values.autonomyGuidedAcquisition");
+    case "bounded_autonomous":
+      return t("dashboard.values.autonomyBoundedAutonomous");
+    default:
+      return autonomyProfile;
+  }
+}
+
+function formatConsentDefaultMode(
+  consentDefaultMode: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!consentDefaultMode) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (consentDefaultMode) {
+    case "prompt":
+      return t("dashboard.values.consentPrompt");
+    case "auto":
+      return t("dashboard.values.consentAuto");
+    case "full":
+      return t("dashboard.values.consentFull");
+    default:
+      return consentDefaultMode;
+  }
+}
+
 function formatPersonality(
   personality: string | null | undefined,
   t: ReturnType<typeof useTranslation>["t"],
@@ -173,6 +213,46 @@ function formatToolCapabilityState(
       return t("dashboard.toolMeta.runtimeUnavailable");
     default:
       return state;
+  }
+}
+
+function formatApprovalStatus(
+  status: string | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (!status) {
+    return t("dashboard.values.notSet");
+  }
+
+  switch (status) {
+    case "pending":
+      return t("dashboard.approvals.status.pending");
+    case "approved":
+      return t("dashboard.approvals.status.approved");
+    case "executing":
+      return t("dashboard.approvals.status.executing");
+    case "executed":
+      return t("dashboard.approvals.status.executed");
+    case "denied":
+      return t("dashboard.approvals.status.denied");
+    case "expired":
+      return t("dashboard.approvals.status.expired");
+    case "cancelled":
+      return t("dashboard.approvals.status.cancelled");
+    default:
+      return status;
+  }
+}
+
+function approvalTone(status: string | null | undefined): Tone {
+  switch (status) {
+    case "pending":
+      return "warn";
+    case "approved":
+    case "executing":
+      return "good";
+    default:
+      return "muted";
   }
 }
 
@@ -313,6 +393,7 @@ export default function DashboardPage() {
     connectivity,
     config,
     tools,
+    approvals,
     error,
     settingsError,
     settingsNotice,
@@ -335,15 +416,19 @@ export default function DashboardPage() {
     : t("dashboard.values.missing");
   const enabledTools = tools?.items.filter((item) => item.enabled).length ?? 0;
   const approvalDisplay = formatApprovalMode(tools?.approvalMode, t);
+  const autonomyProfileDisplay = formatAutonomyProfile(tools?.autonomyProfile, t);
+  const consentDefaultModeDisplay = formatConsentDefaultMode(
+    tools?.consentDefaultMode,
+    t,
+  );
   const shellPolicyDisplay = formatShellPolicy(tools?.shellDefaultMode, t);
   const promptModeDisplay = formatPromptMode(config?.promptMode, t);
   const personalityDisplay = formatPersonality(config?.personality, t);
   const memoryProfileDisplay = formatMemoryProfile(config?.memoryProfile, t);
   const connectivityCopy = buildConnectivityCopy(connectivity, t);
 
-
-
   const toolItems: DashboardToolItem[] = tools?.items ?? [];
+  const approvalItems = approvals?.items ?? [];
   const providerKindOptions = buildProviderKindOptions(
     providerCatalog,
     providerForm.kind,
@@ -753,18 +838,141 @@ export default function DashboardPage() {
                 <span className="dashboard-tool-stat-value">{approvalDisplay}</span>
               </div>
               <div className="dashboard-tool-stat">
-                <span className="dashboard-tool-stat-label">{t("dashboard.fields.allowed")}</span>
-                <span className="dashboard-tool-stat-value">{tools?.shellAllowCount ?? 0}</span>
+                <span className="dashboard-tool-stat-label">{t("dashboard.fields.autonomy")}</span>
+                <span className="dashboard-tool-stat-value" title={autonomyProfileDisplay}>
+                  {autonomyProfileDisplay}
+                </span>
               </div>
               <div className="dashboard-tool-stat">
-                <span className="dashboard-tool-stat-label">{t("dashboard.fields.denied")}</span>
-                <span className="dashboard-tool-stat-value">{tools?.shellDenyCount ?? 0}</span>
+                <span className="dashboard-tool-stat-label">{t("dashboard.fields.consent")}</span>
+                <span className="dashboard-tool-stat-value" title={consentDefaultModeDisplay}>
+                  {consentDefaultModeDisplay}
+                </span>
               </div>
               <div className="dashboard-tool-stat">
                 <span className="dashboard-tool-stat-label">{t("dashboard.fields.shellPolicy")}</span>
                 <span className="dashboard-tool-stat-value" title={shellPolicyDisplay}>{shellPolicyDisplay}</span>
               </div>
             </div>
+
+            <div className="dashboard-kv-list">
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.sessionMutation")}</span>
+                <strong>
+                  {tools
+                    ? tools.sessionsAllowMutation
+                      ? t("dashboard.values.enabled")
+                      : t("dashboard.values.disabled")
+                    : t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.externalSkillsDownloadApproval")}</span>
+                <strong>
+                  {tools
+                    ? tools.externalSkillsRequireDownloadApproval
+                      ? t("dashboard.values.yes")
+                      : t("dashboard.values.no")
+                    : t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.externalSkillsAutoExpose")}</span>
+                <strong>
+                  {tools
+                    ? tools.externalSkillsAutoExposeInstalled
+                      ? t("dashboard.values.enabled")
+                      : t("dashboard.values.disabled")
+                    : t("dashboard.values.notSet")}
+                </strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.externalSkillsBlockedDomains")}</span>
+                <strong>{tools?.externalSkillsBlockedDomainCount ?? 0}</strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.allowed")}</span>
+                <strong>{tools?.shellAllowCount ?? 0}</strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.denied")}</span>
+                <strong>{tools?.shellDenyCount ?? 0}</strong>
+              </div>
+              <div className="dashboard-kv-row">
+                <span>{t("dashboard.fields.enabledTools")}</span>
+                <strong>{enabledTools}</strong>
+              </div>
+            </div>
+
+            <div className="dashboard-sidebar-divider" />
+
+            <div className="dashboard-stacked-section">
+              <div className="dashboard-section-heading">
+                {t("dashboard.sections.approvalsLabel")}
+              </div>
+              <div className="dashboard-kv-list">
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.approvals.pendingCount")}</span>
+                  <strong>{approvals?.pendingApprovalCount ?? 0}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>{t("dashboard.approvals.activeCount")}</span>
+                  <strong>{approvals?.activeApprovalCount ?? 0}</strong>
+                </div>
+              </div>
+              {approvalItems.length > 0 ? (
+                <div className="dashboard-approval-list">
+                  {approvalItems.map((item) => (
+                    <div key={item.approvalRequestId} className="dashboard-approval-row">
+                      <div className="dashboard-approval-row-head">
+                        <div className="dashboard-approval-row-name">
+                          {item.visibleToolName}
+                        </div>
+                        <span
+                          className={`dashboard-pill dashboard-pill-${approvalTone(item.status)} dashboard-pill-compact`}
+                        >
+                          {formatApprovalStatus(item.status, t)}
+                        </span>
+                      </div>
+                      <div
+                        className="dashboard-approval-row-session"
+                        title={item.sessionTitle}
+                      >
+                        {item.sessionTitle}
+                      </div>
+                      <div
+                        className="dashboard-approval-row-meta"
+                        title={item.requestSummary}
+                      >
+                        {item.requestSummary}
+                      </div>
+                      <div
+                        className="dashboard-approval-row-time"
+                        title={item.requestedAt}
+                      >
+                        {t("dashboard.approvals.requestedAt", {
+                          at: item.requestedAt,
+                        })}
+                      </div>
+                      {item.lastError ? (
+                        <div
+                          className="dashboard-approval-row-error"
+                          title={item.lastError}
+                        >
+                          {item.lastError}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="dashboard-approval-empty">
+                  {t("dashboard.approvals.empty")}
+                </p>
+              )}
+            </div>
+
+            <div className="dashboard-sidebar-divider" />
 
             <div className="dashboard-tool-list">
               {toolItems.map((item) => (

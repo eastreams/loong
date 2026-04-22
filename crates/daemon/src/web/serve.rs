@@ -83,6 +83,7 @@ pub(super) async fn run_web_serve(
         .route("/dashboard/connectivity", get(dashboard_connectivity))
         .route("/dashboard/config", get(dashboard_config))
         .route("/dashboard/tools", get(dashboard_tools))
+        .route("/dashboard/approvals", get(dashboard_approvals))
         .route("/dashboard/debug-console", get(dashboard_debug_console))
         .route(
             "/chat/sessions",

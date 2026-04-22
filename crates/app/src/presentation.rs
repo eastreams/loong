@@ -770,33 +770,23 @@ mod tests {
 
     #[test]
     fn presentation_wraps_display_line_with_bullet_prefix() {
-        let lines = render_wrapped_display_line(
-            "- workspace guidance: AGENTS.md, CLAUDE.md, and local policy",
-            42,
-        );
+        let lines =
+            render_wrapped_display_line("- workspace guidance: AGENTS.md and local policy", 42);
 
         assert_eq!(
             lines,
-            vec![
-                "- workspace guidance: AGENTS.md,",
-                "  CLAUDE.md, and local policy",
-            ]
+            vec!["- workspace guidance: AGENTS.md and local", "  policy",]
         );
     }
 
     #[test]
     fn presentation_normalizes_markdown_star_bullets() {
-        let lines = render_wrapped_display_line(
-            "* workspace guidance: AGENTS.md, CLAUDE.md, and local policy",
-            42,
-        );
+        let lines =
+            render_wrapped_display_line("* workspace guidance: AGENTS.md and local policy", 42);
 
         assert_eq!(
             lines,
-            vec![
-                "- workspace guidance: AGENTS.md,",
-                "  CLAUDE.md, and local policy",
-            ]
+            vec!["- workspace guidance: AGENTS.md and local", "  policy",]
         );
     }
 
@@ -819,17 +809,12 @@ mod tests {
 
     #[test]
     fn presentation_normalizes_markdown_plus_bullets() {
-        let lines = render_wrapped_display_line(
-            "+ workspace guidance: AGENTS.md, CLAUDE.md, and local policy",
-            42,
-        );
+        let lines =
+            render_wrapped_display_line("+ workspace guidance: AGENTS.md and local policy", 42);
 
         assert_eq!(
             lines,
-            vec![
-                "- workspace guidance: AGENTS.md,",
-                "  CLAUDE.md, and local policy",
-            ]
+            vec!["- workspace guidance: AGENTS.md and local", "  policy",]
         );
     }
 

@@ -39,6 +39,7 @@ jobs:
     outputs:
       run_rust_jobs: ${{ steps.classify.outputs.run_rust_jobs }}
       run_docs_site: ${{ steps.classify.outputs.run_docs_site }}
+      touched_paths_json: ${{ steps.classify.outputs.touched_paths_json }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -79,6 +80,8 @@ jobs:
       - name: Shell syntax checks
         run: |
           python3 -c "from pathlib import Path; compile(Path('scripts/sync_github_labels.py').read_text(), 'scripts/sync_github_labels.py', 'exec')"
+          python3 -c "from pathlib import Path; compile(Path('scripts/rust_changed_packages.py').read_text(), 'scripts/rust_changed_packages.py', 'exec')"
+          python3 -c "from pathlib import Path; compile(Path('scripts/daemon_changed_test_targets.py').read_text(), 'scripts/daemon_changed_test_targets.py', 'exec')"
           bash -n scripts/check_glibc_floor.sh
           bash -n scripts/install.sh
           bash -n scripts/publish_crates_io.sh
@@ -94,12 +97,21 @@ jobs:
           bash -n scripts/test_release_artifact_lib.sh
           bash -n scripts/test_release_workflow_hardening.sh
           bash -n scripts/test_bootstrap_release_local_artifacts.sh
+          bash -n scripts/test_changed_rust_packages.sh
+          bash -n scripts/test_changed_rust_packages_runner.sh
+          bash -n scripts/run_changed_rust_ci_job.sh
+          bash -n scripts/test_run_changed_rust_ci_job.sh
+          bash -n scripts/test_daemon_changed_test_targets.sh
+          bash -n scripts/run_selected_daemon_tests.sh
+          bash -n scripts/test_run_selected_daemon_tests.sh
+          bash -n scripts/test_rust_changed_packages.sh
           bash -n scripts/test_ci_workflow_change_routing.sh
           bash -n scripts/test_promotion_guard_workflows.sh
           bash -n scripts/test_workflow_change_router.sh
           bash -n scripts/check-docs.sh
           bash -n scripts/check_dep_graph.sh
           bash -n scripts/stress_daemon_tests.sh
+          bash -n scripts/test_daemon_smoke.sh
           bash -n scripts/test_scan_workflow_hardening.sh
           bash -n scripts/test_sync_github_labels.sh
           bash -n scripts/test_stress_daemon_tests.sh
@@ -117,6 +129,11 @@ jobs:
           bash scripts/test_release_workflow_hardening.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
           bash scripts/check_public_repo_hygiene.sh
+          bash scripts/test_daemon_changed_test_targets.sh
+          bash scripts/test_changed_rust_packages_runner.sh
+          bash scripts/test_run_changed_rust_ci_job.sh
+          bash scripts/test_run_selected_daemon_tests.sh
+          bash scripts/test_rust_changed_packages.sh
           bash scripts/test_ci_workflow_change_routing.sh
           bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_workflow_change_router.sh
@@ -154,7 +171,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: ${{ env.MINTLIFY_NODE_VERSION }}
 
@@ -227,11 +244,17 @@ jobs:
 
       - name: Cache Cargo Artifacts
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          save-if: ${{ matrix.os != 'windows-latest' }}
 
       - name: Test
-        run: cargo test --workspace --locked
+        shell: bash
+        env:
+          TOUCHED_PATHS_JSON: ${{ needs.changes.outputs.touched_paths_json }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: ./scripts/run_changed_rust_ci_job.sh
 
-  rust-check-browser-without-webfetch:
+  rust-check-feature-deltas:
     needs: changes
     if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
     runs-on: ubuntu-latest
@@ -248,21 +271,20 @@ jobs:
       - name: Cache Cargo Artifacts
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
+      - name: Check spec test hook surface
+        run: cargo check -p loong-spec --features test-hooks --locked
+
       - name: Check browser feature set without web.fetch
         run: >
-          cargo check -p loong-app --no-default-features
+          cargo check -p loong-app --no-default-features --locked
           --features
           channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
 
   rust-test-all-features:
     needs: changes
     if: ${{ needs.changes.outputs.run_rust_jobs == 'true' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
     permissions:
       contents: read
     steps:
@@ -276,7 +298,11 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
       - name: Test (all features)
-        run: cargo test --workspace --all-features --locked
+        shell: bash
+        env:
+          TOUCHED_PATHS_JSON: ${{ needs.changes.outputs.touched_paths_json }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: ./scripts/run_changed_rust_ci_job.sh --all-features
 
   android-termux-build:
     needs: changes
@@ -358,7 +384,7 @@ jobs:
       - governance
       - rust-quality
       - rust-test-default
-      - rust-check-browser-without-webfetch
+      - rust-check-feature-deltas
       - rust-test-all-features
       - android-termux-build
       - docs-build
@@ -373,7 +399,7 @@ jobs:
           GOVERNANCE_RESULT: ${{ needs.governance.result }}
           RUST_QUALITY_RESULT: ${{ needs.rust-quality.result }}
           RUST_TEST_DEFAULT_RESULT: ${{ needs.rust-test-default.result }}
-          RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT: ${{ needs.rust-check-browser-without-webfetch.result }}
+          RUST_CHECK_FEATURE_DELTAS_RESULT: ${{ needs.rust-check-feature-deltas.result }}
           RUST_TEST_ALL_FEATURES_RESULT: ${{ needs.rust-test-all-features.result }}
           ANDROID_TERMUX_BUILD_RESULT: ${{ needs.android-termux-build.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
@@ -403,7 +429,7 @@ jobs:
           check_result governance "$GOVERNANCE_RESULT"
           check_optional_result rust-quality "$RUST_QUALITY_RESULT"
           check_optional_result rust-test-default "$RUST_TEST_DEFAULT_RESULT"
-          check_optional_result rust-check-browser-without-webfetch "$RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT"
+          check_optional_result rust-check-feature-deltas "$RUST_CHECK_FEATURE_DELTAS_RESULT"
           check_optional_result rust-test-all-features "$RUST_TEST_ALL_FEATURES_RESULT"
           check_optional_result android-termux-build "$ANDROID_TERMUX_BUILD_RESULT"
           check_optional_result docs-build "$DOCS_BUILD_RESULT"

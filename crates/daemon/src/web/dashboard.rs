@@ -17,6 +17,67 @@ pub(super) async fn dashboard_summary(
     }))
 }
 
+pub(super) async fn dashboard_approvals(
+    State(state): State<Arc<WebApiState>>,
+) -> Result<Json<ApiEnvelope<DashboardApprovalsPayload>>, WebApiError> {
+    let snapshot = load_web_snapshot(state.as_ref())?;
+    let repo = mvp::session::repository::SessionRepository::new(&snapshot.memory_config)
+        .map_err(WebApiError::internal)?;
+    let mut title_by_session_id = HashMap::new();
+    let mut approvals = Vec::new();
+
+    for session in &snapshot.sessions {
+        title_by_session_id.insert(session.id.clone(), session.title.clone());
+        approvals.extend(
+            repo.list_approval_requests_for_session(&session.id, None)
+                .map_err(WebApiError::internal)?,
+        );
+    }
+
+    approvals.sort_by(|left, right| {
+        right
+            .requested_at
+            .cmp(&left.requested_at)
+            .then_with(|| left.approval_request_id.cmp(&right.approval_request_id))
+    });
+
+    let pending_approval_count = approvals
+        .iter()
+        .filter(|approval| {
+            approval.status == mvp::session::repository::ApprovalRequestStatus::Pending
+        })
+        .count();
+    let active_approval_count = approvals
+        .iter()
+        .filter(|approval| {
+            matches!(
+                approval.status,
+                mvp::session::repository::ApprovalRequestStatus::Pending
+                    | mvp::session::repository::ApprovalRequestStatus::Approved
+                    | mvp::session::repository::ApprovalRequestStatus::Executing
+            )
+        })
+        .count();
+    let matched_count = approvals.len();
+    approvals.truncate(8);
+    let returned_count = approvals.len();
+    let items = approvals
+        .into_iter()
+        .map(|approval| build_dashboard_approval_item(approval, &title_by_session_id))
+        .collect::<Vec<_>>();
+
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: DashboardApprovalsPayload {
+            pending_approval_count,
+            active_approval_count,
+            matched_count,
+            returned_count,
+            items,
+        },
+    }))
+}
+
 pub(super) async fn dashboard_providers(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardProvidersPayload>>, WebApiError> {
@@ -194,10 +255,84 @@ pub(super) async fn dashboard_tools(
         ok: true,
         data: DashboardToolsPayload {
             approval_mode: approval_mode_label(snapshot.config.tools.approval.mode).to_owned(),
+            autonomy_profile: snapshot.config.tools.autonomy_profile.as_str().to_owned(),
+            consent_default_mode: snapshot.config.tools.consent.default_mode.as_str().to_owned(),
             shell_default_mode: snapshot.config.tools.shell_default_mode.clone(),
             shell_allow_count: snapshot.config.tools.shell_allow.len(),
             shell_deny_count: snapshot.config.tools.shell_deny.len(),
+            sessions_allow_mutation: snapshot.config.tools.sessions.allow_mutation,
+            external_skills_require_download_approval: snapshot
+                .config
+                .external_skills
+                .require_download_approval,
+            external_skills_auto_expose_installed: snapshot
+                .config
+                .external_skills
+                .auto_expose_installed,
+            external_skills_blocked_domain_count: snapshot
+                .config
+                .external_skills
+                .normalized_blocked_domains()
+                .len(),
             items: build_tool_items(&snapshot.config, &tool_runtime),
         },
     }))
+}
+
+fn build_dashboard_approval_item(
+    approval: mvp::session::repository::ApprovalRequestRecord,
+    title_by_session_id: &HashMap<String, String>,
+) -> DashboardApprovalItemPayload {
+    let reason = approval
+        .governance_snapshot_json
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let rule_id = approval
+        .governance_snapshot_json
+        .get("rule_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let raw_request = approval
+        .request_payload_json
+        .as_object()
+        .and_then(|payload| payload.get("args_json"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let request_summary = mvp::tools::summarize_tool_request_for_display(
+        approval.tool_name.as_str(),
+        raw_request,
+    );
+
+    DashboardApprovalItemPayload {
+        approval_request_id: approval.approval_request_id,
+        session_id: approval.session_id.clone(),
+        session_title: title_by_session_id
+            .get(&approval.session_id)
+            .cloned()
+            .unwrap_or_else(|| approval.session_id.clone()),
+        visible_tool_name: mvp::tools::user_visible_tool_name(approval.tool_name.as_str()),
+        tool_name: approval.tool_name,
+        status: approval.status.as_str().to_owned(),
+        decision: approval.decision.map(|value| value.as_str().to_owned()),
+        request_summary: summarize_approval_request_value(&request_summary),
+        requested_at: format_timestamp(approval.requested_at),
+        resolved_at: approval.resolved_at.map(format_timestamp),
+        executed_at: approval.executed_at.map(format_timestamp),
+        reason,
+        rule_id,
+        last_error: approval.last_error,
+    }
+}
+
+fn summarize_approval_request_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "no request payload".to_owned(),
+        serde_json::Value::Bool(raw) => raw.to_string(),
+        serde_json::Value::Number(raw) => raw.to_string(),
+        serde_json::Value::String(raw) => raw.clone(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "request payload".to_owned())
+        }
+    }
 }

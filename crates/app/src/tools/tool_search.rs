@@ -79,7 +79,6 @@ pub(super) fn execute_tool_search_tool_with_config(
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
-
     let exact_match_entries =
         super::runtime_tool_search_entries(config, Some(&visible_tool_view), false)
             .into_iter()
@@ -92,39 +91,73 @@ pub(super) fn execute_tool_search_tool_with_config(
             .collect::<Vec<_>>();
     let collapsible_surface_ids =
         super::provider_visible_collapsible_hidden_surface_ids(config, &visible_tool_view);
+    let skill_query_hints = query
+        .as_deref()
+        .map(|value| super::external_skills::ranked_model_visible_skill_hints(config, value, 3))
+        .transpose()?
+        .unwrap_or_default();
+    let exact_skill_hint = requested_exact_tool_id
+        .as_deref()
+        .map(|value| super::external_skills::exact_model_visible_skill_hint(config, value))
+        .transpose()?
+        .flatten();
     let searchable_entries = collapse_hidden_surface_search_entries(
         exact_match_entries.clone(),
         &collapsible_surface_ids,
     );
-    let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
-        let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
-        let direct_tool_id = direct_tool_id.map(str::to_owned);
+    let searchable_entries = enrich_searchable_entries_for_skill_hints(
+        searchable_entries,
+        skill_query_hints.as_slice(),
+        exact_skill_hint.as_ref(),
+    );
+    let exact_match_entry = exact_tool_id
+        .as_ref()
+        .and_then(|exact_tool_id| {
+            let direct_tool_id = super::direct_tool_name_for_hidden_tool(exact_tool_id);
+            let direct_tool_id = direct_tool_id.map(str::to_owned);
 
-        searchable_entries
-            .iter()
-            .find(|entry| {
-                let canonical_match = entry.canonical_name == *exact_tool_id;
-                let tool_id_match = entry.tool_id == *exact_tool_id;
-                let direct_match = direct_tool_id.as_ref().is_some_and(|direct_tool_id| {
-                    entry.canonical_name == *direct_tool_id || entry.tool_id == *direct_tool_id
-                });
-                canonical_match || tool_id_match || direct_match
-            })
-            .cloned()
-            .or_else(|| {
-                exact_match_entries
+            searchable_entries
+                .iter()
+                .find(|entry| {
+                    let canonical_match = entry.canonical_name == *exact_tool_id;
+                    let tool_id_match = entry.tool_id == *exact_tool_id;
+                    let direct_match = direct_tool_id.as_ref().is_some_and(|direct_tool_id| {
+                        entry.canonical_name == *direct_tool_id || entry.tool_id == *direct_tool_id
+                    });
+                    canonical_match || tool_id_match || direct_match
+                })
+                .cloned()
+                .or_else(|| {
+                    exact_match_entries
+                        .iter()
+                        .find(|entry| {
+                            let canonical_match = entry.canonical_name == *exact_tool_id;
+                            let tool_id_match = entry.tool_id == *exact_tool_id;
+                            let direct_match =
+                                direct_tool_id.as_ref().is_some_and(|direct_tool_id| {
+                                    entry.canonical_name == *direct_tool_id
+                                });
+                            canonical_match || tool_id_match || direct_match
+                        })
+                        .cloned()
+                })
+        })
+        .or_else(|| {
+            exact_skill_hint.as_ref().and_then(|hint| {
+                searchable_entries
                     .iter()
-                    .find(|entry| {
-                        let canonical_match = entry.canonical_name == *exact_tool_id;
-                        let tool_id_match = entry.tool_id == *exact_tool_id;
-                        let direct_match = direct_tool_id
-                            .as_ref()
-                            .is_some_and(|direct_tool_id| entry.canonical_name == *direct_tool_id);
-                        canonical_match || tool_id_match || direct_match
-                    })
+                    .find(|entry| entry.tool_id == "skills")
                     .cloned()
+                    .map(|mut entry| {
+                        enrich_skills_surface_entry(
+                            &mut entry,
+                            std::slice::from_ref(hint),
+                            Some(hint),
+                        );
+                        entry
+                    })
             })
-    });
+        });
     let exact_match_found = exact_match_entry.is_some();
     let mut diagnostics_reason = None;
     let results: Vec<Value> = if let Some(entry) = exact_match_entry {
@@ -249,6 +282,166 @@ fn tool_search_diagnostics_json(
     }
 
     Value::Null
+}
+
+fn enrich_searchable_entries_for_skill_hints(
+    entries: Vec<SearchableToolEntry>,
+    skill_hints: &[super::external_skills::SkillDiscoveryToolHint],
+    exact_skill_hint: Option<&super::external_skills::SkillDiscoveryToolHint>,
+) -> Vec<SearchableToolEntry> {
+    entries
+        .into_iter()
+        .map(|mut entry| {
+            if entry.tool_id == "skills" {
+                enrich_skills_surface_entry(&mut entry, skill_hints, exact_skill_hint);
+            }
+            entry
+        })
+        .collect()
+}
+
+fn enrich_skills_surface_entry(
+    entry: &mut SearchableToolEntry,
+    skill_hints: &[super::external_skills::SkillDiscoveryToolHint],
+    exact_skill_hint: Option<&super::external_skills::SkillDiscoveryToolHint>,
+) {
+    let mut matched_skills = Vec::new();
+    if let Some(skill_hint) = exact_skill_hint {
+        matched_skills.push(skill_hint.clone());
+    }
+    for skill_hint in skill_hints {
+        if matched_skills.iter().any(|existing| {
+            existing
+                .skill_id
+                .eq_ignore_ascii_case(skill_hint.skill_id.as_str())
+        }) {
+            continue;
+        }
+        matched_skills.push(skill_hint.clone());
+    }
+    if matched_skills.is_empty() {
+        return;
+    }
+
+    let matched_skill_labels = matched_skills
+        .iter()
+        .map(|skill| {
+            let display_name = skill.display_name.trim();
+            if display_name.is_empty() || display_name.eq_ignore_ascii_case(skill.skill_id.as_str())
+            {
+                skill.skill_id.clone()
+            } else {
+                format!("{} ({display_name})", skill.skill_id)
+            }
+        })
+        .collect::<Vec<_>>();
+    let matched_skill_summary = format!(
+        "Matching installed skills: {}.",
+        matched_skill_labels.join(", ")
+    );
+    entry.summary = append_unique_sentence(entry.summary.as_str(), matched_skill_summary.as_str());
+    entry.search_hint =
+        append_unique_sentence(entry.search_hint.as_str(), matched_skill_summary.as_str());
+
+    let preferred_skill = exact_skill_hint.or_else(|| matched_skills.first());
+    let mut usage_guidance = entry
+        .usage_guidance
+        .clone()
+        .unwrap_or_else(|| "Use this when the task is about capability expansion.".to_owned());
+    if let Some(skill) = preferred_skill {
+        let invoke_example = format!(
+            "{{\"operation\":\"run\",\"skill_id\":\"{}\"}}",
+            skill.skill_id
+        );
+        let inspect_example = format!(
+            "{{\"operation\":\"inspect\",\"skill_id\":\"{}\"}}",
+            skill.skill_id
+        );
+        let guidance = format!(
+            "To load a specific installed skill through this surface, call tool.invoke with the lease from this card and arguments {invoke_example}. Use {inspect_example} to inspect metadata, or {{\"operation\":\"list\"}} to enumerate installed skills."
+        );
+        usage_guidance = append_unique_sentence(usage_guidance.as_str(), guidance.as_str());
+    }
+    entry.usage_guidance = Some(usage_guidance);
+
+    let mut tags = entry.tags.clone();
+    for skill in &matched_skills {
+        if !tags
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(skill.skill_id.as_str()))
+        {
+            tags.push(skill.skill_id.clone());
+        }
+        let display_name = skill.display_name.trim();
+        if !display_name.is_empty()
+            && !tags
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(display_name))
+        {
+            tags.push(display_name.to_owned());
+        }
+    }
+    entry.tags = tags;
+
+    let mut name_fragments = vec![entry.canonical_name.clone(), entry.tool_id.clone()];
+    let mut summary_fragments = vec![entry.summary.clone(), entry.search_hint.clone()];
+    let argument_fragments = build_argument_fragments(
+        entry.argument_hint.as_str(),
+        &entry.required_fields,
+        &entry.required_field_groups,
+    );
+    let schema_fragments = vec![
+        entry.required_fields.join(" "),
+        entry
+            .required_field_groups
+            .iter()
+            .map(|group| group.join(" "))
+            .collect::<Vec<_>>()
+            .join(" "),
+    ]
+    .into_iter()
+    .filter(|fragment| !fragment.trim().is_empty())
+    .collect::<Vec<_>>();
+    let mut tag_fragments = entry.tags.clone();
+
+    for skill in &matched_skills {
+        name_fragments.push(skill.skill_id.clone());
+        let display_name = skill.display_name.trim();
+        if !display_name.is_empty() {
+            name_fragments.push(display_name.to_owned());
+        }
+        let skill_summary = skill.summary.trim();
+        if !skill_summary.is_empty() {
+            summary_fragments.push(skill_summary.to_owned());
+        }
+        tag_fragments.push(skill.skill_id.clone());
+    }
+
+    entry.search_document = SearchDocument::new(
+        name_fragments,
+        summary_fragments,
+        argument_fragments,
+        schema_fragments,
+        tag_fragments,
+    );
+}
+
+fn append_unique_sentence(base: &str, addition: &str) -> String {
+    let trimmed_addition = addition.trim();
+    if trimmed_addition.is_empty() {
+        return base.trim().to_owned();
+    }
+
+    let trimmed_base = base.trim();
+    if trimmed_base.is_empty() {
+        return trimmed_addition.to_owned();
+    }
+
+    if trimmed_base.contains(trimmed_addition) {
+        return trimmed_base.to_owned();
+    }
+
+    format!("{trimmed_base} {trimmed_addition}")
 }
 
 fn tool_search_query_from_payload(

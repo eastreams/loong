@@ -14,7 +14,7 @@ use super::provider_transport::ImportedProviderTransport;
 use super::types::{
     ChannelCandidate, ChannelImportReadiness, CurrentSetupState, DomainPreview, ImportCandidate,
     ImportSourceKind, ImportSurface, ImportSurfaceLevel, PreviewStatus, SetupDomainKind,
-    WorkspaceGuidanceCandidate, WorkspaceGuidanceKind,
+    WorkspaceGuidanceCandidate,
 };
 
 #[derive(Debug, Deserialize)]
@@ -240,21 +240,21 @@ pub fn resolve_channel_import_readiness_from_config(
 }
 
 pub fn detect_workspace_guidance(root: &Path) -> Vec<WorkspaceGuidanceCandidate> {
+    let kinds = mvp::workspace_guidance::import_discovery_workspace_guidance_kinds();
+    let scope = mvp::workspace_guidance::WorkspaceGuidanceSearchScope::SingleRoot;
+    let detected_paths =
+        mvp::workspace_guidance::detect_workspace_guidance_paths(root, scope, kinds);
     let mut guidance = Vec::new();
-    for kind in [
-        WorkspaceGuidanceKind::Agents,
-        WorkspaceGuidanceKind::Claude,
-        WorkspaceGuidanceKind::Gemini,
-        WorkspaceGuidanceKind::Opencode,
-    ] {
-        let path = root.join(kind.file_name());
-        if path.is_file() {
-            guidance.push(WorkspaceGuidanceCandidate {
-                kind,
-                path: path.display().to_string(),
-            });
-        }
+
+    for detected_path in detected_paths {
+        let rendered_path = detected_path.path.display().to_string();
+        let candidate = WorkspaceGuidanceCandidate {
+            kind: detected_path.kind,
+            path: rendered_path,
+        };
+        guidance.push(candidate);
     }
+
     guidance
 }
 
@@ -706,6 +706,8 @@ fn memory_behavior_summary(config: &mvp::config::MemoryConfig) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -734,5 +736,48 @@ mod tests {
         let surface = provider_import_surface(&config).expect("provider surface should exist");
 
         assert_eq!(surface.level, ImportSurfaceLevel::Ready);
+    }
+
+    #[test]
+    fn detect_workspace_guidance_uses_shared_import_taxonomy() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let agents_path = workspace_root.join("AGENTS.md");
+
+        std::fs::write(&agents_path, "agents").expect("write AGENTS");
+
+        let guidance = detect_workspace_guidance(workspace_root);
+        let guidance_kinds = guidance
+            .iter()
+            .map(|candidate| candidate.kind)
+            .collect::<Vec<_>>();
+        let guidance_paths = guidance
+            .iter()
+            .map(|candidate| candidate.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            guidance_kinds,
+            vec![mvp::workspace_guidance::WorkspaceGuidanceKind::Agents]
+        );
+        assert_eq!(guidance_paths, vec![agents_path.display().to_string()]);
+    }
+
+    #[test]
+    fn detect_workspace_guidance_keeps_single_root_scope_for_import_discovery() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let nested_workspace_root = workspace_root.join("workspace");
+        let nested_agents_path = nested_workspace_root.join("AGENTS.md");
+
+        std::fs::create_dir_all(&nested_workspace_root).expect("create nested workspace");
+        std::fs::write(&nested_agents_path, "nested agents").expect("write nested AGENTS");
+
+        let guidance = detect_workspace_guidance(workspace_root);
+
+        assert!(
+            guidance.is_empty(),
+            "single-root import discovery should not scan nested workspace guidance: {guidance:#?}"
+        );
     }
 }

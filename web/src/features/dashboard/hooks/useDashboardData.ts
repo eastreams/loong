@@ -12,6 +12,7 @@ import {
   useProviderConfigForm,
 } from "../../onboarding/provider/providerConfig";
 import {
+  type DashboardApprovals,
   dashboardApi,
   type DashboardConnectivity,
   type DashboardDebugConsole,
@@ -38,6 +39,7 @@ interface DashboardSnapshot {
   connectivity: DashboardConnectivity;
   config: DashboardConfigSnapshot;
   tools: DashboardTools;
+  approvals: DashboardApprovals;
 }
 
 interface DashboardPreferencesSourceOverride {
@@ -107,6 +109,7 @@ export function useDashboardData({
   const [connectivity, setConnectivity] = useState<DashboardConnectivity | null>(null);
   const [config, setConfig] = useState<DashboardConfigSnapshot | null>(null);
   const [tools, setTools] = useState<DashboardTools | null>(null);
+  const [approvals, setApprovals] = useState<DashboardApprovals | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
@@ -154,6 +157,7 @@ export function useDashboardData({
     setConnectivity(snapshot.connectivity);
     setConfig(snapshot.config);
     setTools(snapshot.tools);
+    setApprovals(snapshot.approvals);
     providerForm.resetFromSource(buildProviderFormSource(snapshot), {
       force: forceFormReset,
     });
@@ -173,6 +177,7 @@ export function useDashboardData({
       loadedConnectivity,
       loadedConfig,
       loadedTools,
+      loadedApprovals,
     ] = await Promise.all([
       dashboardApi.loadSummary(),
       dashboardApi.loadProviders(),
@@ -180,6 +185,7 @@ export function useDashboardData({
       dashboardApi.loadConnectivity(),
       dashboardApi.loadConfig(),
       dashboardApi.loadTools(),
+      dashboardApi.loadApprovals(),
     ]);
 
     return {
@@ -189,6 +195,7 @@ export function useDashboardData({
       connectivity: loadedConnectivity,
       config: loadedConfig,
       tools: loadedTools,
+      approvals: loadedApprovals,
     };
   }
 
@@ -215,6 +222,7 @@ export function useDashboardData({
       setConnectivity(null);
       setConfig(null);
       setTools(null);
+      setApprovals(null);
       setError(
         status === "unauthorized"
           ? authMode === "same_origin_session"
@@ -443,6 +451,7 @@ export function useDashboardData({
       connectivity,
       config,
       tools,
+      approvals,
       error,
       settingsError,
       settingsNotice,

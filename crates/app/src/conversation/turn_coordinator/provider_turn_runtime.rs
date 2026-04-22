@@ -740,6 +740,7 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
                         &follow_up_messages,
                         binding,
                         raw_reply.as_str(),
+                        None,
                     )
                     .await;
                     let checkpoint =
@@ -772,6 +773,7 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
                     &guard_messages,
                     binding,
                     raw_reply.as_str(),
+                    None,
                 )
                 .await;
                 let checkpoint =

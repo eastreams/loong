@@ -79,9 +79,9 @@ lettre = { version = "0.11.21", default-features = false, features = ["builder",
 futures-util.workspace = true
 base64.workspace = true
 bech32.workspace = true
-aws-config = { version = "1.8.15", optional = true }
+aws-config = { version = "1.8.16", optional = true }
 aws-credential-types = { version = "1.2.14", optional = true }
-aws-sigv4 = { version = "1.4.2", optional = true }
+aws-sigv4 = { version = "1.4.3", optional = true }
 http = { version = "1.4.0", optional = true }
 time.workspace = true
 http-body = "1"
@@ -94,7 +94,7 @@ tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
-jieba-rs = "0.8"
+jieba-rs = "0.9"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25"
 starlark = "0.13"

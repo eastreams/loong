@@ -23,7 +23,8 @@
                      "configTitle":  "本地配置",
                      "toolsEyebrow":  "工具面",
                      "toolsTitle":  "工具策略",
-                     "toolsGovernanceLabel":  "工具治理"
+                     "toolsGovernanceLabel":  "工具治理",
+                     "approvalsLabel":  "审批队列"
                  },
     "fields":  {
                    "source":  "来源",
@@ -58,9 +59,16 @@
                    "fileRoot":  "文件根目录",
                    "lastProvider":  "上次 Provider",
                    "approval":  "审批",
+                   "autonomy":  "自治",
+                   "consent":  "Consent",
                    "shellPolicy":  "策略",
                    "allowed":  "允许",
                    "denied":  "拒绝",
+                   "enabledTools":  "启用工具",
+                   "sessionMutation":  "会话写入",
+                   "externalSkillsDownloadApproval":  "外部技能下载审批",
+                   "externalSkillsAutoExpose":  "外部技能自动暴露",
+                   "externalSkillsBlockedDomains":  "外部技能阻止域名",
                    "providerHost":  "Provider 域名",
                    "dns":  "DNS",
                    "probe":  "探测",
@@ -99,11 +107,19 @@
                    "noProviders":  "还没有加载任何 provider 配置。",
                    "enabled":  "已启用",
                    "disabled":  "已禁用",
+                   "yes":  "是",
+                   "no":  "否",
                    "approvalOff":  "已关闭",
                    "approvalMediumBalanced":  "中等平衡",
                    "approvalStrict":  "严格模式",
                    "denyByDefault":  "默认拒绝",
-                   "allowByDefault":  "默认允许"
+                   "allowByDefault":  "默认允许",
+                   "autonomyDiscoveryOnly":  "仅发现",
+                   "autonomyGuidedAcquisition":  "引导式获取",
+                   "autonomyBoundedAutonomous":  "边界自治",
+                   "consentPrompt":  "提示确认",
+                   "consentAuto":  "自动同意",
+                   "consentFull":  "完全放开"
                },
     "connectivity":  {
                          "loading":  "正在检查本地 provider 路由…",
@@ -166,6 +182,21 @@
                                  "logs":  "{{at}} 进程输出"
                              }
               },
+    "approvals":  {
+                      "pendingCount":  "待审批",
+                      "activeCount":  "处理中",
+                      "empty":  "当前没有待关注的审批请求。",
+                      "requestedAt":  "请求于 {{at}}",
+                      "status":  {
+                                     "pending":  "待审批",
+                                     "approved":  "已批准",
+                                     "executing":  "执行中",
+                                     "executed":  "已执行",
+                                     "denied":  "已拒绝",
+                                     "expired":  "已过期",
+                                     "cancelled":  "已取消"
+                                 }
+                  },
     "settings":  {
                      "eyebrow":  "",
                      "title":  "Provider 配置",

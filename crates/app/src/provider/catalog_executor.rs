@@ -177,6 +177,7 @@ pub(super) async fn fetch_available_models_with_policy(
                     error_message.as_str(),
                     error.is_timeout(),
                     error.is_connect(),
+                    transport::TransportRouteHintPhase::BeforeHttpResponse,
                 ) {
                     message.push(' ');
                     message.push_str(route_hint.as_str());

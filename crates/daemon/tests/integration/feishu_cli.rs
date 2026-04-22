@@ -7,68 +7,7 @@ use axum::{
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-
-fn temp_feishu_cli_dir(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "loong-feishu-cli-{label}-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ))
-}
-
-fn write_sample_feishu_config(dir: &std::path::Path) -> std::path::PathBuf {
-    write_sample_feishu_config_with_capabilities(dir, None)
-}
-
-fn write_sample_feishu_config_with_capabilities(
-    dir: &std::path::Path,
-    capabilities: Option<mvp::config::FeishuCapabilityConfig>,
-) -> std::path::PathBuf {
-    fs::create_dir_all(dir).expect("create temp feishu config dir");
-    let config_path = dir.join("loong.toml");
-    let sqlite_path = dir.join("feishu.sqlite3");
-
-    let mut config = mvp::config::LoongConfig::default();
-    config.feishu.enabled = true;
-    config.feishu.account_id = Some("feishu_main".to_owned());
-    config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
-    config.feishu.app_secret = Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
-    config.feishu_integration.sqlite_path = sqlite_path.display().to_string();
-    if let Some(capabilities) = capabilities {
-        config.feishu_integration.capabilities = capabilities;
-        config.feishu_integration.capabilities_explicitly_configured = true;
-    }
-
-    mvp::config::write(config_path.to_str(), &config, true).expect("write sample feishu config");
-    config_path
-}
-
-fn write_sample_feishu_config_with_capabilities_and_default_scopes(
-    dir: &std::path::Path,
-    capabilities: mvp::config::FeishuCapabilityConfig,
-    default_scopes: Vec<String>,
-) -> std::path::PathBuf {
-    fs::create_dir_all(dir).expect("create temp feishu config dir");
-    let config_path = dir.join("loong.toml");
-    let sqlite_path = dir.join("feishu.sqlite3");
-
-    let mut config = mvp::config::LoongConfig::default();
-    config.feishu.enabled = true;
-    config.feishu.account_id = Some("feishu_main".to_owned());
-    config.feishu.app_id = Some(loong_contracts::SecretRef::Inline("cli_a1b2c3".to_owned()));
-    config.feishu.app_secret = Some(loong_contracts::SecretRef::Inline("app-secret".to_owned()));
-    config.feishu_integration.sqlite_path = sqlite_path.display().to_string();
-    config.feishu_integration.default_scopes = default_scopes;
-    config.feishu_integration.capabilities = capabilities;
-    config.feishu_integration.capabilities_explicitly_configured = true;
-
-    mvp::config::write(config_path.to_str(), &config, true).expect("write sample feishu config");
-    config_path
-}
 
 fn write_sample_feishu_config_with_account_alias(
     dir: &std::path::Path,
@@ -148,67 +87,6 @@ fn write_sample_feishu_config_with_base_url(
 
     mvp::config::write(config_path.to_str(), &config, true).expect("write sample feishu config");
     config_path
-}
-
-fn sample_grant(
-    account_id: &str,
-    open_id: &str,
-    access_token: &str,
-    refresh_token: &str,
-    now_s: i64,
-) -> mvp::channel::feishu::api::FeishuGrant {
-    mvp::channel::feishu::api::FeishuGrant {
-        principal: mvp::channel::feishu::api::FeishuUserPrincipal {
-            account_id: account_id.to_owned(),
-            open_id: open_id.to_owned(),
-            union_id: Some("on_456".to_owned()),
-            user_id: Some("u_789".to_owned()),
-            name: Some("Alice".to_owned()),
-            tenant_key: Some("tenant_x".to_owned()),
-            avatar_url: None,
-            email: Some("alice@example.com".to_owned()),
-            enterprise_email: None,
-        },
-        access_token: access_token.to_owned(),
-        refresh_token: refresh_token.to_owned(),
-        scopes: mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
-            "offline_access",
-            "docx:document:readonly",
-            "im:message:readonly",
-            "im:message.group_msg",
-            "search:message",
-            "calendar:calendar:readonly",
-        ]),
-        access_expires_at_s: now_s + 3600,
-        refresh_expires_at_s: now_s + 86_400,
-        refreshed_at_s: now_s,
-    }
-}
-
-fn sample_grant_covering_default_coarse_capabilities(
-    account_id: &str,
-    open_id: &str,
-    access_token: &str,
-    refresh_token: &str,
-    now_s: i64,
-) -> mvp::channel::feishu::api::FeishuGrant {
-    let mut grant = sample_grant(account_id, open_id, access_token, refresh_token, now_s);
-    let config = mvp::config::FeishuIntegrationConfig {
-        capabilities: mvp::config::FeishuCapabilityConfig {
-            docs: true,
-            messages: true,
-            calendar: true,
-            bitable: false,
-        },
-        capabilities_explicitly_configured: true,
-        ..mvp::config::FeishuIntegrationConfig::default()
-    };
-    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
-        loong_daemon::feishu_support::scopes_for_configured_capabilities(
-            &loong_daemon::feishu_support::configured_capabilities_from_config(&config),
-        ),
-    );
-    grant
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

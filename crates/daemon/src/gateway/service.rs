@@ -27,6 +27,8 @@ pub enum GatewayCommand {
         config: Option<String>,
         #[arg(long)]
         session: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long = "channel-account", value_name = "CHANNEL=ACCOUNT")]
         channel_account: Vec<MultiChannelServeChannelAccount>,
     },
@@ -59,8 +61,11 @@ pub async fn run_gateway_cli(command: GatewayCommand) -> CliResult<()> {
         GatewayCommand::Run {
             config,
             session,
+            port,
             channel_account,
-        } => run_gateway_run_cli(config.as_deref(), session.as_deref(), channel_account).await,
+        } => {
+            run_gateway_run_cli(config.as_deref(), session.as_deref(), port, channel_account).await
+        }
         GatewayCommand::Status { json } => run_gateway_status_cli(json),
         GatewayCommand::Stop => run_gateway_stop_cli(),
     }
@@ -69,12 +74,14 @@ pub async fn run_gateway_cli(command: GatewayCommand) -> CliResult<()> {
 pub async fn run_gateway_run_cli(
     config_path: Option<&str>,
     session: Option<&str>,
+    port_override: Option<u16>,
     channel_accounts: Vec<MultiChannelServeChannelAccount>,
 ) -> CliResult<()> {
     let runtime_dir = default_gateway_runtime_state_dir();
     let supervisor = run_gateway_runtime_with_hooks_for_test(
         config_path,
         session,
+        port_override,
         channel_accounts,
         runtime_dir.as_path(),
         GatewayRuntimeEntryPoint::GatewayRun,
@@ -93,6 +100,7 @@ pub async fn run_multi_channel_serve_gateway_compat_cli(
     let supervisor = run_gateway_runtime_with_hooks_for_test(
         config_path,
         Some(session),
+        None,
         channel_accounts,
         runtime_dir.as_path(),
         GatewayRuntimeEntryPoint::MultiChannelServeCompatibility,
@@ -105,6 +113,7 @@ pub async fn run_multi_channel_serve_gateway_compat_cli(
 async fn run_gateway_runtime_with_hooks_for_test(
     config_path: Option<&str>,
     session: Option<&str>,
+    port_override: Option<u16>,
     channel_accounts: Vec<MultiChannelServeChannelAccount>,
     runtime_dir: &Path,
     entry_point: GatewayRuntimeEntryPoint,
@@ -144,8 +153,13 @@ async fn run_gateway_runtime_with_hooks_for_test(
         &loaded_config.config,
         build_gateway_acp_session_manager,
     )?;
-    let control_surface_result =
-        start_gateway_control_surface(runtime_dir, &loaded_config, Some(acp_manager)).await;
+    let control_surface_result = start_gateway_control_surface(
+        runtime_dir,
+        &loaded_config,
+        Some(acp_manager),
+        port_override,
+    )
+    .await;
     let control_surface = match control_surface_result {
         Ok(control_surface) => control_surface,
         Err(error) => {
@@ -227,6 +241,7 @@ async fn run_gateway_runtime_with_hooks_for_test(
 pub async fn run_gateway_run_with_hooks_for_test(
     config_path: Option<&str>,
     session: Option<&str>,
+    port_override: Option<u16>,
     channel_accounts: Vec<MultiChannelServeChannelAccount>,
     runtime_dir: &Path,
     hooks: SupervisorRuntimeHooks,
@@ -234,6 +249,7 @@ pub async fn run_gateway_run_with_hooks_for_test(
     run_gateway_runtime_with_hooks_for_test(
         config_path,
         session,
+        port_override,
         channel_accounts,
         runtime_dir,
         GatewayRuntimeEntryPoint::GatewayRun,
@@ -253,6 +269,7 @@ pub async fn run_multi_channel_serve_gateway_compat_with_hooks_for_test(
     run_gateway_runtime_with_hooks_for_test(
         config_path,
         Some(session),
+        None,
         channel_accounts,
         runtime_dir,
         GatewayRuntimeEntryPoint::MultiChannelServeCompatibility,
@@ -365,6 +382,7 @@ pub(crate) fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerSt
         running_surface_count: 0,
         bind_address: None,
         port: None,
+        port_source: None,
         token_path: None,
     }
 }

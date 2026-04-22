@@ -1082,9 +1082,9 @@
   font-size: 0.85rem;
   font-weight: 700;
   color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
   max-width: 100%;
 }
 
@@ -1133,4 +1133,70 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.dashboard-approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.dashboard-approval-row {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dashboard-approval-row:last-child {
+  border-bottom: none;
+}
+
+.dashboard-approval-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dashboard-approval-row-name,
+.dashboard-approval-row-session,
+.dashboard-approval-row-meta,
+.dashboard-approval-row-time,
+.dashboard-approval-row-error {
+  min-width: 0;
+}
+
+.dashboard-approval-row-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-approval-row-session,
+.dashboard-approval-row-meta,
+.dashboard-approval-row-time {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-approval-row-error {
+  font-size: 0.72rem;
+  color: var(--color-status-danger);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-approval-empty {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
 }

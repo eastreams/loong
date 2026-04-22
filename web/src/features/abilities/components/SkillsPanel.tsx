@@ -1,287 +1,15 @@
 import { useTranslation } from "react-i18next";
-import type { SkillsSnapshot } from "../api";
+import type {
+  HiddenToolSurfaceSnapshot,
+  SkillsSnapshot,
+  VisibleToolSnapshot,
+} from "../api";
 
 interface SkillsPanelProps {
   data: SkillsSnapshot | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
-}
-
-type VisibleToolSource =
-  | "session"
-  | "execution"
-  | "browser"
-  | "local"
-  | "provider"
-  | "delegation"
-  | "approval"
-  | "external"
-  | "system"
-  | "runtime";
-
-interface VisibleToolPresentation {
-  id: string;
-  label: string;
-  summary: string;
-  source: string;
-  sourceWeight: number;
-}
-
-interface VisibleToolDescriptor {
-  labelKey: string;
-  summaryKey: string;
-  source: VisibleToolSource;
-}
-
-const VISIBLE_TOOL_DESCRIPTORS: Record<string, VisibleToolDescriptor> = {
-  approval_request_resolve: {
-    labelKey: "approvalRequestResolve",
-    summaryKey: "approvalRequestResolve",
-    source: "approval",
-  },
-  approval_request_status: {
-    labelKey: "approvalRequestStatus",
-    summaryKey: "approvalRequestStatus",
-    source: "approval",
-  },
-  approval_requests_list: {
-    labelKey: "approvalRequestsList",
-    summaryKey: "approvalRequestsList",
-    source: "approval",
-  },
-  "bash.exec": {
-    labelKey: "bashExec",
-    summaryKey: "bashExec",
-    source: "execution",
-  },
-  "browser.click": {
-    labelKey: "browserClick",
-    summaryKey: "browserClick",
-    source: "browser",
-  },
-  "browser.extract": {
-    labelKey: "browserExtract",
-    summaryKey: "browserExtract",
-    source: "browser",
-  },
-  "browser.open": {
-    labelKey: "browserOpen",
-    summaryKey: "browserOpen",
-    source: "browser",
-  },
-  "claw.migrate": {
-    labelKey: "clawMigrate",
-    summaryKey: "clawMigrate",
-    source: "system",
-  },
-  delegate: {
-    labelKey: "delegate",
-    summaryKey: "delegate",
-    source: "delegation",
-  },
-  delegate_async: {
-    labelKey: "delegateAsync",
-    summaryKey: "delegateAsync",
-    source: "delegation",
-  },
-  "external_skills.policy": {
-    labelKey: "externalSkillsPolicy",
-    summaryKey: "externalSkillsPolicy",
-    source: "external",
-  },
-  "file.edit": {
-    labelKey: "fileEdit",
-    summaryKey: "fileEdit",
-    source: "local",
-  },
-  "file.read": {
-    labelKey: "fileRead",
-    summaryKey: "fileRead",
-    source: "local",
-  },
-  "file.write": {
-    labelKey: "fileWrite",
-    summaryKey: "fileWrite",
-    source: "local",
-  },
-  "provider.switch": {
-    labelKey: "providerSwitch",
-    summaryKey: "providerSwitch",
-    source: "provider",
-  },
-  session_events: {
-    labelKey: "sessionEvents",
-    summaryKey: "sessionEvents",
-    source: "session",
-  },
-  session_search: {
-    labelKey: "sessionSearch",
-    summaryKey: "sessionSearch",
-    source: "session",
-  },
-  session_status: {
-    labelKey: "sessionStatus",
-    summaryKey: "sessionStatus",
-    source: "session",
-  },
-  session_tool_policy_status: {
-    labelKey: "sessionToolPolicyStatus",
-    summaryKey: "sessionToolPolicyStatus",
-    source: "session",
-  },
-  session_wait: {
-    labelKey: "sessionWait",
-    summaryKey: "sessionWait",
-    source: "session",
-  },
-  sessions_history: {
-    labelKey: "sessionsHistory",
-    summaryKey: "sessionsHistory",
-    source: "session",
-  },
-  sessions_list: {
-    labelKey: "sessionsList",
-    summaryKey: "sessionsList",
-    source: "session",
-  },
-  "shell.exec": {
-    labelKey: "shellExec",
-    summaryKey: "shellExec",
-    source: "execution",
-  },
-  "tool.invoke": {
-    labelKey: "toolInvoke",
-    summaryKey: "toolInvoke",
-    source: "runtime",
-  },
-  "tool.search": {
-    labelKey: "toolSearch",
-    summaryKey: "toolSearch",
-    source: "runtime",
-  },
-  "web.fetch": {
-    labelKey: "webFetch",
-    summaryKey: "webFetch",
-    source: "browser",
-  },
-  "web.search": {
-    labelKey: "webSearch",
-    summaryKey: "webSearch",
-    source: "provider",
-  },
-};
-
-function inferVisibleToolSource(toolId: string): VisibleToolSource {
-  if (toolId.startsWith("session_") || toolId.startsWith("sessions_")) {
-    return "session";
-  }
-  if (toolId.startsWith("browser.") || toolId.startsWith("web.")) {
-    return "browser";
-  }
-  if (toolId.startsWith("file.")) {
-    return "local";
-  }
-  if (toolId.startsWith("approval_request")) {
-    return "approval";
-  }
-  if (toolId.startsWith("delegate")) {
-    return "delegation";
-  }
-  if (toolId.startsWith("provider.")) {
-    return "provider";
-  }
-  if (toolId === "bash.exec" || toolId === "shell.exec") {
-    return "execution";
-  }
-  if (toolId.startsWith("external_skills.")) {
-    return "external";
-  }
-  if (toolId.startsWith("claw.")) {
-    return "system";
-  }
-  return "runtime";
-}
-
-function formatVisibleToolSource(
-  source: VisibleToolSource,
-  t: ReturnType<typeof useTranslation>["t"],
-): string {
-  switch (source) {
-    case "session":
-      return t("abilities.skills.sources.session");
-    case "execution":
-      return t("abilities.skills.sources.execution");
-    case "browser":
-      return t("abilities.skills.sources.browser");
-    case "local":
-      return t("abilities.skills.sources.local");
-    case "provider":
-      return t("abilities.skills.sources.provider");
-    case "delegation":
-      return t("abilities.skills.sources.delegation");
-    case "approval":
-      return t("abilities.skills.sources.approval");
-    case "external":
-      return t("abilities.skills.sources.external");
-    case "system":
-      return t("abilities.skills.sources.system");
-    default:
-      return t("abilities.skills.sources.runtime");
-  }
-}
-
-function sourceWeight(source: VisibleToolSource): number {
-  switch (source) {
-    case "session":
-      return 1;
-    case "execution":
-      return 2;
-    case "browser":
-      return 3;
-    case "local":
-      return 4;
-    case "provider":
-      return 5;
-    case "delegation":
-      return 6;
-    case "approval":
-      return 7;
-    case "external":
-      return 8;
-    case "system":
-      return 9;
-    default:
-      return 10;
-  }
-}
-
-function humanizeToolId(toolId: string): string {
-  return toolId
-    .split(/[._]/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function resolveVisibleToolPresentation(
-  toolId: string,
-  t: ReturnType<typeof useTranslation>["t"],
-): VisibleToolPresentation {
-  const descriptor = VISIBLE_TOOL_DESCRIPTORS[toolId];
-  const source = descriptor?.source ?? inferVisibleToolSource(toolId);
-
-  return {
-    id: toolId,
-    label: descriptor
-      ? t(`abilities.skills.toolLabels.${descriptor.labelKey}`)
-      : humanizeToolId(toolId),
-    summary: descriptor
-      ? t(`abilities.skills.toolSummaries.${descriptor.summaryKey}`)
-      : t("abilities.skills.values.toolSummaryFallback", { tool: toolId }),
-    source: formatVisibleToolSource(source, t),
-    sourceWeight: sourceWeight(source),
-  };
 }
 
 function formatInventoryStatus(
@@ -316,16 +44,148 @@ function formatExecutionTier(
   }
 }
 
+function formatApprovalMode(
+  value: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (value) {
+    case "disabled":
+      return t("abilities.skills.values.approvalDisabled");
+    case "medium_balanced":
+      return t("abilities.skills.values.approvalMediumBalanced");
+    case "strict":
+      return t("abilities.skills.values.approvalStrict");
+    default:
+      return value;
+  }
+}
+
+function formatAutonomyProfile(
+  value: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (value) {
+    case "discovery_only":
+      return t("abilities.skills.values.autonomyDiscoveryOnly");
+    case "guided_acquisition":
+      return t("abilities.skills.values.autonomyGuidedAcquisition");
+    case "bounded_autonomous":
+      return t("abilities.skills.values.autonomyBoundedAutonomous");
+    default:
+      return value;
+  }
+}
+
+function formatConsentDefaultMode(
+  value: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (value) {
+    case "prompt":
+      return t("abilities.skills.values.consentPrompt");
+    case "auto":
+      return t("abilities.skills.values.consentAuto");
+    case "full":
+      return t("abilities.skills.values.consentFull");
+    default:
+      return value;
+  }
+}
+
+function formatToolExposure(
+  value: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (value) {
+    case "direct":
+      return t("abilities.skills.values.exposureDirect");
+    case "discoverable":
+      return t("abilities.skills.values.exposureDiscoverable");
+    case "hidden":
+      return t("abilities.skills.values.exposureHidden");
+    default:
+      return value;
+  }
+}
+
+function formatExecutionKind(
+  value: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (value) {
+    case "core":
+      return t("abilities.skills.values.executionKindCore");
+    case "app":
+      return t("abilities.skills.values.executionKindApp");
+    default:
+      return value;
+  }
+}
+
+function formatCapabilityActionClass(
+  value: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (value) {
+    case "discover":
+      return t("abilities.skills.values.capabilityDiscover");
+    case "execute_existing":
+      return t("abilities.skills.values.capabilityExecuteExisting");
+    case "capability_fetch":
+      return t("abilities.skills.values.capabilityFetch");
+    case "capability_install":
+      return t("abilities.skills.values.capabilityInstall");
+    case "capability_load":
+      return t("abilities.skills.values.capabilityLoad");
+    case "runtime_switch":
+      return t("abilities.skills.values.capabilityRuntimeSwitch");
+    case "topology_expand":
+      return t("abilities.skills.values.capabilityTopologyExpand");
+    case "policy_mutation":
+      return t("abilities.skills.values.capabilityPolicyMutation");
+    case "session_mutation":
+      return t("abilities.skills.values.capabilitySessionMutation");
+    default:
+      return value;
+  }
+}
+
+function buildHiddenSurfaceSummary(
+  surface: HiddenToolSurfaceSnapshot,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (surface.visibleToolNames.length === 0) {
+    return t("abilities.common.notAvailable");
+  }
+
+  return surface.visibleToolNames.join(", ");
+}
+
+function sortVisibleTools(
+  left: VisibleToolSnapshot,
+  right: VisibleToolSnapshot,
+): number {
+  const leftSurface = left.surfaceId ?? "";
+  const rightSurface = right.surfaceId ?? "";
+
+  if (leftSurface !== rightSurface) {
+    return leftSurface.localeCompare(rightSurface);
+  }
+
+  return left.displayName.localeCompare(right.displayName);
+}
+
+function sortHiddenSurfaces(
+  left: HiddenToolSurfaceSnapshot,
+  right: HiddenToolSurfaceSnapshot,
+): number {
+  return left.surfaceId.localeCompare(right.surfaceId);
+}
+
 export function SkillsPanel({ data, loading, error, onRetry }: SkillsPanelProps) {
   const { t } = useTranslation();
-  const visibleTools = (data?.visibleRuntimeTools ?? [])
-    .map((toolId) => resolveVisibleToolPresentation(toolId, t))
-    .sort((left, right) => {
-      if (left.sourceWeight !== right.sourceWeight) {
-        return left.sourceWeight - right.sourceWeight;
-      }
-      return left.label.localeCompare(right.label);
-    });
+  const visibleTools = [...(data?.visibleRuntimeCatalog ?? [])].sort(sortVisibleTools);
+  const hiddenSurfaces = [...(data?.hiddenToolSurfaces ?? [])].sort(sortHiddenSurfaces);
 
   return (
     <div className="abilities-content-stack">
@@ -359,6 +219,36 @@ export function SkillsPanel({ data, loading, error, onRetry }: SkillsPanelProps)
                         <strong>{data.visibleRuntimeToolCount}</strong>
                       </div>
                       <div className="abilities-kv-row">
+                        <span>{t("abilities.skills.fields.visibleRuntimeDirectTools")}</span>
+                        <strong>{data.visibleRuntimeDirectToolCount}</strong>
+                      </div>
+                      <div className="abilities-kv-row">
+                        <span>{t("abilities.skills.fields.hiddenToolCount")}</span>
+                        <strong>{data.hiddenToolCount}</strong>
+                      </div>
+                      <div className="abilities-kv-row">
+                        <span>{t("abilities.skills.fields.approvalMode")}</span>
+                        <strong>{formatApprovalMode(data.approvalMode, t)}</strong>
+                      </div>
+                      <div className="abilities-kv-row">
+                        <span>{t("abilities.skills.fields.autonomyProfile")}</span>
+                        <strong>{formatAutonomyProfile(data.autonomyProfile, t)}</strong>
+                      </div>
+                      <div className="abilities-kv-row">
+                        <span>{t("abilities.skills.fields.consentDefaultMode")}</span>
+                        <strong>
+                          {formatConsentDefaultMode(data.consentDefaultMode, t)}
+                        </strong>
+                      </div>
+                      <div className="abilities-kv-row">
+                        <span>{t("abilities.skills.fields.sessionsAllowMutation")}</span>
+                        <strong>
+                          {data.sessionsAllowMutation
+                            ? t("abilities.common.enabled")
+                            : t("abilities.common.disabled")}
+                        </strong>
+                      </div>
+                      <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.browserCompanionEnabled")}</span>
                         <strong>
                           {data.browserCompanion.enabled
@@ -384,11 +274,16 @@ export function SkillsPanel({ data, loading, error, onRetry }: SkillsPanelProps)
                       </div>
                       <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.executionTier")}</span>
-                        <strong>{formatExecutionTier(data.browserCompanion.executionTier, t)}</strong>
+                        <strong>
+                          {formatExecutionTier(data.browserCompanion.executionTier, t)}
+                        </strong>
                       </div>
                       <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.expectedVersion")}</span>
-                        <strong>{data.browserCompanion.expectedVersion ?? t("abilities.common.notAvailable")}</strong>
+                        <strong>
+                          {data.browserCompanion.expectedVersion ??
+                            t("abilities.common.notAvailable")}
+                        </strong>
                       </div>
                       <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.timeoutSeconds")}</span>
@@ -426,7 +321,9 @@ export function SkillsPanel({ data, loading, error, onRetry }: SkillsPanelProps)
                       </div>
                       <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.inventoryStatus")}</span>
-                        <strong>{formatInventoryStatus(data.externalSkills.inventoryStatus, t)}</strong>
+                        <strong>
+                          {formatInventoryStatus(data.externalSkills.inventoryStatus, t)}
+                        </strong>
                       </div>
                       <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.resolvedSkillCount")}</span>
@@ -470,7 +367,10 @@ export function SkillsPanel({ data, loading, error, onRetry }: SkillsPanelProps)
                       </div>
                       <div className="abilities-kv-row">
                         <span>{t("abilities.skills.fields.installRoot")}</span>
-                        <strong>{data.externalSkills.installRoot ?? t("abilities.common.notAvailable")}</strong>
+                        <strong>
+                          {data.externalSkills.installRoot ??
+                            t("abilities.common.notAvailable")}
+                        </strong>
                       </div>
                       {data.externalSkills.inventoryError ? (
                         <div className="abilities-kv-row">
@@ -498,22 +398,88 @@ export function SkillsPanel({ data, loading, error, onRetry }: SkillsPanelProps)
                 ) : visibleTools.length > 0 ? (
                   <div className="abilities-entity-list">
                     {visibleTools.map((tool) => (
-                      <div
-                        key={tool.id}
-                        className="abilities-entity-row"
-                        title={tool.summary}
-                        aria-label={`${tool.id}: ${tool.summary}`}
-                      >
-                        <div className="abilities-entity-head abilities-entity-head-inline">
-                          <strong className="abilities-tool-id">{tool.id}</strong>
-                          <span>{tool.source}</span>
+                      <div key={tool.visibleName} className="abilities-entity-row">
+                        <div className="abilities-entity-head">
+                          <div className="abilities-entity-title">
+                            <strong>{tool.displayName}</strong>
+                          </div>
+                          <span>{formatToolExposure(tool.exposure, t)}</span>
                         </div>
+                        <div className="abilities-entity-meta">{tool.summary}</div>
+                        <div className="abilities-inline-list">
+                          <span className="abilities-inline-item">
+                            {t("abilities.skills.fields.visibleName")}:{" "}
+                            <span className="abilities-tool-id">{tool.visibleName}</span>
+                          </span>
+                          {tool.canonicalName !== tool.visibleName ? (
+                            <span className="abilities-inline-item">
+                              {t("abilities.skills.fields.canonicalName")}:{" "}
+                              <span className="abilities-tool-id">{tool.canonicalName}</span>
+                            </span>
+                          ) : null}
+                          <span className="abilities-inline-item">
+                            {t("abilities.skills.fields.surfaceId")}:{" "}
+                            {tool.surfaceId ?? t("abilities.common.notAvailable")}
+                          </span>
+                          <span className="abilities-inline-item">
+                            {t("abilities.skills.fields.executionKind")}:{" "}
+                            {formatExecutionKind(tool.executionKind, t)}
+                          </span>
+                          <span className="abilities-inline-item">
+                            {t("abilities.skills.fields.capabilityActionClass")}:{" "}
+                            {formatCapabilityActionClass(tool.capabilityActionClass, t)}
+                          </span>
+                        </div>
+                        {tool.usageGuidance ? (
+                          <div className="abilities-entity-detail">{tool.usageGuidance}</div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
                 ) : (
                   <p className="abilities-note">{t("abilities.skills.noVisibleTools")}</p>
                 )}
+
+                <section className="abilities-section-block abilities-section-block-nested">
+                  <div className="abilities-section-head">
+                    <div className="panel-title">{t("abilities.skills.hiddenToolsTitle")}</div>
+                  </div>
+                  <div className="abilities-section-body">
+                    {loading ? (
+                      <p className="abilities-note">{t("abilities.common.loading")}</p>
+                    ) : error ? (
+                      <p className="abilities-note">{t("abilities.common.loadFailed")}</p>
+                    ) : hiddenSurfaces.length > 0 ? (
+                      <div className="abilities-entity-list">
+                        {hiddenSurfaces.map((surface) => (
+                          <div key={surface.surfaceId} className="abilities-entity-row">
+                            <div className="abilities-entity-head">
+                              <div className="abilities-entity-title">
+                                <strong>{surface.surfaceId}</strong>
+                              </div>
+                              <span>
+                                {t("abilities.skills.values.hiddenSurfaceTools", {
+                                  count: surface.toolCount,
+                                })}
+                              </span>
+                            </div>
+                            <div className="abilities-entity-meta">
+                              {surface.usageGuidance}
+                            </div>
+                            <div className="abilities-entity-detail">
+                              {t("abilities.skills.fields.visibleNames")}:{" "}
+                              {buildHiddenSurfaceSummary(surface, t)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="abilities-note">
+                        {t("abilities.skills.noHiddenTools")}
+                      </p>
+                    )}
+                  </div>
+                </section>
               </div>
             </div>
           </div>

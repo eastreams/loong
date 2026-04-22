@@ -1098,6 +1098,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 runtime.conversation_binding(),
                 None,
                 live_surface_observer,
+                None,
             )
             .await
     }

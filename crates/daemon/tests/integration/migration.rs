@@ -2312,7 +2312,7 @@ fn migration_render_preview_includes_channel_details_and_guidance() {
                 status: loong_daemon::migration::types::PreviewStatus::Ready,
                 decision: Some(loong_daemon::migration::types::PreviewDecision::UseDetected),
                 source: "workspace".to_owned(),
-                summary: "AGENTS.md, CLAUDE.md".to_owned(),
+                summary: "AGENTS.md".to_owned(),
             },
         ],
         channel_candidates: vec![
@@ -2331,16 +2331,10 @@ fn migration_render_preview_includes_channel_details_and_guidance() {
                 summary: "app credentials resolved · can enable during onboarding".to_owned(),
             },
         ],
-        workspace_guidance: vec![
-            loong_daemon::migration::types::WorkspaceGuidanceCandidate {
-                kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
-                path: "/tmp/project/AGENTS.md".to_owned(),
-            },
-            loong_daemon::migration::types::WorkspaceGuidanceCandidate {
-                kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Claude,
-                path: "/tmp/project/CLAUDE.md".to_owned(),
-            },
-        ],
+        workspace_guidance: vec![loong_daemon::migration::types::WorkspaceGuidanceCandidate {
+            kind: loong_daemon::migration::types::WorkspaceGuidanceKind::Agents,
+            path: "/tmp/project/AGENTS.md".to_owned(),
+        }],
     };
 
     let lines = loong_daemon::migration::render::render_candidate_preview_lines(&candidate, 100);
@@ -2382,7 +2376,7 @@ fn migration_render_preview_falls_back_to_stacked_rows_when_wide_table_would_ove
                 status: loong_daemon::migration::types::PreviewStatus::Ready,
                 decision: Some(loong_daemon::migration::types::PreviewDecision::UseDetected),
                 source: "workspace".to_owned(),
-                summary: "AGENTS.md, CLAUDE.md, and custom workspace instructions".to_owned(),
+                summary: "AGENTS.md and custom workspace instructions".to_owned(),
             },
         ],
         channel_candidates: vec![loong_daemon::migration::types::ChannelCandidate {
