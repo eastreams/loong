@@ -37,7 +37,7 @@ Loong needs one design that keeps all of the following true at the same time:
 
 1. Keep the provider-visible tool surface extremely small.
 2. Prefer short action names over taxonomy-heavy names.
-3. Keep common file, edit, shell, web, browser, and memory work one call away.
+3. Keep common file, grep, find, edit, shell, web, browser, and memory work one call away.
 4. Preserve `tool.search -> tool.invoke` for hidden specialized tools.
 5. Preserve canonical internal tool identities for governance, telemetry,
    testing, and runtime routing.
@@ -53,6 +53,8 @@ They must be short, high-prior, and assistant-first.
 Current direct tool vocabulary:
 
 - `read`
+- `grep`
+- `find`
 - `edit`
 - `write`
 - `exec`
@@ -67,8 +69,10 @@ Examples:
 
 - `read { path }` -> `file.read`
 - `read { path, offset, limit }` -> `file.read`
-- `read { query }` -> `content.search`
-- `read { pattern }` -> `glob.search`
+- `grep { query }` -> `content.search`
+- `read { query }` -> `content.search` (compatibility path; prefer `grep` for direct text search)
+- `find { pattern }` -> `glob.search`
+- `read { pattern }` -> `glob.search` (compatibility path; prefer `find` for direct path matching)
 - `edit { path, edits }` -> `file.edit`
 - `edit { path, old_string, new_string }` -> `file.edit` (legacy exact-edit mode)
 - `write { path, content }` -> `file.write`

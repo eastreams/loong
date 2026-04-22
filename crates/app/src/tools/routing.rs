@@ -23,7 +23,7 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
 
     let is_direct_tool = matches!(
         canonical_name,
-        "read" | "edit" | "write" | "exec" | "web" | "browser" | "memory"
+        "read" | "grep" | "find" | "edit" | "write" | "exec" | "web" | "browser" | "memory"
     );
     if !is_direct_tool {
         return "-".to_owned();
@@ -87,6 +87,8 @@ pub(crate) fn route_direct_tool_name(
 ) -> Result<&'static str, String> {
     match tool_name {
         "read" => route_direct_read_tool_name(payload),
+        "grep" => route_direct_grep_tool_name(payload),
+        "find" => route_direct_find_tool_name(payload),
         "edit" => route_direct_edit_tool_name(payload),
         "write" => route_direct_write_tool_name(payload),
         "exec" => route_direct_exec_tool_name(payload),
@@ -236,6 +238,44 @@ fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> 
 
     if has_query {
         return Ok("content.search");
+    }
+
+    Ok("glob.search")
+}
+
+fn route_direct_grep_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_query = payload_has_non_null_field(payload, "query");
+    let has_path = payload_has_non_null_field(payload, "path");
+    let has_pattern = payload_has_non_null_field(payload, "pattern");
+
+    if has_path || has_pattern {
+        return Err(
+            "direct_grep_query_only: `grep` only supports content search; use `read { path }` for files or `read { pattern }` for path matching"
+                .to_owned(),
+        );
+    }
+
+    if !has_query {
+        return Err("direct_grep_requires_query: expected `query` for grep mode".to_owned());
+    }
+
+    Ok("content.search")
+}
+
+fn route_direct_find_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_pattern = payload_has_non_null_field(payload, "pattern");
+    let has_path = payload_has_non_null_field(payload, "path");
+    let has_query = payload_has_non_null_field(payload, "query");
+
+    if has_path || has_query {
+        return Err(
+            "direct_find_pattern_only: `find` only supports path matching; use `read { path }` for files or `grep { query }` for content search"
+                .to_owned(),
+        );
+    }
+
+    if !has_pattern {
+        return Err("direct_find_requires_pattern: expected `pattern` for find mode".to_owned());
     }
 
     Ok("glob.search")
@@ -981,6 +1021,56 @@ mod tests {
         .expect("blank command alias should be ignored");
 
         assert_eq!(routed, BASH_EXEC_TOOL_NAME);
+    }
+
+    #[test]
+    fn direct_grep_routes_query_to_content_search() {
+        let routed = route_direct_grep_tool_name(&json!({
+            "query": "deploy freeze"
+        }))
+        .expect("grep query should route");
+
+        assert_eq!(routed, "content.search");
+    }
+
+    #[test]
+    fn direct_grep_rejects_path_and_pattern_modes() {
+        let path_error = route_direct_grep_tool_name(&json!({
+            "path": "README.md"
+        }))
+        .expect_err("grep should reject path mode");
+        assert!(path_error.contains("query_only"));
+
+        let pattern_error = route_direct_grep_tool_name(&json!({
+            "pattern": "*.md"
+        }))
+        .expect_err("grep should reject pattern mode");
+        assert!(pattern_error.contains("query_only"));
+    }
+
+    #[test]
+    fn direct_find_routes_pattern_to_glob_search() {
+        let routed = route_direct_find_tool_name(&json!({
+            "pattern": "**/*.rs"
+        }))
+        .expect("find pattern should route");
+
+        assert_eq!(routed, "glob.search");
+    }
+
+    #[test]
+    fn direct_find_rejects_path_and_query_modes() {
+        let path_error = route_direct_find_tool_name(&json!({
+            "path": "README.md"
+        }))
+        .expect_err("find should reject path mode");
+        assert!(path_error.contains("pattern_only"));
+
+        let query_error = route_direct_find_tool_name(&json!({
+            "query": "deploy"
+        }))
+        .expect_err("find should reject query mode");
+        assert!(query_error.contains("pattern_only"));
     }
 
     #[test]

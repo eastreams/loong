@@ -24,8 +24,9 @@ use metadata_support::{
 mod core_definition_support;
 use core_definition_support::{
     direct_browser_definition, direct_edit_definition, direct_exec_definition,
-    direct_memory_definition, direct_read_definition, direct_web_definition,
-    direct_write_definition, tool_invoke_definition, tool_search_definition,
+    direct_find_definition, direct_grep_definition, direct_memory_definition,
+    direct_read_definition, direct_web_definition, direct_write_definition, tool_invoke_definition,
+    tool_search_definition,
 };
 #[path = "catalog_browser_definition_support.rs"]
 mod browser_definition_support;
@@ -763,6 +764,34 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: direct_read_definition,
+        },
+        ToolDescriptor {
+            name: "grep",
+            provider_name: "grep",
+            aliases: &[],
+            description: "Search workspace file contents by text",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_grep_definition,
+        },
+        ToolDescriptor {
+            name: "find",
+            provider_name: "find",
+            aliases: &[],
+            description: "List workspace paths that match a glob pattern",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_find_definition,
         },
         ToolDescriptor {
             name: "edit",

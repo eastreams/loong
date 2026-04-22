@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::ToolView;
 
 pub(crate) const DIRECT_READ_TOOL_NAME: &str = "read";
+pub(crate) const DIRECT_GREP_TOOL_NAME: &str = "grep";
+pub(crate) const DIRECT_FIND_TOOL_NAME: &str = "find";
 pub(crate) const DIRECT_EDIT_TOOL_NAME: &str = "edit";
 pub(crate) const DIRECT_WRITE_TOOL_NAME: &str = "write";
 pub(crate) const DIRECT_EXEC_TOOL_NAME: &str = "exec";
@@ -145,6 +147,14 @@ const EDIT_GUIDELINES: &[&str] = &[
     "Keep each exact replacement block as small as possible while still unique in the original file.",
     "When one file needs multiple disjoint changes, prefer one edit call with multiple exact edit blocks.",
 ];
+const GREP_GUIDELINES: &[&str] = &[
+    "Use grep for direct workspace content search by text.",
+    "Use root, glob, and case_sensitive to narrow searches before dropping to shell.",
+];
+const FIND_GUIDELINES: &[&str] = &[
+    "Use find for direct path matching by glob pattern.",
+    "Use include_directories only when directory matches matter.",
+];
 const WRITE_GUIDELINES: &[&str] = &[
     "Use write for new files or whole-file rewrites.",
     "Prefer edit for surgical changes to existing files instead of whole-file rewrites.",
@@ -203,6 +213,20 @@ const EDIT_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("new_string", "string"),
     ("replace_all", "boolean"),
 ];
+const GREP_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
+    ("query", "string"),
+    ("root", "string"),
+    ("glob", "string"),
+    ("max_results", "integer"),
+    ("max_bytes_per_file", "integer"),
+    ("case_sensitive", "boolean"),
+];
+const FIND_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
+    ("pattern", "string"),
+    ("root", "string"),
+    ("max_results", "integer"),
+    ("include_directories", "boolean"),
+];
 const WRITE_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("path", "string"),
     ("content", "string"),
@@ -244,7 +268,9 @@ const MEMORY_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("lines", "integer"),
 ];
 
-const READ_COVERED_TOOL_NAMES: &[&str] = &["file.read", "glob.search", "content.search"];
+const READ_COVERED_TOOL_NAMES: &[&str] = &["file.read"];
+const GREP_COVERED_TOOL_NAMES: &[&str] = &["content.search"];
+const FIND_COVERED_TOOL_NAMES: &[&str] = &["glob.search"];
 const EDIT_COVERED_TOOL_NAMES: &[&str] = &["file.edit"];
 const WRITE_COVERED_TOOL_NAMES: &[&str] = &["file.write"];
 const EXEC_COVERED_TOOL_NAMES: &[&str] = &["shell.exec", "bash.exec"];
@@ -258,6 +284,22 @@ const READ_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadat
     parameter_types: READ_DIRECT_PARAMETER_TYPES,
     required_fields: &[],
     tags: &["surface", "read", "file", "search"],
+};
+
+const GREP_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
+    argument_hint: "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean",
+    search_hint: "search workspace file contents directly by text through one direct tool",
+    parameter_types: GREP_DIRECT_PARAMETER_TYPES,
+    required_fields: &["query"],
+    tags: &["surface", "grep", "search", "content", "filesystem"],
+};
+
+const FIND_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
+    argument_hint: "pattern:string,root?:string,max_results?:integer,include_directories?:boolean",
+    search_hint: "list workspace-relative paths that match a glob pattern through one direct tool",
+    parameter_types: FIND_DIRECT_PARAMETER_TYPES,
+    required_fields: &["pattern"],
+    tags: &["surface", "find", "glob", "search", "filesystem"],
 };
 const EDIT_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
     argument_hint: "path:string,edits?:array,old_string?:string,new_string?:string,replace_all?:boolean",
@@ -304,8 +346,8 @@ const MEMORY_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetad
 
 const READ_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     id: "read",
-    prompt_snippet: "read files, page through large files, search repo text, or list matching paths.",
-    prompt_guidance: "Use read for normal repo inspection and file pagination.",
+    prompt_snippet: "read files, page through large files, or list matching paths.",
+    prompt_guidance: "Use read for normal repo inspection, pagination, and path-oriented lookup.",
     prompt_guidelines: READ_GUIDELINES,
     direct_tool_name: Some(DIRECT_READ_TOOL_NAME),
     covered_tool_names: READ_COVERED_TOOL_NAMES,
@@ -322,6 +364,30 @@ const EDIT_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     direct_tool_name: Some(DIRECT_EDIT_TOOL_NAME),
     covered_tool_names: EDIT_COVERED_TOOL_NAMES,
     direct_metadata: Some(EDIT_DIRECT_METADATA),
+    hidden_search_summary: None,
+    hidden_search_argument_hint: None,
+};
+
+const GREP_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
+    id: "grep",
+    prompt_snippet: "search workspace file contents by text.",
+    prompt_guidance: "Use grep for direct repo content search when you know you need text matching.",
+    prompt_guidelines: GREP_GUIDELINES,
+    direct_tool_name: Some(DIRECT_GREP_TOOL_NAME),
+    covered_tool_names: GREP_COVERED_TOOL_NAMES,
+    direct_metadata: Some(GREP_DIRECT_METADATA),
+    hidden_search_summary: None,
+    hidden_search_argument_hint: None,
+};
+
+const FIND_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
+    id: "find",
+    prompt_snippet: "list workspace paths that match a glob pattern.",
+    prompt_guidance: "Use find for direct path matching when you know the pattern you need.",
+    prompt_guidelines: FIND_GUIDELINES,
+    direct_tool_name: Some(DIRECT_FIND_TOOL_NAME),
+    covered_tool_names: FIND_COVERED_TOOL_NAMES,
+    direct_metadata: Some(FIND_DIRECT_METADATA),
     hidden_search_summary: None,
     hidden_search_argument_hint: None,
 };
@@ -441,6 +507,8 @@ const CHANNEL_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
 
 const ALL_TOOL_SURFACES: &[ToolSurfaceDescriptor] = &[
     READ_SURFACE,
+    GREP_SURFACE,
+    FIND_SURFACE,
     EDIT_SURFACE,
     WRITE_SURFACE,
     EXEC_SURFACE,
@@ -848,6 +916,8 @@ mod tests {
     fn visible_direct_tool_states_follow_runtime_view() {
         let view = ToolView::from_tool_names([
             "file.read",
+            "content.search",
+            "glob.search",
             "file.write",
             "file.edit",
             "shell.exec",
@@ -863,7 +933,9 @@ mod tests {
 
         assert_eq!(
             state_ids,
-            vec!["read", "edit", "write", "exec", "web", "memory"]
+            vec![
+                "read", "grep", "find", "edit", "write", "exec", "web", "memory"
+            ]
         );
     }
 
@@ -890,6 +962,7 @@ mod tests {
             "browser.open",
             "browser.companion.snapshot",
             "http.request",
+            "content.search",
         ]);
 
         assert!(hidden_tool_is_covered_by_visible_direct_tool(
@@ -910,6 +983,10 @@ mod tests {
         ));
         assert!(hidden_tool_is_covered_by_visible_direct_tool(
             "http.request",
+            &view
+        ));
+        assert!(hidden_tool_is_covered_by_visible_direct_tool(
+            "content.search",
             &view
         ));
     }
@@ -941,6 +1018,24 @@ mod tests {
                 .expect("read argument hint")
                 .contains("offset?:integer")
         );
+        assert_eq!(
+            direct_tool_required_fields(DIRECT_GREP_TOOL_NAME),
+            Some(["query"].as_slice())
+        );
+        assert_eq!(
+            direct_tool_required_fields(DIRECT_FIND_TOOL_NAME),
+            Some(["pattern"].as_slice())
+        );
+        assert!(
+            direct_tool_search_hint(DIRECT_GREP_TOOL_NAME)
+                .expect("grep search hint")
+                .contains("workspace file contents")
+        );
+        assert!(
+            direct_tool_search_hint(DIRECT_FIND_TOOL_NAME)
+                .expect("find search hint")
+                .contains("glob pattern")
+        );
         assert!(
             direct_tool_search_hint(DIRECT_BROWSER_TOOL_NAME)
                 .expect("browser search hint")
@@ -971,6 +1066,14 @@ mod tests {
         assert_eq!(
             discovery_tool_name_for_tool_name("file.edit"),
             DIRECT_EDIT_TOOL_NAME
+        );
+        assert_eq!(
+            discovery_tool_name_for_tool_name("content.search"),
+            DIRECT_GREP_TOOL_NAME
+        );
+        assert_eq!(
+            discovery_tool_name_for_tool_name("glob.search"),
+            DIRECT_FIND_TOOL_NAME
         );
         assert_eq!(
             discovery_tool_name_for_tool_name("external_skills.install"),

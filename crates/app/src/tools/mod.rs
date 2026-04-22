@@ -920,7 +920,7 @@ pub fn execute_tool_core_with_config(
         match canonical_name {
             "tool.search" => execute_tool_search_tool_with_config(request, config),
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
-            "read" | "edit" | "write" | "exec" | "web" | "browser" | "memory" => {
+            "read" | "grep" | "find" | "edit" | "write" | "exec" | "web" | "browser" | "memory" => {
                 execute_direct_tool_core_with_config(request, config)
             }
             _ => execute_discoverable_tool_core_with_config(request, config),

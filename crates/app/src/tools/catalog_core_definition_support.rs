@@ -114,6 +114,86 @@ pub(super) fn direct_read_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+pub(super) fn direct_grep_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search workspace file contents for this text."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path."
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional file glob filter applied during content search."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Optional maximum result count."
+                    },
+                    "max_bytes_per_file": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1_048_576,
+                        "description": "Optional per-file scan budget."
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Use case-sensitive matching. Defaults to false."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn direct_find_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "List workspace-relative paths that match this glob pattern."
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional search root path."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Optional maximum result count."
+                    },
+                    "include_directories": {
+                        "type": "boolean",
+                        "description": "Include matching directories. Defaults to false."
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn exact_edit_block_definition() -> Value {
     json!({
         "type": "object",

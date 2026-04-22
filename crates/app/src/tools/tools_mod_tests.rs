@@ -324,6 +324,8 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     let snapshot = capability_snapshot();
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
+    assert!(snapshot.contains("- grep:"));
+    assert!(snapshot.contains("- find:"));
     assert!(snapshot.contains("- edit:"));
     assert!(snapshot.contains("- write:"));
     assert!(snapshot.contains("- exec:"));
@@ -344,8 +346,10 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     assert!(!snapshot.contains("shell.exec"));
 
     let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-    assert!(lines.len() >= 8);
+    assert!(lines.len() >= 10);
     assert!(lines.iter().any(|line| line.starts_with("- read:")));
+    assert!(lines.iter().any(|line| line.starts_with("- grep:")));
+    assert!(lines.iter().any(|line| line.starts_with("- find:")));
     assert!(lines.iter().any(|line| line.starts_with("- tool.search:")));
 }
 
@@ -692,6 +696,8 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
         "browser",
         "edit",
         "exec",
+        "find",
+        "grep",
         "read",
         "tool_invoke",
         "tool_search",
@@ -1201,6 +1207,10 @@ fn tool_search_returns_direct_results_for_common_file_queries() {
             .iter()
             .all(|entry| entry["tool_id"] != "tool.search")
     );
+    assert!(
+        results.iter().any(|entry| entry["tool_id"] == "read"),
+        "common file queries should still keep direct read discoverable: {results:?}"
+    );
     assert!(results.iter().any(|entry| entry["tool_id"] == "read"));
     assert!(results.iter().all(|entry| {
         if entry["tool_id"] != "read" {
@@ -1671,6 +1681,8 @@ fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
     let config = test_tool_runtime_config(root.clone());
     let cases = vec![
         ("edit file", "edit"),
+        ("grep repo text", "grep"),
+        ("find matching paths", "find"),
         ("read repo file", "read"),
         ("external skills policy", "agent"),
         ("search memory notes", "memory"),
