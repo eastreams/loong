@@ -69,10 +69,41 @@ export interface DashboardToolItem {
 
 export interface DashboardTools {
   approvalMode: string;
+  autonomyProfile: string;
+  consentDefaultMode: string;
   shellDefaultMode: string;
   shellAllowCount: number;
   shellDenyCount: number;
+  sessionsAllowMutation: boolean;
+  externalSkillsRequireDownloadApproval: boolean;
+  externalSkillsAutoExposeInstalled: boolean;
+  externalSkillsBlockedDomainCount: number;
   items: DashboardToolItem[];
+}
+
+export interface DashboardApprovalItem {
+  approvalRequestId: string;
+  sessionId: string;
+  sessionTitle: string;
+  visibleToolName: string;
+  toolName: string;
+  status: string;
+  decision: string | null;
+  requestSummary: string;
+  requestedAt: string;
+  resolvedAt: string | null;
+  executedAt: string | null;
+  reason: string | null;
+  ruleId: string | null;
+  lastError: string | null;
+}
+
+export interface DashboardApprovals {
+  pendingApprovalCount: number;
+  activeApprovalCount: number;
+  matchedCount: number;
+  returnedCount: number;
+  items: DashboardApprovalItem[];
 }
 
 export interface DashboardDebugConsole {
@@ -163,6 +194,13 @@ export const dashboardApi = {
   async loadTools(request?: ApiRequestOptions): Promise<DashboardTools> {
     return apiGetData<DashboardTools>(
       "/api/dashboard/tools",
+      withDefaultTimeout(request),
+    );
+  },
+
+  async loadApprovals(request?: ApiRequestOptions): Promise<DashboardApprovals> {
+    return apiGetData<DashboardApprovals>(
+      "/api/dashboard/approvals",
       withDefaultTimeout(request),
     );
   },

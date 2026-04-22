@@ -199,12 +199,37 @@ pub(super) async fn abilities_skills(
 
     let browser_companion = json_object_field(&runtime_snapshot.tool_runtime, "browser_companion");
     let external_skills = json_object_field(&runtime_snapshot.external_skills, "policy");
+    let visible_runtime_catalog = runtime_snapshot
+        .tools
+        .visible_tool_names
+        .iter()
+        .map(|tool_name| build_visible_tool_payload(tool_name))
+        .collect::<Vec<_>>();
+    let hidden_tool_surfaces = runtime_snapshot
+        .tools
+        .hidden_tool_surfaces
+        .iter()
+        .map(|surface| AbilitiesHiddenToolSurfacePayload {
+            surface_id: surface.surface_id.clone(),
+            tool_count: surface.tool_count,
+            visible_tool_names: surface.visible_tool_names.clone(),
+            usage_guidance: surface.usage_guidance.clone(),
+        })
+        .collect::<Vec<_>>();
 
     Ok(Json(ApiEnvelope {
         ok: true,
         data: AbilitiesSkillsPayload {
             visible_runtime_tool_count: runtime_snapshot.tools.visible_tool_count,
+            visible_runtime_direct_tool_count: runtime_snapshot.tools.visible_direct_tool_names.len(),
+            hidden_tool_count: runtime_snapshot.tools.hidden_tool_count,
             visible_runtime_tools: runtime_snapshot.tools.visible_tool_names.clone(),
+            visible_runtime_catalog,
+            hidden_tool_surfaces,
+            approval_mode: approval_mode_label(snapshot.config.tools.approval.mode).to_owned(),
+            autonomy_profile: snapshot.config.tools.autonomy_profile.as_str().to_owned(),
+            consent_default_mode: snapshot.config.tools.consent.default_mode.as_str().to_owned(),
+            sessions_allow_mutation: snapshot.config.tools.sessions.allow_mutation,
             browser_companion: AbilitiesBrowserCompanionPayload {
                 enabled: json_bool_field(browser_companion, "enabled"),
                 ready: json_bool_field(browser_companion, "ready"),
@@ -253,6 +278,56 @@ pub(super) async fn abilities_skills(
             },
         },
     }))
+}
+
+fn build_visible_tool_payload(tool_name: &str) -> AbilitiesVisibleToolPayload {
+    match mvp::tools::tool_catalog().resolve(tool_name) {
+        Some(entry) => AbilitiesVisibleToolPayload {
+            visible_name: tool_name.to_owned(),
+            canonical_name: entry.name.to_owned(),
+            display_name: humanize_tool_name(tool_name),
+            summary: entry.description.to_owned(),
+            surface_id: entry.surface_id().map(str::to_owned),
+            exposure: format!("{:?}", entry.exposure).to_ascii_lowercase(),
+            execution_kind: tool_execution_kind_label(entry.execution_kind).to_owned(),
+            capability_action_class: entry.capability_action_class().as_str().to_owned(),
+            usage_guidance: entry.usage_guidance().map(str::to_owned),
+        },
+        None => AbilitiesVisibleToolPayload {
+            visible_name: tool_name.to_owned(),
+            canonical_name: tool_name.to_owned(),
+            display_name: humanize_tool_name(tool_name),
+            summary: format!("Runtime capability surfaced as {tool_name}."),
+            surface_id: None,
+            exposure: "unknown".to_owned(),
+            execution_kind: "unknown".to_owned(),
+            capability_action_class: "unknown".to_owned(),
+            usage_guidance: None,
+        },
+    }
+}
+
+fn tool_execution_kind_label(
+    execution_kind: mvp::tools::ToolExecutionKind,
+) -> &'static str {
+    match execution_kind {
+        mvp::tools::ToolExecutionKind::Core => "core",
+        mvp::tools::ToolExecutionKind::App => "app",
+    }
+}
+
+fn humanize_tool_name(raw: &str) -> String {
+    raw.split(['.', '_'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn collect_runtime_snapshot(

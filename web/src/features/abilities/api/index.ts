@@ -79,9 +79,36 @@ export interface ExternalSkillsSnapshot {
   shadowedSkillCount: number;
 }
 
+export interface VisibleToolSnapshot {
+  visibleName: string;
+  canonicalName: string;
+  displayName: string;
+  summary: string;
+  surfaceId: string | null;
+  exposure: string;
+  executionKind: string;
+  capabilityActionClass: string;
+  usageGuidance: string | null;
+}
+
+export interface HiddenToolSurfaceSnapshot {
+  surfaceId: string;
+  toolCount: number;
+  visibleToolNames: string[];
+  usageGuidance: string;
+}
+
 export interface SkillsSnapshot {
   visibleRuntimeToolCount: number;
+  visibleRuntimeDirectToolCount: number;
+  hiddenToolCount: number;
   visibleRuntimeTools: string[];
+  visibleRuntimeCatalog: VisibleToolSnapshot[];
+  hiddenToolSurfaces: HiddenToolSurfaceSnapshot[];
+  approvalMode: string;
+  autonomyProfile: string;
+  consentDefaultMode: string;
+  sessionsAllowMutation: boolean;
   browserCompanion: BrowserCompanionSnapshot;
   externalSkills: ExternalSkillsSnapshot;
 }

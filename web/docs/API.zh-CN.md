@@ -10,7 +10,7 @@
 
 ### `GET /api/meta`
 
-返回 Web 入口需要的基础元信息。当前前端实际依赖：
+返回 Web 入口需要的基础元信息。当前前端会实际消费：
 
 - `appVersion`
 - `apiVersion`
@@ -24,31 +24,27 @@
 - `auth.tokenEnv`
 - `auth.mode`
 
-当前已支持两类鉴权模式：
+当前支持的认证模式：
 
 - `local_token`
 - `same_origin_session`
 
-## 2. 认证与客户端调用约定
+## 2. 认证与调用约定
 
-当前 Web 客户端与本地 API 的交互约定：
+当前 Web 客户端与本地 API 的约定如下：
 
 - 所有请求默认带 `credentials: include`
-- 若浏览器本地保存了 token，请求会额外附带 `Authorization: Bearer <token>`
+- 如果浏览器里存在本地 token，请求会额外带 `Authorization: Bearer <token>`
 - `GET /api/meta` 与 `GET /api/onboard/status` 用于入口状态判断
-- `same_origin_static` 模式下，前端优先依赖同源 session cookie，而不是手动 token
-- 同源写操作保留本地可信 `Origin` 校验
-
-补充说明：
-
+- same-origin 模式下前端优先依赖本地 session cookie，而不是手动 token
+- 同源写操作会做本地可信 `Origin` 校验
 - Chat 流式响应当前基于 `HTTP + NDJSON`
-- 当前并未使用 WebSocket / SSE 作为主流式通道
 
 ## 3. Onboarding 接口
 
 ### `GET /api/onboard/status`
 
-用于首次进入状态聚合。重点字段包括：
+用于首次进入时的状态聚合。当前重点字段包括：
 
 - `runtimeOnline`
 - `tokenRequired`
@@ -81,18 +77,6 @@
 - `provider_unreachable`
 - `ready`
 
-常见 `nextAction`：
-
-- `start_local_runtime`
-- `enter_local_token`
-- `refresh_local_session`
-- `create_local_config`
-- `fix_local_config`
-- `configure_provider`
-- `validate_provider_route`
-- `enter_web`
-- `open_chat`
-
 ### `POST /api/onboard/provider`
 
 最小 provider 配置写入接口。当前支持：
@@ -106,14 +90,14 @@
 
 “应用并验证” provider 配置。当前语义：
 
-- 先按候选配置做最小验证
-- 仅验证通过时才正式落盘
-- 若 `kind` 与 route 明显错配（如标准 `volcengine` 指向 coding plan 路径），会直接返回 `400`
-- 返回验证结果与最新 onboarding 状态
+- 先对候选配置做最小验证
+- 只有验证通过时才正式落盘
+- 若 `kind` 与 route 明显错配，会直接拒绝保存并返回明确错误
+- 返回最新验证结果与 onboarding 状态
 
 ### `GET /api/providers/catalog`
 
-提供完整 provider catalog，供 onboarding / dashboard 下拉与默认 route 回填使用。常用字段：
+返回 provider catalog，供 onboarding / dashboard 下拉、默认 route 回填与提示文案使用。当前常用字段：
 
 - `kind`
 - `displayName`
@@ -136,7 +120,7 @@
 
 ### `POST /api/onboard/validate`
 
-执行最小 provider 验证。当前返回重点包括：
+执行最小 provider 验证。当前重点返回：
 
 - `passed`
 - `endpointStatus`
@@ -155,17 +139,99 @@
 
 ### `POST /api/onboard/pairing/clear`
 
-清理当前浏览器自动配对 cookie，用于退出本地配对状态。
+清理当前浏览器的自动配对 cookie。
 
-## 4. Dashboard 接口
+## 4. Abilities 接口
+
+### `GET /api/abilities/personalization`
+
+返回当前个性化摘要。前端实际消费：
+
+- `configured`
+- `hasOperatorPreferences`
+- `suppressed`
+- `promptState`
+- `updatedAt`
+- `preferredName`
+- `responseDensity`
+- `initiativeLevel`
+- `standingBoundaries`
+- `locale`
+- `timezone`
+
+### `POST /api/abilities/personalization`
+
+保存基础个性化配置。当前支持：
+
+- `preferredName`
+- `responseDensity`
+- `initiativeLevel`
+- `standingBoundaries`
+- `locale`
+- `timezone`
+- `promptState`
+
+### `GET /api/abilities/channels`
+
+返回 channels snapshot。当前重点字段：
+
+- `catalogChannelCount`
+- `configuredChannelCount`
+- `configuredAccountCount`
+- `enabledAccountCount`
+- `misconfiguredAccountCount`
+- `runtimeBackedChannelCount`
+- `enabledServiceChannelCount`
+- `readyServiceChannelCount`
+- `surfaces`
+
+其中 `surfaces[]` 当前常用字段包括：
+
+- `id`
+- `label`
+- `source`
+- `configuredAccountCount`
+- `enabledAccountCount`
+- `misconfiguredAccountCount`
+- `readySendAccountCount`
+- `readyServeAccountCount`
+- `defaultConfiguredAccountId`
+- `serviceEnabled`
+- `serviceReady`
+
+### `GET /api/abilities/skills`
+
+返回技能/工具能力面的 runtime truth。当前前端实际消费：
+
+- `visibleRuntimeToolCount`
+- `visibleRuntimeDirectToolCount`
+- `hiddenToolCount`
+- `visibleRuntimeTools`
+- `visibleRuntimeCatalog`
+- `hiddenToolSurfaces`
+- `approvalMode`
+- `autonomyProfile`
+- `consentDefaultMode`
+- `sessionsAllowMutation`
+- `browserCompanion`
+- `externalSkills`
+
+其中：
+
+- `visibleRuntimeCatalog[]` 用于展示真实可见 tool 的名称、summary、execution kind、surface/source 与 usage guidance
+- `hiddenToolSurfaces[]` 用于展示隐藏 surface 与其覆盖关系
+- `browserCompanion` 用于展示 companion 的 `enabled / ready / commandConfigured / expectedVersion / executionTier / timeoutSeconds`
+- `externalSkills` 用于展示 external skills 的 inventory、下载审批、auto expose 与域名约束
+
+## 5. Dashboard 接口
 
 ### `GET /api/dashboard/summary`
 
-提供 Dashboard 顶部摘要卡数据。
+返回 Dashboard 顶部摘要卡所需数据。
 
 ### `GET /api/dashboard/providers`
 
-提供 provider 列表与当前激活项。常用字段：
+返回 provider 列表与当前激活项。当前常用字段：
 
 - `id`
 - `label`
@@ -178,7 +244,7 @@
 
 ### `GET /api/dashboard/runtime`
 
-提供 runtime 运行态信息。常用字段：
+返回 runtime 运行态信息。当前常用字段：
 
 - `status`
 - `source`
@@ -194,7 +260,7 @@
 
 ### `GET /api/dashboard/config`
 
-提供 UI 关注的配置快照。常用字段：
+返回 UI 关注的配置快照。当前常用字段：
 
 - `activeProvider`
 - `lastProvider`
@@ -207,6 +273,7 @@
 - `personality`
 - `promptMode`
 - `promptAddendumConfigured`
+- `promptAddendum`
 - `memoryProfile`
 - `memorySystem`
 - `sqlitePath`
@@ -216,7 +283,7 @@
 
 ### `GET /api/dashboard/connectivity`
 
-提供 provider route / connectivity 诊断。常用字段：
+返回 provider route / connectivity 诊断。当前常用字段：
 
 - `status`
 - `endpoint`
@@ -230,12 +297,18 @@
 
 ### `GET /api/dashboard/tools`
 
-提供工具启用状态与策略摘要。当前前端消费：
+返回工具姿态摘要。当前前端实际消费：
 
 - `approvalMode`
+- `autonomyProfile`
+- `consentDefaultMode`
 - `shellDefaultMode`
 - `shellAllowCount`
 - `shellDenyCount`
+- `sessionsAllowMutation`
+- `externalSkillsRequireDownloadApproval`
+- `externalSkillsAutoExposeInstalled`
+- `externalSkillsBlockedDomainCount`
 - `items`
 
 当前重点工具项包括：
@@ -250,9 +323,36 @@
 - `file_tools`
 - `external_skills`
 
+### `GET /api/dashboard/approvals`
+
+返回 Dashboard 的审批队列摘要。当前前端实际消费：
+
+- `pendingApprovalCount`
+- `activeApprovalCount`
+- `matchedCount`
+- `returnedCount`
+- `items`
+
+其中 `items[]` 常用字段包括：
+
+- `approvalRequestId`
+- `sessionId`
+- `sessionTitle`
+- `visibleToolName`
+- `toolName`
+- `status`
+- `decision`
+- `requestSummary`
+- `requestedAt`
+- `resolvedAt`
+- `executedAt`
+- `reason`
+- `ruleId`
+- `lastError`
+
 ### `GET /api/dashboard/debug-console`
 
-提供只读 Debug Console 的块级数据。返回结构：
+返回只读 Debug Console 的分块数据。当前结构：
 
 - `generatedAt`
 - `command`
@@ -267,7 +367,7 @@
 - 最近一次 token pairing
 - process output
 
-## 5. Chat 接口
+## 6. Chat 接口
 
 ### `GET /api/chat/sessions`
 
@@ -282,8 +382,9 @@
 删除会话。
 
 补充说明：
+
 - 当前没有独立的“重命名会话”后端接口
-- Web 里的会话名修改目前是前端本地覆写，不会写回 daemon session 模型
+- Web 里的会话名修改仍是前端本地覆写，不会写回 daemon session 模型
 
 ### `GET /api/chat/sessions/{id}/history`
 
@@ -299,6 +400,7 @@
 创建 turn。当前请求体至少支持：
 
 - `input`
+
 返回：
 
 - `sessionId`
@@ -307,31 +409,42 @@
 
 当前前端约定：
 
-- 一旦 `turn` 被 `accepted`，前端不应再把该轮用户消息整体回滚掉
+- 一旦 turn 被 `accepted`，前端不会再整轮回滚该条用户消息
 
 ### `GET /api/chat/sessions/{id}/turns/{turn_id}/stream`
 
-返回 NDJSON 流式事件。当前事件集合：
+返回 NDJSON 流式事件。当前前端消费的事件集合：
 
 - `turn.started`
+- `turn.phase`
 - `message.delta`
 - `tool.started`
 - `tool.finished`
 - `turn.completed`
 - `turn.failed`
 
+其中 `turn.phase` 当前会携带：
+
+- `phase`
+- `providerRound`
+- `lane`
+- `toolCallCount`
+- `messageCount`
+- `estimatedTokens`
+
 当前前端消费约定：
 
-- 以换行分隔单位消费 NDJSON
+- 按换行消费 NDJSON
 - 保留单行解析失败容错
-- `turn.failed` 需要显式反馈到 UI
+- `turn.phase` 会被映射成更轻的 Web `streamPhase`
+- `turn.failed` 必须显式反馈到 UI
 
-## 6. 当前边界
+## 7. 当前边界
 
 当前 API 仍有这些边界：
 
-- Debug Console 还是只读观测面，不是 CLI 镜像
+- Debug Console 仍是只读观测面，不是 CLI 镜像
 - provider 验证仍是最小验证，不是完整 doctor
 - Dashboard 写入仍以最小 provider / preferences 为主
-- `tool.search` 的中文 / 泛化意图召回问题仍未解决
-- Chat 流式仍缺少更完整的中断 / 重连 / 恢复语义
+- 审批队列当前是可解释展示，不是完整 approval 操作台
+- Chat 流式仍缺更完整的 cancel / reconnect / resume 语义

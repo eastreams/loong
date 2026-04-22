@@ -23,7 +23,8 @@
     "configTitle": "Local config",
     "toolsEyebrow": "Tool surface",
     "toolsTitle": "Tool policy",
-    "toolsGovernanceLabel": "Tool governance"
+    "toolsGovernanceLabel": "Tool governance",
+    "approvalsLabel": "Approval queue"
   },
   "fields": {
     "source": "Source",
@@ -58,9 +59,16 @@
     "fileRoot": "File root",
     "lastProvider": "Last provider",
     "approval": "Approval",
+    "autonomy": "Autonomy",
+    "consent": "Consent",
     "shellPolicy": "Policy",
     "allowed": "Allowed",
     "denied": "Denied",
+    "enabledTools": "Enabled tools",
+    "sessionMutation": "Session mutation",
+    "externalSkillsDownloadApproval": "External skill download approval",
+    "externalSkillsAutoExpose": "External skill auto-expose",
+    "externalSkillsBlockedDomains": "Blocked external domains",
     "providerHost": "Provider host",
     "dns": "DNS",
     "probe": "Probe",
@@ -99,11 +107,19 @@
     "noProviders": "No provider profiles loaded.",
     "enabled": "Enabled",
     "disabled": "Disabled",
+    "yes": "Yes",
+    "no": "No",
     "approvalOff": "Off",
     "approvalMediumBalanced": "Medium balanced",
     "approvalStrict": "Strict",
     "denyByDefault": "Deny by default",
-    "allowByDefault": "Allow by default"
+    "allowByDefault": "Allow by default",
+    "autonomyDiscoveryOnly": "Discovery only",
+    "autonomyGuidedAcquisition": "Guided acquisition",
+    "autonomyBoundedAutonomous": "Bounded autonomous",
+    "consentPrompt": "Prompt",
+    "consentAuto": "Auto",
+    "consentFull": "Full"
   },
   "connectivity": {
     "loading": "Checking local provider route…",
@@ -164,6 +180,21 @@
       "preferences": "{{at}} preferences update",
       "tokenPairing": "{{at}} token pairing",
       "logs": "{{at}} process output"
+    }
+  },
+  "approvals": {
+    "pendingCount": "Pending",
+    "activeCount": "Active",
+    "empty": "No approval requests need attention right now.",
+    "requestedAt": "Requested {{at}}",
+    "status": {
+      "pending": "Pending",
+      "approved": "Approved",
+      "executing": "Executing",
+      "executed": "Executed",
+      "denied": "Denied",
+      "expired": "Expired",
+      "cancelled": "Cancelled"
     }
   },
   "settings": {

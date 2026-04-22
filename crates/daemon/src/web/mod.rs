@@ -61,7 +61,7 @@ use chat::{
     delete_chat_session,
 };
 use dashboard::{
-    dashboard_config, dashboard_connectivity, dashboard_providers, dashboard_runtime,
+    dashboard_approvals, dashboard_config, dashboard_connectivity, dashboard_providers, dashboard_runtime,
     dashboard_summary, dashboard_tools, provider_catalog,
 };
 use debug_console::{dashboard_debug_console, record_debug_operation};
@@ -473,10 +473,45 @@ struct DashboardConfigPayload {
 #[serde(rename_all = "camelCase")]
 struct DashboardToolsPayload {
     approval_mode: String,
+    autonomy_profile: String,
+    consent_default_mode: String,
     shell_default_mode: String,
     shell_allow_count: usize,
     shell_deny_count: usize,
+    sessions_allow_mutation: bool,
+    external_skills_require_download_approval: bool,
+    external_skills_auto_expose_installed: bool,
+    external_skills_blocked_domain_count: usize,
     items: Vec<DashboardToolItemPayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardApprovalsPayload {
+    pending_approval_count: usize,
+    active_approval_count: usize,
+    matched_count: usize,
+    returned_count: usize,
+    items: Vec<DashboardApprovalItemPayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardApprovalItemPayload {
+    approval_request_id: String,
+    session_id: String,
+    session_title: String,
+    visible_tool_name: String,
+    tool_name: String,
+    status: String,
+    decision: Option<String>,
+    request_summary: String,
+    requested_at: String,
+    resolved_at: Option<String>,
+    executed_at: Option<String>,
+    reason: Option<String>,
+    rule_id: Option<String>,
+    last_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -541,9 +576,40 @@ struct AbilitiesChannelSurfacePayload {
 #[serde(rename_all = "camelCase")]
 struct AbilitiesSkillsPayload {
     visible_runtime_tool_count: usize,
+    visible_runtime_direct_tool_count: usize,
+    hidden_tool_count: usize,
     visible_runtime_tools: Vec<String>,
+    visible_runtime_catalog: Vec<AbilitiesVisibleToolPayload>,
+    hidden_tool_surfaces: Vec<AbilitiesHiddenToolSurfacePayload>,
+    approval_mode: String,
+    autonomy_profile: String,
+    consent_default_mode: String,
+    sessions_allow_mutation: bool,
     browser_companion: AbilitiesBrowserCompanionPayload,
     external_skills: AbilitiesExternalSkillsPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesVisibleToolPayload {
+    visible_name: String,
+    canonical_name: String,
+    display_name: String,
+    summary: String,
+    surface_id: Option<String>,
+    exposure: String,
+    execution_kind: String,
+    capability_action_class: String,
+    usage_guidance: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesHiddenToolSurfacePayload {
+    surface_id: String,
+    tool_count: usize,
+    visible_tool_names: Vec<String>,
+    usage_guidance: String,
 }
 
 #[derive(Debug, Serialize)]

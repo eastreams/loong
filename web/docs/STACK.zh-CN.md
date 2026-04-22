@@ -1,19 +1,19 @@
 # LoongClaw Web 技术栈与目录结构
 
 状态：已进入可用 MVP，持续迭代中  
-最后更新：2026-03-22
+最后更新：2026-04-22
 
 ## 1. 目标
 
 `web/` 目录承载 LoongClaw 的本地优先 Web Console。
 
-当前目标不是独立云端产品，而是基于现有 runtime 提供：
+当前目标不是独立云端产品，而是基于本地 runtime 提供：
 
 - Web Chat
-- Web Status
+- Web Dashboard
 - Web Abilities
-- 首次进入 / onboarding
-- 本地诊断与调试入口
+- Onboarding
+- 本地调试与状态观察入口
 
 ## 2. 当前技术栈
 
@@ -24,15 +24,17 @@
 - Vite 7
 - React Router 7
 - i18next / react-i18next
-- `lucide-react`
-- 原生 `fetch` + NDJSON 流读取
-- CSS Variables + 自定义主题样式
+- 原生 `fetch`
+- `ReadableStream + NDJSON` 流式读取
+- CSS Variables + 主题变量
 
 后端承接：
 
-- `crates/daemon/src/web/mod.rs`
+- `crates/daemon/src/web/serve.rs`
 - `crates/daemon/src/web/onboarding.rs`
-- `crates/daemon/src/web/auth.rs`
+- `crates/daemon/src/web/abilities.rs`
+- `crates/daemon/src/web/dashboard.rs`
+- `crates/daemon/src/web/chat.rs`
 - `crates/daemon/src/web/debug_console.rs`
 - Axum 本地 API
 
@@ -48,21 +50,20 @@
 
 特点：
 
-- 分离前后端
-- 热更新快
-- 适合日常开发和联调
+- 前后端分离
+- 适合热更新与联调
 
-### 同源产品态骨架
+### 同源产品态
 
 当前已支持：
 
-- daemon 直接托管打包后的静态资源
-- 页面和 API 走同一个 origin
-- 同源模式下走本地 session cookie，而不是手动 token 主路径
+- daemon 直接托管构建后的静态资源
+- 页面与 API 走同一 origin
+- 同源模式下优先走本地 session cookie
 
 ### 安装态
 
-当前已实现第一版安装命令：
+当前已实现第一版命令：
 
 - `loongclaw web install --source <dist-dir>`
 - `loongclaw web status`
@@ -71,7 +72,7 @@
 安装目录：
 
 - `~/.loong/web/dist/`
-- 清单：`~/.loong/web/install.json`
+- `~/.loong/web/install.json`
 
 ## 4. 当前目录
 
@@ -81,6 +82,7 @@ web/
     API.zh-CN.md
     DESIGN.zh-CN.md
     STACK.zh-CN.md
+    note.md
   public/
   src/
     app/
@@ -89,9 +91,6 @@ web/
         en/
         zh-CN/
     components/
-      layout/
-      status/
-      surfaces/
     contexts/
     features/
       abilities/
@@ -105,10 +104,6 @@ web/
       config/
       utils/
     styles/
-      variables.css
-      themes.css
-      dashboard.css
-      index.css
     main.tsx
 ```
 
@@ -122,47 +117,51 @@ web/
 - history
 - turn 创建
 - turn 流式读取
-- 生成中状态
-- 轻量消息渲染
+- tool 状态
+- 流式占位消息
+- 实验性小宠物显示
 
-当前关键状态已拆进：
+关键点：
 
 - `hooks/useChatSessions.ts`
 - `hooks/useChatStream.ts`
-- 会话列表已支持前端本地会话名覆写
-- 会话列表与当前会话头部会显示更友好的最近活跃时间
-- 当前正在生成的会话会在会话列表里给出显式状态提示
+- `pages/ChatPage.tsx`
+- `components/ChatMascot.tsx`
+- `mascotPreference.ts`
 
 ### `web/src/features/abilities/`
 
-当前第一版已落地：
+承载：
+
+- personalization 读取与最小编辑
+- channels snapshot
+- skills runtime truth
+- mascot 实验开关
+
+关键点：
 
 - `pages/AbilitiesPage.tsx`
-- `components/AbilitiesNav.tsx`
 - `components/PersonalizationPanel.tsx`
 - `components/ChannelsPanel.tsx`
 - `components/SkillsPanel.tsx`
+- `components/MascotPanel.tsx`
 - `hooks/useAbilitiesData.ts`
-
-当前作为第三个大页面骨架，后续主要承接：
-
-- personalization
-- channels snapshot
-- skills / external skills
 
 ### `web/src/features/dashboard/`
 
 承载：
 
 - runtime 摘要
-- tools 摘要
-- config 摘要
+- tools posture 摘要
+- config snapshot
 - connectivity 诊断
 - provider 最小写入
+- approval queue
 - Debug Console
 
-当前关键状态已拆进：
+关键点：
 
+- `pages/DashboardPage.tsx`
 - `hooks/useDashboardData.ts`
 - `components/DebugConsolePanel.tsx`
 
@@ -172,11 +171,11 @@ web/
 
 - onboarding 状态读取
 - provider 最小写入
-- preferences 轻配置写入
-- validate 放行
+- provider apply-and-validate
+- preferences 轻配置项写入
 - token / session 进入流程
 
-当前关键状态已拆进：
+关键点：
 
 - `components/OnboardingStatusPanel.tsx`
 - `hooks/useOnboardingFlow.ts`
@@ -185,13 +184,13 @@ web/
 
 ### `web/src/contexts/` 与 `web/src/hooks/`
 
-当前主要承载：
+主要承载：
 
-- Web 会话连接状态
+- Web 连接与认证状态
 - token / pairing / same-origin session
 - onboarding gate
 
-当前关键入口：
+关键入口：
 
 - `contexts/WebSessionContext.tsx`
 - `hooks/useWebSessionManager.ts`
@@ -201,34 +200,39 @@ web/
 
 ### 路由与页面保活
 
-当前 `chat`、`dashboard` 与 `abilities` 已加入 keep-alive 语义，用来保留切页返回后的可见状态。
+当前 `chat / dashboard / abilities` 已加入 keep-alive 语义，用于保留切页返回后的可见状态。
 
 收益：
 
 - 流式中切页返回更稳定
-- 会话列表与当前可见状态不容易丢
-
-边界：
-
-- 仍需持续关注初始化副作用与页面体积
+- 会话列表与当前视图态不容易丢
 
 ### 数据访问
 
-当前前端数据访问特点：
+当前前端数据访问特征：
 
 - 默认 `credentials: include`
 - 开发态可附带本地 token
-- 同源产品态优先依赖 session cookie
-- Chat 流式消费基于 `fetch + ReadableStream + NDJSON`
+- 同源态优先依赖 session cookie
+- Chat 流式基于 `fetch + ReadableStream + NDJSON`
 
 ### 状态组织
 
-当前以“轻全局 + feature 本地状态”组合为主：
+当前仍采用“轻全局 + feature 本地状态”的组合：
 
-- WebSessionContext：连接 / auth / onboarding gate
-- feature hooks：各自页面的数据加载、交互与错误处理
+- `WebSessionContext`：连接 / auth / onboarding gate
+- feature hooks：每个页面自己的读取、交互与错误处理
 
-当前尚未引入 Redux / Zustand / React Query 一类额外状态层。
+当前尚未引入 Redux / Zustand / React Query 这一类额外状态层。
+
+### Runtime truth 接入
+
+这一轮值得单独记住的技术方向：
+
+- `Skills` 已以后端 runtime/catalog 真值为主
+- `Dashboard` 已接 autonomy / approval / consent / session mutation 等工具姿态
+- `Dashboard` 已显式接 approval queue
+- `Chat` 已接 `turn.phase`
 
 ## 7. 脚本与命令
 
@@ -254,32 +258,19 @@ web/
 - `%USERPROFILE%\\.loong\\logs\\web-api.log`
 - `%USERPROFILE%\\.loong\\logs\\web-api.err.log`
 
-## 9. 专项 review 后的当前重点
+## 9. 当前结构上的判断
 
-这轮 WebUI 专项 review 之后，当前结构上的结论是：
+当前结构比较明确的结论是：
 
-- 大状态机已经开始从页面文件拆到 feature hooks，方向是对的
-- Chat / Status / Onboarding 三条主链现在都已有自己的状态 hook
-- 近期已修复几条真实运行时问题：
-  - 流式失败时不再误删已接受的用户消息
-  - 新建会话失败时不再残留空白会话
-  - Dashboard 部分成功保存后会回拉真实状态
-  - onboarding 不再把 401/session 失效误判成 runtime offline
-  - 发送失败后会恢复输入框内容
-
-当前仍值得继续关注：
-
-- `ChatPage.tsx`
-- `DashboardPage.tsx`
-- `OnboardingStatusPanel.tsx`
-
-这三个页面文件仍偏大，后续继续开发时应优先保持“先抽 hook / 子组件，再加功能”。
+- 大状态已经开始从页面文件拆到 feature hooks，方向是对的
+- Chat / Dashboard / Onboarding / Abilities 都已经形成独立 feature 面
+- Debug Console、approval queue、skills runtime truth 这类“读真值”能力适合继续留在现有页面里演进
+- 小宠物目前仍应视为 `chat + abilities` 间的实验能力，而不是单独 runtime 子系统
 
 ## 10. 当前仍未完成
 
-- 更像真实 CLI 的连续输出流 Debug Console
+- 更接近真实 CLI 的连续输出流 Debug Console
 - 更完整的 tool trace / event timeline
 - 更完整的 Dashboard 受控写入
-- 更顺的安装态产品化体验
-- `tool.search` 中文 / 泛化意图召回问题
-- Chat 流式的更完整中断 / 重连 / 恢复语义
+- 更顺的安装态产品体验
+- Chat 流式更完整的中断 / 重连 / 恢复语义
