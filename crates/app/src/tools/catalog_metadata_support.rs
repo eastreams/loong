@@ -178,6 +178,7 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
         "task_status" => "task_id:string,task_ids?:string[]",
         "task_wait" | "task_history" => "task_id:string",
+        "task_events" => "task_id:string,after_id?:integer,limit?:integer",
         "tasks_list" => "limit?:integer,offset?:integer,task_state?:string,stable_only?:boolean",
         "tasks_search" => {
             "query:string,max_results?:integer,task_state?:string,stable_only?:boolean"
@@ -675,6 +676,11 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
         "task_status" => &[("task_id", "string")],
         "task_wait" | "task_history" => &[("task_id", "string")],
+        "task_events" => &[
+            ("task_id", "string"),
+            ("after_id", "integer"),
+            ("limit", "integer"),
+        ],
         "tasks_list" => &[
             ("limit", "integer"),
             ("offset", "integer"),
@@ -783,7 +789,7 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
-        "task_status" | "task_wait" | "task_history" => &["task_id"],
+        "task_status" | "task_wait" | "task_history" | "task_events" => &["task_id"],
         "tasks_list" => &[],
         "tasks_search" => &["query"],
         "session_continue" => &["session_id", "input"],
@@ -890,6 +896,7 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
             &["session", "history", "runtime"]
         }
         "task_status" | "task_wait" | "task_history" => &["task", "runtime", "history", "status"],
+        "task_events" => &["task", "runtime", "events", "history", "status"],
         "tasks_list" => &["task", "runtime", "list", "status"],
         "tasks_search" => &["task", "runtime", "search", "status"],
         "session_continue" => &["session", "continue", "delegate", "child"],
