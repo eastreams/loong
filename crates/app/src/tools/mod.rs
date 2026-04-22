@@ -146,7 +146,7 @@ pub use provider_schema::{
     provider_tool_definitions, tool_parameter_schema_types, try_provider_tool_definitions_for_view,
 };
 pub(crate) use routing::hidden_operation_for_tool_name;
-#[cfg(test)]
+#[cfg(all(test, unix, feature = "tool-shell"))]
 pub(crate) use routing::route_direct_tool_name;
 pub use tool_surface::ToolSurfaceState;
 

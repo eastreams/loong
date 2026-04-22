@@ -49,8 +49,8 @@ If Track B, fill these in:
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --workspace --locked`
-- [ ] `cargo test --workspace --all-features --locked`
+- [ ] Rust tests match the touched packages / feature surface (for example `cargo test --workspace --locked`, `cargo test --workspace --all-features --locked`, `task verify`, `task verify:changed`, or equivalent exact commands documented below)
+- [ ] If full workspace / all-features Rust tests were not run locally, explain why and cite CI evidence or a known baseline blocker
 - [ ] Relevant architecture / dep-graph / docs checks for touched areas
 - [ ] Additional scenario, benchmark, or manual checks when behavior changed
 - [ ] If this changes config/env fallback, limits, or defaults: include before/after behavior and regression coverage for explicit path, fallback path, and boundary values

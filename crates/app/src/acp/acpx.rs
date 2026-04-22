@@ -15,7 +15,7 @@ use crate::process_launch::retry_executable_file_busy_async;
 #[cfg(test)]
 use crate::process_launch::retry_executable_file_busy_blocking as retry_spawn_blocking;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use super::acpx_mcp::probe_mcp_proxy_support_with_runtime;
 pub(crate) use super::acpx_mcp::{
     AcpxMcpServerEntry, AcpxMcpServerEnvEntry, build_mcp_proxy_agent_command,
@@ -755,6 +755,7 @@ mod tests {
 
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongConfig};
+    #[cfg(unix)]
     use crate::test_support::ScopedEnv;
 
     const ACPX_RUNTIME_TEST_TIMEOUT_SECONDS: f64 = 45.0;
