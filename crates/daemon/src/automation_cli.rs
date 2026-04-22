@@ -189,6 +189,8 @@ pub struct AutomationJournalCommandOptions {
 pub enum AutomationJournalCommands {
     /// Inspect the internal automation journal layout and cursor
     Inspect(AutomationJournalInspectCommandOptions),
+    /// Report automation journal health and drift signals
+    Health(AutomationJournalHealthCommandOptions),
     /// Rotate the active internal automation journal segment
     Rotate(AutomationJournalRotateCommandOptions),
     /// Prune sealed internal automation journal segments older than the retained segment
@@ -199,6 +201,9 @@ pub enum AutomationJournalCommands {
 
 #[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
 pub struct AutomationJournalInspectCommandOptions {}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationJournalHealthCommandOptions {}
 
 #[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
 pub struct AutomationJournalRotateCommandOptions {}
@@ -1087,6 +1092,7 @@ async fn execute_journal_command(
 ) -> CliResult<Value> {
     match options.command {
         AutomationJournalCommands::Inspect(_command) => execute_journal_inspect_command(),
+        AutomationJournalCommands::Health(_command) => execute_journal_health_command(),
         AutomationJournalCommands::Rotate(_command) => execute_journal_rotate_command(config).await,
         AutomationJournalCommands::Prune(command) => execute_journal_prune_command(command),
         AutomationJournalCommands::Repair(_command) => execute_journal_repair_command(),
@@ -1121,6 +1127,64 @@ fn execute_journal_inspect_command() -> CliResult<Value> {
         "layout": layout,
         "state_path": automation_journal_state_path().display().to_string(),
         "active_marker_path": automation_active_segment_marker_path().display().to_string(),
+    }))
+}
+
+fn execute_journal_health_command() -> CliResult<Value> {
+    let inspection = execute_journal_inspect_command()?;
+    let layout = inspection
+        .get("layout")
+        .cloned()
+        .ok_or_else(|| "automation journal inspect payload missing layout".to_owned())?;
+    let cursor = inspection
+        .get("cursor")
+        .cloned()
+        .ok_or_else(|| "automation journal inspect payload missing cursor".to_owned())?;
+    let state_path = automation_journal_state_path();
+    let active_marker_path = automation_active_segment_marker_path();
+    let state_active_segment_id = fs::read_to_string(state_path.as_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(raw.as_str()).ok())
+        .and_then(|value| value.get("active_segment_id").cloned())
+        .unwrap_or(Value::Null);
+    let active_marker_segment_id = fs::read_to_string(active_marker_path.as_path())
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    let cursor_segment_id = cursor.get("segment_id").cloned().unwrap_or(Value::Null);
+    let layout_segments = layout["segments"]
+        .as_array()
+        .ok_or_else(|| "automation journal inspect payload missing segments".to_owned())?;
+    let cursor_segment_exists = cursor_segment_id.as_str().is_some_and(|segment_id| {
+        layout_segments
+            .iter()
+            .any(|segment| segment["segment_id"].as_str() == Some(segment_id))
+    });
+    let active_segment_exists = layout["active_segment_id"]
+        .as_str()
+        .is_some_and(|segment_id| {
+            layout_segments
+                .iter()
+                .any(|segment| segment["segment_id"].as_str() == Some(segment_id))
+        });
+    let active_marker_matches_state = match (
+        active_marker_segment_id.as_str(),
+        state_active_segment_id.as_str(),
+    ) {
+        (Some(marker), Some(state)) => marker == state,
+        _ => false,
+    };
+    Ok(json!({
+        "command": "journal_health",
+        "inspection": inspection,
+        "state_active_segment_id": state_active_segment_id,
+        "active_marker_segment_id": active_marker_segment_id,
+        "cursor_segment_id": cursor_segment_id,
+        "cursor_segment_exists": cursor_segment_exists,
+        "active_segment_exists": active_segment_exists,
+        "active_marker_matches_state": active_marker_matches_state,
     }))
 }
 
@@ -1705,6 +1769,7 @@ fn render_automation_text(payload: &Value) -> CliResult<String> {
         }
         "emit" => render_emit_result(payload),
         "journal_inspect" => render_journal_inspect(payload),
+        "journal_health" => render_journal_health(payload),
         "journal_rotate" => render_journal_rotate(payload),
         "journal_prune" => render_journal_prune(payload),
         "journal_repair" => render_journal_repair(payload),
@@ -1896,6 +1961,39 @@ fn render_journal_inspect(payload: &Value) -> CliResult<String> {
         let path = segment["path"].as_str().unwrap_or("unknown");
         lines.push(format!("- {segment_id} [{status}] {path}"));
     }
+    Ok(lines.join("\n"))
+}
+
+fn render_journal_health(payload: &Value) -> CliResult<String> {
+    let inspection = payload
+        .get("inspection")
+        .ok_or_else(|| "automation journal health payload missing inspection".to_owned())?;
+    let lines = vec![
+        "Automation journal health".to_owned(),
+        format!(
+            "active_marker_matches_state: {}",
+            payload["active_marker_matches_state"]
+        ),
+        format!(
+            "active_segment_exists: {}",
+            payload["active_segment_exists"]
+        ),
+        format!(
+            "cursor_segment_exists: {}",
+            payload["cursor_segment_exists"]
+        ),
+        format!(
+            "state_active_segment_id: {}",
+            payload["state_active_segment_id"]
+        ),
+        format!(
+            "active_marker_segment_id: {}",
+            payload["active_marker_segment_id"]
+        ),
+        format!("cursor_segment_id: {}", payload["cursor_segment_id"]),
+        String::new(),
+        render_journal_inspect(inspection)?,
+    ];
     Ok(lines.join("\n"))
 }
 

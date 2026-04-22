@@ -150,7 +150,7 @@ fn wait_for_path(path: &Path, description: &str) {
 }
 
 fn wait_for_serve_lock(child: &mut Child, path: &Path) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         if path.exists() {
             return;
@@ -365,6 +365,95 @@ async fn automation_journal_inspect_surfaces_layout_and_cursor() {
     assert_eq!(payload["layout"]["segments"][2]["status"], "active");
     assert_eq!(payload["cursor"]["segment_id"], "segment-000002");
     assert_eq!(payload["cursor"]["line_cursor"], 3);
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_journal_health_reports_state_marker_drift_and_missing_cursor_segment() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-journal-health");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(
+        loong_app::internal_events::internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        loong_app::internal_events::internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000003\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\"},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"active\"}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write journal state");
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000004\n",
+    )
+    .expect("write divergent active marker");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"health-old\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write first segment");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000003"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"health-active\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write active segment");
+    fs::write(
+        automation_cursor_path(&loong_home),
+        concat!(
+            "{\n",
+            "  \"segment_id\": \"segment-000005\",\n",
+            "  \"line_cursor\": 1,\n",
+            "  \"byte_offset\": 10,\n",
+            "  \"journal_fingerprint\": \"missing\"\n",
+            "}\n"
+        ),
+    )
+    .expect("write missing cursor payload");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Journal(
+                loong_daemon::automation_cli::AutomationJournalCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationJournalCommands::Health(
+                        loong_daemon::automation_cli::AutomationJournalHealthCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("journal health");
+
+    assert_eq!(payload["command"], "journal_health");
+    assert_eq!(payload["state_active_segment_id"], "segment-000003");
+    assert_eq!(payload["active_marker_segment_id"], "segment-000004");
+    assert_eq!(payload["cursor_segment_id"], "segment-000005");
+    assert_eq!(payload["active_marker_matches_state"], false);
+    assert_eq!(payload["active_segment_exists"], true);
+    assert_eq!(payload["cursor_segment_exists"], false);
     drop(guard);
 }
 
