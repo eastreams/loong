@@ -25,6 +25,7 @@ use crate::CliResult;
 pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue solving the original user request. If more tool work is needed, emit the next tool call instead of only describing the plan in natural language. Only answer directly when the current evidence is already sufficient. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
+pub const RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT: &str = "The previous tool step is retryable or repairable. Prefer emitting a corrected or narrower tool call now. Do not end the turn with only a narrated retry plan.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
@@ -110,7 +111,10 @@ pub fn missing_tool_call_followup_payload(reply_text: &str) -> Option<ToolDriven
         ),
     };
 
-    Some(ToolDrivenFollowupPayload::ToolFailure { reason })
+    Some(ToolDrivenFollowupPayload::ToolFailure {
+        reason,
+        retryable: true,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,7 +255,7 @@ pub fn tool_loop_circuit_breaker_reply(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenFollowupPayload {
     ToolResult { text: String },
-    ToolFailure { reason: String },
+    ToolFailure { reason: String, retryable: bool },
     DiscoveryRecovery { reason: String },
 }
 
@@ -427,7 +431,9 @@ impl ToolDrivenFollowupPayload {
         let label = self.label();
         match self {
             Self::ToolResult { text } => ToolDrivenFollowupTextRef::new(label, text.as_str()),
-            Self::ToolFailure { reason } => ToolDrivenFollowupTextRef::new(label, reason.as_str()),
+            Self::ToolFailure { reason, .. } => {
+                ToolDrivenFollowupTextRef::new(label, reason.as_str())
+            }
             Self::DiscoveryRecovery { reason } => {
                 ToolDrivenFollowupTextRef::new(label, reason.as_str())
             }
@@ -467,6 +473,7 @@ pub fn tool_driven_followup_payload(
         TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: failure.reason.clone(),
+                retryable: failure.retryable,
             })
         }
         TurnResult::ProviderError(_) => None,
@@ -1496,6 +1503,24 @@ pub fn build_tool_followup_user_prompt_with_context(
     sections.join("\n\n")
 }
 
+pub fn build_retryable_tool_failure_followup_user_prompt(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    extra_context: Option<&str>,
+) -> String {
+    let mut sections = vec![RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT.to_owned()];
+    if let Some(reason) = loop_warning_reason {
+        sections.push(format!(
+            "Loop warning:\n{reason}\nDo not repeat the same narrated retry. Either emit a corrected tool call or provide the best possible final answer with clear limits."
+        ));
+    }
+    if let Some(extra_context) = extra_context {
+        sections.push(extra_context.to_owned());
+    }
+    sections.push(format!("Original request:\n{user_input}"));
+    sections.join("\n\n")
+}
+
 pub fn build_discovery_recovery_followup_user_prompt(
     user_input: &str,
     loop_warning_reason: Option<&str>,
@@ -1883,6 +1908,7 @@ where
 pub fn build_tool_failure_followup_tail<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
+    retryable: bool,
     tool_request_summary: Option<&str>,
     user_input: &str,
     loop_warning_reason: Option<&str>,
@@ -1894,6 +1920,7 @@ where
     build_tool_failure_followup_tail_with_request_summary(
         assistant_preface,
         tool_failure_reason,
+        retryable,
         user_input,
         loop_warning_reason,
         tool_request_summary,
@@ -1904,6 +1931,7 @@ where
 pub fn build_tool_failure_followup_tail_with_request_summary<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
+    retryable: bool,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_request_summary: Option<&str>,
@@ -1939,13 +1967,21 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt_with_context(
-            user_input,
-            loop_warning_reason,
-            None,
-            None,
-            repair_guidance.as_deref(),
-        ),
+        "content": if retryable {
+            build_retryable_tool_failure_followup_user_prompt(
+                user_input,
+                loop_warning_reason,
+                repair_guidance.as_deref(),
+            )
+        } else {
+            build_tool_followup_user_prompt_with_context(
+                user_input,
+                loop_warning_reason,
+                None,
+                None,
+                repair_guidance.as_deref(),
+            )
+        },
     }));
     messages
 }
@@ -2024,10 +2060,11 @@ where
             loop_warning_reason,
             payload_mapper,
         ),
-        ToolDrivenFollowupPayload::ToolFailure { reason } => {
+        ToolDrivenFollowupPayload::ToolFailure { reason, retryable } => {
             build_tool_failure_followup_tail_with_request_summary(
                 assistant_preface,
                 reason.as_str(),
+                *retryable,
                 user_input,
                 loop_warning_reason,
                 tool_request_summary,
@@ -2549,6 +2586,7 @@ mod tests {
             kernel.followup_payload(),
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: "temporary failure".to_owned(),
+                retryable: true,
             })
         );
     }
@@ -2601,6 +2639,7 @@ mod tests {
     fn tool_driven_followup_payload_reports_failure_kind_and_context() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool failed".to_owned(),
+            retryable: false,
         };
         let message_context = payload.message_context();
 
@@ -2755,6 +2794,7 @@ mod tests {
                 raw_reply: "preface\ntemporary failure".to_owned(),
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
+                    retryable: true,
                 },
             }
         );
@@ -2837,6 +2877,7 @@ mod tests {
                 raw_reply: "preface\ntemporary failure".to_owned(),
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
+                    retryable: true,
                 },
             }
         );
@@ -3024,6 +3065,7 @@ mod tests {
         let tail = build_tool_failure_followup_tail(
             "preface",
             "tool_timeout ...(truncated 200 chars)",
+            false,
             None,
             "summarize note.md",
             Some("warning"),
@@ -3082,6 +3124,7 @@ mod tests {
     fn tool_driven_followup_tail_dispatches_failure_payload() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+            retryable: false,
         };
         let tail = build_tool_driven_followup_tail(
             "preface",
@@ -3113,6 +3156,7 @@ mod tests {
     fn tool_driven_followup_tail_preserves_request_summary_for_failure_payloads() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "payload.command contains path separators".to_owned(),
+            retryable: false,
         };
         let tool_request_summary =
             r#"{"tool":"exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
@@ -3236,6 +3280,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"ls -la"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3255,12 +3300,14 @@ mod tests {
 
         assert!(user_prompt.contains("Repair guidance for exec"));
         assert!(user_prompt.contains("The failed request used `ls -la`; retry with `ls`"));
+        assert!(user_prompt.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT));
     }
 
     #[test]
     fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"\"ls -la\" "}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3288,6 +3335,7 @@ mod tests {
             reason:
                 "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
                     .to_owned(),
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"read","request":{}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3310,6 +3358,7 @@ mod tests {
         assert!(user_prompt.contains(
             "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
         ));
+        assert!(user_prompt.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT));
     }
 
     #[test]
@@ -3317,6 +3366,7 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
                 .to_owned(),
+            retryable: true,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"echo"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3475,12 +3525,13 @@ mod tests {
         )
         .expect("pseudo-tool lines should trigger missing-tool-call recovery");
 
-        let ToolDrivenFollowupPayload::ToolFailure { reason } = payload else {
+        let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
             panic!("expected tool failure payload");
         };
 
         assert!(reason.contains("pseudo-tool text"));
         assert!(reason.contains("Reply excerpt"));
+        assert!(retryable);
     }
 
     #[test]
@@ -3490,12 +3541,13 @@ mod tests {
         )
         .expect("narrated tool plan should trigger missing-tool-call recovery");
 
-        let ToolDrivenFollowupPayload::ToolFailure { reason } = payload else {
+        let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
             panic!("expected tool failure payload");
         };
 
         assert!(reason.contains("described another tool step"));
         assert!(reason.contains("emit the exact next tool call"));
+        assert!(retryable);
     }
 
     #[test]

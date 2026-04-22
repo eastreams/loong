@@ -3056,7 +3056,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             } => {
                 let is_missing_tool_call_recovery = matches!(
                     &followup,
-                    ToolDrivenFollowupPayload::ToolFailure { reason }
+                    ToolDrivenFollowupPayload::ToolFailure { reason, .. }
                         if reason.starts_with("missing_tool_call_followup:")
                 );
                 if is_missing_tool_call_recovery {
@@ -7363,6 +7363,7 @@ mod tests {
             "preface",
             ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+                retryable: false,
             },
             "summarize note.md",
         );
@@ -8923,11 +8924,12 @@ mod tests {
         let payload =
             provider_turn_missing_tool_call_followup(&lane_execution, 0).expect("repair followup");
 
-        let ToolDrivenFollowupPayload::ToolFailure { reason } = payload else {
+        let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
             panic!("expected tool failure payload");
         };
 
         assert!(reason.contains("missing_tool_call_followup:"));
+        assert!(retryable);
     }
 
     #[test]

@@ -423,7 +423,7 @@ fn update_missing_tool_call_retry_state(
             session.followup_chain_active = true;
             let is_missing_tool_call_recovery = matches!(
                 payload,
-                ToolDrivenFollowupPayload::ToolFailure { reason }
+                ToolDrivenFollowupPayload::ToolFailure { reason, .. }
                     if reason.starts_with("missing_tool_call_followup:")
             );
             if is_missing_tool_call_recovery {
@@ -1157,6 +1157,7 @@ mod tests {
             "preface",
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+                retryable: false,
             },
             "summarize note.md",
             &mut budget,
@@ -1191,6 +1192,7 @@ mod tests {
             "preface",
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_preflight_denied: tool input needs repair".to_owned(),
+                retryable: true,
             },
             "retry the command",
             &mut budget,
@@ -1207,6 +1209,10 @@ mod tests {
         assert!(user_prompt.contains("Repair guidance for exec:"));
         assert!(user_prompt.contains("CMD.EXE"));
         assert!(user_prompt.contains("cmd.exe"));
+        assert!(
+            user_prompt
+                .contains(crate::conversation::turn_shared::RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT)
+        );
     }
 
     #[test]
@@ -1749,6 +1755,7 @@ mod tests {
                     latest_tool_payload:
                         Some(ToolDrivenFollowupPayload::ToolFailure {
                             reason: tool_reason,
+                            retryable: true,
                         }),
                 },
         } = decision
@@ -1814,11 +1821,12 @@ mod tests {
         );
 
         if let RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool {
-            payload: ToolDrivenFollowupPayload::ToolFailure { reason },
+            payload: ToolDrivenFollowupPayload::ToolFailure { reason, retryable },
             ..
         }) = decision
         {
             assert!(reason.contains("missing_tool_call_followup:"));
+            assert!(retryable);
         } else {
             panic!("unexpected decision: {decision:?}");
         }
