@@ -3489,12 +3489,14 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
     assert!(names.contains(&"browser"));
     assert!(names.contains(&"edit"));
     assert!(names.contains(&"exec"));
+    assert!(names.contains(&"find"));
+    assert!(names.contains(&"grep"));
     assert!(names.contains(&"read"));
     assert!(names.contains(&"tool_invoke"));
     assert!(names.contains(&"tool_search"));
     assert!(names.contains(&"web"));
     assert!(names.contains(&"write"));
-    assert_eq!(names.len(), 8);
+    assert_eq!(names.len(), 10);
 }
 
 #[cfg(feature = "feishu-integration")]
