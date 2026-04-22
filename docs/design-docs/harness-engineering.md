@@ -50,13 +50,21 @@ Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file
 
 ### Stage 4: Result Verification & Iteration
 
-- `ConversationTurnLoop`: Multi-round agent loop (max 4 rounds default)
-- `ToolLoopSupervisor`: Detects infinite loops, ping-pong, failure streaks
+- `ConversationTurnCoordinator`: Active turn-bearing runtime seam across CLI,
+  gateway, control plane, channel bridge, and daemon task paths
+- `Execution Discipline` prompt fragment: Product-owned runtime guidance for
+  tool persistence, act-don't-ask behavior, prerequisite checks, and
+  verification before stopping
+- `ToolLoopSupervisor` / provider-lane guards: Detect repeated-tool stalls,
+  ping-pong, and failure streaks
 - `FollowupPayloadBudget`: Caps tool output size per round
 
 ### Stage 5: Completion and Handoff
 
-Turn persistence to SQLite. Audit event recording. Structured progress artifacts are a gap.
+Turn persistence to SQLite and audit event recording remain in place. Runtime
+self continuity and turn checkpoint artifacts are implemented, and durable
+task-progress events now provide a session-visible MVP for long-running
+ownership and completion state.
 
 ---
 
@@ -115,9 +123,32 @@ Progressive disclosure hierarchy:
 
 | Tier | Files | Loading |
 |------|-------|---------|
-| Hot | `AGENTS.md` / `CLAUDE.md` | Auto-loaded every session |
+| Hot | `AGENTS.md` | Auto-loaded every session |
 | Specialized | Design docs, domain indices | Loaded when working on that domain |
 | Cold | Roadmap, reliability, and knowledge-base specs/plans | Accessed on demand |
+
+### Workspace Guidance Taxonomy
+
+Loong's runtime guidance contract is now explicit and narrow:
+
+- `AGENTS.md` is the only runtime-visible workspace-guidance file.
+- other ecosystem files such as `CLAUDE.md`, `GEMINI.md`, and `OPENCODE.md`
+  are not runtime inputs for Loong.
+- runtime-specific files such as `TOOLS.md`, `SOUL.md`, `IDENTITY.md`, and
+  `USER.md` remain separate from workspace guidance even when they are loaded
+  from the same workspace root.
+
+### Current Runtime Boundary
+
+Today the runtime and daemon are aligned on one rule:
+
+- `crates/app` loads `AGENTS.md` as the runtime workspace-guidance surface.
+- `crates/daemon` only surfaces `AGENTS.md` in onboarding/import previews for
+  workspace-guidance detection.
+
+This split keeps the runtime contract simple and avoids silently promoting
+provider- or tool-specific foreign guidance files into Loong's provider-facing
+prompt.
 
 ---
 

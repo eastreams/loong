@@ -268,6 +268,163 @@ pub(super) fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+pub(super) fn task_status_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Durable task identifier to inspect."
+                    },
+                    "task_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1,
+                        "description": "Durable task identifiers to inspect in one request."
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn task_wait_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Durable task identifier to wait on."
+                    },
+                    "after_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Optional event id cursor; when present only newer events are returned."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30000,
+                        "description": "Maximum time to wait before returning timeout."
+                    }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn task_history_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Durable task identifier to inspect."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Maximum transcript entries to return."
+                    }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn tasks_list_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Maximum number of visible tasks to return."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Zero-based page offset for visible tasks."
+                    },
+                    "task_state": {
+                        "type": "string",
+                        "description": "Optional task state filter such as waiting, blocked, completed, or failed."
+                    },
+                    "stable_only": {
+                        "type": "boolean",
+                        "description": "When true, return only tasks in a stable state."
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn tasks_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query over visible durable task metadata."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "description": "Maximum number of matching tasks to return."
+                    },
+                    "task_state": {
+                        "type": "string",
+                        "description": "Optional task state filter such as waiting, blocked, completed, or failed."
+                    },
+                    "stable_only": {
+                        "type": "boolean",
+                        "description": "When true, return only tasks in a stable state."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn session_tool_runtime_narrowing_schema() -> Value {
     json!({
         "type": "object",

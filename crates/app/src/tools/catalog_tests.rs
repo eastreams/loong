@@ -778,6 +778,11 @@ fn autonomy_capability_action_classifies_representative_tool_families() {
             CapabilityActionClass::PolicyMutation,
         ),
         ("session_search", CapabilityActionClass::ExecuteExisting),
+        ("task_status", CapabilityActionClass::ExecuteExisting),
+        ("task_wait", CapabilityActionClass::ExecuteExisting),
+        ("task_history", CapabilityActionClass::ExecuteExisting),
+        ("tasks_list", CapabilityActionClass::ExecuteExisting),
+        ("tasks_search", CapabilityActionClass::ExecuteExisting),
         ("session_recover", CapabilityActionClass::SessionMutation),
     ];
 

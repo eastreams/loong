@@ -143,9 +143,45 @@ fn read_local_provider_request(stream: &mut std::net::TcpStream, deadline: Insta
     stream
         .set_read_timeout(Some(timeout))
         .expect("set accepted stream read timeout");
-    let mut request_buf = [0_u8; 8192];
-    let len = stream.read(&mut request_buf).expect("read request");
-    String::from_utf8_lossy(&request_buf[..len]).to_string()
+    let mut request_bytes = Vec::new();
+    let mut request_buf = [0_u8; 4096];
+    let mut expected_len = None;
+
+    loop {
+        let len = stream.read(&mut request_buf).expect("read request");
+        if len == 0 {
+            break;
+        }
+        request_bytes.extend_from_slice(&request_buf[..len]);
+
+        if expected_len.is_none()
+            && let Some(headers_end) = request_bytes
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+        {
+            let headers_end = headers_end + 4;
+            let headers = String::from_utf8_lossy(&request_bytes[..headers_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    if !name.eq_ignore_ascii_case("content-length") {
+                        return None;
+                    }
+                    value.trim().parse::<usize>().ok()
+                })
+                .unwrap_or(0);
+            expected_len = Some(headers_end + content_length);
+        }
+
+        if let Some(expected_len) = expected_len
+            && request_bytes.len() >= expected_len
+        {
+            break;
+        }
+    }
+
+    String::from_utf8_lossy(&request_bytes).to_string()
 }
 
 #[test]
@@ -2680,6 +2716,7 @@ async fn sibling_provider_tests_can_inject_mock_transport_into_dispatch_layer() 
         &auth_context,
         &request_policy,
         &transport,
+        None,
     )
     .await
     .expect("dispatch helper should accept mock transport from sibling tests");
@@ -2945,9 +2982,8 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request =
+                read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("POST /v1/responses ") {
@@ -3028,9 +3064,8 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
         let mut requests = Vec::new();
         for _ in 0..2 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request =
+                read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
             requests.push(request.clone());
 
             let (status_line, body) = if request.starts_with("POST /v1/responses ") {
@@ -3114,9 +3149,8 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
         let mut requests = Vec::new();
         for _ in 0..3 {
             let (mut stream, _) = listener.accept().expect("accept local provider request");
-            let mut request_buf = [0_u8; 8192];
-            let len = stream.read(&mut request_buf).expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+            let request =
+                read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
             requests.push(request.clone());
 
             let body =
@@ -3181,9 +3215,8 @@ async fn routed_google_requests_do_not_retry_responses_fallback_logic() {
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         let (mut stream, _) = listener.accept().expect("accept local provider request");
-        let mut request_buf = [0_u8; 8192];
-        let len = stream.read(&mut request_buf).expect("read request");
-        let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+        let request =
+            read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
         requests.push(request);
 
         let body = r#"{"error":{"message":"unsupported google route request"}}"#;

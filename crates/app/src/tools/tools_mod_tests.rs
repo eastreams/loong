@@ -296,7 +296,18 @@ fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("[available_external_skills]"));
     assert!(snapshot.contains("demo-skill"));
-    assert!(snapshot.contains("external_skills.invoke"));
+    assert!(snapshot.contains("Use the read tool to load a listed skill's SKILL.md file"));
+    assert!(snapshot.contains("<available_skills>"));
+    let expected_skill_md_path = root
+        .join("external-skills-installed")
+        .join("demo-skill")
+        .join("SKILL.md")
+        .display()
+        .to_string();
+    assert!(
+        snapshot.contains(&expected_skill_md_path),
+        "snapshot should surface installed skill path: {snapshot}"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -368,6 +379,11 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         "session_tool_policy_set",
         "session_tool_policy_status",
         "session_wait",
+        "task_history",
+        "task_status",
+        "task_wait",
+        "tasks_list",
+        "tasks_search",
         "sessions_history",
         "sessions_list",
     ]);
@@ -408,6 +424,11 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websea
         "session_tool_policy_set",
         "session_tool_policy_status",
         "session_wait",
+        "task_history",
+        "task_status",
+        "task_wait",
+        "tasks_list",
+        "tasks_search",
         "sessions_history",
         "sessions_list",
     ]);
@@ -488,6 +509,11 @@ fn runtime_tool_view_hides_session_mutation_tools_when_explicitly_disabled() {
         "session_search",
         "session_status",
         "session_wait",
+        "task_history",
+        "task_status",
+        "task_wait",
+        "tasks_list",
+        "tasks_search",
         "sessions_history",
         "sessions_list",
         "browser.click",
@@ -3032,6 +3058,131 @@ fn tool_search_hides_app_only_discoverables_from_provider_visible_results() {
         result.payload["diagnostics"]["reason"],
         json!("exact_tool_id_not_visible")
     );
+}
+
+#[test]
+fn tool_search_exact_skill_id_returns_skills_surface_with_run_guidance() {
+    use std::fs;
+
+    let root = unique_temp_dir("loongclaw-tool-search-skill-exact");
+    fs::create_dir_all(&root).expect("create fixture root");
+    let skill_root = root.join("skills").join("agent-browser");
+    fs::create_dir_all(&skill_root).expect("create skill root");
+    fs::write(
+        skill_root.join("SKILL.md"),
+        "# Agent Browser\n\nUse this skill for managed browser automation.\n",
+    )
+    .expect("write skill fixture");
+
+    let config = test_tool_runtime_config(&root);
+    execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "external_skills.install".to_owned(),
+            payload: json!({
+                "path": "skills/agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("install should succeed");
+
+    let search = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "exact_tool_id": "agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("tool search should succeed");
+
+    let results = search.payload["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["tool_id"], "skills");
+    assert_eq!(search.payload["exact_tool_id"], "agent-browser");
+    assert!(search.payload["diagnostics"].is_null());
+    assert!(
+        results[0]["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("Matching installed skills: agent-browser")),
+        "search result should mention the matched installed skill: {results:?}"
+    );
+    assert!(
+        results[0]["usage_guidance"].as_str().is_some_and(
+            |guidance| guidance.contains(r#"{"operation":"run","skill_id":"agent-browser"}"#)
+        ),
+        "skills surface should advertise the explicit run flow: {results:?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn tool_invoke_skills_surface_requires_operation_when_skill_id_is_present() {
+    use std::fs;
+
+    let root = unique_temp_dir("loongclaw-tool-search-skill-operation");
+    fs::create_dir_all(&root).expect("create fixture root");
+    let skill_root = root.join("skills").join("agent-browser");
+    fs::create_dir_all(&skill_root).expect("create skill root");
+    fs::write(
+        skill_root.join("SKILL.md"),
+        "# Agent Browser\n\nUse this skill for managed browser automation.\n",
+    )
+    .expect("write skill fixture");
+
+    let config = test_tool_runtime_config(&root);
+    execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "external_skills.install".to_owned(),
+            payload: json!({
+                "path": "skills/agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("install should succeed");
+
+    let search = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "query": "agent-browser"
+            }),
+        },
+        &config,
+    )
+    .expect("tool search should succeed");
+    let lease = search.payload["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .find(|entry| entry["tool_id"] == "skills")
+        .and_then(|entry| entry["lease"].as_str())
+        .expect("skills lease");
+
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "lease": lease,
+                "arguments": {
+                    "skill_id": "agent-browser"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("skill_id without operation should fail closed");
+
+    assert!(
+        error.contains("tool_not_found:") && error.contains("skills"),
+        "skill_id without operation should fail closed instead of silently inspecting: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
 }
 
 #[test]

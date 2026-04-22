@@ -312,6 +312,7 @@ async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
                 &session.messages,
                 binding,
                 raw_reply.as_str(),
+                None,
             )
             .await;
             Ok(Some(TurnLoopTerminalAction::PersistReply {

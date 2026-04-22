@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, LOCATION};
 use scraper::{Html, Selector};
 use serde_json::{Map, Value, json};
@@ -309,120 +309,135 @@ fn fetch_browser_page(
         super::web_fetch::validate_web_target(&current_url, &config.web_fetch, "browser")?;
     let mut redirect_count = 0usize;
 
-    loop {
-        let response = client
-            .get(current_url.clone())
-            .send()
-            .map_err(|error| format!("browser request failed: {error}"))?;
+    super::web_http::run_async(async {
+        loop {
+            let response = client
+                .get(current_url.clone())
+                .send()
+                .await
+                .map_err(|error| format!("browser request failed: {error}"))?;
 
-        if response.status().is_redirection() {
-            if redirect_count >= config.web_fetch.max_redirects {
+            if response.status().is_redirection() {
+                if redirect_count >= config.web_fetch.max_redirects {
+                    return Err(format!(
+                        "browser exceeded redirect limit ({})",
+                        config.web_fetch.max_redirects
+                    ));
+                }
+                let location = response
+                    .headers()
+                    .get(LOCATION)
+                    .ok_or_else(|| {
+                        format!(
+                            "browser received redirect status {} without Location header",
+                            response.status()
+                        )
+                    })?
+                    .to_str()
+                    .map_err(|error| {
+                        format!("browser redirect Location header was invalid: {error}")
+                    })?;
+                let next_url = current_url.join(location).map_err(|error| {
+                    format!("browser failed to resolve redirect target: {error}")
+                })?;
+                current_host =
+                    super::web_fetch::validate_web_target(&next_url, &config.web_fetch, "browser")?;
+                current_url = next_url;
+                redirect_count += 1;
+                continue;
+            }
+
+            if !response.status().is_success() {
                 return Err(format!(
-                    "browser exceeded redirect limit ({})",
-                    config.web_fetch.max_redirects
+                    "browser returned non-success status {} for `{}`",
+                    response.status(),
+                    current_url
                 ));
             }
-            let location = response
+
+            let content_type = response
                 .headers()
-                .get(LOCATION)
-                .ok_or_else(|| {
-                    format!(
-                        "browser received redirect status {} without Location header",
-                        response.status()
-                    )
-                })?
-                .to_str()
-                .map_err(|error| {
-                    format!("browser redirect Location header was invalid: {error}")
-                })?;
-            let next_url = current_url
-                .join(location)
-                .map_err(|error| format!("browser failed to resolve redirect target: {error}"))?;
-            current_host =
-                super::web_fetch::validate_web_target(&next_url, &config.web_fetch, "browser")?;
-            current_url = next_url;
-            redirect_count += 1;
-            continue;
-        }
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(|value| value.to_owned());
+            let mut budget = super::download_guard::ByteBudget::new(max_bytes);
+            budget
+                .reject_if_content_length_exceeds(response.content_length(), "browser response")?;
 
-        if !response.status().is_success() {
-            return Err(format!(
-                "browser returned non-success status {} for `{}`",
-                response.status(),
-                current_url
-            ));
-        }
-
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.to_owned());
-        let mut budget = super::download_guard::ByteBudget::new(max_bytes);
-
-        budget.reject_if_content_length_exceeds(response.content_length(), "browser response")?;
-        let mut body = Vec::new();
-        let mut limited_reader = response.take((max_bytes as u64).saturating_add(1));
-        let mut buffer = [0_u8; 8_192];
-
-        loop {
-            let read = limited_reader
-                .read(&mut buffer)
-                .map_err(|error| format!("failed to read browser response body: {error}"))?;
-            if read == 0 {
-                break;
+            let mut body = Vec::new();
+            let mut stream = response.bytes_stream();
+            let mut remaining_read = (max_bytes as u64).saturating_add(1) as usize;
+            const BROWSER_READ_BUFFER_BYTES: usize = 8_192;
+            while remaining_read > 0 {
+                let Some(chunk) = stream.next().await else {
+                    break;
+                };
+                let chunk = chunk
+                    .map_err(|error| format!("failed to read browser response body: {error}"))?;
+                let mut offset = 0usize;
+                while offset < chunk.len() && remaining_read > 0 {
+                    let read = chunk
+                        .len()
+                        .saturating_sub(offset)
+                        .min(remaining_read)
+                        .min(BROWSER_READ_BUFFER_BYTES);
+                    budget.try_consume(read, "browser response")?;
+                    let end = offset.saturating_add(read);
+                    let chunk_slice = chunk
+                        .get(offset..end)
+                        .ok_or_else(|| "failed to slice browser response buffer".to_owned())?;
+                    body.extend_from_slice(chunk_slice);
+                    remaining_read = remaining_read.saturating_sub(read);
+                    offset = end;
+                }
             }
 
-            budget.try_consume(read, "browser response")?;
-            let chunk = buffer
-                .get(..read)
-                .ok_or_else(|| "failed to slice browser response buffer".to_owned())?;
-            body.extend_from_slice(chunk);
+            let raw_text = String::from_utf8_lossy(&body).into_owned();
+            let is_html =
+                super::web_fetch::looks_like_html(content_type.as_deref(), raw_text.as_str());
+            if !is_html
+                && super::web_fetch::response_is_probably_binary(content_type.as_deref(), &body)
+            {
+                return Err(
+                    "browser tools only support text-like responses; binary bodies are not returned"
+                        .to_owned(),
+                );
+            }
+
+            let title = is_html
+                .then(|| super::web_fetch::extract_html_title(raw_text.as_str()))
+                .flatten();
+            let page_text = if is_html {
+                super::web_fetch::extract_readable_text_from_html(&raw_text)
+            } else {
+                raw_text.trim().to_owned()
+            };
+            let page_text = truncate_chars(&page_text, config.browser.max_text_chars);
+            let links = if is_html {
+                discover_page_links(
+                    &current_url,
+                    raw_text.as_str(),
+                    &config.web_fetch,
+                    config.browser.max_links,
+                )?
+            } else {
+                Vec::new()
+            };
+
+            return Ok(BrowserPage {
+                requested_url: raw_url.to_owned(),
+                final_url: current_url.to_string(),
+                host: current_host,
+                title,
+                content_type,
+                raw_html: raw_text,
+                page_text,
+                links,
+                bytes_downloaded: budget.consumed(),
+                redirect_count,
+            });
         }
-
-        let raw_text = String::from_utf8_lossy(&body).into_owned();
-        let is_html = super::web_fetch::looks_like_html(content_type.as_deref(), raw_text.as_str());
-        if !is_html && super::web_fetch::response_is_probably_binary(content_type.as_deref(), &body)
-        {
-            return Err(
-                "browser tools only support text-like responses; binary bodies are not returned"
-                    .to_owned(),
-            );
-        }
-
-        let title = is_html
-            .then(|| super::web_fetch::extract_html_title(raw_text.as_str()))
-            .flatten();
-        let page_text = if is_html {
-            super::web_fetch::extract_readable_text_from_html(&raw_text)
-        } else {
-            raw_text.trim().to_owned()
-        };
-        let page_text = truncate_chars(&page_text, config.browser.max_text_chars);
-        let links = if is_html {
-            discover_page_links(
-                &current_url,
-                raw_text.as_str(),
-                &config.web_fetch,
-                config.browser.max_links,
-            )?
-        } else {
-            Vec::new()
-        };
-
-        return Ok(BrowserPage {
-            requested_url: raw_url.to_owned(),
-            final_url: current_url.to_string(),
-            host: current_host,
-            title,
-            content_type,
-            raw_html: raw_text,
-            page_text,
-            links,
-            bytes_downloaded: budget.consumed(),
-            redirect_count,
-        });
-    }
+    })?
 }
 
 fn discover_page_links(

@@ -293,19 +293,34 @@ fn message_looks_like_proxy_route_failure(message: &str) -> bool {
         || message.contains("tun0")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TransportRouteHintPhase {
+    BeforeHttpResponse,
+    StreamingResponseBody,
+}
+
 pub(super) fn render_transport_route_hint(
     url: &str,
     error_message: &str,
     is_timeout: bool,
     is_connect: bool,
+    phase: TransportRouteHintPhase,
 ) -> Option<String> {
     let host = request_host_label(url)?;
     let lower = error_message.to_ascii_lowercase();
     let doctor_command = format!("{} doctor", active_cli_command_name());
 
     if is_timeout {
+        let timeout_context = match phase {
+            TransportRouteHintPhase::BeforeHttpResponse => {
+                "the transport timed out before an HTTP response arrived"
+            }
+            TransportRouteHintPhase::StreamingResponseBody => {
+                "the transport timed out while reading the streaming response body after an HTTP response arrived"
+            }
+        };
         return Some(format!(
-            "request host {host}: the transport timed out before an HTTP response arrived. if you're using a proxy/TUN/fake-ip setup, verify that the route stays healthy for longer-lived requests, then run `{doctor_command}` to inspect provider route diagnostics"
+            "request host {host}: {timeout_context}. if you're using a proxy/TUN/fake-ip setup, verify that the route stays healthy for longer-lived requests, then run `{doctor_command}` to inspect provider route diagnostics"
         ));
     }
 
@@ -906,6 +921,7 @@ mod tests {
             "dns error: failed to lookup address information: nodename nor servname provided, or not known",
             false,
             true,
+            TransportRouteHintPhase::BeforeHttpResponse,
         )
         .expect("dns failure should surface a route hint");
 
@@ -921,6 +937,7 @@ mod tests {
             "operation timed out",
             true,
             false,
+            TransportRouteHintPhase::BeforeHttpResponse,
         )
         .expect("timeouts should surface a route hint");
 
@@ -930,12 +947,29 @@ mod tests {
     }
 
     #[test]
+    fn render_transport_route_hint_distinguishes_streaming_body_timeouts() {
+        let hint = render_transport_route_hint(
+            "https://api.openai.com/v1/chat/completions",
+            "operation timed out",
+            true,
+            false,
+            TransportRouteHintPhase::StreamingResponseBody,
+        )
+        .expect("streaming body timeouts should surface a route hint");
+
+        assert!(hint.contains("api.openai.com:443"));
+        assert!(hint.contains("streaming response body"));
+        assert!(!hint.contains("before an HTTP response arrived"));
+    }
+
+    #[test]
     fn render_transport_route_hint_does_not_treat_tuning_as_proxy_route_failure() {
         let hint = render_transport_route_hint(
             "https://api.openai.com/v1/chat/completions",
             "provider tuning metadata could not be loaded",
             false,
             false,
+            TransportRouteHintPhase::BeforeHttpResponse,
         );
 
         assert!(

@@ -26,6 +26,81 @@ tasks:
     cmds:
       - cargo test --workspace --all-features
 
+  test:quick:
+    desc: Fast local confidence bar with daemon smoke coverage but without the full heavy integration suite
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong-contracts -p loong-kernel -p loong-protocol -p loong-bridge-runtime -p loong-spec -p loong-bench -p loong-app --lib --tests
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --lib --bins
+      - ./scripts/test_daemon_smoke.sh
+
+  test:changed:
+    desc: Run tests for Rust packages touched in the current working tree plus reverse dependents
+    cmds:
+      - ./scripts/test_changed_rust_packages.sh
+
+  test:changed:all-features:
+    desc: Run changed-package tests with all features enabled
+    cmds:
+      - ./scripts/test_changed_rust_packages.sh --all-features
+
+  test:packages:
+    desc: Run targeted package tests (example: task test:packages PACKAGES='-p loong-app -p loong-spec')
+    preconditions:
+      - sh: test -n "{{.PACKAGES}}"
+        msg: "set PACKAGES, e.g. task test:packages PACKAGES='-p loong-app -p loong-spec'"
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked {{.PACKAGES}}
+
+  test:daemon:smoke:
+    desc: Run the curated daemon integration smoke subset
+    cmds:
+      - ./scripts/test_daemon_smoke.sh
+
+  test:daemon:cli:
+    desc: Run the optional daemon CLI shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_cli
+
+  test:daemon:gateway:
+    desc: Run the optional daemon gateway shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_gateway
+
+  test:daemon:onboard:
+    desc: Run the optional daemon onboarding and migration shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_onboard
+
+  test:daemon:channels:
+    desc: Run the optional daemon channel-operations shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_channels
+
+  test:daemon:feishu:
+    desc: Run the optional daemon Feishu shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_feishu
+
+  test:daemon:runtime:
+    desc: Run the optional daemon runtime and spec shard
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --features test-support --test daemon_runtime
+
+  test:daemon:domains:
+    desc: Run all optional daemon domain shards
+    cmds:
+      - task: test:daemon:cli
+      - task: test:daemon:gateway
+      - task: test:daemon:onboard
+      - task: test:daemon:channels
+      - task: test:daemon:feishu
+      - task: test:daemon:runtime
+
+  test:daemon:heavy:
+    desc: Run the full daemon integration binary
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh test --locked -p loong --test integration
+
   test:daemon:stress:
     desc: Stress daemon test binary across thread modes to catch intermittent regressions
     cmds:
@@ -87,6 +162,15 @@ tasks:
     cmds:
       - scripts/check_dep_graph.sh
 
+  check:feature-deltas:
+    desc: Validate supported non-default Rust feature combinations
+    cmds:
+      - ./scripts/cargo-local-toolchain.sh check -p loong-spec --features test-hooks --locked
+      - >
+        ./scripts/cargo-local-toolchain.sh check -p loong-app --no-default-features --locked
+        --features
+        channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
+
   check:harness:
     desc: Verify agent guide mirrors are identical
     cmds:
@@ -100,6 +184,23 @@ tasks:
     cmds:
       - cargo deny check advisories bans licenses sources
 
+  verify:changed:
+    desc: Changed-package local verification using the current working tree (not CI parity)
+    cmds:
+      - task: check:architecture
+      - task: check:dep-graph
+      - task: check:feature-deltas
+      - task: test:changed
+
+  verify:quick:
+    desc: Fast local verification loop for routine iteration (not CI parity)
+    cmds:
+      - task: fmt
+      - task: check:architecture
+      - task: check:dep-graph
+      - task: test:quick
+      - task: check:feature-deltas
+
   verify:
     desc: Canonical local verification gate (strict superset of CI checks)
     cmds:
@@ -107,6 +208,7 @@ tasks:
       - task: lint:strict
       - task: check:architecture:strict
       - task: check:dep-graph
+      - task: check:feature-deltas
       - task: check:conventions
       - task: check:harness
       - task: test

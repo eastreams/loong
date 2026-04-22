@@ -106,6 +106,28 @@ Optional convenience wrapper:
 task verify
 ```
 
+For shorter local iteration loops, prefer the lighter wrappers first:
+
+```bash
+task verify:quick
+task verify:changed
+task test:packages PACKAGES='-p loong-app -p loong-spec'
+task test:daemon:smoke
+task test:daemon:domains
+task test:daemon:heavy
+```
+
+`verify:quick` keeps daemon smoke coverage but skips the heaviest integration
+matrix. `verify:changed` narrows testing to Rust packages touched in the current
+working tree plus reverse dependents. When that closure includes `loong`, the
+script still runs `loong` library and binary coverage, keeps the curated daemon
+smoke suite as the default floor, and now routes daemon test-file changes into
+matching optional daemon domain shards (`test:daemon:cli`, `:gateway`,
+`:onboard`, `:channels`, `:runtime`) by reading the shard entry files as the
+source of truth, with a fallback to the full `integration` binary for broad
+harness edits. These fast loops **do not** replace the Track A required checks
+or CI parity.
+
 If `task` or its transitive dependencies are unavailable locally, run at least
 CI parity plus architecture/dep-graph checks directly:
 
@@ -162,6 +184,10 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - Inside those workflows, expensive jobs may skip themselves when the changed paths are unrelated.
   This keeps required checks reportable without relying on workflow-level path filters that can
   leave required statuses pending.
+- The Rust lane keeps `cargo test --workspace --locked` cross-platform on Ubuntu and Windows, runs
+  `cargo test --workspace --all-features --locked` on Ubuntu, and complements that with explicit
+  feature-delta compile checks (`loong-spec` `test-hooks` and the browser-without-web.fetch app
+  feature set).
 - `perf-lint` follows the same branch set but only when workflow, benchmark, daemon, spec, kernel,
   or app paths change.
 - The aggregate required check for promotion branches is `build`, emitted by

@@ -6,6 +6,7 @@ import {
   classifySecurityJobSet,
   collectChangedFileContext,
   collectTouchedPaths,
+  writeRouteOutputs,
 } from "./workflow_change_router.mjs";
 
 function createRuntime(eventName, files, beforeSha = "abc123", headSha = "def456") {
@@ -95,6 +96,36 @@ async function runTests() {
   const ciRenameOutputs = classifyCiJobSet(ciRenameContext);
   assert.equal(ciRenameOutputs.runRustJobs, true);
   assert.equal(ciRenameOutputs.runDocsSite, true);
+  assert.equal(
+    ciRenameOutputs.touchedPathsJson,
+    JSON.stringify([
+      "docs/runtime.md",
+      "crates/app/src/runtime.rs",
+      "README.md",
+      "site/index.mdx",
+    ]),
+  );
+
+  const emittedOutputs = {};
+  const outputCore = {};
+  outputCore.setOutput = (name, value) => {
+    emittedOutputs[name] = value;
+  };
+  writeRouteOutputs(outputCore, {
+    runRustJobs: true,
+    runDocsSite: false,
+    touchedPaths: ["docs/runtime.md"],
+    touchedPathsJson: JSON.stringify(["docs/runtime.md"]),
+    runAdvisoryChecks: true,
+    runAnalysis: false,
+  });
+  assert.deepEqual(emittedOutputs, {
+    run_rust_jobs: "true",
+    run_docs_site: "false",
+    touched_paths_json: JSON.stringify(["docs/runtime.md"]),
+    run_advisory_checks: "true",
+    run_analysis: "false",
+  });
 
   const securityCargoConfigContext = {};
   securityCargoConfigContext.forceRun = false;

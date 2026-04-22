@@ -34,6 +34,7 @@ pub(super) async fn request_completion_with_model(
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
     auth_context: &super::transport::RequestAuthContext,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<String, ModelRequestError> {
     request_completion_with_provider(
         config,
@@ -45,6 +46,7 @@ pub(super) async fn request_completion_with_model(
         auth_context,
         request_policy,
         client,
+        retry_progress,
     )
     .await
 }
@@ -62,6 +64,7 @@ pub(super) async fn request_turn_with_model(
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
     auth_context: &super::transport::RequestAuthContext,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     request_turn_with_provider(
         config,
@@ -76,6 +79,7 @@ pub(super) async fn request_turn_with_model(
         auth_context,
         request_policy,
         client,
+        retry_progress,
     )
     .await
 }
@@ -91,6 +95,7 @@ async fn request_completion_with_provider(
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<String, ModelRequestError> {
     let transport = super::transport::ReqwestTransport::new(client.clone(), auth_context.clone());
     request_completion_with_provider_transport(
@@ -103,6 +108,7 @@ async fn request_completion_with_provider(
         auth_context,
         request_policy,
         &transport,
+        retry_progress,
     )
     .await
 }
@@ -118,6 +124,7 @@ pub(super) async fn request_completion_with_provider_transport(
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
     transport: &dyn ProviderTransport,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<String, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     loop {
@@ -191,6 +198,7 @@ pub(super) async fn request_completion_with_provider_transport(
             request_policy,
             transport,
             auth_context,
+            retry_progress: retry_progress.clone(),
         };
 
         match execute_model_request(
@@ -243,6 +251,7 @@ async fn request_turn_with_provider(
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let transport = super::transport::ReqwestTransport::new(client.clone(), auth_context.clone());
     request_turn_with_provider_transport(
@@ -258,6 +267,7 @@ async fn request_turn_with_provider(
         auth_context,
         request_policy,
         &transport,
+        retry_progress,
     )
     .await
 }
@@ -276,6 +286,7 @@ pub(super) async fn request_turn_with_provider_transport(
     auth_context: &super::transport::RequestAuthContext,
     request_policy: &policy::ProviderRequestPolicy,
     transport: &dyn ProviderTransport,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     loop {
@@ -356,6 +367,7 @@ pub(super) async fn request_turn_with_provider_transport(
             request_policy,
             transport,
             auth_context,
+            retry_progress: retry_progress.clone(),
         };
 
         match execute_model_request(
@@ -428,6 +440,7 @@ pub(super) async fn request_turn_streaming(
     request_policy: &policy::ProviderRequestPolicy,
     client: &reqwest::Client,
     on_token: super::request_executor::StreamingTokenCallback,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let transport = super::transport::ReqwestTransport::new(client.clone(), auth_context.clone());
     request_turn_streaming_with_transport(
@@ -444,6 +457,7 @@ pub(super) async fn request_turn_streaming(
         request_policy,
         &transport,
         on_token,
+        retry_progress,
     )
     .await
 }
@@ -463,6 +477,7 @@ pub(super) async fn request_turn_streaming_with_transport(
     request_policy: &policy::ProviderRequestPolicy,
     transport: &dyn ProviderTransport,
     on_token: super::request_executor::StreamingTokenCallback,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     let mut current_provider = request_provider.clone();
     loop {
@@ -543,6 +558,7 @@ pub(super) async fn request_turn_streaming_with_transport(
             request_policy,
             transport,
             auth_context,
+            retry_progress: retry_progress.clone(),
         };
 
         match execute_streaming_turn_request(
@@ -609,6 +625,7 @@ pub(super) async fn request_turn_streaming_with_model(
     client: &reqwest::Client,
     auth_context: &super::transport::RequestAuthContext,
     on_token: super::request_executor::StreamingTokenCallback,
+    retry_progress: super::request_executor::ProviderRetryProgressCallback,
 ) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
     request_turn_streaming(
         config,
@@ -624,6 +641,7 @@ pub(super) async fn request_turn_streaming_with_model(
         request_policy,
         client,
         on_token,
+        retry_progress,
     )
     .await
 }
@@ -770,7 +788,7 @@ mod tests {
     use crate::provider::auth_profile_runtime::resolve_provider_auth_profiles;
     use crate::provider::mock_transport::MockTransport;
     use crate::provider::transport::RequestAuthContext;
-    use crate::provider::transport_trait::TransportResponse;
+    use crate::provider::transport_trait::{TransportError, TransportErrorKind, TransportResponse};
     use loong_contracts::SecretRef;
     use serde_json::json;
 
@@ -818,6 +836,7 @@ mod tests {
             &auth_context,
             &request_policy,
             &transport,
+            None,
         )
         .await
         .expect("dispatch should use injected transport");
@@ -830,5 +849,71 @@ mod tests {
             .get(reqwest::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok());
         assert_eq!(authorization_header, Some("Bearer dispatch-test-secret"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_turn_streaming_with_transport_preserves_timeout_context_for_stream_errors() {
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Openai,
+            api_key: Some(SecretRef::Inline("dispatch-test-secret".to_owned())),
+            api_key_env: None,
+            oauth_access_token: None,
+            oauth_access_token_env: None,
+            retry_max_attempts: 1,
+            ..ProviderConfig::default()
+        };
+        let config = LoongConfig {
+            provider: provider.clone(),
+            ..LoongConfig::default()
+        };
+        let request_policy = policy::ProviderRequestPolicy::from_config(&provider);
+        let auth_context = RequestAuthContext::default();
+        let auth_profiles = resolve_provider_auth_profiles(&provider);
+        let auth_profile = auth_profiles.first().expect("auth profile");
+        let transport = MockTransport::with_stream_events([Ok(vec![Err(TransportError::new(
+            TransportErrorKind::Timeout,
+            "operation timed out",
+        ))])]);
+
+        let error = request_turn_streaming_with_transport(
+            &config,
+            &provider,
+            "session-provider-test",
+            "turn-provider-test",
+            &[json!({
+                "role": "user",
+                "content": "ping"
+            })],
+            "gpt-5.4",
+            false,
+            &[],
+            auth_profile,
+            &auth_context,
+            &request_policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect_err("streaming timeout should surface a provider error");
+
+        assert_eq!(error.reason, ProviderFailoverReason::TransportFailure);
+        assert_eq!(error.snapshot.model, "gpt-5.4");
+        assert_eq!(error.snapshot.attempt, 1);
+        assert_eq!(error.snapshot.max_attempts, 1);
+        assert!(
+            error
+                .message
+                .contains("streaming response error for model `gpt-5.4` on attempt 1/1"),
+            "error should preserve streaming model/attempt context: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains(
+                "timed out while reading the streaming response body after an HTTP response arrived"
+            ),
+            "error should preserve timeout route hint: {}",
+            error.message
+        );
     }
 }

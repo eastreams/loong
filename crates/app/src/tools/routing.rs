@@ -558,6 +558,11 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
             "session-search" => Ok("session_search"),
             "session-status" => Ok("session_status"),
             "session-wait" => Ok("session_wait"),
+            "task-history" => Ok("task_history"),
+            "tasks-list" => Ok("tasks_list"),
+            "tasks-search" => Ok("tasks_search"),
+            "task-status" => Ok("task_status"),
+            "task-wait" => Ok("task_wait"),
             "session-policy-status" => Ok("session_tool_policy_status"),
             "session-policy-set" => Ok("session_tool_policy_set"),
             "session-policy-clear" => Ok("session_tool_policy_clear"),
@@ -598,6 +603,10 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
     let has_query = payload_has_non_null_field(payload, "query");
     let has_text = payload_has_non_null_field(payload, "text");
     let has_input = payload_has_non_null_field(payload, "input");
+    let has_task_id = payload_has_non_null_field(payload, "task_id");
+    let has_task_ids = payload_has_non_null_field(payload, "task_ids");
+    let has_task_state = payload_has_non_null_field(payload, "task_state");
+    let has_stable_only = payload_has_non_null_field(payload, "stable_only");
     let has_tool_ids = payload_has_non_null_field(payload, "tool_ids");
     let has_runtime_narrowing = payload_has_non_null_field(payload, "runtime_narrowing");
     let has_session_id = payload_has_non_null_field(payload, "session_id");
@@ -647,6 +656,27 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
 
     if has_text {
         return Ok("sessions_send");
+    }
+
+    if has_task_id || has_task_ids {
+        if has_timeout_ms {
+            return Ok("task_wait");
+        }
+        if has_limit {
+            return Ok("task_history");
+        }
+        return Ok("task_status");
+    }
+
+    if has_query
+        && (payload_has_non_null_field(payload, "task_state")
+            || payload_has_non_null_field(payload, "stable_only"))
+    {
+        return Ok("tasks_search");
+    }
+
+    if has_task_state || has_stable_only {
+        return Ok("tasks_list");
     }
 
     if has_input {
@@ -770,7 +800,10 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
         if invokes_skill {
             return Ok("external_skills.invoke");
         }
-        return Ok("external_skills.inspect");
+        return Err(
+            "hidden_skills_requires_operation_for_skill_id: add `operation` (`inspect` or `run`) when payload.skill_id is present"
+                .to_owned(),
+        );
     }
 
     if payload.as_object().is_some_and(|object| object.is_empty()) {
@@ -829,6 +862,11 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
             "session_search" => Some("session-search".to_owned()),
             "session_status" => Some("session-status".to_owned()),
             "session_wait" => Some("session-wait".to_owned()),
+            "task_history" => Some("task-history".to_owned()),
+            "tasks_list" => Some("tasks-list".to_owned()),
+            "tasks_search" => Some("tasks-search".to_owned()),
+            "task_status" => Some("task-status".to_owned()),
+            "task_wait" => Some("task-wait".to_owned()),
             "session_tool_policy_status" => Some("session-policy-status".to_owned()),
             "session_tool_policy_set" => Some("session-policy-set".to_owned()),
             "session_tool_policy_clear" => Some("session-policy-clear".to_owned()),

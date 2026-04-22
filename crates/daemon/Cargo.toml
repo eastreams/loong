@@ -91,6 +91,7 @@ dunce = "1"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wait-timeout = "0.2"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
@@ -102,6 +103,41 @@ wat = "1"
 [[bin]]
 name = "loong"
 path = "src/main.rs"
+
+[[test]]
+name = "daemon_smoke"
+path = "tests/daemon_smoke.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "daemon_cli"
+path = "tests/daemon_cli.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "daemon_gateway"
+path = "tests/daemon_gateway.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "daemon_onboard"
+path = "tests/daemon_onboard.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "daemon_channels"
+path = "tests/daemon_channels.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "daemon_feishu"
+path = "tests/daemon_feishu.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "daemon_runtime"
+path = "tests/daemon_runtime.rs"
+required-features = ["test-support"]
 
 [lints]
 workspace = true
