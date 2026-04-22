@@ -298,10 +298,11 @@ fn build_status_cli_recipes(config_path: &str) -> Vec<String> {
     let gateway_recipe = format!("{command_name} gateway status");
     let channels_recipe = format!("{command_name} channels --config {config_arg} --json");
     let acp_observability_recipe =
-        format!("{command_name} acp-observability --config {config_arg} --json");
+        format!("{command_name} runtime acp observability --config {config_arg} --json");
     let acp_sessions_recipe =
-        format!("{command_name} list-acp-sessions --config {config_arg} --json");
-    let work_units_recipe = format!("{command_name} work-unit health --config {config_arg} --json");
+        format!("{command_name} runtime acp sessions --config {config_arg} --json");
+    let work_units_recipe =
+        format!("{command_name} runtime work-unit health --config {config_arg} --json");
 
     vec![
         gateway_recipe,
@@ -977,6 +978,22 @@ mod tests {
         GatewayOperatorRuntimeSummaryReadModel,
     };
     use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
+
+    #[test]
+    fn build_status_cli_recipes_use_grouped_runtime_commands() {
+        let recipes = build_status_cli_recipes("/tmp/config.toml");
+
+        assert_eq!(
+            recipes,
+            vec![
+                "loong gateway status".to_owned(),
+                "loong channels --config '/tmp/config.toml' --json".to_owned(),
+                "loong runtime acp observability --config '/tmp/config.toml' --json".to_owned(),
+                "loong runtime acp sessions --config '/tmp/config.toml' --json".to_owned(),
+                "loong runtime work-unit health --config '/tmp/config.toml' --json".to_owned(),
+            ]
+        );
+    }
 
     #[test]
     fn query_search_checklist_status_treats_disabled_mode_as_non_degraded() {

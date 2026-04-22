@@ -2948,7 +2948,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     }
 
     let runtime_snapshot_json_command = format!(
-        "{} runtime-snapshot --json --config {}",
+        "{} runtime snapshot --json --config {}",
         mvp::config::CLI_COMMAND_NAME,
         crate::cli_handoff::shell_quote_argument(&config_path_display),
     );
@@ -6381,6 +6381,32 @@ mod tests {
                     && step.contains("weixin-bridge-a,weixin-bridge-b")
             }),
             "doctor next steps should stay anchored to the same discovery snapshot as the checks even if the managed install root changes afterward: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_use_grouped_runtime_snapshot_command() {
+        let checks = vec![DoctorCheck {
+            name: "runtime plugins inventory".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "missing manifest".to_owned(),
+        }];
+        let config = mvp::config::LoongConfig::default();
+
+        let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+            &checks,
+            Path::new("/tmp/loong.toml"),
+            &config,
+            &[],
+            false,
+            None,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Inspect runtime plugin inventory: loong runtime snapshot --json --config '/tmp/loong.toml'"
+            }),
+            "doctor next steps should point to the grouped runtime snapshot surface: {next_steps:#?}"
         );
     }
 

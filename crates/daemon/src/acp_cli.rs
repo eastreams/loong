@@ -4,6 +4,10 @@ use crate::{
     CliResult, format_capability_names, format_u32_rollup, format_usize_rollup, gateway, mvp,
 };
 
+const RUNTIME_ACP_STATUS_COMMAND: &str = "runtime acp status";
+const RUNTIME_ACP_EVENT_SUMMARY_COMMAND: &str = "runtime acp event-summary";
+const RUNTIME_ACP_DISPATCH_COMMAND: &str = "runtime acp dispatch";
+
 pub fn run_list_acp_backends_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let snapshot = mvp::acp::collect_acp_runtime_snapshot(&config)?;
@@ -397,16 +401,12 @@ pub fn resolve_acp_status_session_key(
                 Ok(metadata.session_key)
             }
         }
-        (Some(_), Some(_), _)
-        | (Some(_), _, Some(_))
-        | (_, Some(_), Some(_)) => Err(
-            "acp-status accepts exactly one of --session, --conversation-id, or --route-session-id"
-                .to_owned(),
-        ),
-        (None, None, None) => Err(
-            "acp-status requires --session <session_key>, --conversation-id <conversation_id>, or --route-session-id <route_session_id>"
-                .to_owned(),
-        ),
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => Err(format!(
+            "{RUNTIME_ACP_STATUS_COMMAND} accepts exactly one of --session, --conversation-id, or --route-session-id"
+        )),
+        (None, None, None) => Err(format!(
+            "{RUNTIME_ACP_STATUS_COMMAND} requires --session <session_key>, --conversation-id <conversation_id>, or --route-session-id <route_session_id>"
+        )),
     }
 }
 
@@ -417,7 +417,9 @@ pub fn run_acp_event_summary_cli(
     as_json: bool,
 ) -> CliResult<()> {
     if limit == 0 {
-        return Err("acp-event-summary limit must be >= 1".to_owned());
+        return Err(format!(
+            "{RUNTIME_ACP_EVENT_SUMMARY_COMMAND} limit must be >= 1"
+        ));
     }
 
     let (_, config) = mvp::config::load(config_path)?;
@@ -452,7 +454,9 @@ pub fn run_acp_event_summary_cli(
     #[cfg(not(feature = "memory-sqlite"))]
     {
         let _ = (config, session_id, as_json);
-        Err("acp-event-summary requires memory-sqlite feature".to_owned())
+        Err(format!(
+            "{RUNTIME_ACP_EVENT_SUMMARY_COMMAND} requires memory-sqlite feature"
+        ))
     }
 }
 
@@ -555,7 +559,9 @@ pub fn build_acp_dispatch_address(
 ) -> CliResult<mvp::conversation::ConversationSessionAddress> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
-        return Err("acp-dispatch requires a non-empty --session value".to_owned());
+        return Err(format!(
+            "{RUNTIME_ACP_DISPATCH_COMMAND} requires a non-empty --session value"
+        ));
     }
 
     let channel = channel.map(str::trim).filter(|value| !value.is_empty());
@@ -576,17 +582,18 @@ pub fn build_acp_dispatch_address(
                 || participant_id.is_some()
                 || thread_id.is_some()
             {
-                return Err(
-                    "acp-dispatch requires --channel when using --conversation-id, --account-id, --participant-id, or --thread-id"
-                        .to_owned(),
-                );
+                return Err(format!(
+                    "{RUNTIME_ACP_DISPATCH_COMMAND} requires --channel when using --conversation-id, --account-id, --participant-id, or --thread-id"
+                ));
             }
             return Ok(mvp::conversation::ConversationSessionAddress::from_session_id(session_id));
         }
     };
 
     let conversation_id = conversation_id.ok_or_else(|| {
-        "acp-dispatch requires --conversation-id when --channel is provided".to_owned()
+        format!(
+            "{RUNTIME_ACP_DISPATCH_COMMAND} requires --conversation-id when --channel is provided"
+        )
     })?;
     let mut address = mvp::conversation::ConversationSessionAddress::from_session_id(session_id)
         .with_channel_scope(channel, conversation_id);
@@ -874,5 +881,45 @@ pub fn acp_session_state_label(state: mvp::acp::AcpSessionState) -> &'static str
         mvp::acp::AcpSessionState::Cancelling => "cancelling",
         mvp::acp::AcpSessionState::Error => "error",
         mvp::acp::AcpSessionState::Closed => "closed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acp_status_errors_use_grouped_runtime_namespace() {
+        let error = resolve_acp_status_session_key(
+            &mvp::config::LoongConfig::default(),
+            Some("session"),
+            Some("conversation"),
+            None,
+        )
+        .expect_err("conflicting selectors should fail");
+
+        assert_eq!(
+            error,
+            "runtime acp status accepts exactly one of --session, --conversation-id, or --route-session-id"
+        );
+    }
+
+    #[test]
+    fn acp_event_summary_errors_use_grouped_runtime_namespace() {
+        let error = run_acp_event_summary_cli(None, None, 0, false)
+            .expect_err("zero limit should fail before config loading");
+
+        assert_eq!(error, "runtime acp event-summary limit must be >= 1");
+    }
+
+    #[test]
+    fn acp_dispatch_errors_use_grouped_runtime_namespace() {
+        let error = build_acp_dispatch_address("", None, None, None, None, None)
+            .expect_err("blank session should fail");
+
+        assert_eq!(
+            error,
+            "runtime acp dispatch requires a non-empty --session value"
+        );
     }
 }
