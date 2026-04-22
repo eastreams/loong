@@ -3388,8 +3388,8 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
         "expected the existing system prompt addition to remain ahead of the child contract block, got: {merged}"
     );
     assert!(
-        base_system_index < contract_index,
-        "expected base system prompt to remain ahead of the child contract block, got: {merged}"
+        contract_index < base_system_index,
+        "expected child contract block to stay ahead of the base system prompt, got: {merged}"
     );
 }
 
