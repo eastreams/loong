@@ -95,10 +95,11 @@ The current product surface is intentionally legible:
 - first-run path: `onboard`, `ask`, `chat`, `doctor`
 - operator runtime controls: `audit`, `migrate`, and related support commands
 - longer-lived service ownership: `gateway run`, `gateway status`, `gateway stop`
-- shipped service-channel runtimes: `telegram-serve`, `feishu-serve`,
-  `matrix-serve`, `wecom-serve`, `multi-channel-serve`
-- outbound delivery: channel `*-send` commands for the shipped outbound surface
-  inventory
+- shipped service-channel runtimes: `channels serve telegram`,
+  `channels serve matrix`, `channels serve wecom`, and the dedicated
+  provider-owned serve surfaces such as `feishu serve`
+- outbound delivery: grouped `channels send <channel>` commands plus the
+  dedicated provider-owned send surfaces for the shipped outbound inventory
 
 ## Do Not Put Here By Default
 

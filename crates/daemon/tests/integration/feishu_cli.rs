@@ -679,20 +679,22 @@ fn feishu_resource_subcommands_parse() {
 }
 
 #[test]
-fn legacy_feishu_send_subcommand_supports_rich_outbound_flags() {
+fn feishu_namespace_send_supports_rich_outbound_flags() {
     try_parse_cli([
         "loong",
-        "feishu-send",
+        "feishu",
+        "send",
         "--receive-id",
         "oc_demo",
         "--post-json",
         "{\"zh_cn\":{\"title\":\"Ship update\",\"content\":[[{\"tag\":\"text\",\"text\":\"rich ship\"}]]}}",
     ])
-    .expect("legacy feishu-send should parse post content");
+    .expect("feishu send should parse post content");
 
     try_parse_cli([
         "loong",
-        "feishu-send",
+        "feishu",
+        "send",
         "--receive-id-type",
         "open_id",
         "--receive-id",
@@ -702,17 +704,18 @@ fn legacy_feishu_send_subcommand_supports_rich_outbound_flags() {
         "--uuid",
         "legacy-send-image-1",
     ])
-    .expect("legacy feishu-send should parse image-path content");
+    .expect("feishu send should parse image-path content");
 
     try_parse_cli([
         "loong",
-        "feishu-send",
+        "feishu",
+        "send",
         "--receive-id",
         "oc_demo",
         "--file-key",
         "file_v2_demo",
     ])
-    .expect("legacy feishu-send should parse file-key content");
+    .expect("feishu send should parse file-key content");
 }
 
 #[tokio::test]

@@ -1107,7 +1107,7 @@ fn require_managed_bridge_target<'a>(
     channel_id: &str,
     target: Option<&'a str>,
 ) -> CliResult<&'a str> {
-    let command_name = format!("{channel_id}-send");
+    let command_name = format!("channels send {channel_id}");
     let target = target.map(str::trim);
     let Some(target) = target else {
         return Err(format!("{command_name} requires --target"));

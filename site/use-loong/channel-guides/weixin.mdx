@@ -113,9 +113,9 @@ Use Loong here for:
 - Keep `allowed_contact_ids` tight. Treat it as the trust boundary, not a convenience list.
 - Loong validates `allowed_contact_ids` locally before forwarding a contact send through the managed bridge runtime.
 - `channels serve weixin` retries transient managed bridge runtime failures with bounded backoff; repeated failures still surface as a hard error so the bridge can be inspected.
-- `weixin-serve --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
+- `channels serve weixin --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
 - When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
-- `weixin-serve --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
+- `channels serve weixin --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
 - While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
 - Prefer one explicit managed bridge per environment. If discovery is ambiguous, fix the ambiguity instead of relying on accidental selection.
 - If you need multiple bridge identities, move to `default_account` plus `accounts.<id>` before inventing ad-hoc routes.

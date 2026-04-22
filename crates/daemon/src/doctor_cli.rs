@@ -5908,7 +5908,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Restart the stale Weixin runtime or external bridge owner: loong weixin-serve --config '/tmp/loong.toml' --stop --account 'default'"
+                step == "Restart the stale Weixin runtime or external bridge owner: loong channels serve weixin --config '/tmp/loong.toml' --stop --account 'default'"
             }),
             "stale runtime should produce a restart-oriented recovery step: {next_steps:#?}"
         );
@@ -5934,7 +5934,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong weixin-serve --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
+                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong channels serve weixin --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
             }),
             "duplicate runtime attention should produce a cleanup-oriented recovery step: {next_steps:#?}"
         );

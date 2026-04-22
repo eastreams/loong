@@ -10,7 +10,7 @@ use crate::{
 pub enum RuntimeCommands {
     /// Print a unified runtime snapshot for experiment reproducibility and lineage capture
     Snapshot(RuntimeSnapshotArgs),
-    /// Restore a persisted runtime snapshot artifact into the current config and managed skill state
+    /// Restore a persisted runtime snapshot artifact into the current config and managed skill state. Dry-run by default; pass --apply to mutate state.
     Restore(RuntimeRestoreArgs),
     /// Manage snapshot-linked experiment run records
     Experiment {

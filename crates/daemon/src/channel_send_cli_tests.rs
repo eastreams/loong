@@ -41,13 +41,13 @@ async fn email_send_cli_requires_target() {
         .await
         .expect_err("missing target should fail");
 
-    assert_eq!(error, "email-send requires --target");
+    assert_eq!(error, "channels send email requires --target");
 }
 
 #[test]
 fn discord_send_cli_accepts_conversation_target_kind() {
     let target_kind = parse_discord_send_target_kind("conversation")
-        .expect("discord-send should accept conversation targets");
+        .expect("discord should accept conversation targets");
 
     assert_eq!(
         default_discord_send_target_kind(),
@@ -85,13 +85,13 @@ async fn discord_send_cli_requires_target() {
         .await
         .expect_err("missing target should fail");
 
-    assert_eq!(error, "discord-send requires --target");
+    assert_eq!(error, "channels send discord requires --target");
 }
 
 #[test]
 fn irc_send_cli_accepts_conversation_target_kind() {
-    let target_kind = parse_irc_send_target_kind("conversation")
-        .expect("irc-send should accept conversation targets");
+    let target_kind =
+        parse_irc_send_target_kind("conversation").expect("irc should accept conversation targets");
 
     assert_eq!(
         default_irc_send_target_kind(),
@@ -127,7 +127,7 @@ fn irc_send_cli_requires_target() {
     }));
 
     let error = result.expect_err("missing target should fail before runtime execution");
-    assert_eq!(error, "irc-send requires --target");
+    assert_eq!(error, "channels send irc requires --target");
 }
 
 #[test]
@@ -197,17 +197,17 @@ async fn twitch_send_cli_requires_target() {
         .await
         .expect_err("missing target should fail");
 
-    assert_eq!(error, "twitch-send requires --target");
+    assert_eq!(error, "channels send twitch requires --target");
 }
 
 #[test]
 fn managed_bridge_send_cli_accepts_conversation_target_kind() {
     let weixin_target_kind = parse_weixin_send_target_kind("conversation")
-        .expect("weixin-send should accept conversation targets");
+        .expect("weixin should accept conversation targets");
     let qqbot_target_kind = parse_qqbot_send_target_kind("conversation")
-        .expect("qqbot-send should accept conversation targets");
+        .expect("qqbot should accept conversation targets");
     let onebot_target_kind = parse_onebot_send_target_kind("conversation")
-        .expect("onebot-send should accept conversation targets");
+        .expect("onebot should accept conversation targets");
 
     assert_eq!(
         default_weixin_send_target_kind(),
@@ -237,12 +237,12 @@ fn managed_bridge_send_cli_accepts_conversation_target_kind() {
 
 #[test]
 fn managed_bridge_send_cli_rejects_non_conversation_target_kind() {
-    let weixin_error = parse_weixin_send_target_kind("address")
-        .expect_err("weixin-send should reject address targets");
-    let qqbot_error = parse_qqbot_send_target_kind("endpoint")
-        .expect_err("qqbot-send should reject endpoint targets");
+    let weixin_error =
+        parse_weixin_send_target_kind("address").expect_err("weixin should reject address targets");
+    let qqbot_error =
+        parse_qqbot_send_target_kind("endpoint").expect_err("qqbot should reject endpoint targets");
     let onebot_error = parse_onebot_send_target_kind("message_reply")
-        .expect_err("onebot-send should reject reply targets");
+        .expect_err("onebot should reject reply targets");
 
     assert_eq!(
         weixin_error,
@@ -279,7 +279,7 @@ async fn managed_bridge_send_cli_requires_target() {
         .await
         .expect_err("missing target should fail");
 
-    assert_eq!(weixin_error, "weixin-send requires --target");
-    assert_eq!(qqbot_error, "qqbot-send requires --target");
-    assert_eq!(onebot_error, "onebot-send requires --target");
+    assert_eq!(weixin_error, "channels send weixin requires --target");
+    assert_eq!(qqbot_error, "channels send qqbot requires --target");
+    assert_eq!(onebot_error, "channels send onebot requires --target");
 }

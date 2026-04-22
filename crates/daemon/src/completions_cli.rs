@@ -63,7 +63,6 @@ fn strip_hidden_root_bash_aliases(rendered: &str, hidden_root_subcommands: &[Str
     let mut lines = rendered.lines().peekable();
 
     while let Some(line) = lines.next() {
-
         if should_strip_hidden_root_case_block(line, &hidden) {
             for candidate in lines.by_ref() {
                 if candidate.trim() == ";;" {
