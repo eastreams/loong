@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kernel::{
     AuditSink, Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter,
-    HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongClawKernel,
+    HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongKernel,
     PolicyEngine, StaticPolicyEngine, SystemClock, TaskIntent, TaskState, TaskSupervisor,
     VerticalPackManifest,
 };
@@ -87,7 +87,7 @@ impl HarnessAdapter for EmbeddedAgentHarness {
         let payload = serde_json::from_value::<DaemonTurnTaskPayload>(request.payload)
             .map_err(|error| HarnessError::Execution(format!("invalid_turn_payload: {error}")))?;
         let message = payload.message.unwrap_or(request.objective);
-        let turn_request = loongclaw_app::agent_runtime::AgentTurnRequest {
+        let turn_request = loong_app::agent_runtime::AgentTurnRequest {
             message,
             turn_mode: payload.turn_mode,
             channel_id: None,
@@ -102,14 +102,13 @@ impl HarnessAdapter for EmbeddedAgentHarness {
             acp_cwd: payload.acp_cwd,
             live_surface_enabled: matches!(
                 payload.turn_mode,
-                loongclaw_app::agent_runtime::AgentTurnMode::Interactive
+                loong_app::agent_runtime::AgentTurnMode::Interactive
             ),
         };
-        let turn_service = loongclaw_app::agent_runtime::load_turn_execution_service(
-            payload.config_path.as_deref(),
-        )
-        .map_err(HarnessError::Execution)?;
-        let turn_options = loongclaw_app::agent_runtime::TurnExecutionOptions::default();
+        let turn_service =
+            loong_app::agent_runtime::load_turn_execution_service(payload.config_path.as_deref())
+                .map_err(HarnessError::Execution)?;
+        let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
         let turn_result = turn_service
             .execute(payload.session_hint.as_deref(), &turn_request, turn_options)
             .await
@@ -129,12 +128,11 @@ impl HarnessAdapter for EmbeddedAgentHarness {
 /// This starts from the spec/kernel bootstrap defaults and then registers the
 /// embedded agent harness so daemon task intents can route back into the shared
 /// `AgentRuntime` pipeline without spawning an external process.
-fn build_daemon_runtime_kernel() -> LoongClawKernel<StaticPolicyEngine> {
+fn build_daemon_runtime_kernel() -> LoongKernel<StaticPolicyEngine> {
     let audit_sink = Arc::new(InMemoryAuditSink::default());
     let audit_sink = audit_sink as Arc<dyn AuditSink>;
     let clock = Arc::new(SystemClock) as Arc<dyn kernel::Clock>;
-    let mut kernel =
-        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit_sink);
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit_sink);
     let pack = daemon_runtime_pack_manifest();
     let register_pack_result = kernel.register_pack(pack);
     register_pack_result.expect("daemon runtime pack should register");
@@ -270,13 +268,13 @@ pub(crate) async fn run_turn_cli(
     if message.trim().is_empty() {
         return Err("turn message must not be empty".to_owned());
     }
-    let turn_service = loongclaw_app::agent_runtime::load_turn_execution_service(config_path)?;
+    let turn_service = loong_app::agent_runtime::load_turn_execution_service(config_path)?;
     let config = turn_service.config();
     if !config.cli.enabled {
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
 
-    let turn_request = loongclaw_app::agent_runtime::AgentTurnRequest {
+    let turn_request = loong_app::agent_runtime::AgentTurnRequest {
         message: message.to_owned(),
         turn_mode: if acp {
             loong_app::agent_runtime::AgentTurnMode::Acp
@@ -290,7 +288,7 @@ pub(crate) async fn run_turn_cli(
         acp_cwd: acp_cwd.map(ToOwned::to_owned),
         ..Default::default()
     };
-    let turn_options = loongclaw_app::agent_runtime::TurnExecutionOptions::default();
+    let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
     let result = turn_service
         .execute(session_hint, &turn_request, turn_options)
         .await?;

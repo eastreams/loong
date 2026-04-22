@@ -30,7 +30,16 @@ use crate::CliResult;
     feature = "channel-imessage",
 ))]
 use crate::KernelContext;
-#[cfg(test)]
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook",
+))]
 use crate::acp::AcpConversationTurnOptions;
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -55,7 +64,7 @@ use crate::acp::AcpConversationTurnOptions;
     feature = "channel-imessage",
 ))]
 use crate::acp::AcpTurnProvenance;
-use crate::config::LoongClawConfig;
+use crate::config::LoongConfig;
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -167,17 +176,17 @@ use crate::conversation::{
     feature = "channel-whatsapp",
     feature = "channel-webhook",
 ))]
-#[cfg(test)]
 use crate::conversation::{ConversationRuntime, ConversationRuntimeBinding};
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
+    feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
+    feature = "channel-webhook",
 ))]
-#[cfg(test)]
 use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 #[cfg(any(
@@ -2780,7 +2789,7 @@ pub async fn run_wecom_channel_with_stop(
 pub async fn run_background_channel_with_stop(
     channel_id: &str,
     resolved_path: PathBuf,
-    config: LoongClawConfig,
+    config: LoongConfig,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
@@ -3259,7 +3268,7 @@ struct PreparedChannelInboundTurn {
     feature = "channel-whatsapp"
 ))]
 fn prepare_channel_inbound_turn(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     message: &ChannelInboundMessage,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<PreparedChannelInboundTurn> {
@@ -3286,11 +3295,45 @@ fn prepare_channel_inbound_turn(
 ))]
 #[cfg(test)]
 pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     runtime: &R,
     message: &ChannelInboundMessage,
     binding: ConversationRuntimeBinding<'_>,
     feedback_policy: ChannelTurnFeedbackPolicy,
+) -> CliResult<String> {
+    process_inbound_with_runtime_and_feedback_and_error_mode(
+        config,
+        runtime,
+        message,
+        binding,
+        feedback_policy,
+        ProviderErrorMode::Propagate,
+        None,
+    )
+    .await
+}
+
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook"
+))]
+#[cfg_attr(not(test), allow(dead_code))]
+pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
+    R: ConversationRuntime + ?Sized,
+>(
+    config: &LoongConfig,
+    runtime: &R,
+    message: &ChannelInboundMessage,
+    binding: ConversationRuntimeBinding<'_>,
+    feedback_policy: ChannelTurnFeedbackPolicy,
+    error_mode: ProviderErrorMode,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<String> {
     let prepared = prepare_channel_inbound_turn(config, message, feedback_policy)?;
     let address = prepared.address;
@@ -3303,7 +3346,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
         .with_provenance(channel_message_acp_turn_provenance(message));
     let observer = feedback_capture.observer_handle();
     let reply = ConversationTurnCoordinator::new()
-        .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             &address,
             &message.text,
@@ -3314,6 +3357,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
             ingress.as_ref(),
             observer,
             retry_progress,
+            None,
         )
         .await?;
     Ok(feedback_capture.render_reply(reply))
@@ -3338,7 +3382,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
 /// supplied `kernel_ctx`, and assembles a one-shot chat runtime around the
 /// channel session address before handing execution to `AgentRuntime`.
 pub async fn process_inbound_with_provider(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved_path: Option<&std::path::Path>,
     message: &ChannelInboundMessage,
     kernel_ctx: &KernelContext,
@@ -3440,7 +3484,8 @@ pub async fn process_inbound_with_provider_and_error_mode(
                 observer,
                 ingress: ingress.as_ref(),
                 provenance: channel_message_acp_turn_provenance(message),
-                provider_error_mode: crate::conversation::ProviderErrorMode::Propagate,
+                provider_error_mode: error_mode,
+                retry_progress,
                 ..Default::default()
             };
             let result = turn_service
@@ -3544,7 +3589,7 @@ pub async fn process_inbound_with_provider_and_error_mode(
     feature = "channel-webhook"
 ))]
 pub(super) fn reload_channel_turn_config(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     resolved_path: Option<&std::path::Path>,
 ) -> CliResult<LoongConfig> {
     match resolved_path {

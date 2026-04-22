@@ -5196,6 +5196,7 @@ async fn handle_turn_with_observer_routes_explicit_acp_turns_through_acp() {
             None,
             Some(observer_handle),
             None,
+            None,
         )
         .await
         .expect("explicit ACP turn with observer should route through ACP");
@@ -6469,6 +6470,7 @@ async fn handle_turn_with_runtime_automatic_acp_uses_injected_manager() {
             &runtime,
             &acp_options,
             ConversationRuntimeBinding::direct(),
+            None,
             None,
             None,
             Some(provided_manager.clone()),

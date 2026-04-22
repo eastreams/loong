@@ -67,7 +67,7 @@ impl KernelBuilder {
 
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
-    pub fn build(self) -> LoongClawKernel<StaticPolicyEngine> {
+    pub fn build(self) -> LoongKernel<StaticPolicyEngine> {
         configured_builder(
             self.clock,
             self.audit,

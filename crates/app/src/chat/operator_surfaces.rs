@@ -158,7 +158,7 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
             &runtime.config,
             &runtime.session_id,
             limit,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            runtime.conversation_binding(),
         )
         .await
     {
@@ -212,7 +212,7 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
             &runtime.config,
             &runtime.session_id,
             limit,
-            crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            runtime.conversation_binding(),
         )
         .await
     {

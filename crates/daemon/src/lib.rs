@@ -1016,20 +1016,11 @@ fn default_onboard_command() -> Commands {
 }
 
 pub fn resolve_default_entry_command() -> Commands {
-    let config_path = resolved_default_entry_config_path();
-    if config_path.is_file() {
-        return Commands::Welcome;
+    if resolved_default_entry_config_path().is_file() {
+        Commands::Welcome
+    } else {
+        default_onboard_command()
     }
-
-    if default_entry_config_path_override().is_some() {
-        return default_onboard_command();
-    }
-
-    if detected_legacy_home_for_default_entry().is_some() {
-        return default_import_preview_command();
-    }
-
-    default_onboard_command()
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {

@@ -346,6 +346,7 @@ enum ReadToolLeaseSecretFileError {
 }
 
 impl ReadToolLeaseSecretFileError {
+    #[allow(dead_code)]
     fn is_retryable_publication_state(&self) -> bool {
         matches!(
             self,

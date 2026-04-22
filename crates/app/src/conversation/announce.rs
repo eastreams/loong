@@ -510,7 +510,7 @@ mod tests {
 
     const DELEGATE_ANNOUNCE_EVENT_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 
-    fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
         static NEXT_ISOLATED_MEMORY_ID: AtomicU64 = AtomicU64::new(1);
 
         let isolated_id = NEXT_ISOLATED_MEMORY_ID.fetch_add(1, Ordering::Relaxed);
