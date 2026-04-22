@@ -762,7 +762,7 @@ fn ensure_wecom_send_runtime_is_exclusive(resolved: &ResolvedWecomChannelConfig)
         .map(|value| value.to_string())
         .unwrap_or_else(|| "unknown".to_owned());
     Err(format!(
-        "wecom account `{}` already has an active serve runtime (pid={process_id}, running_instances={}); stop the existing `wecom-serve` session before using `wecom-send`",
+        "wecom account `{}` already has an active serve runtime (pid={process_id}, running_instances={}); stop the existing `channels serve wecom` session before using `channels send wecom`",
         resolved.account.id, runtime.running_instances
     ))
 }

@@ -119,7 +119,9 @@ fn runtime_trajectory_export_writes_bounded_artifact_with_lineage_and_canonical_
     let artifact_path = root.join("artifacts").join("root-session.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
-            "runtime-trajectory",
+            "runtime",
+            "trajectory",
+            "runtime",
             "export",
             "--config",
             config_path.to_str().expect("config path should be utf-8"),
@@ -169,7 +171,9 @@ fn runtime_trajectory_show_round_trips_persisted_artifact_in_text_mode() {
     let artifact_path = root.join("artifacts").join("root-session.json");
     let export_status = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
-            "runtime-trajectory",
+            "runtime",
+            "trajectory",
+            "runtime",
             "export",
             "--config",
             config_path.to_str().expect("config path should be utf-8"),
@@ -187,7 +191,9 @@ fn runtime_trajectory_show_round_trips_persisted_artifact_in_text_mode() {
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
-            "runtime-trajectory",
+            "runtime",
+            "trajectory",
+            "runtime",
             "show",
             "--artifact",
             artifact_path
@@ -226,7 +232,9 @@ fn runtime_trajectory_export_accepts_bare_output_file_in_current_directory() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_loong"))
         .current_dir(root.as_path())
         .args([
-            "runtime-trajectory",
+            "runtime",
+            "trajectory",
+            "runtime",
             "export",
             "--config",
             config_path.to_str().expect("config path should be utf-8"),

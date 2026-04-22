@@ -355,6 +355,6 @@ mod tests {
         assert!(rendered.contains("channel_id=telegram"));
         assert!(rendered.contains("session_shape=telegram_chat"));
         assert!(rendered.contains("matched_configured_account=ops"));
-        assert!(rendered.contains("send_command=telegram-send"));
+        assert!(rendered.contains("send_command=channels send telegram"));
     }
 }

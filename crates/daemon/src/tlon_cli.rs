@@ -81,6 +81,6 @@ mod tests {
             .await
             .expect_err("missing target should fail");
 
-        assert_eq!(error, "tlon-send requires --target");
+        assert_eq!(error, "channels send tlon requires --target");
     }
 }
