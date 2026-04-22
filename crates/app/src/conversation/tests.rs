@@ -7630,6 +7630,326 @@ async fn handle_turn_with_runtime_blocks_only_when_next_round_would_exceed_max_t
     assert_eq!(requested_turn_messages.len(), 2);
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_persists_continuation_request_on_tool_loop_circuit_breaker() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-search-breaker-persist",
+                    "turn-tool-search-breaker-persist",
+                    "call-tool-search-breaker-persist-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I should search one more time before continuing.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-search-breaker-persist",
+                    "turn-tool-search-breaker-persist",
+                    "call-tool-search-breaker-persist-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_total_tool_calls = 1;
+    config.memory.sqlite_path = unique_acp_sqlite_path("turn-loop-continuation-request");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-search-breaker-persist",
+            "search for the right tool, then read and summarize note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("tool loop breaker should return a synthetic reply");
+
+    assert_eq!(
+        reply,
+        "tool_loop_circuit_breaker: would exceed 2/1 tool calls this turn. Do you want to continue? Reply to resume."
+    );
+
+    let memory_config = session_store_config_from_config(&config);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let continuation = repo
+        .latest_pending_continuation_request_for_session("session-tool-search-breaker-persist")
+        .expect("load continuation request")
+        .expect("pending continuation request");
+
+    assert_eq!(
+        continuation.kind,
+        crate::session::repository::ContinuationRequestKind::ToolLoopCircuitBreaker
+    );
+    assert_eq!(
+        continuation.status,
+        crate::session::repository::ContinuationRequestStatus::Pending
+    );
+    assert_eq!(
+        continuation.request_payload_json["user_input"],
+        "search for the right tool, then read and summarize note.md"
+    );
+    assert_eq!(
+        continuation.request_payload_json["prospective_total_tool_calls"],
+        2
+    );
+    assert_eq!(continuation.request_payload_json["max_total_tool_calls"], 1);
+    assert!(
+        continuation.request_payload_json["messages"]
+            .as_array()
+            .is_some_and(|messages| !messages.is_empty()),
+        "continuation should persist saved messages: {}",
+        continuation.request_payload_json
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_resume_uses_pending_continuation_state() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text: "resumed final answer".to_owned(),
+            tool_intents: vec![],
+            raw_meta: Value::Null,
+        })],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_acp_sqlite_path("turn-loop-continuation-resume");
+
+    let memory_config = session_store_config_from_config(&config);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let continuation = repo
+        .ensure_continuation_request(crate::session::repository::NewContinuationRequestRecord {
+            continuation_request_id: "ctr-resume".to_owned(),
+            session_id: "session-turn-loop-resume".to_owned(),
+            kind: crate::session::repository::ContinuationRequestKind::ToolLoopCircuitBreaker,
+            reason_code: "tool_loop_circuit_breaker".to_owned(),
+            request_payload_json: json!({
+                "user_input": "original request",
+                "messages": [
+                    {"role": "user", "content": "original request"},
+                    {"role": "assistant", "content": "[tool_result]\\n{\"tool\":\"tool.search\"}"}
+                ]
+            }),
+        })
+        .expect("persist continuation request");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-turn-loop-resume",
+            "resume",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("resume should succeed");
+
+    assert_eq!(reply, "resumed final answer");
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 1);
+    let resumed_messages = &requested_turn_messages[0];
+    assert_eq!(resumed_messages.len(), 3);
+    assert_eq!(resumed_messages[0]["content"], "original request");
+    assert_eq!(
+        resumed_messages[2]["content"],
+        "Resume the interrupted request from the saved runtime state and continue the original user request without restarting from scratch."
+    );
+
+    let updated = repo
+        .load_continuation_request(&continuation.continuation_request_id)
+        .expect("load updated continuation request")
+        .expect("updated continuation request");
+    assert_eq!(
+        updated.status,
+        crate::session::repository::ContinuationRequestStatus::Resumed
+    );
+    assert_eq!(
+        updated.resolved_by_session_id.as_deref(),
+        Some("session-turn-loop-resume")
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_resume_failure_does_not_leave_pending_continuation() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let runtime = FakeRuntime::new(vec![], Err("provider failure after resume".to_owned()));
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_acp_sqlite_path("turn-loop-continuation-resume-failure");
+
+    let memory_config = session_store_config_from_config(&config);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.ensure_continuation_request(crate::session::repository::NewContinuationRequestRecord {
+        continuation_request_id: "ctr-resume-failure".to_owned(),
+        session_id: "session-turn-loop-resume-failure".to_owned(),
+        kind: crate::session::repository::ContinuationRequestKind::ToolLoopCircuitBreaker,
+        reason_code: "tool_loop_circuit_breaker".to_owned(),
+        request_payload_json: json!({
+            "user_input": "original request",
+            "messages": [
+                {"role": "user", "content": "original request"}
+            ]
+        }),
+    })
+    .expect("persist continuation request");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let error = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-turn-loop-resume-failure",
+            "resume",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect_err("resume failure should propagate");
+
+    assert!(
+        error.contains("provider failure after resume"),
+        "expected provider failure, got: {error}"
+    );
+
+    let updated = repo
+        .load_continuation_request("ctr-resume-failure")
+        .expect("load updated continuation request")
+        .expect("updated continuation request");
+    assert_eq!(
+        updated.status,
+        crate::session::repository::ContinuationRequestStatus::Resumed
+    );
+    assert_eq!(
+        updated.last_error.as_deref(),
+        Some("provider failure after resume")
+    );
+    assert!(
+        repo.latest_pending_continuation_request_for_session("session-turn-loop-resume-failure")
+            .expect("load latest pending continuation request")
+            .is_none(),
+        "failed resumed continuation should not remain pending"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_resume_persists_original_input_when_interrupted_again() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I need to search one more time.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "deploy checklist", "limit": 3}),
+                    "session-turn-loop-resume-retry",
+                    "turn-turn-loop-resume-retry",
+                    "call-turn-loop-resume-retry-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I should search once more before answering.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "release summary", "limit": 3}),
+                    "session-turn-loop-resume-retry",
+                    "turn-turn-loop-resume-retry",
+                    "call-turn-loop-resume-retry-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_total_tool_calls = 1;
+    config.memory.sqlite_path = unique_acp_sqlite_path("turn-loop-continuation-resume-retry");
+
+    let memory_config = session_store_config_from_config(&config);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.ensure_continuation_request(crate::session::repository::NewContinuationRequestRecord {
+        continuation_request_id: "ctr-resume-retry".to_owned(),
+        session_id: "session-turn-loop-resume-retry".to_owned(),
+        kind: crate::session::repository::ContinuationRequestKind::ToolLoopCircuitBreaker,
+        reason_code: "tool_loop_circuit_breaker".to_owned(),
+        request_payload_json: json!({
+            "user_input": "deploy the release and summarize the result",
+            "messages": [
+                {"role": "user", "content": "deploy the release and summarize the result"}
+            ]
+        }),
+    })
+    .expect("persist initial continuation request");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-turn-loop-resume-retry",
+            "resume",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("second interruption should return synthetic reply");
+
+    assert!(
+        reply.contains("tool_loop_circuit_breaker"),
+        "expected circuit-breaker reply, got: {reply}"
+    );
+
+    let latest = repo
+        .latest_pending_continuation_request_for_session("session-turn-loop-resume-retry")
+        .expect("load latest continuation request")
+        .expect("pending continuation request");
+
+    assert_ne!(latest.continuation_request_id, "ctr-resume-retry");
+    assert_eq!(
+        latest.request_payload_json["user_input"],
+        "deploy the release and summarize the result"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provider_round() {
     use crate::test_support::TurnTestHarness;

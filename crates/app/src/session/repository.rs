@@ -221,6 +221,83 @@ pub struct NewApprovalGrantRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationRequestKind {
+    ToolLoopCircuitBreaker,
+}
+
+impl ContinuationRequestKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolLoopCircuitBreaker => "tool_loop_circuit_breaker",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "tool_loop_circuit_breaker" => Ok(Self::ToolLoopCircuitBreaker),
+            _ => Err(format!("unknown continuation request kind `{value}`")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationRequestStatus {
+    Pending,
+    Resumed,
+    Cancelled,
+}
+
+impl ContinuationRequestStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Resumed => "resumed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "resumed" => Ok(Self::Resumed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(format!("unknown continuation request status `{value}`")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContinuationRequestRecord {
+    pub continuation_request_id: String,
+    pub session_id: String,
+    pub kind: ContinuationRequestKind,
+    pub reason_code: String,
+    pub status: ContinuationRequestStatus,
+    pub request_payload_json: Value,
+    pub requested_at: i64,
+    pub resolved_at: Option<i64>,
+    pub resolved_by_session_id: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewContinuationRequestRecord {
+    pub continuation_request_id: String,
+    pub session_id: String,
+    pub kind: ContinuationRequestKind,
+    pub reason_code: String,
+    pub request_payload_json: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionContinuationRequestIfCurrentRequest {
+    pub expected_status: ContinuationRequestStatus,
+    pub next_status: ContinuationRequestStatus,
+    pub resolved_by_session_id: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlPlanePairingRequestStatus {
     Pending,
     Approved,
@@ -359,6 +436,7 @@ pub struct SessionObservationRecord {
     pub session: SessionSummaryRecord,
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
     pub recent_events: Vec<SessionEventRecord>,
+    pub continuation_requests: Vec<ContinuationRequestRecord>,
     pub tail_events: Vec<SessionEventRecord>,
 }
 
@@ -370,6 +448,7 @@ pub struct SessionTrajectoryReadSnapshot {
     pub turns: Vec<SessionTranscriptTurn>,
     pub events: Vec<SessionEventRecord>,
     pub approval_requests: Vec<ApprovalRequestRecord>,
+    pub continuation_requests: Vec<ContinuationRequestRecord>,
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
 }
 
@@ -1232,6 +1311,8 @@ impl SessionRepository {
             let events = Self::list_all_events_with_conn(conn, &session_id, page_limit)?;
             let approval_requests =
                 Self::list_approval_requests_for_session_with_conn(conn, &session_id, None)?;
+            let continuation_requests =
+                Self::list_continuation_requests_for_session_with_conn(conn, &session_id, None)?;
             let terminal_outcome = Self::load_terminal_outcome_with_conn(conn, &session_id)?;
 
             Ok(Some(SessionTrajectoryReadSnapshot {
@@ -1241,6 +1322,7 @@ impl SessionRepository {
                 turns,
                 events,
                 approval_requests,
+                continuation_requests,
                 terminal_outcome,
             }))
         })
@@ -1507,6 +1589,117 @@ impl SessionRepository {
         Ok(requests)
     }
 
+    pub fn list_continuation_requests_for_session(
+        &self,
+        session_id: &str,
+        status: Option<ContinuationRequestStatus>,
+    ) -> Result<Vec<ContinuationRequestRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::list_continuation_requests_for_session_with_conn(&conn, &session_id, status)
+    }
+
+    pub(crate) fn list_continuation_requests_for_session_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        status: Option<ContinuationRequestStatus>,
+    ) -> Result<Vec<ContinuationRequestRecord>, String> {
+        let mut requests = Vec::new();
+        match status {
+            Some(status) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT
+                            continuation_request_id,
+                            session_id,
+                            kind,
+                            reason_code,
+                            status,
+                            request_payload_json,
+                            requested_at,
+                            resolved_at,
+                            resolved_by_session_id,
+                            last_error
+                         FROM continuation_requests
+                         WHERE session_id = ?1 AND status = ?2
+                         ORDER BY requested_at DESC, rowid DESC, continuation_request_id ASC",
+                    )
+                    .map_err(|error| {
+                        format!("prepare continuation request list query failed: {error}")
+                    })?;
+                let rows = stmt
+                    .query_map(params![session_id, status.as_str()], |row| {
+                        Ok(RawContinuationRequestRecord {
+                            continuation_request_id: row.get(0)?,
+                            session_id: row.get(1)?,
+                            kind: row.get(2)?,
+                            reason_code: row.get(3)?,
+                            status: row.get(4)?,
+                            request_payload_json: row.get(5)?,
+                            requested_at: row.get(6)?,
+                            resolved_at: row.get(7)?,
+                            resolved_by_session_id: row.get(8)?,
+                            last_error: row.get(9)?,
+                        })
+                    })
+                    .map_err(|error| format!("query continuation request list failed: {error}"))?;
+                for row in rows {
+                    let raw = row.map_err(|error| {
+                        format!("decode continuation request row failed: {error}")
+                    })?;
+                    let request = ContinuationRequestRecord::try_from_raw(raw)?;
+                    requests.push(request);
+                }
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT
+                            continuation_request_id,
+                            session_id,
+                            kind,
+                            reason_code,
+                            status,
+                            request_payload_json,
+                            requested_at,
+                            resolved_at,
+                            resolved_by_session_id,
+                            last_error
+                         FROM continuation_requests
+                         WHERE session_id = ?1
+                         ORDER BY requested_at DESC, rowid DESC, continuation_request_id ASC",
+                    )
+                    .map_err(|error| {
+                        format!("prepare continuation request list query failed: {error}")
+                    })?;
+                let rows = stmt
+                    .query_map(params![session_id], |row| {
+                        Ok(RawContinuationRequestRecord {
+                            continuation_request_id: row.get(0)?,
+                            session_id: row.get(1)?,
+                            kind: row.get(2)?,
+                            reason_code: row.get(3)?,
+                            status: row.get(4)?,
+                            request_payload_json: row.get(5)?,
+                            requested_at: row.get(6)?,
+                            resolved_at: row.get(7)?,
+                            resolved_by_session_id: row.get(8)?,
+                            last_error: row.get(9)?,
+                        })
+                    })
+                    .map_err(|error| format!("query continuation request list failed: {error}"))?;
+                for row in rows {
+                    let raw = row.map_err(|error| {
+                        format!("decode continuation request row failed: {error}")
+                    })?;
+                    let request = ContinuationRequestRecord::try_from_raw(raw)?;
+                    requests.push(request);
+                }
+            }
+        }
+        Ok(requests)
+    }
+
     pub fn transition_approval_request_if_current(
         &self,
         approval_request_id: &str,
@@ -1553,6 +1746,196 @@ impl SessionRepository {
             .map(Some)
             .ok_or_else(|| {
                 format!("approval request `{approval_request_id}` missing after conditional update")
+            })
+    }
+
+    pub fn ensure_continuation_request(
+        &self,
+        record: NewContinuationRequestRecord,
+    ) -> Result<ContinuationRequestRecord, String> {
+        let continuation_request_id =
+            normalize_required_text(&record.continuation_request_id, "continuation_request_id")?;
+        let session_id = normalize_required_text(&record.session_id, "session_id")?;
+        let reason_code = normalize_required_text(&record.reason_code, "reason_code")?;
+
+        let encoded_request_payload = serde_json::to_string(&record.request_payload_json)
+            .map_err(|error| format!("encode continuation request payload failed: {error}"))?;
+        let requested_at = unix_ts_now();
+        let conn = self.open_connection()?;
+        match conn.execute(
+            "INSERT INTO continuation_requests(
+                continuation_request_id,
+                session_id,
+                kind,
+                reason_code,
+                status,
+                request_payload_json,
+                requested_at,
+                resolved_at,
+                resolved_by_session_id,
+                last_error
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL)",
+            params![
+                continuation_request_id,
+                session_id,
+                record.kind.as_str(),
+                reason_code,
+                ContinuationRequestStatus::Pending.as_str(),
+                encoded_request_payload,
+                requested_at,
+            ],
+        ) {
+            Ok(_) => {}
+            Err(error) if error.to_string().contains("UNIQUE constraint failed") => {
+                return self
+                    .load_continuation_request(&continuation_request_id)?
+                    .ok_or_else(|| {
+                        format!(
+                            "continuation request `{continuation_request_id}` missing after concurrent insert"
+                        )
+                    });
+            }
+            Err(error) => return Err(format!("insert continuation request row failed: {error}")),
+        }
+
+        self.load_continuation_request(&continuation_request_id)?
+            .ok_or_else(|| {
+                format!("continuation request `{continuation_request_id}` disappeared after insert")
+            })
+    }
+
+    pub fn load_continuation_request(
+        &self,
+        continuation_request_id: &str,
+    ) -> Result<Option<ContinuationRequestRecord>, String> {
+        let continuation_request_id =
+            normalize_required_text(continuation_request_id, "continuation_request_id")?;
+        let conn = self.open_connection()?;
+        let raw = conn
+            .query_row(
+                "SELECT
+                    continuation_request_id,
+                    session_id,
+                    kind,
+                    reason_code,
+                    status,
+                    request_payload_json,
+                    requested_at,
+                    resolved_at,
+                    resolved_by_session_id,
+                    last_error
+                 FROM continuation_requests
+                 WHERE continuation_request_id = ?1",
+                params![continuation_request_id],
+                |row| {
+                    Ok(RawContinuationRequestRecord {
+                        continuation_request_id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        kind: row.get(2)?,
+                        reason_code: row.get(3)?,
+                        status: row.get(4)?,
+                        request_payload_json: row.get(5)?,
+                        requested_at: row.get(6)?,
+                        resolved_at: row.get(7)?,
+                        resolved_by_session_id: row.get(8)?,
+                        last_error: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| format!("load continuation request row failed: {error}"))?;
+
+        raw.map(ContinuationRequestRecord::try_from_raw).transpose()
+    }
+
+    pub fn latest_pending_continuation_request_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ContinuationRequestRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        let raw = conn
+            .query_row(
+                "SELECT
+                    continuation_request_id,
+                    session_id,
+                    kind,
+                    reason_code,
+                    status,
+                    request_payload_json,
+                    requested_at,
+                    resolved_at,
+                    resolved_by_session_id,
+                    last_error
+                 FROM continuation_requests
+                 WHERE session_id = ?1 AND status = ?2
+                 ORDER BY requested_at DESC, rowid DESC, continuation_request_id ASC
+                 LIMIT 1",
+                params![session_id, ContinuationRequestStatus::Pending.as_str()],
+                |row| {
+                    Ok(RawContinuationRequestRecord {
+                        continuation_request_id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        kind: row.get(2)?,
+                        reason_code: row.get(3)?,
+                        status: row.get(4)?,
+                        request_payload_json: row.get(5)?,
+                        requested_at: row.get(6)?,
+                        resolved_at: row.get(7)?,
+                        resolved_by_session_id: row.get(8)?,
+                        last_error: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| format!("load latest continuation request failed: {error}"))?;
+
+        raw.map(ContinuationRequestRecord::try_from_raw).transpose()
+    }
+
+    pub fn transition_continuation_request_if_current(
+        &self,
+        continuation_request_id: &str,
+        request: TransitionContinuationRequestIfCurrentRequest,
+    ) -> Result<Option<ContinuationRequestRecord>, String> {
+        let continuation_request_id =
+            normalize_required_text(continuation_request_id, "continuation_request_id")?;
+        let resolved_by_session_id = normalize_optional_text(request.resolved_by_session_id);
+        let last_error = normalize_optional_text(request.last_error);
+        let resolution_ts = matches!(
+            request.next_status,
+            ContinuationRequestStatus::Resumed | ContinuationRequestStatus::Cancelled
+        )
+        .then(unix_ts_now);
+        let conn = self.open_connection()?;
+        let affected = conn
+            .execute(
+                "UPDATE continuation_requests
+                 SET status = ?3,
+                     resolved_at = CASE WHEN ?4 IS NULL THEN resolved_at ELSE ?4 END,
+                     resolved_by_session_id = CASE WHEN ?5 IS NULL THEN resolved_by_session_id ELSE ?5 END,
+                     last_error = ?6
+                 WHERE continuation_request_id = ?1 AND status = ?2",
+                params![
+                    continuation_request_id,
+                    request.expected_status.as_str(),
+                    request.next_status.as_str(),
+                    resolution_ts,
+                    resolved_by_session_id,
+                    last_error,
+                ],
+            )
+            .map_err(|error| format!("conditionally update continuation request failed: {error}"))?;
+        if affected == 0 {
+            return Ok(None);
+        }
+
+        self.load_continuation_request(&continuation_request_id)?
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "continuation request `{continuation_request_id}` missing after conditional update"
+                )
             })
     }
 
@@ -3350,6 +3733,8 @@ impl SessionRepository {
         };
         let recent_events =
             Self::list_recent_events_with_conn(conn, session_id, recent_event_limit)?;
+        let continuation_requests =
+            Self::list_continuation_requests_for_session_with_conn(conn, session_id, None)?;
         let terminal_outcome = Self::load_terminal_outcome_with_conn(conn, session_id)?;
         let tail_events = match tail_after_id {
             Some(after_id) => Self::drain_events_after_with_conn(
@@ -3364,6 +3749,7 @@ impl SessionRepository {
             session,
             terminal_outcome,
             recent_events,
+            continuation_requests,
             tail_events,
         }))
     }
@@ -3510,6 +3896,20 @@ struct RawApprovalGrantRecord {
     created_by_session_id: Option<String>,
     created_at: i64,
     updated_at: i64,
+}
+
+#[derive(Debug)]
+struct RawContinuationRequestRecord {
+    continuation_request_id: String,
+    session_id: String,
+    kind: String,
+    reason_code: String,
+    status: String,
+    request_payload_json: String,
+    requested_at: i64,
+    resolved_at: Option<i64>,
+    resolved_by_session_id: Option<String>,
+    last_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -3684,6 +4084,26 @@ impl ApprovalGrantRecord {
             created_by_session_id: raw.created_by_session_id,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
+        })
+    }
+}
+
+impl ContinuationRequestRecord {
+    fn try_from_raw(raw: RawContinuationRequestRecord) -> Result<Self, String> {
+        let request_payload_json = serde_json::from_str(&raw.request_payload_json)
+            .map_err(|error| format!("decode continuation request payload failed: {error}"))?;
+
+        Ok(Self {
+            continuation_request_id: raw.continuation_request_id,
+            session_id: raw.session_id,
+            kind: ContinuationRequestKind::from_db(&raw.kind)?,
+            reason_code: raw.reason_code,
+            status: ContinuationRequestStatus::from_db(&raw.status)?,
+            request_payload_json,
+            requested_at: raw.requested_at,
+            resolved_at: raw.resolved_at,
+            resolved_by_session_id: raw.resolved_by_session_id,
+            last_error: raw.last_error,
         })
     }
 }
@@ -5503,7 +5923,13 @@ mod tests {
             approved.resolved_by_session_id.as_deref(),
             Some("root-session")
         );
+        assert!(approved.requested_at < 10_000_000_000);
         assert!(approved.resolved_at.is_some());
+        assert!(
+            approved
+                .resolved_at
+                .is_some_and(|resolved_at| resolved_at < 10_000_000_000)
+        );
         assert!(approved.executed_at.is_none());
         assert!(approved.last_error.is_none());
 
@@ -5805,5 +6231,249 @@ mod tests {
             pending_root_requests[0].approval_request_id,
             "apr-root-pending"
         );
+    }
+
+    #[test]
+    fn continuation_request_repository_persists_pending_request() {
+        let config = isolated_memory_config("continuation-request-create");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let created = repo
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "ctr_123".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({
+                    "user_input": "build the report",
+                    "messages": [
+                        {"role": "user", "content": "build the report"}
+                    ]
+                }),
+            })
+            .expect("persist continuation request");
+
+        assert_eq!(created.continuation_request_id, "ctr_123");
+        assert_eq!(created.session_id, "root-session");
+        assert_eq!(
+            created.kind,
+            ContinuationRequestKind::ToolLoopCircuitBreaker
+        );
+        assert_eq!(created.reason_code, "tool_loop_circuit_breaker");
+        assert_eq!(created.status, ContinuationRequestStatus::Pending);
+        assert_eq!(
+            created.request_payload_json["user_input"],
+            "build the report"
+        );
+        assert!(created.resolved_at.is_none());
+        assert!(created.last_error.is_none());
+
+        let loaded = repo
+            .load_continuation_request("ctr_123")
+            .expect("load continuation request")
+            .expect("continuation request row");
+        assert_eq!(loaded, created);
+    }
+
+    #[test]
+    fn continuation_request_repository_returns_existing_row_for_duplicate_create() {
+        let config = isolated_memory_config("continuation-request-idempotent");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let first = repo
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "ctr_duplicate".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({
+                    "user_input": "first"
+                }),
+            })
+            .expect("persist first continuation request");
+        let second = repo
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "ctr_duplicate".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "different_reason".to_owned(),
+                request_payload_json: json!({
+                    "user_input": "second"
+                }),
+            })
+            .expect("persist duplicate continuation request");
+
+        assert_eq!(
+            second.continuation_request_id,
+            first.continuation_request_id
+        );
+        assert_eq!(second.reason_code, first.reason_code);
+        assert_eq!(second.request_payload_json, first.request_payload_json);
+    }
+
+    #[test]
+    fn continuation_request_repository_loads_latest_pending_request_for_session() {
+        let config = isolated_memory_config("continuation-request-latest");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        repo.ensure_continuation_request(NewContinuationRequestRecord {
+            continuation_request_id: "ctr_old".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+            reason_code: "tool_loop_circuit_breaker".to_owned(),
+            request_payload_json: json!({
+                "user_input": "old"
+            }),
+        })
+        .expect("persist old continuation request");
+        let latest = repo
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "ctr_new".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({
+                    "user_input": "new"
+                }),
+            })
+            .expect("persist latest continuation request");
+
+        let loaded = repo
+            .latest_pending_continuation_request_for_session("root-session")
+            .expect("load latest pending continuation request")
+            .expect("latest continuation request");
+        assert_eq!(loaded, latest);
+    }
+
+    #[test]
+    fn continuation_request_repository_breaks_requested_at_ties_by_insertion_order() {
+        let config = isolated_memory_config("continuation-request-tie-break");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let first = repo
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "ctr-first".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({"user_input": "first"}),
+            })
+            .expect("persist first continuation request");
+        let second = repo
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "ctr-second".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({"user_input": "second"}),
+            })
+            .expect("persist second continuation request");
+
+        let conn = repo.open_connection().expect("open repository connection");
+        conn.execute(
+            "UPDATE continuation_requests
+             SET requested_at = ?1
+             WHERE continuation_request_id IN (?2, ?3)",
+            params![first.requested_at, "ctr-first", "ctr-second"],
+        )
+        .expect("force same requested_at");
+
+        let loaded = repo
+            .latest_pending_continuation_request_for_session("root-session")
+            .expect("load latest pending continuation request")
+            .expect("latest continuation request");
+        assert_eq!(
+            loaded.continuation_request_id,
+            second.continuation_request_id
+        );
+    }
+
+    #[test]
+    fn continuation_request_repository_transitions_status_if_current() {
+        let config = isolated_memory_config("continuation-request-transition");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        repo.ensure_continuation_request(NewContinuationRequestRecord {
+            continuation_request_id: "ctr-transition".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+            reason_code: "tool_loop_circuit_breaker".to_owned(),
+            request_payload_json: json!({
+                "user_input": "resume me"
+            }),
+        })
+        .expect("persist continuation request");
+
+        let resumed = repo
+            .transition_continuation_request_if_current(
+                "ctr-transition",
+                TransitionContinuationRequestIfCurrentRequest {
+                    expected_status: ContinuationRequestStatus::Pending,
+                    next_status: ContinuationRequestStatus::Resumed,
+                    resolved_by_session_id: Some("root-session".to_owned()),
+                    last_error: None,
+                },
+            )
+            .expect("transition continuation request")
+            .expect("resumed continuation request");
+        assert_eq!(resumed.status, ContinuationRequestStatus::Resumed);
+        assert_eq!(
+            resumed.resolved_by_session_id.as_deref(),
+            Some("root-session")
+        );
+        assert!(resumed.resolved_at.is_some());
+
+        let noop = repo
+            .transition_continuation_request_if_current(
+                "ctr-transition",
+                TransitionContinuationRequestIfCurrentRequest {
+                    expected_status: ContinuationRequestStatus::Pending,
+                    next_status: ContinuationRequestStatus::Cancelled,
+                    resolved_by_session_id: Some("root-session".to_owned()),
+                    last_error: Some("should not apply".to_owned()),
+                },
+            )
+            .expect("stale continuation transition should not error");
+        assert!(noop.is_none());
     }
 }

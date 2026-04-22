@@ -121,7 +121,7 @@ impl AttentionSignal {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GrantAttentionState {
+pub(crate) enum GrantAttentionState {
     NotApplicable,
     Clean,
     MissingGrant,
@@ -189,6 +189,94 @@ struct DerivedAttentionView {
 }
 
 #[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalExecutionIntegrityState {
+    Clean,
+    PendingDecision,
+    ResumeIncomplete,
+    ResumeFailed,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ApprovalExecutionIntegrityState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::PendingDecision => "pending_decision",
+            Self::ResumeIncomplete => "resume_incomplete",
+            Self::ResumeFailed => "resume_failed",
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalExecutionLifecycleState {
+    PendingDecision,
+    AwaitingReplay,
+    ExecutingReplay,
+    ReplaySucceeded,
+    ReplayFailed,
+    Denied,
+    Expired,
+    Cancelled,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ApprovalExecutionLifecycleState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PendingDecision => "pending_decision",
+            Self::AwaitingReplay => "awaiting_replay",
+            Self::ExecutingReplay => "executing_replay",
+            Self::ReplaySucceeded => "replay_succeeded",
+            Self::ReplayFailed => "replay_failed",
+            Self::Denied => "denied",
+            Self::Expired => "expired",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::ReplaySucceeded
+                | Self::ReplayFailed
+                | Self::Denied
+                | Self::Expired
+                | Self::Cancelled
+        )
+    }
+
+    fn replay_expected(self) -> bool {
+        matches!(
+            self,
+            Self::AwaitingReplay
+                | Self::ExecutingReplay
+                | Self::ReplaySucceeded
+                | Self::ReplayFailed
+        )
+    }
+
+    fn replay_completed(self) -> bool {
+        matches!(self, Self::ReplaySucceeded | Self::ReplayFailed)
+    }
+
+    fn replay_failed(self) -> bool {
+        matches!(self, Self::ReplayFailed)
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ApprovalAttentionSnapshot {
+    pub execution_integrity_state: ApprovalExecutionIntegrityState,
+    pub execution_lifecycle_state: ApprovalExecutionLifecycleState,
+    pub grant_review_state: GrantAttentionState,
+    pub needs_attention: bool,
+}
+
+#[cfg(feature = "memory-sqlite")]
 impl DerivedAttentionView {
     fn combined_signals(&self) -> Vec<AttentionSignal> {
         let mut signals = self.execution_signals.clone();
@@ -243,33 +331,48 @@ impl DerivedAttentionView {
             .collect()
     }
 
-    fn execution_state(&self) -> &'static str {
+    fn execution_state(&self) -> ApprovalExecutionIntegrityState {
         if self
             .execution_signals
             .iter()
             .any(|signal| signal.kind == "resumed_execution_failed")
         {
-            "resume_failed"
+            ApprovalExecutionIntegrityState::ResumeFailed
         } else if self
             .execution_signals
             .iter()
             .any(|signal| signal.kind == "resume_incomplete")
         {
-            "resume_incomplete"
+            ApprovalExecutionIntegrityState::ResumeIncomplete
         } else if self
             .execution_signals
             .iter()
             .any(|signal| signal.kind == "pending_operator_decision")
         {
-            "pending_decision"
+            ApprovalExecutionIntegrityState::PendingDecision
         } else {
-            "clean"
+            ApprovalExecutionIntegrityState::Clean
+        }
+    }
+
+    fn snapshot(&self, record: &ApprovalRequestRecord) -> ApprovalAttentionSnapshot {
+        let execution_integrity_state = self.execution_state();
+        let execution_lifecycle_state = self.execution_lifecycle_state(record);
+        let grant_review_state = self.grant_state;
+        let needs_attention = self.needs_attention();
+
+        ApprovalAttentionSnapshot {
+            execution_integrity_state,
+            execution_lifecycle_state,
+            grant_review_state,
+            needs_attention,
         }
     }
 
     fn execution_integrity_json(&self) -> Value {
+        let execution_state = self.execution_state();
         json!({
-            "state": self.execution_state(),
+            "state": execution_state.as_str(),
             "needs_attention": !self.execution_signals.is_empty(),
             "signals": self.execution_signals.iter().map(AttentionSignal::to_json).collect::<Vec<_>>(),
             "highest_escalation_level": self
@@ -279,6 +382,38 @@ impl DerivedAttentionView {
                 .max()
                 .map(AttentionSeverity::as_str)
                 .unwrap_or("none"),
+        })
+    }
+
+    fn execution_lifecycle_state(
+        &self,
+        record: &ApprovalRequestRecord,
+    ) -> ApprovalExecutionLifecycleState {
+        match record.status {
+            ApprovalRequestStatus::Pending => ApprovalExecutionLifecycleState::PendingDecision,
+            ApprovalRequestStatus::Approved => ApprovalExecutionLifecycleState::AwaitingReplay,
+            ApprovalRequestStatus::Executing => ApprovalExecutionLifecycleState::ExecutingReplay,
+            ApprovalRequestStatus::Executed => {
+                if record.last_error.is_some() {
+                    ApprovalExecutionLifecycleState::ReplayFailed
+                } else {
+                    ApprovalExecutionLifecycleState::ReplaySucceeded
+                }
+            }
+            ApprovalRequestStatus::Denied => ApprovalExecutionLifecycleState::Denied,
+            ApprovalRequestStatus::Expired => ApprovalExecutionLifecycleState::Expired,
+            ApprovalRequestStatus::Cancelled => ApprovalExecutionLifecycleState::Cancelled,
+        }
+    }
+
+    fn execution_lifecycle_json(&self, record: &ApprovalRequestRecord) -> Value {
+        let lifecycle_state = self.execution_lifecycle_state(record);
+        json!({
+            "state": lifecycle_state.as_str(),
+            "terminal": lifecycle_state.is_terminal(),
+            "replay_expected": lifecycle_state.replay_expected(),
+            "replay_completed": lifecycle_state.replay_completed(),
+            "replay_failed": lifecycle_state.replay_failed(),
         })
     }
 
@@ -965,18 +1100,7 @@ fn derive_attention_view(
             action: "resolve_request",
             detail: Some("approval request is waiting for an operator decision".to_owned()),
         }),
-        ApprovalRequestStatus::Approved | ApprovalRequestStatus::Executing => {
-            execution_signals.push(AttentionSignal {
-                source: "execution",
-                kind: "resume_incomplete",
-                severity: AttentionSeverity::High,
-                action: "inspect_replay_state",
-                detail: Some(
-                    "approval request left the queue without reaching a terminal execution state"
-                        .to_owned(),
-                ),
-            });
-        }
+        ApprovalRequestStatus::Approved | ApprovalRequestStatus::Executing => {}
         ApprovalRequestStatus::Executed if record.last_error.is_some() => {
             execution_signals.push(AttentionSignal {
                 source: "execution",
@@ -1042,6 +1166,17 @@ fn derive_attention_view(
         grant_record,
         grant_age_seconds,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn derive_approval_attention_snapshot(
+    repo: &SessionRepository,
+    record: &ApprovalRequestRecord,
+) -> Result<ApprovalAttentionSnapshot, String> {
+    let attention = derive_attention_view(repo, record)?;
+    let snapshot = attention.snapshot(record);
+
+    Ok(snapshot)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1176,6 +1311,7 @@ fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
         "rule_id": snapshot.get("rule_id").and_then(Value::as_str),
         "reason_code": snapshot.get("reason_code").and_then(Value::as_str),
         "execution_integrity": view.attention.execution_integrity_json(),
+        "execution_lifecycle": view.attention.execution_lifecycle_json(record),
         "grant_review": view.attention.grant_review_json(),
         "grant_attention": view.attention.grant_attention_json(),
         "attention": view.attention.attention_json(),
@@ -1208,6 +1344,7 @@ fn approval_request_detail_json(
         "request_payload": record.request_payload_json,
         "governance_snapshot": record.governance_snapshot_json,
         "execution_integrity": attention.execution_integrity_json(),
+        "execution_lifecycle": attention.execution_lifecycle_json(record),
         "grant_review": attention.grant_review_json(),
         "grant_attention": attention.grant_attention_json(),
         "attention": attention.attention_json(),
@@ -1472,6 +1609,23 @@ mod tests {
         )
         .expect("approve request")
         .expect("approval request should be pending");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn mark_request_executing(repo: &SessionRepository, approval_request_id: &str) {
+        repo.transition_approval_request_if_current(
+            approval_request_id,
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Approved,
+                next_status: ApprovalRequestStatus::Executing,
+                decision: None,
+                resolved_by_session_id: None,
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("mark request executing")
+        .expect("approval request should be approved");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1755,6 +1909,8 @@ mod tests {
             "run-apr-child-visible"
         );
         assert_eq!(request["execution_integrity"]["state"], "pending_decision");
+        assert_eq!(request["execution_lifecycle"]["state"], "pending_decision");
+        assert_eq!(request["execution_lifecycle"]["terminal"], false);
         assert_eq!(request["grant_review"]["state"], "not_applicable");
         assert_eq!(request["attention"]["sources"], json!(["execution"]));
     }
@@ -1887,6 +2043,9 @@ mod tests {
 
         let request = &outcome.payload["approval_request"];
         assert_eq!(request["execution_integrity"]["state"], "resume_failed");
+        assert_eq!(request["execution_lifecycle"]["state"], "replay_failed");
+        assert_eq!(request["execution_lifecycle"]["terminal"], true);
+        assert_eq!(request["execution_lifecycle"]["replay_failed"], true);
         assert_eq!(request["grant_review"]["state"], "missing_grant");
         assert_eq!(request["grant_attention"]["needs_attention"], true);
         assert_eq!(request["attention"]["needs_attention"], true);
@@ -1899,6 +2058,81 @@ mod tests {
             .expect("attention signals");
         assert!(sources.iter().any(|signal| signal["source"] == "execution"));
         assert!(sources.iter().any(|signal| signal["source"] == "grant"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_attention_summary_ignores_in_flight_replay_states() {
+        let config = isolated_memory_config("approval-attention-in-flight");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        seed_request(
+            &repo,
+            "apr-awaiting-replay",
+            "root-session",
+            "delegate",
+            "rule-awaiting",
+        );
+        approve_request(
+            &repo,
+            "apr-awaiting-replay",
+            ApprovalDecision::ApproveOnce,
+            "root-session",
+        );
+
+        seed_request(
+            &repo,
+            "apr-executing-replay",
+            "root-session",
+            "delegate",
+            "rule-executing",
+        );
+        approve_request(
+            &repo,
+            "apr-executing-replay",
+            ApprovalDecision::ApproveOnce,
+            "root-session",
+        );
+        mark_request_executing(&repo, "apr-executing-replay");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({}),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome");
+
+        assert_eq!(
+            outcome.payload["attention_summary"]["needs_attention_count"],
+            0
+        );
+
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("approval request summaries");
+        let awaiting = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-awaiting-replay")
+            .expect("awaiting replay request");
+        assert_eq!(awaiting["execution_integrity"]["state"], "clean");
+        assert_eq!(awaiting["execution_lifecycle"]["state"], "awaiting_replay");
+        assert_eq!(awaiting["attention"]["needs_attention"], false);
+
+        let executing = requests
+            .iter()
+            .find(|item| item["approval_request_id"] == "apr-executing-replay")
+            .expect("executing replay request");
+        assert_eq!(executing["execution_integrity"]["state"], "clean");
+        assert_eq!(
+            executing["execution_lifecycle"]["state"],
+            "executing_replay"
+        );
+        assert_eq!(executing["attention"]["needs_attention"], false);
     }
 
     #[cfg(feature = "memory-sqlite")]

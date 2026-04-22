@@ -123,6 +123,7 @@ pub enum SafeLaneContinuationBudgetDecision {
 pub enum SafeLaneFailureRouteReason {
     RetryableFailure,
     RoundBudgetExhausted,
+    ApprovalRequired,
     PolicyDenied,
     NonRetryableFailure,
     RetryableFlagFalse,
@@ -137,6 +138,7 @@ impl SafeLaneFailureRouteReason {
         match self {
             Self::RetryableFailure => "retryable_failure",
             Self::RoundBudgetExhausted => "round_budget_exhausted",
+            Self::ApprovalRequired => "approval_required",
             Self::PolicyDenied => "policy_denied",
             Self::NonRetryableFailure => "non_retryable_failure",
             Self::RetryableFlagFalse => "retryable_flag_false",
@@ -151,6 +153,7 @@ impl SafeLaneFailureRouteReason {
         match value.trim() {
             "retryable_failure" => Some(Self::RetryableFailure),
             "round_budget_exhausted" => Some(Self::RoundBudgetExhausted),
+            "approval_required" => Some(Self::ApprovalRequired),
             "policy_denied" => Some(Self::PolicyDenied),
             "non_retryable_failure" => Some(Self::NonRetryableFailure),
             "retryable_flag_false" => Some(Self::RetryableFlagFalse),
@@ -259,5 +262,13 @@ mod tests {
             budget.continuation_decision(1, 0),
             SafeLaneContinuationBudgetDecision::Continue
         );
+    }
+
+    #[test]
+    fn safe_lane_failure_route_reason_round_trips_approval_required() {
+        let reason = SafeLaneFailureRouteReason::parse("approval_required")
+            .expect("approval_required should parse");
+        assert_eq!(reason, SafeLaneFailureRouteReason::ApprovalRequired);
+        assert_eq!(reason.as_str(), "approval_required");
     }
 }

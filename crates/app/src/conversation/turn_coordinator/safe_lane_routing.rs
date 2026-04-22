@@ -36,6 +36,9 @@ impl SafeLaneFailureRoute {
 
         if let Some(code) = SafeLaneFailureCode::parse(failure.code.as_str()) {
             match code {
+                SafeLaneFailureCode::PlanNodeApprovalRequired => {
+                    return Self::terminal(SafeLaneFailureRouteReason::ApprovalRequired);
+                }
                 SafeLaneFailureCode::PlanNodePolicyDenied => {
                     return Self::terminal(SafeLaneFailureRouteReason::PolicyDenied);
                 }

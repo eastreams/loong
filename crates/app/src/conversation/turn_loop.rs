@@ -6,6 +6,11 @@ use serde_json::{Value, json};
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{
+    ContinuationRequestKind, ContinuationRequestStatus, NewContinuationRequestRecord,
+    SessionRepository, TransitionContinuationRequestIfCurrentRequest,
+};
 use crate::session::store;
 
 use super::super::config::LoongConfig;
@@ -38,6 +43,14 @@ struct TurnLoopSessionState {
     loop_supervisor: ToolLoopSupervisor,
     followup_payload_budget: FollowupPayloadBudget,
     total_tool_calls: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PendingTurnLoopContinuation {
+    continuation_request_id: String,
+    reason_code: String,
+    original_user_input: String,
+    resume_messages: Vec<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,13 +137,35 @@ impl ConversationTurnLoop {
             config.clone(),
         );
         let turn_id = super::turn_shared::next_conversation_turn_id();
-        let mut session = initialize_turn_loop_session(
-            runtime
-                .build_messages(config, session_id, true, &tool_view, binding)
-                .await?,
-            user_input,
-            &policy,
-        );
+        let pending_continuation =
+            load_pending_turn_loop_continuation(config, session_id, user_input)?;
+        let initial_messages = match pending_continuation.as_ref() {
+            Some(continuation) => continuation.resume_messages.clone(),
+            None => {
+                runtime
+                    .build_messages(config, session_id, true, &tool_view, binding)
+                    .await?
+            }
+        };
+        let initial_user_input = match pending_continuation.as_ref() {
+            Some(continuation) => continuation.original_user_input.as_str(),
+            None => user_input,
+        };
+        let active_user_input = initial_user_input;
+        let resume_prompt = pending_continuation.as_ref().map(|continuation| {
+            turn_loop_resume_prompt_from_reason(continuation.reason_code.as_str())
+        });
+        let mut session =
+            initialize_turn_loop_session(initial_messages, initial_user_input, &policy);
+        if let Some(resume_prompt) = resume_prompt {
+            session.messages.push(json!({
+                "role": "user",
+                "content": resume_prompt,
+            }));
+        }
+        let resumed_continuation_request_id = pending_continuation
+            .as_ref()
+            .map(|continuation| continuation.continuation_request_id.clone());
 
         for round_index in 0..policy.max_rounds {
             let use_streaming = crate::provider::supports_turn_streaming_events(config);
@@ -176,12 +211,14 @@ impl ConversationTurnLoop {
                 ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
                     return apply_turn_loop_terminal_action(
                         runtime,
+                        config,
                         session_id,
-                        user_input,
+                        active_user_input,
                         TurnLoopTerminalAction::PersistReply {
                             reply,
                             persistence_mode: ReplyPersistenceMode::InlineProviderError,
                         },
+                        resumed_continuation_request_id.as_deref(),
                         binding,
                     )
                     .await;
@@ -189,9 +226,11 @@ impl ConversationTurnLoop {
                 ProviderTurnRequestAction::ReturnError { error } => {
                     return apply_turn_loop_terminal_action(
                         runtime,
+                        config,
                         session_id,
-                        user_input,
+                        active_user_input,
                         TurnLoopTerminalAction::ReturnError { error },
+                        resumed_continuation_request_id.as_deref(),
                         binding,
                     )
                     .await;
@@ -207,14 +246,25 @@ impl ConversationTurnLoop {
             if let Some(reply) =
                 tool_loop_circuit_breaker_reply(prospective_total, policy.max_total_tool_calls)
             {
+                persist_turn_loop_continuation_request(
+                    config,
+                    session_id,
+                    turn_id.as_str(),
+                    active_user_input,
+                    &session.messages,
+                    prospective_total,
+                    policy.max_total_tool_calls,
+                )?;
                 return apply_turn_loop_terminal_action(
                     runtime,
+                    config,
                     session_id,
-                    user_input,
+                    active_user_input,
                     TurnLoopTerminalAction::PersistReply {
                         reply,
                         persistence_mode: ReplyPersistenceMode::Success,
                     },
+                    resumed_continuation_request_id.as_deref(),
                     binding,
                 )
                 .await;
@@ -247,14 +297,20 @@ impl ConversationTurnLoop {
                 runtime,
                 config,
                 &mut session,
-                user_input,
+                active_user_input,
                 decision,
                 binding,
             )
             .await?
             {
                 return apply_turn_loop_terminal_action(
-                    runtime, session_id, user_input, action, binding,
+                    runtime,
+                    config,
+                    session_id,
+                    active_user_input,
+                    action,
+                    resumed_continuation_request_id.as_deref(),
+                    binding,
                 )
                 .await;
             }
@@ -262,9 +318,11 @@ impl ConversationTurnLoop {
 
         apply_turn_loop_terminal_action(
             runtime,
+            config,
             session_id,
-            user_input,
+            active_user_input,
             build_round_limit_terminal_action(session.last_raw_reply.as_str()),
+            resumed_continuation_request_id.as_deref(),
             binding,
         )
         .await
@@ -280,6 +338,223 @@ fn build_round_limit_terminal_action(last_raw_reply: &str) -> TurnLoopTerminalAc
             last_raw_reply.to_owned()
         },
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_pending_turn_loop_continuation(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> CliResult<Option<PendingTurnLoopContinuation>> {
+    let resume_requested = user_requested_turn_loop_resume(user_input);
+    if !resume_requested {
+        return Ok(None);
+    }
+
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let Some(record) = repo.latest_pending_continuation_request_for_session(session_id)? else {
+        return Ok(None);
+    };
+    if record.kind != ContinuationRequestKind::ToolLoopCircuitBreaker {
+        return Ok(None);
+    }
+
+    let claimed_record = repo
+        .transition_continuation_request_if_current(
+            &record.continuation_request_id,
+            TransitionContinuationRequestIfCurrentRequest {
+                expected_status: ContinuationRequestStatus::Pending,
+                next_status: ContinuationRequestStatus::Resumed,
+                resolved_by_session_id: Some(session_id.to_owned()),
+                last_error: None,
+            },
+        )?
+        .ok_or_else(|| {
+            format!(
+                "continuation_request_not_pending: `{}`",
+                record.continuation_request_id
+            )
+        })?;
+    let original_user_input =
+        decode_turn_loop_continuation_user_input(&claimed_record.request_payload_json)?;
+    let resume_messages =
+        decode_turn_loop_continuation_messages(&claimed_record.request_payload_json)?;
+    Ok(Some(PendingTurnLoopContinuation {
+        continuation_request_id: claimed_record.continuation_request_id,
+        reason_code: claimed_record.reason_code,
+        original_user_input,
+        resume_messages,
+    }))
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn load_pending_turn_loop_continuation(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _user_input: &str,
+) -> CliResult<Option<PendingTurnLoopContinuation>> {
+    Ok(None)
+}
+
+fn user_requested_turn_loop_resume(user_input: &str) -> bool {
+    let normalized = user_input.trim();
+    normalized.eq_ignore_ascii_case("resume")
+}
+
+fn turn_loop_resume_prompt_from_reason(reason_code: &str) -> &str {
+    match reason_code {
+        "tool_loop_circuit_breaker" => {
+            "Resume the interrupted request from the saved runtime state and continue the original user request without restarting from scratch."
+        }
+        _ => "Resume the interrupted request from the saved runtime state.",
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn decode_turn_loop_continuation_messages(payload: &Value) -> Result<Vec<Value>, String> {
+    let Some(messages_value) = payload.get("messages") else {
+        return Err("continuation_request_missing_messages".to_owned());
+    };
+    let messages = serde_json::from_value::<Vec<Value>>(messages_value.clone())
+        .map_err(|error| format!("decode continuation request messages failed: {error}"))?;
+    Ok(messages)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn decode_turn_loop_continuation_user_input(payload: &Value) -> Result<String, String> {
+    let Some(user_input_value) = payload.get("user_input") else {
+        return Err("continuation_request_missing_user_input".to_owned());
+    };
+    let Some(user_input) = user_input_value.as_str() else {
+        return Err("continuation_request_invalid_user_input".to_owned());
+    };
+    let normalized_user_input = user_input.trim();
+    if normalized_user_input.is_empty() {
+        return Err("continuation_request_invalid_user_input".to_owned());
+    }
+    Ok(normalized_user_input.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_turn_loop_continuation_request(
+    config: &LoongConfig,
+    session_id: &str,
+    turn_id: &str,
+    user_input: &str,
+    messages: &[Value],
+    prospective_total: usize,
+    max_total_tool_calls: usize,
+) -> Result<(), String> {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let continuation_request_id =
+        tool_loop_continuation_request_id(session_id, turn_id, "tool_loop_circuit_breaker");
+    let request_payload_json = json!({
+        "user_input": user_input,
+        "messages": messages,
+        "prospective_total_tool_calls": prospective_total,
+        "max_total_tool_calls": max_total_tool_calls,
+    });
+
+    let _record = repo.ensure_continuation_request(NewContinuationRequestRecord {
+        continuation_request_id,
+        session_id: session_id.to_owned(),
+        kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+        reason_code: "tool_loop_circuit_breaker".to_owned(),
+        request_payload_json,
+    })?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn persist_turn_loop_continuation_request(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _turn_id: &str,
+    _user_input: &str,
+    _messages: &[Value],
+    _prospective_total: usize,
+    _max_total_tool_calls: usize,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_resumed_turn_loop_continuation(
+    config: &LoongConfig,
+    session_id: &str,
+    continuation_request_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(continuation_request_id) = continuation_request_id else {
+        return Ok(());
+    };
+
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let _record = repo.transition_continuation_request_if_current(
+        continuation_request_id,
+        TransitionContinuationRequestIfCurrentRequest {
+            expected_status: ContinuationRequestStatus::Resumed,
+            next_status: ContinuationRequestStatus::Resumed,
+            resolved_by_session_id: Some(session_id.to_owned()),
+            last_error: None,
+        },
+    )?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn finalize_resumed_turn_loop_continuation(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _continuation_request_id: Option<&str>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_resumed_turn_loop_continuation_error(
+    config: &LoongConfig,
+    session_id: &str,
+    continuation_request_id: Option<&str>,
+    error: &str,
+) -> Result<(), String> {
+    let Some(continuation_request_id) = continuation_request_id else {
+        return Ok(());
+    };
+
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let _record = repo.transition_continuation_request_if_current(
+        continuation_request_id,
+        TransitionContinuationRequestIfCurrentRequest {
+            expected_status: ContinuationRequestStatus::Resumed,
+            next_status: ContinuationRequestStatus::Resumed,
+            resolved_by_session_id: Some(session_id.to_owned()),
+            last_error: Some(error.to_owned()),
+        },
+    )?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn finalize_resumed_turn_loop_continuation_error(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _continuation_request_id: Option<&str>,
+    _error: &str,
+) -> Result<(), String> {
+    Ok(())
+}
+
+fn tool_loop_continuation_request_id(session_id: &str, turn_id: &str, reason_code: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    turn_id.hash(&mut hasher);
+    reason_code.hash(&mut hasher);
+    let digest = hasher.finish();
+    format!("ctr_{digest:016x}")
 }
 
 async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
@@ -324,9 +599,11 @@ async fn resolve_round_kernel_terminal_action<R: ConversationRuntime + ?Sized>(
 
 async fn apply_turn_loop_terminal_action<R: ConversationRuntime + ?Sized>(
     runtime: &R,
+    config: &LoongConfig,
     session_id: &str,
     user_input: &str,
     action: TurnLoopTerminalAction,
+    resumed_continuation_request_id: Option<&str>,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<String> {
     match action {
@@ -343,9 +620,22 @@ async fn apply_turn_loop_terminal_action<R: ConversationRuntime + ?Sized>(
                 binding,
             )
             .await?;
+            finalize_resumed_turn_loop_continuation(
+                config,
+                session_id,
+                resumed_continuation_request_id,
+            )?;
             Ok(reply)
         }
-        TurnLoopTerminalAction::ReturnError { error } => Err(error),
+        TurnLoopTerminalAction::ReturnError { error } => {
+            finalize_resumed_turn_loop_continuation_error(
+                config,
+                session_id,
+                resumed_continuation_request_id,
+                error.as_str(),
+            )?;
+            Err(error)
+        }
     }
 }
 
@@ -968,6 +1258,12 @@ impl ToolLoopSupervisor {
 mod tests {
     use super::*;
     use crate::conversation::turn_engine::TurnFailure;
+    use crate::session::repository::{
+        ContinuationRequestKind, ContinuationRequestStatus, NewContinuationRequestRecord,
+        SessionRepository,
+    };
+    use crate::session::store::SessionStoreConfig;
+    use crate::test_support::unique_temp_dir;
 
     fn build_large_file_read_tool_result() -> String {
         let content = (0..96)
@@ -1904,5 +2200,60 @@ mod tests {
             )
         );
         assert!(tool_loop_circuit_breaker_reply(usize::MAX, 200).is_some());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn continuation_test_config(name: &str) -> LoongConfig {
+        let root = unique_temp_dir(name);
+        let sqlite_path = root.join("memory.sqlite3");
+        let mut config = LoongConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn load_pending_turn_loop_continuation_claims_request_and_keeps_original_input() {
+        let config = continuation_test_config("turn-loop-continuation-load");
+        let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.ensure_continuation_request(NewContinuationRequestRecord {
+            continuation_request_id: "ctr-loop-load".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+            reason_code: "tool_loop_circuit_breaker".to_owned(),
+            request_payload_json: json!({
+                "user_input": "deploy to production and show raw tool output",
+                "messages": [
+                    {"role": "user", "content": "deploy to production and show raw tool output"}
+                ]
+            }),
+        })
+        .expect("persist continuation request");
+
+        let loaded = load_pending_turn_loop_continuation(&config, "root-session", "resume")
+            .expect("load continuation request")
+            .expect("pending continuation request");
+
+        assert_eq!(
+            loaded.original_user_input,
+            "deploy to production and show raw tool output"
+        );
+        assert_eq!(loaded.reason_code, "tool_loop_circuit_breaker");
+
+        let updated = repo
+            .load_continuation_request("ctr-loop-load")
+            .expect("load updated continuation request")
+            .expect("updated continuation request");
+        assert_eq!(updated.status, ContinuationRequestStatus::Resumed);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn user_requested_turn_loop_resume_matches_exact_resume_only() {
+        assert!(user_requested_turn_loop_resume("resume"));
+        assert!(user_requested_turn_loop_resume("  RESUME  "));
+        assert!(!user_requested_turn_loop_resume("resume now"));
+        assert!(!user_requested_turn_loop_resume("please resume"));
     }
 }

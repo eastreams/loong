@@ -52,6 +52,36 @@ impl ProviderTurnSessionState {
         }
     }
 
+    pub(super) fn from_saved_messages(
+        assembled_context: AssembledConversationContext,
+        mut messages: Vec<Value>,
+        user_input: &str,
+    ) -> Self {
+        let AssembledConversationContext {
+            artifacts,
+            estimated_tokens,
+            prompt_fragments,
+            system_prompt_addition: _system_prompt_addition,
+            messages: _context_messages,
+        } = assembled_context;
+        messages.push(json!({
+            "role": "user",
+            "content": user_input,
+        }));
+        let prompt_frame = PromptFrame::from_context_parts(
+            prompt_fragments.as_slice(),
+            messages.as_slice(),
+            artifacts.as_slice(),
+            estimated_tokens,
+            None,
+        );
+        Self {
+            messages,
+            estimated_tokens,
+            prompt_frame,
+        }
+    }
+
     pub(super) fn after_turn_messages(&self, reply: &str) -> Vec<Value> {
         let mut messages = self.messages.clone();
         messages.push(json!({
@@ -136,6 +166,26 @@ impl ProviderTurnPreparation {
             ),
             lane_plan: ProviderTurnLanePlan::from_user_input(config, user_input),
             raw_tool_output_requested: user_requested_raw_tool_output(user_input),
+            turn_id: turn_id.to_owned(),
+        }
+    }
+
+    pub(super) fn from_saved_messages_with_turn_id(
+        config: &LoongConfig,
+        assembled_context: AssembledConversationContext,
+        messages: Vec<Value>,
+        resume_prompt: &str,
+        original_user_input: &str,
+        turn_id: &str,
+    ) -> Self {
+        Self {
+            session: ProviderTurnSessionState::from_saved_messages(
+                assembled_context,
+                messages,
+                resume_prompt,
+            ),
+            lane_plan: ProviderTurnLanePlan::from_user_input(config, original_user_input),
+            raw_tool_output_requested: user_requested_raw_tool_output(original_user_input),
             turn_id: turn_id.to_owned(),
         }
     }

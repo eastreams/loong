@@ -433,7 +433,8 @@ fn control_plane_connect_response_debug_redacts_connection_token() {
             presence_count: 1,
             session_count: 2,
             pending_approval_count: 3,
-            acp_session_count: 4,
+            pending_continuation_count: 4,
+            acp_session_count: 5,
             runtime_ready: true,
         },
         policy: ControlPlanePolicy {
@@ -551,7 +552,8 @@ fn control_plane_connect_response_roundtrips_through_json() {
             presence_count: 10,
             session_count: 11,
             pending_approval_count: 12,
-            acp_session_count: 13,
+            pending_continuation_count: 13,
+            acp_session_count: 14,
             runtime_ready: true,
         },
         policy: ControlPlanePolicy {
@@ -642,7 +644,8 @@ fn control_plane_snapshot_response_roundtrips_through_json() {
             presence_count: 10,
             session_count: 20,
             pending_approval_count: 3,
-            acp_session_count: 4,
+            pending_continuation_count: 4,
+            acp_session_count: 5,
             runtime_ready: true,
         },
     };
@@ -650,6 +653,31 @@ fn control_plane_snapshot_response_roundtrips_through_json() {
     let decoded: ControlPlaneSnapshotResponse =
         serde_json::from_str(&encoded).expect("snapshot response should deserialize");
     assert_eq!(decoded, response);
+}
+
+#[test]
+fn control_plane_snapshot_response_defaults_missing_pending_continuation_count() {
+    let payload = serde_json::json!({
+        "snapshot": {
+            "state_version": {
+                "presence": 1,
+                "health": 2,
+                "sessions": 3,
+                "approvals": 4,
+                "acp": 5
+            },
+            "presence_count": 10,
+            "session_count": 20,
+            "pending_approval_count": 3,
+            "acp_session_count": 5,
+            "runtime_ready": true
+        }
+    });
+
+    let decoded: ControlPlaneSnapshotResponse =
+        serde_json::from_value(payload).expect("snapshot response should deserialize");
+
+    assert_eq!(decoded.snapshot.pending_continuation_count, 0);
 }
 
 #[test]
@@ -928,6 +956,14 @@ fn control_plane_approval_list_response_roundtrips_through_json() {
             last_error: None,
             reason: Some("governed_tool_requires_approval".to_owned()),
             rule_id: Some("rule-1".to_owned()),
+            execution_integrity_state: Some(
+                ControlPlaneApprovalExecutionIntegrityState::PendingDecision,
+            ),
+            execution_lifecycle_state: Some(
+                ControlPlaneApprovalExecutionLifecycleState::PendingDecision,
+            ),
+            grant_review_state: Some(ControlPlaneApprovalGrantReviewState::NotApplicable),
+            needs_attention: true,
         }],
     };
     let encoded =

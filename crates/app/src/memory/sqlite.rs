@@ -118,9 +118,9 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 12;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 13;
 const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 24;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 26;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
@@ -227,6 +227,7 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'session_events_fts',
                         'approval_requests',
                         'approval_grants',
+                        'continuation_requests',
                         'session_tool_consent',
                         'session_tool_policies'
                     ))
@@ -235,7 +236,8 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'idx_turns_session_turn_index',
                         'idx_memory_canonical_records_scope_kind_ts',
                         'idx_memory_canonical_records_session_turn',
-                        'idx_approval_requests_session_status_requested_at'
+                        'idx_approval_requests_session_status_requested_at',
+                        'idx_continuation_requests_session_status_requested_at'
                     ))
                 OR (type = 'trigger' AND name IN (
                         'memory_canonical_records_ai',
@@ -1798,6 +1800,18 @@ fn open_sqlite_connection_with_diagnostics(
               updated_at INTEGER NOT NULL,
               PRIMARY KEY(scope_session_id, approval_key)
             );
+            CREATE TABLE IF NOT EXISTS continuation_requests(
+              continuation_request_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              reason_code TEXT NOT NULL,
+              status TEXT NOT NULL,
+              request_payload_json TEXT NOT NULL,
+              requested_at INTEGER NOT NULL,
+              resolved_at INTEGER NULL,
+              resolved_by_session_id TEXT NULL,
+              last_error TEXT NULL
+            );
             CREATE TABLE IF NOT EXISTS session_tool_consent(
               scope_session_id TEXT PRIMARY KEY,
               mode TEXT NOT NULL CHECK (mode IN ('prompt', 'auto', 'full')),
@@ -1813,6 +1827,8 @@ fn open_sqlite_connection_with_diagnostics(
             );
             CREATE INDEX IF NOT EXISTS idx_approval_requests_session_status_requested_at
               ON approval_requests(session_id, status, requested_at DESC, approval_request_id);
+            CREATE INDEX IF NOT EXISTS idx_continuation_requests_session_status_requested_at
+              ON continuation_requests(session_id, status, requested_at DESC, continuation_request_id);
             ",
         )
         .map_err(|error| format!("initialize sqlite memory schema failed: {error}"))?;
@@ -1907,6 +1923,7 @@ fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), S
 fn ensure_sqlite_runtime_schema_ready(conn: &mut Connection) -> Result<(), String> {
     ensure_sqlite_schema_repairs_if_needed(conn)?;
     ensure_control_plane_pairing_tables(conn)?;
+    ensure_continuation_request_storage(conn)?;
     Ok(())
 }
 
@@ -2068,6 +2085,30 @@ fn ensure_session_event_search_storage(conn: &Connection) -> Result<(), String> 
     }
 
     rebuild_session_event_search_storage_if_needed(conn)
+}
+
+fn ensure_continuation_request_storage(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS continuation_requests(
+          continuation_request_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          reason_code TEXT NOT NULL,
+          status TEXT NOT NULL,
+          request_payload_json TEXT NOT NULL,
+          requested_at INTEGER NOT NULL,
+          resolved_at INTEGER NULL,
+          resolved_by_session_id TEXT NULL,
+          last_error TEXT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_continuation_requests_session_status_requested_at
+          ON continuation_requests(session_id, status, requested_at DESC, continuation_request_id);
+        ",
+    )
+    .map_err(|error| format!("ensure continuation request storage failed: {error}"))?;
+
+    Ok(())
 }
 
 fn backfill_session_event_search_text(conn: &Connection) -> Result<(), String> {
@@ -6380,6 +6421,81 @@ mod tests {
             )
             .expect("query session event FTS");
         assert_eq!(fts_count, 1);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_memory_db_ready_repairs_continuation_request_storage() {
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loong-continuation-request-storage-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("continuation-request.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("open legacy sqlite db");
+        configure_sqlite_connection(&conn).expect("configure legacy sqlite db");
+        conn.execute_batch(
+            "
+            CREATE TABLE turns(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              ts INTEGER NOT NULL
+            );
+            CREATE INDEX idx_turns_session_id ON turns(session_id, id);
+            CREATE TABLE sessions(
+              session_id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              parent_session_id TEXT NULL,
+              label TEXT NULL,
+              state TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              last_error TEXT NULL
+            );
+            CREATE TABLE session_events(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              event_kind TEXT NOT NULL,
+              actor_session_id TEXT NULL,
+              payload_json TEXT NOT NULL,
+              search_text TEXT NOT NULL DEFAULT '',
+              ts INTEGER NOT NULL
+            );
+            CREATE INDEX idx_session_events_session_id
+              ON session_events(session_id, id);
+            PRAGMA user_version = 12;
+            ",
+        )
+        .expect("create legacy continuation schema");
+        drop(conn);
+
+        let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
+
+        ensure_memory_db_ready(Some(db_path.clone()), &config).expect("repair sqlite db");
+
+        let conn = Connection::open(&db_path).expect("open repaired sqlite db");
+        let columns =
+            sqlite_table_columns(&conn, "continuation_requests").expect("continuation columns");
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "continuation_request_id")
+        );
+        assert!(columns.iter().any(|column| column == "requested_at"));
+        let user_version = read_sqlite_user_version(&conn).expect("read repaired user version");
+        assert_eq!(user_version, SQLITE_MEMORY_SCHEMA_VERSION);
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);

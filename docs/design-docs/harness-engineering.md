@@ -58,6 +58,20 @@ Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file
 
 Turn persistence to SQLite. Audit event recording. Structured progress artifacts are a gap.
 
+Current progress:
+
+- tool-loop circuit breaker pauses now persist a typed `continuation_requests`
+  record in session durability instead of relying only on text like "reply to
+  resume"
+- the canonical `resume` path restores saved context from that typed record and
+  marks the request resumed with retained error context on failure
+- session inspection and trajectory export now surface those continuation
+  records so pause/resume control state is inspectable rather than implicit
+- approval request read surfaces now derive a shared typed attention snapshot so
+  approval tools and control-plane views agree on execution integrity,
+  execution lifecycle, grant review state, and whether operator attention is
+  still required
+
 ---
 
 ## Architectural Constraints as Harness

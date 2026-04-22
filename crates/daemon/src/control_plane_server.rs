@@ -23,17 +23,18 @@ use loong_protocol::{
     CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
     ControlPlaneAcpSessionListResponse, ControlPlaneAcpSessionMetadata, ControlPlaneAcpSessionMode,
     ControlPlaneAcpSessionReadResponse, ControlPlaneAcpSessionState, ControlPlaneAcpSessionStatus,
-    ControlPlaneApprovalDecision, ControlPlaneApprovalListResponse,
-    ControlPlaneApprovalRequestStatus, ControlPlaneApprovalSummary, ControlPlaneChallengeResponse,
-    ControlPlaneConnectErrorCode, ControlPlaneConnectErrorResponse, ControlPlaneConnectRequest,
-    ControlPlaneConnectResponse, ControlPlaneEventEnvelope, ControlPlaneEventName,
-    ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
-    ControlPlanePairingResolveRequest, ControlPlanePairingResolveResponse,
-    ControlPlanePairingStatus, ControlPlanePolicy, ControlPlanePrincipal,
-    ControlPlaneRecentEventsResponse, ControlPlaneScope, ControlPlaneSessionEvent,
-    ControlPlaneSessionKind, ControlPlaneSessionListResponse, ControlPlaneSessionObservation,
-    ControlPlaneSessionReadResponse, ControlPlaneSessionState, ControlPlaneSessionSummary,
-    ControlPlaneSessionTerminalOutcome, ControlPlaneSessionWorkflow,
+    ControlPlaneApprovalDecision, ControlPlaneApprovalExecutionIntegrityState,
+    ControlPlaneApprovalExecutionLifecycleState, ControlPlaneApprovalGrantReviewState,
+    ControlPlaneApprovalListResponse, ControlPlaneApprovalRequestStatus,
+    ControlPlaneApprovalSummary, ControlPlaneChallengeResponse, ControlPlaneConnectErrorCode,
+    ControlPlaneConnectErrorResponse, ControlPlaneConnectRequest, ControlPlaneConnectResponse,
+    ControlPlaneEventEnvelope, ControlPlaneEventName, ControlPlanePairingListResponse,
+    ControlPlanePairingRequestSummary, ControlPlanePairingResolveRequest,
+    ControlPlanePairingResolveResponse, ControlPlanePairingStatus, ControlPlanePolicy,
+    ControlPlanePrincipal, ControlPlaneRecentEventsResponse, ControlPlaneScope,
+    ControlPlaneSessionEvent, ControlPlaneSessionKind, ControlPlaneSessionListResponse,
+    ControlPlaneSessionObservation, ControlPlaneSessionReadResponse, ControlPlaneSessionState,
+    ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSessionWorkflow,
     ControlPlaneSessionWorkflowBinding, ControlPlaneSessionWorkflowBindingWorktree,
     ControlPlaneSessionWorkflowContinuity, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
     ControlPlaneStateVersion, ControlPlaneTaskListResponse, ControlPlaneTaskReadResponse,
@@ -416,6 +417,7 @@ fn map_snapshot(snapshot: mvp::control_plane::ControlPlaneSnapshotSummary) -> Co
         presence_count: snapshot.presence_count,
         session_count: snapshot.session_count,
         pending_approval_count: snapshot.pending_approval_count,
+        pending_continuation_count: snapshot.pending_continuation_count,
         acp_session_count: snapshot.acp_session_count,
         runtime_ready: snapshot.runtime_ready,
     }
@@ -703,51 +705,143 @@ fn map_approval_decision(
 
 #[cfg(feature = "memory-sqlite")]
 fn map_approval_summary(
-    approval: mvp::session::repository::ApprovalRequestRecord,
+    approval: mvp::control_plane::ControlPlaneApprovalSummaryView,
 ) -> ControlPlaneApprovalSummary {
-    let reason = approval
+    let mvp::control_plane::ControlPlaneApprovalSummaryView {
+        approval_request,
+        execution_integrity_state,
+        execution_lifecycle_state,
+        grant_review_state,
+        needs_attention,
+    } = approval;
+    let execution_integrity_state = Some(map_approval_execution_integrity_state(
+        execution_integrity_state,
+    ));
+    let execution_lifecycle_state = Some(map_approval_execution_lifecycle_state(
+        execution_lifecycle_state,
+    ));
+    let grant_review_state = Some(map_approval_grant_review_state(grant_review_state));
+    let reason = approval_request
         .governance_snapshot_json
         .get("reason")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
-    let rule_id = approval
+    let rule_id = approval_request
         .governance_snapshot_json
         .get("rule_id")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
     let visible_tool_name = Some(mvp::tools::user_visible_tool_name(
-        approval.tool_name.as_str(),
+        approval_request.tool_name.as_str(),
     ));
-    let raw_request = approval
+    let raw_request = approval_request
         .request_payload_json
         .as_object()
         .and_then(|payload| payload.get("args_json"))
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    let summarized_request =
-        mvp::tools::summarize_tool_request_for_display(approval.tool_name.as_str(), raw_request);
+    let summarized_request = mvp::tools::summarize_tool_request_for_display(
+        approval_request.tool_name.as_str(),
+        raw_request,
+    );
     let request_summary = Some(serde_json::json!({
-        "tool": visible_tool_name.clone().unwrap_or_else(|| approval.tool_name.clone()),
+        "tool": visible_tool_name.clone().unwrap_or_else(|| approval_request.tool_name.clone()),
         "request": summarized_request,
     }));
     ControlPlaneApprovalSummary {
-        approval_request_id: approval.approval_request_id,
-        session_id: approval.session_id,
-        turn_id: approval.turn_id,
-        tool_call_id: approval.tool_call_id,
-        tool_name: approval.tool_name,
+        approval_request_id: approval_request.approval_request_id,
+        session_id: approval_request.session_id,
+        turn_id: approval_request.turn_id,
+        tool_call_id: approval_request.tool_call_id,
+        tool_name: approval_request.tool_name,
         visible_tool_name,
         request_summary,
-        approval_key: approval.approval_key,
-        status: map_approval_status(approval.status),
-        decision: approval.decision.map(map_approval_decision),
-        requested_at: approval.requested_at,
-        resolved_at: approval.resolved_at,
-        resolved_by_session_id: approval.resolved_by_session_id,
-        executed_at: approval.executed_at,
-        last_error: approval.last_error,
+        approval_key: approval_request.approval_key,
+        status: map_approval_status(approval_request.status),
+        decision: approval_request.decision.map(map_approval_decision),
+        requested_at: approval_request.requested_at,
+        resolved_at: approval_request.resolved_at,
+        resolved_by_session_id: approval_request.resolved_by_session_id,
+        executed_at: approval_request.executed_at,
+        last_error: approval_request.last_error,
         reason,
         rule_id,
+        execution_integrity_state,
+        execution_lifecycle_state,
+        grant_review_state,
+        needs_attention,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_approval_execution_integrity_state(
+    state: mvp::control_plane::ControlPlaneApprovalExecutionIntegrityState,
+) -> ControlPlaneApprovalExecutionIntegrityState {
+    match state {
+        mvp::control_plane::ControlPlaneApprovalExecutionIntegrityState::Clean => {
+            ControlPlaneApprovalExecutionIntegrityState::Clean
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionIntegrityState::PendingDecision => {
+            ControlPlaneApprovalExecutionIntegrityState::PendingDecision
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionIntegrityState::ResumeIncomplete => {
+            ControlPlaneApprovalExecutionIntegrityState::ResumeIncomplete
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionIntegrityState::ResumeFailed => {
+            ControlPlaneApprovalExecutionIntegrityState::ResumeFailed
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_approval_execution_lifecycle_state(
+    state: mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState,
+) -> ControlPlaneApprovalExecutionLifecycleState {
+    match state {
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::PendingDecision => {
+            ControlPlaneApprovalExecutionLifecycleState::PendingDecision
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::AwaitingReplay => {
+            ControlPlaneApprovalExecutionLifecycleState::AwaitingReplay
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::ExecutingReplay => {
+            ControlPlaneApprovalExecutionLifecycleState::ExecutingReplay
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::ReplaySucceeded => {
+            ControlPlaneApprovalExecutionLifecycleState::ReplaySucceeded
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::ReplayFailed => {
+            ControlPlaneApprovalExecutionLifecycleState::ReplayFailed
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::Denied => {
+            ControlPlaneApprovalExecutionLifecycleState::Denied
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::Expired => {
+            ControlPlaneApprovalExecutionLifecycleState::Expired
+        }
+        mvp::control_plane::ControlPlaneApprovalExecutionLifecycleState::Cancelled => {
+            ControlPlaneApprovalExecutionLifecycleState::Cancelled
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_approval_grant_review_state(
+    state: mvp::control_plane::ControlPlaneApprovalGrantReviewState,
+) -> ControlPlaneApprovalGrantReviewState {
+    match state {
+        mvp::control_plane::ControlPlaneApprovalGrantReviewState::NotApplicable => {
+            ControlPlaneApprovalGrantReviewState::NotApplicable
+        }
+        mvp::control_plane::ControlPlaneApprovalGrantReviewState::Clean => {
+            ControlPlaneApprovalGrantReviewState::Clean
+        }
+        mvp::control_plane::ControlPlaneApprovalGrantReviewState::MissingGrant => {
+            ControlPlaneApprovalGrantReviewState::MissingGrant
+        }
+        mvp::control_plane::ControlPlaneApprovalGrantReviewState::ReviewStale => {
+            ControlPlaneApprovalGrantReviewState::ReviewStale
+        }
     }
 }
 
@@ -1685,6 +1779,7 @@ async fn current_snapshot(state: &ControlPlaneHttpState) -> Result<ControlPlaneS
         let repository_snapshot = repository_view.snapshot_summary()?;
         snapshot.session_count = repository_snapshot.session_count;
         snapshot.pending_approval_count = repository_snapshot.pending_approval_count;
+        snapshot.pending_continuation_count = repository_snapshot.pending_continuation_count;
     }
     #[cfg(feature = "memory-sqlite")]
     if let Some(acp_view) = state.acp_view.as_ref() {
@@ -3533,6 +3628,7 @@ mod tests {
         assert_eq!(snapshot.snapshot.presence_count, 2);
         assert_eq!(snapshot.snapshot.session_count, 3);
         assert_eq!(snapshot.snapshot.pending_approval_count, 1);
+        assert_eq!(snapshot.snapshot.pending_continuation_count, 0);
         assert_eq!(snapshot.snapshot.acp_session_count, 4);
     }
 
@@ -4583,6 +4679,7 @@ mod tests {
             serde_json::from_slice(&body).expect("snapshot json");
         assert_eq!(snapshot.snapshot.session_count, 2);
         assert_eq!(snapshot.snapshot.pending_approval_count, 1);
+        assert_eq!(snapshot.snapshot.pending_continuation_count, 0);
         assert_eq!(snapshot.snapshot.acp_session_count, 1);
     }
 
@@ -4898,6 +4995,19 @@ mod tests {
                 "request": {}
             }))
         );
+        assert_eq!(
+            approvals.approvals[0].execution_integrity_state,
+            Some(ControlPlaneApprovalExecutionIntegrityState::PendingDecision)
+        );
+        assert_eq!(
+            approvals.approvals[0].execution_lifecycle_state,
+            Some(ControlPlaneApprovalExecutionLifecycleState::PendingDecision)
+        );
+        assert_eq!(
+            approvals.approvals[0].grant_review_state,
+            Some(ControlPlaneApprovalGrantReviewState::NotApplicable)
+        );
+        assert!(approvals.approvals[0].needs_attention);
     }
 
     #[cfg(feature = "memory-sqlite")]

@@ -29,6 +29,13 @@ use crate::session::repository::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::store::{self, SessionStoreConfig};
 #[cfg(feature = "memory-sqlite")]
+use crate::tools::approval::{
+    ApprovalAttentionSnapshot,
+    ApprovalExecutionIntegrityState as DerivedApprovalExecutionIntegrityState,
+    ApprovalExecutionLifecycleState as DerivedApprovalExecutionLifecycleState,
+    GrantAttentionState as DerivedGrantAttentionState, derive_approval_attention_snapshot,
+};
+#[cfg(feature = "memory-sqlite")]
 use crate::tools::session::{
     SessionRuntimeSelfContinuityRecord, SessionWorkflowBindingRecord, SessionWorkflowRecord,
     build_session_tool_policy_status_payload, load_session_workflow_record,
@@ -107,6 +114,7 @@ pub struct ControlPlaneSnapshotSummary {
     pub presence_count: usize,
     pub session_count: usize,
     pub pending_approval_count: usize,
+    pub pending_continuation_count: usize,
     pub acp_session_count: usize,
     pub runtime_ready: bool,
 }
@@ -435,6 +443,7 @@ struct ControlPlaneSnapshotState {
     presence_count: usize,
     session_count: usize,
     pending_approval_count: usize,
+    pending_continuation_count: usize,
     acp_session_count: usize,
 }
 
@@ -507,6 +516,7 @@ impl ControlPlaneManager {
             presence_count: snapshot_state.presence_count,
             session_count: snapshot_state.session_count,
             pending_approval_count: snapshot_state.pending_approval_count,
+            pending_continuation_count: snapshot_state.pending_continuation_count,
             acp_session_count: snapshot_state.acp_session_count,
             runtime_ready: self.runtime_ready.load(Ordering::Relaxed),
         }
@@ -1480,6 +1490,7 @@ pub struct ControlPlaneRepositorySnapshotSummary {
     pub current_session_id: String,
     pub session_count: usize,
     pub pending_approval_count: usize,
+    pub pending_continuation_count: usize,
     pub acp_session_count: usize,
 }
 
@@ -1572,6 +1583,47 @@ pub struct ControlPlaneTaskSummaryView {
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq)]
+pub enum ControlPlaneApprovalExecutionIntegrityState {
+    Clean,
+    PendingDecision,
+    ResumeIncomplete,
+    ResumeFailed,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlPlaneApprovalExecutionLifecycleState {
+    PendingDecision,
+    AwaitingReplay,
+    ExecutingReplay,
+    ReplaySucceeded,
+    ReplayFailed,
+    Denied,
+    Expired,
+    Cancelled,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlPlaneApprovalGrantReviewState {
+    NotApplicable,
+    Clean,
+    MissingGrant,
+    ReviewStale,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlPlaneApprovalSummaryView {
+    pub approval_request: ApprovalRequestRecord,
+    pub execution_integrity_state: ControlPlaneApprovalExecutionIntegrityState,
+    pub execution_lifecycle_state: ControlPlaneApprovalExecutionLifecycleState,
+    pub grant_review_state: ControlPlaneApprovalGrantReviewState,
+    pub needs_attention: bool,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ControlPlaneTaskListView {
     pub current_session_id: String,
     pub matched_count: usize,
@@ -1585,7 +1637,7 @@ pub struct ControlPlaneApprovalListView {
     pub current_session_id: String,
     pub matched_count: usize,
     pub returned_count: usize,
-    pub approvals: Vec<ApprovalRequestRecord>,
+    pub approvals: Vec<ControlPlaneApprovalSummaryView>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1639,10 +1691,16 @@ impl ControlPlaneRepositoryView {
             visible_sessions.as_slice(),
             Some(ApprovalRequestStatus::Pending),
         )?;
+        let pending_continuation_count = self.count_continuations(
+            &repo,
+            visible_sessions.as_slice(),
+            Some(crate::session::repository::ContinuationRequestStatus::Pending),
+        )?;
         Ok(ControlPlaneRepositorySnapshotSummary {
             current_session_id: self.current_session_id.clone(),
             session_count: visible_sessions.len(),
             pending_approval_count,
+            pending_continuation_count,
             acp_session_count: 0,
         })
     }
@@ -1776,19 +1834,28 @@ impl ControlPlaneRepositoryView {
                 .collect::<Vec<_>>(),
         };
 
-        let mut approvals = Vec::new();
+        let mut approval_records = Vec::new();
         for session_id in &target_session_ids {
-            approvals.extend(repo.list_approval_requests_for_session(session_id, status)?);
+            let session_approvals = repo.list_approval_requests_for_session(session_id, status)?;
+            approval_records.extend(session_approvals);
         }
-        approvals.sort_by(|left, right| {
+        approval_records.sort_by(|left, right| {
             right
                 .requested_at
                 .cmp(&left.requested_at)
                 .then_with(|| left.approval_request_id.cmp(&right.approval_request_id))
         });
 
-        let matched_count = approvals.len();
-        approvals.truncate(limit.clamp(1, CONTROL_PLANE_MAX_LIST_LIMIT));
+        let matched_count = approval_records.len();
+        let bounded_limit = limit.clamp(1, CONTROL_PLANE_MAX_LIST_LIMIT);
+        approval_records.truncate(bounded_limit);
+
+        let mut approvals = Vec::new();
+        for approval_request in approval_records {
+            let summary_view = self.build_approval_summary_view(&repo, approval_request)?;
+            approvals.push(summary_view);
+        }
+
         let returned_count = approvals.len();
         Ok(ControlPlaneApprovalListView {
             current_session_id: self.current_session_id.clone(),
@@ -1907,10 +1974,8 @@ impl ControlPlaneRepositoryView {
             control_plane_effective_runtime_narrowing(&tool_policy_payload);
         let approval_requests =
             repo.list_approval_requests_for_session(&session.session_id, None)?;
-        let pending_approval_requests = repo.list_approval_requests_for_session(
-            &session.session_id,
-            Some(ApprovalRequestStatus::Pending),
-        )?;
+        let approval_attention_count =
+            self.count_approval_attention(repo, approval_requests.as_slice())?;
         let delegate_phase = delegate_lifecycle.phase.to_owned();
         let delegate_mode = delegate_lifecycle.mode.to_owned();
 
@@ -1925,7 +1990,7 @@ impl ControlPlaneRepositoryView {
             timeout_seconds: delegate_lifecycle.timeout_seconds,
             workflow,
             approval_request_count: approval_requests.len(),
-            approval_attention_count: pending_approval_requests.len(),
+            approval_attention_count,
             requested_tool_ids,
             visible_requested_tool_ids,
             effective_tool_ids,
@@ -1950,6 +2015,130 @@ impl ControlPlaneRepositoryView {
                 .len();
         }
         Ok(count)
+    }
+
+    fn count_continuations(
+        &self,
+        repo: &SessionRepository,
+        sessions: &[SessionSummaryRecord],
+        status: Option<crate::session::repository::ContinuationRequestStatus>,
+    ) -> Result<usize, String> {
+        let mut count = 0usize;
+        for session in sessions {
+            count += repo
+                .list_continuation_requests_for_session(&session.session_id, status)?
+                .len();
+        }
+        Ok(count)
+    }
+
+    fn count_approval_attention(
+        &self,
+        repo: &SessionRepository,
+        approvals: &[ApprovalRequestRecord],
+    ) -> Result<usize, String> {
+        let mut count = 0usize;
+
+        for approval_request in approvals {
+            let attention_snapshot = derive_approval_attention_snapshot(repo, approval_request)?;
+            if attention_snapshot.needs_attention {
+                count += 1;
+            }
+        }
+
+        Ok(count)
+    }
+
+    fn build_approval_summary_view(
+        &self,
+        repo: &SessionRepository,
+        approval_request: ApprovalRequestRecord,
+    ) -> Result<ControlPlaneApprovalSummaryView, String> {
+        let attention_snapshot = derive_approval_attention_snapshot(repo, &approval_request)?;
+        let execution_integrity_state =
+            control_plane_approval_execution_integrity_state(&attention_snapshot);
+        let execution_lifecycle_state =
+            control_plane_approval_execution_lifecycle_state(&attention_snapshot);
+        let grant_review_state = control_plane_approval_grant_review_state(&attention_snapshot);
+        let needs_attention = attention_snapshot.needs_attention;
+
+        Ok(ControlPlaneApprovalSummaryView {
+            approval_request,
+            execution_integrity_state,
+            execution_lifecycle_state,
+            grant_review_state,
+            needs_attention,
+        })
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_approval_execution_integrity_state(
+    attention_snapshot: &ApprovalAttentionSnapshot,
+) -> ControlPlaneApprovalExecutionIntegrityState {
+    match attention_snapshot.execution_integrity_state {
+        DerivedApprovalExecutionIntegrityState::Clean => {
+            ControlPlaneApprovalExecutionIntegrityState::Clean
+        }
+        DerivedApprovalExecutionIntegrityState::PendingDecision => {
+            ControlPlaneApprovalExecutionIntegrityState::PendingDecision
+        }
+        DerivedApprovalExecutionIntegrityState::ResumeIncomplete => {
+            ControlPlaneApprovalExecutionIntegrityState::ResumeIncomplete
+        }
+        DerivedApprovalExecutionIntegrityState::ResumeFailed => {
+            ControlPlaneApprovalExecutionIntegrityState::ResumeFailed
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_approval_execution_lifecycle_state(
+    attention_snapshot: &ApprovalAttentionSnapshot,
+) -> ControlPlaneApprovalExecutionLifecycleState {
+    match attention_snapshot.execution_lifecycle_state {
+        DerivedApprovalExecutionLifecycleState::PendingDecision => {
+            ControlPlaneApprovalExecutionLifecycleState::PendingDecision
+        }
+        DerivedApprovalExecutionLifecycleState::AwaitingReplay => {
+            ControlPlaneApprovalExecutionLifecycleState::AwaitingReplay
+        }
+        DerivedApprovalExecutionLifecycleState::ExecutingReplay => {
+            ControlPlaneApprovalExecutionLifecycleState::ExecutingReplay
+        }
+        DerivedApprovalExecutionLifecycleState::ReplaySucceeded => {
+            ControlPlaneApprovalExecutionLifecycleState::ReplaySucceeded
+        }
+        DerivedApprovalExecutionLifecycleState::ReplayFailed => {
+            ControlPlaneApprovalExecutionLifecycleState::ReplayFailed
+        }
+        DerivedApprovalExecutionLifecycleState::Denied => {
+            ControlPlaneApprovalExecutionLifecycleState::Denied
+        }
+        DerivedApprovalExecutionLifecycleState::Expired => {
+            ControlPlaneApprovalExecutionLifecycleState::Expired
+        }
+        DerivedApprovalExecutionLifecycleState::Cancelled => {
+            ControlPlaneApprovalExecutionLifecycleState::Cancelled
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn control_plane_approval_grant_review_state(
+    attention_snapshot: &ApprovalAttentionSnapshot,
+) -> ControlPlaneApprovalGrantReviewState {
+    match attention_snapshot.grant_review_state {
+        DerivedGrantAttentionState::NotApplicable => {
+            ControlPlaneApprovalGrantReviewState::NotApplicable
+        }
+        DerivedGrantAttentionState::Clean => ControlPlaneApprovalGrantReviewState::Clean,
+        DerivedGrantAttentionState::MissingGrant => {
+            ControlPlaneApprovalGrantReviewState::MissingGrant
+        }
+        DerivedGrantAttentionState::ReviewStale => {
+            ControlPlaneApprovalGrantReviewState::ReviewStale
+        }
     }
 }
 
@@ -2259,8 +2448,9 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     use crate::session::repository::{
-        ApprovalRequestStatus, NewApprovalRequestRecord, NewSessionEvent, NewSessionRecord,
-        SessionKind, SessionRepository, SessionState,
+        ApprovalDecision, ApprovalRequestStatus, NewApprovalRequestRecord, NewSessionEvent,
+        NewSessionRecord, SessionKind, SessionRepository, SessionState,
+        TransitionApprovalRequestIfCurrentRequest,
     };
     #[cfg(feature = "memory-sqlite")]
     use crate::session::store::SessionStoreConfig;
@@ -2282,6 +2472,7 @@ mod tests {
         assert_eq!(snapshot.presence_count, 0);
         assert_eq!(snapshot.session_count, 0);
         assert_eq!(snapshot.pending_approval_count, 0);
+        assert_eq!(snapshot.pending_continuation_count, 0);
         assert_eq!(snapshot.acp_session_count, 0);
         assert!(!snapshot.runtime_ready);
         assert_eq!(snapshot.state_version, ControlPlaneStateVersion::default());
@@ -2324,6 +2515,7 @@ mod tests {
         assert_eq!(resolved.state_version.approvals, 2);
         assert!(resolved.targeted);
         assert_eq!(manager.snapshot().pending_approval_count, 1);
+        assert_eq!(manager.snapshot().pending_continuation_count, 0);
     }
 
     #[test]
@@ -3240,6 +3432,7 @@ mod tests {
         assert_eq!(snapshot.current_session_id, "root-session");
         assert_eq!(snapshot.session_count, 2);
         assert_eq!(snapshot.pending_approval_count, 1);
+        assert_eq!(snapshot.pending_continuation_count, 0);
         assert_eq!(snapshot.acp_session_count, 0);
 
         let sessions = view.list_sessions(false, 50).expect("visible session list");
@@ -3317,7 +3510,21 @@ mod tests {
         assert_eq!(approvals.current_session_id, "root-session");
         assert_eq!(approvals.matched_count, 1);
         assert_eq!(approvals.returned_count, 1);
-        assert_eq!(approvals.approvals[0].approval_request_id, "apr-visible");
+        let approval = approvals.approvals.first().expect("first approval");
+        assert_eq!(approval.approval_request.approval_request_id, "apr-visible");
+        assert_eq!(
+            approval.execution_integrity_state,
+            ControlPlaneApprovalExecutionIntegrityState::PendingDecision
+        );
+        assert_eq!(
+            approval.execution_lifecycle_state,
+            ControlPlaneApprovalExecutionLifecycleState::PendingDecision
+        );
+        assert_eq!(
+            approval.grant_review_state,
+            ControlPlaneApprovalGrantReviewState::NotApplicable
+        );
+        assert!(approval.needs_attention);
 
         let error = view
             .read_session("hidden-root", 20, None, 50)
@@ -3389,6 +3596,222 @@ mod tests {
             .read_background_task("hidden-root")
             .expect_err("hidden session should be rejected");
         assert!(hidden_error.contains("visibility_denied"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn repository_view_task_attention_counts_replay_failed_approval() {
+        let config = isolated_memory_config("task-attention-replay-failed");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root session");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child session");
+
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: serde_json::json!({
+                "task": "replay failed attention",
+                "label": "Child",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 90,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "workspace_root": "/tmp/loong/control-plane/replay-failed",
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append delegate start");
+
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: "apr-replay-failed".to_owned(),
+            session_id: "child-session".to_owned(),
+            turn_id: "turn-replay-failed".to_owned(),
+            tool_call_id: "call-replay-failed".to_owned(),
+            tool_name: "delegate".to_owned(),
+            approval_key: "tool:delegate".to_owned(),
+            request_payload_json: serde_json::json!({
+                "tool": "delegate",
+            }),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "governed_tool_requires_approval",
+                "rule_id": "approval-replay-failed",
+            }),
+        })
+        .expect("create approval request");
+
+        repo.transition_approval_request_if_current(
+            "apr-replay-failed",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("root-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("approve request");
+
+        repo.transition_approval_request_if_current(
+            "apr-replay-failed",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Approved,
+                next_status: ApprovalRequestStatus::Executed,
+                decision: None,
+                resolved_by_session_id: None,
+                executed_at: Some(42),
+                last_error: Some("delegate replay failed".to_owned()),
+            },
+        )
+        .expect("mark request executed");
+
+        repo.upsert_session_tool_policy(crate::session::repository::NewSessionToolPolicyRecord {
+            session_id: "child-session".to_owned(),
+            requested_tool_ids: vec!["file.read".to_owned()],
+            runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        })
+        .expect("seed tool policy");
+
+        let view = ControlPlaneRepositoryView::new(config, ToolConfig::default(), "root-session");
+        let task = view
+            .read_background_task("child-session")
+            .expect("background task read")
+            .expect("background task");
+
+        assert_eq!(task.approval_request_count, 1);
+        assert_eq!(task.approval_attention_count, 1);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn repository_view_task_attention_ignores_executing_replay() {
+        let config = isolated_memory_config("task-attention-executing");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root session");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child session");
+
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: serde_json::json!({
+                "task": "executing replay attention",
+                "label": "Child",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 90,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "workspace_root": "/tmp/loong/control-plane/executing-replay",
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append delegate start");
+
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: "apr-executing".to_owned(),
+            session_id: "child-session".to_owned(),
+            turn_id: "turn-executing".to_owned(),
+            tool_call_id: "call-executing".to_owned(),
+            tool_name: "delegate".to_owned(),
+            approval_key: "tool:delegate".to_owned(),
+            request_payload_json: serde_json::json!({
+                "tool": "delegate",
+            }),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "governed_tool_requires_approval",
+                "rule_id": "approval-executing",
+            }),
+        })
+        .expect("create approval request");
+
+        repo.transition_approval_request_if_current(
+            "apr-executing",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("root-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("approve request");
+
+        repo.transition_approval_request_if_current(
+            "apr-executing",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Approved,
+                next_status: ApprovalRequestStatus::Executing,
+                decision: None,
+                resolved_by_session_id: None,
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("mark request executing");
+
+        repo.upsert_session_tool_policy(crate::session::repository::NewSessionToolPolicyRecord {
+            session_id: "child-session".to_owned(),
+            requested_tool_ids: vec!["file.read".to_owned()],
+            runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        })
+        .expect("seed tool policy");
+
+        let view = ControlPlaneRepositoryView::new(config, ToolConfig::default(), "root-session");
+        let task = view
+            .read_background_task("child-session")
+            .expect("background task read")
+            .expect("background task");
+
+        assert_eq!(task.approval_request_count, 1);
+        assert_eq!(task.approval_attention_count, 0);
     }
 
     #[cfg(feature = "memory-sqlite")]

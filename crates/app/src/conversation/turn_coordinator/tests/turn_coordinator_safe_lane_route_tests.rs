@@ -65,6 +65,17 @@ fn safe_lane_route_policy_denied_failure_is_terminal() {
 }
 
 #[test]
+fn safe_lane_route_approval_required_failure_is_terminal_and_distinct() {
+    let failure =
+        TurnFailure::policy_denied("safe_lane_plan_node_approval_required", "approval required");
+    let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(3));
+
+    assert_eq!(route.decision, SafeLaneFailureRouteDecision::Terminal);
+    assert_eq!(route.reason, SafeLaneFailureRouteReason::ApprovalRequired);
+    assert_eq!(route.source, SafeLaneFailureRouteSource::BaseRouting);
+}
+
+#[test]
 fn safe_lane_route_non_retryable_failure_is_terminal() {
     let failure = TurnFailure::non_retryable("safe_lane_plan_node_non_retryable_error", "bad");
     let route = SafeLaneFailureRoute::from_failure(&failure, SafeLaneReplanBudget::new(3));
@@ -83,7 +94,7 @@ fn turn_failure_from_plan_failure_node_error_mapping_is_stable() {
         (
             PlanNodeErrorKind::ApprovalRequired,
             TurnFailureKind::PolicyDenied,
-            "safe_lane_plan_node_policy_denied",
+            "safe_lane_plan_node_approval_required",
             false,
         ),
         (

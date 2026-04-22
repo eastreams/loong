@@ -49,8 +49,8 @@ use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    NewSessionRecord, NewSessionToolPolicyRecord, SessionEventRecord, SessionKind,
-    SessionObservationRecord, SessionRepository, SessionState, SessionSummaryRecord,
+    ContinuationRequestRecord, NewSessionRecord, NewSessionToolPolicyRecord, SessionEventRecord,
+    SessionKind, SessionObservationRecord, SessionRepository, SessionState, SessionSummaryRecord,
     SessionTerminalOutcomeRecord, SessionToolPolicyRecord,
 };
 #[cfg(feature = "memory-sqlite")]
@@ -87,6 +87,7 @@ pub(super) struct SessionInspectionSnapshot {
     pub session: SessionSummaryRecord,
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
     pub recent_events: Vec<SessionEventRecord>,
+    pub continuation_requests: Vec<ContinuationRequestRecord>,
     pub delegate_events: Vec<SessionEventRecord>,
     pub workflow: SessionWorkflowRecord,
     pub subagent_contract: Option<ConstrainedSubagentContractView>,
@@ -444,12 +445,6 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
     let target_session = repo
         .load_session_summary_with_legacy_fallback(&request.session_id)?
         .ok_or_else(|| format!("session_not_found: `{}`", request.session_id))?;
-    if target_session.kind != SessionKind::DelegateChild {
-        return Err(format!(
-            "session_continue_not_supported: session `{}` is not a delegate child",
-            request.session_id
-        ));
-    }
     if target_session.session_id == current_session_id {
         return Err(
             "session_continue_not_supported: current session cannot continue itself".to_owned(),
@@ -458,6 +453,13 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
     if target_session.state == SessionState::Running {
         return Err(format!(
             "session_continue_busy: session `{}` is already running",
+            request.session_id
+        ));
+    }
+
+    if target_session.kind != SessionKind::DelegateChild {
+        return Err(format!(
+            "session_continue_not_supported: session `{}` is not a delegate child",
             request.session_id
         ));
     }
@@ -1783,6 +1785,7 @@ pub(super) fn observe_visible_session_with_policies(
         session,
         terminal_outcome,
         recent_events,
+        continuation_requests,
         tail_events,
     } = repo
         .load_session_observation(
@@ -1808,6 +1811,7 @@ pub(super) fn observe_visible_session_with_policies(
             session,
             terminal_outcome,
             recent_events,
+            continuation_requests,
             delegate_events,
             workflow,
             subagent_contract,
@@ -2214,6 +2218,11 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
             .recent_events
             .into_iter()
             .map(session_event_json)
+            .collect::<Vec<_>>(),
+        "continuation_requests": snapshot
+            .continuation_requests
+            .into_iter()
+            .map(session_continuation_request_json)
             .collect::<Vec<_>>(),
     });
     let Some(object) = payload.as_object_mut() else {
@@ -3993,6 +4002,22 @@ pub(super) fn session_event_json(event: SessionEventRecord) -> Value {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn session_continuation_request_json(request: ContinuationRequestRecord) -> Value {
+    json!({
+        "continuation_request_id": request.continuation_request_id,
+        "session_id": request.session_id,
+        "kind": request.kind.as_str(),
+        "reason_code": request.reason_code,
+        "status": request.status.as_str(),
+        "request_payload_json": request.request_payload_json,
+        "requested_at": request.requested_at,
+        "resolved_at": request.resolved_at,
+        "resolved_by_session_id": request.resolved_by_session_id,
+        "last_error": request.last_error,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn session_terminal_outcome_json(
     outcome: crate::session::repository::SessionTerminalOutcomeRecord,
 ) -> Value {
@@ -4834,6 +4859,21 @@ mod tests {
             }),
         )
         .expect("upsert terminal outcome");
+        repo.ensure_continuation_request(
+            crate::session::repository::NewContinuationRequestRecord {
+                continuation_request_id: "continuation-1".to_owned(),
+                session_id: "child-session".to_owned(),
+                kind: crate::session::repository::ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({
+                    "user_input": "resume work",
+                    "messages": [
+                        {"role": "user", "content": "resume work"}
+                    ]
+                }),
+            },
+        )
+        .expect("persist continuation request");
 
         let outcome = execute_session_tool_with_config(
             ToolCoreRequest {
@@ -4862,6 +4902,18 @@ mod tests {
             .expect("recent_events array");
         assert_eq!(recent_events.len(), 1);
         assert_eq!(recent_events[0]["event_kind"], "delegate_failed");
+        let continuation_requests = outcome.payload["continuation_requests"]
+            .as_array()
+            .expect("continuation_requests array");
+        assert_eq!(continuation_requests.len(), 1);
+        assert_eq!(
+            continuation_requests[0]["continuation_request_id"],
+            "continuation-1"
+        );
+        assert_eq!(
+            continuation_requests[0]["reason_code"],
+            "tool_loop_circuit_breaker"
+        );
     }
 
     #[test]

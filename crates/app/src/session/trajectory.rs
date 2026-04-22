@@ -8,6 +8,7 @@ use crate::memory::canonical_memory_record_from_persisted_turn;
 
 use super::repository::ApprovalDecision;
 use super::repository::ApprovalRequestRecord;
+use super::repository::ContinuationRequestRecord;
 use super::repository::SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE;
 use super::repository::SessionEventRecord;
 use super::repository::SessionRepository;
@@ -15,7 +16,7 @@ use super::repository::SessionSummaryRecord;
 use super::repository::SessionTerminalOutcomeRecord;
 use super::store::{self, SessionStoreConfig, SessionTranscriptTurn};
 
-pub const SESSION_TRAJECTORY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
+pub const SESSION_TRAJECTORY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 pub const SESSION_TRAJECTORY_ARTIFACT_SURFACE: &str = "runtime_trajectory";
 pub const SESSION_TRAJECTORY_ARTIFACT_PURPOSE: &str = "runtime_trajectory_export";
 const DEFAULT_EVENT_PAGE_LIMIT: usize = 200;
@@ -118,6 +119,19 @@ pub struct SessionTrajectoryApprovalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionTrajectoryContinuationRequest {
+    pub continuation_request_id: String,
+    pub kind: String,
+    pub reason_code: String,
+    pub status: String,
+    pub request_payload_json: Value,
+    pub requested_at: i64,
+    pub resolved_at: Option<i64>,
+    pub resolved_by_session_id: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTrajectoryArtifact {
     pub schema: SessionTrajectoryArtifactSchema,
     pub exported_at: String,
@@ -133,6 +147,8 @@ pub struct SessionTrajectoryArtifact {
     pub events: Vec<SessionTrajectoryEvent>,
     pub approval_request_count: usize,
     pub approval_requests: Vec<SessionTrajectoryApprovalRequest>,
+    pub continuation_request_count: usize,
+    pub continuation_requests: Vec<SessionTrajectoryContinuationRequest>,
     pub terminal_outcome: Option<SessionTrajectoryTerminalOutcome>,
 }
 
@@ -163,6 +179,10 @@ pub fn export_session_trajectory(
         let approval_requests = SessionRepository::list_approval_requests_for_session_with_conn(
             conn, session_id, None,
         )?;
+        let continuation_requests =
+            SessionRepository::list_continuation_requests_for_session_with_conn(
+                conn, session_id, None,
+            )?;
         let terminal_outcome =
             SessionRepository::load_terminal_outcome_with_conn(conn, session_id)?;
         let turns_truncated = total_turn_count > turn_limit;
@@ -178,6 +198,7 @@ pub fn export_session_trajectory(
         let canonical_records = build_canonical_records(session_id, &turns);
         let trajectory_events = build_trajectory_events(&events);
         let trajectory_approval_requests = build_approval_requests(&approval_requests);
+        let trajectory_continuation_requests = build_continuation_requests(&continuation_requests);
         let trajectory_outcome = terminal_outcome
             .as_ref()
             .map(SessionTrajectoryTerminalOutcome::from_terminal_outcome);
@@ -185,6 +206,7 @@ pub fn export_session_trajectory(
         let canonical_record_count = canonical_records.len();
         let event_count = trajectory_events.len();
         let approval_request_count = trajectory_approval_requests.len();
+        let continuation_request_count = trajectory_continuation_requests.len();
         let schema = SessionTrajectoryArtifactSchema::default();
 
         Ok(SessionTrajectoryArtifact {
@@ -202,6 +224,8 @@ pub fn export_session_trajectory(
             events: trajectory_events,
             approval_request_count,
             approval_requests: trajectory_approval_requests,
+            continuation_request_count,
+            continuation_requests: trajectory_continuation_requests,
             terminal_outcome: trajectory_outcome,
         })
     })
@@ -344,6 +368,20 @@ fn build_approval_requests(
     trajectory_approval_requests
 }
 
+fn build_continuation_requests(
+    continuation_requests: &[ContinuationRequestRecord],
+) -> Vec<SessionTrajectoryContinuationRequest> {
+    let mut trajectory_continuation_requests = Vec::with_capacity(continuation_requests.len());
+
+    for continuation_request in continuation_requests {
+        let trajectory_continuation_request =
+            SessionTrajectoryContinuationRequest::from_record(continuation_request);
+        trajectory_continuation_requests.push(trajectory_continuation_request);
+    }
+
+    trajectory_continuation_requests
+}
+
 fn now_rfc3339() -> Result<String, String> {
     let now = OffsetDateTime::now_utc();
     let formatted = now
@@ -461,6 +499,22 @@ impl SessionTrajectoryApprovalRequest {
     }
 }
 
+impl SessionTrajectoryContinuationRequest {
+    fn from_record(record: &ContinuationRequestRecord) -> Self {
+        Self {
+            continuation_request_id: record.continuation_request_id.clone(),
+            kind: record.kind.as_str().to_owned(),
+            reason_code: record.reason_code.clone(),
+            status: record.status.as_str().to_owned(),
+            request_payload_json: record.request_payload_json.clone(),
+            requested_at: record.requested_at,
+            resolved_at: record.resolved_at,
+            resolved_by_session_id: record.resolved_by_session_id.clone(),
+            last_error: record.last_error.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -469,8 +523,10 @@ mod tests {
     use super::SessionTranscriptTurn;
     use super::export_session_trajectory;
     use super::trim_turns_to_limit;
+    use crate::session::repository::ContinuationRequestKind;
     use crate::session::repository::FinalizeSessionTerminalRequest;
     use crate::session::repository::NewApprovalRequestRecord;
+    use crate::session::repository::NewContinuationRequestRecord;
     use crate::session::repository::NewSessionEvent;
     use crate::session::repository::NewSessionRecord;
     use crate::session::repository::SessionKind;
@@ -592,6 +648,7 @@ mod tests {
         assert_eq!(artifact.events[1].event_kind, "delegate_completed");
         assert_eq!(artifact.approval_request_count, 1);
         assert_eq!(artifact.approval_requests[0].tool_name, "delegate");
+        assert_eq!(artifact.continuation_request_count, 0);
         assert_eq!(
             artifact
                 .terminal_outcome
@@ -600,6 +657,48 @@ mod tests {
                 .status,
             "ok"
         );
+    }
+
+    #[test]
+    fn export_session_trajectory_includes_continuation_requests() {
+        let config = isolated_memory_config("session-trajectory-continuation");
+        let repository = SessionRepository::new(&config).expect("repository");
+        create_session(&repository, "root-session").expect("create session");
+        append_turns("root-session", &config, &["one"]).expect("append turns");
+
+        repository
+            .ensure_continuation_request(NewContinuationRequestRecord {
+                continuation_request_id: "continuation-1".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+                reason_code: "tool_loop_circuit_breaker".to_owned(),
+                request_payload_json: json!({
+                    "user_input": "build the report",
+                    "messages": [
+                        {"role": "user", "content": "build the report"}
+                    ]
+                }),
+            })
+            .expect("persist continuation request");
+
+        let options = SessionTrajectoryExportOptions::default();
+        let artifact =
+            export_session_trajectory("root-session", &config, &options).expect("export");
+
+        assert_eq!(artifact.continuation_request_count, 1);
+        assert_eq!(
+            artifact.continuation_requests[0].continuation_request_id,
+            "continuation-1"
+        );
+        assert_eq!(
+            artifact.continuation_requests[0].kind,
+            "tool_loop_circuit_breaker"
+        );
+        assert_eq!(
+            artifact.continuation_requests[0].reason_code,
+            "tool_loop_circuit_breaker"
+        );
+        assert_eq!(artifact.continuation_requests[0].status, "pending");
     }
 
     #[test]

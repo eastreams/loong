@@ -99,6 +99,7 @@ pub enum SafeLaneFailureCode {
     PlanTopologyResolutionFailed,
     PlanBudgetExceeded,
     PlanWallTimeExceeded,
+    PlanNodeApprovalRequired,
     PlanNodePolicyDenied,
     PlanNodeRetryableError,
     PlanNodeNonRetryableError,
@@ -117,6 +118,7 @@ impl SafeLaneFailureCode {
             Self::PlanTopologyResolutionFailed => "safe_lane_plan_topology_resolution_failed",
             Self::PlanBudgetExceeded => "safe_lane_plan_budget_exceeded",
             Self::PlanWallTimeExceeded => "safe_lane_plan_wall_time_exceeded",
+            Self::PlanNodeApprovalRequired => "safe_lane_plan_node_approval_required",
             Self::PlanNodePolicyDenied => "safe_lane_plan_node_policy_denied",
             Self::PlanNodeRetryableError => "safe_lane_plan_node_retryable_error",
             Self::PlanNodeNonRetryableError => "safe_lane_plan_node_non_retryable_error",
@@ -137,6 +139,7 @@ impl SafeLaneFailureCode {
             "safe_lane_plan_topology_resolution_failed" => Some(Self::PlanTopologyResolutionFailed),
             "safe_lane_plan_budget_exceeded" => Some(Self::PlanBudgetExceeded),
             "safe_lane_plan_wall_time_exceeded" => Some(Self::PlanWallTimeExceeded),
+            "safe_lane_plan_node_approval_required" => Some(Self::PlanNodeApprovalRequired),
             "safe_lane_plan_node_policy_denied" => Some(Self::PlanNodePolicyDenied),
             "safe_lane_plan_node_retryable_error" => Some(Self::PlanNodeRetryableError),
             "safe_lane_plan_node_non_retryable_error" => Some(Self::PlanNodeNonRetryableError),
@@ -213,7 +216,7 @@ pub fn classify_safe_lane_plan_failure(
             last_error_kind, ..
         } => match last_error_kind {
             PlanNodeErrorKind::ApprovalRequired => (
-                SafeLaneFailureCode::PlanNodePolicyDenied,
+                SafeLaneFailureCode::PlanNodeApprovalRequired,
                 TurnFailureKind::PolicyDenied,
             ),
             PlanNodeErrorKind::PolicyDenied => (
@@ -270,6 +273,10 @@ mod tests {
             Some(SafeLaneFailureCode::VerifyFailedSessionGovernor)
         );
         assert_eq!(
+            SafeLaneFailureCode::parse("safe_lane_plan_node_approval_required"),
+            Some(SafeLaneFailureCode::PlanNodeApprovalRequired)
+        );
+        assert_eq!(
             SafeLaneFailureCode::parse("safe_lane_plan_backpressure_guard"),
             Some(SafeLaneFailureCode::PlanBackpressureGuard)
         );
@@ -286,6 +293,9 @@ mod tests {
         )));
         assert!(is_safe_lane_terminal_instability_failure_code(Some(
             "safe_lane_plan_session_governor_no_replan"
+        )));
+        assert!(!is_safe_lane_terminal_instability_failure_code(Some(
+            "safe_lane_plan_node_approval_required"
         )));
         assert!(!is_safe_lane_terminal_instability_failure_code(Some(
             "safe_lane_plan_node_policy_denied"
@@ -398,7 +408,7 @@ mod tests {
         assert_eq!(
             classify_safe_lane_plan_failure(&approval_node),
             (
-                SafeLaneFailureCode::PlanNodePolicyDenied,
+                SafeLaneFailureCode::PlanNodeApprovalRequired,
                 TurnFailureKind::PolicyDenied
             )
         );

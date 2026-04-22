@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 #[cfg(feature = "memory-sqlite")]
 use std::panic::AssertUnwindSafe;
 
@@ -167,8 +168,9 @@ use crate::session::repository::FinalizeSessionTerminalRequest;
 use crate::session::repository::TransitionApprovalRequestIfCurrentRequest;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    ApprovalDecision, ApprovalRequestStatus, NewSessionEvent, NewSessionRecord, SessionKind,
-    SessionRepository, SessionState,
+    ApprovalDecision, ApprovalRequestStatus, ContinuationRequestKind, ContinuationRequestStatus,
+    NewContinuationRequestRecord, NewSessionEvent, NewSessionRecord, SessionKind,
+    SessionRepository, SessionState, TransitionContinuationRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
 use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
@@ -532,6 +534,15 @@ struct ProviderTurnLoopState {
     warned_same_tool_key: Option<String>,
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone)]
+struct PendingProviderTurnContinuation {
+    continuation_request_id: String,
+    reason_code: String,
+    original_user_input: String,
+    resume_messages: Vec<Value>,
+}
+
 #[derive(Debug, Clone)]
 enum ProviderTurnLoopVerdict {
     Continue,
@@ -675,6 +686,7 @@ impl ProviderTurnContinuePhase {
         turn_loop_policy: &ProviderTurnLoopPolicy,
         turn_loop_state: &mut ProviderTurnLoopState,
         remaining_provider_rounds: usize,
+        resumed_continuation_request_id: Option<&str>,
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<&ConversationTurnObserverHandle>,
     ) -> ResolvedProviderTurn {
@@ -688,6 +700,7 @@ impl ProviderTurnContinuePhase {
             turn_loop_policy,
             turn_loop_state,
             remaining_provider_rounds,
+            resumed_continuation_request_id,
             binding,
             self.ingress.as_ref(),
             observer,
@@ -707,16 +720,14 @@ impl ResolvedProviderTurn {
         reply: String,
         usage: Option<Value>,
         checkpoint: TurnCheckpointSnapshot,
+        resumed_continuation_request_id: Option<String>,
     ) -> Self {
         Self::PersistReply(ResolvedProviderReply {
             reply,
             usage,
             checkpoint,
+            resumed_continuation_request_id,
         })
-    }
-
-    fn return_error(error: String, checkpoint: TurnCheckpointSnapshot) -> Self {
-        Self::ReturnError(ResolvedProviderError { error, checkpoint })
     }
 
     #[cfg(test)]
@@ -740,12 +751,18 @@ impl ResolvedProviderTurn {
                         reply.reply.as_str(),
                     ),
                     usage: reply.usage.clone(),
+                    resumed_continuation_request_id: reply
+                        .resumed_continuation_request_id
+                        .as_deref(),
                 })
             }
             Self::ReturnError(error) => {
                 ProviderTurnTerminalPhase::ReturnError(ProviderTurnReturnErrorPhase {
                     checkpoint: &error.checkpoint,
                     error: error.error.as_str(),
+                    resumed_continuation_request_id: error
+                        .resumed_continuation_request_id
+                        .as_deref(),
                 })
             }
         }
@@ -772,6 +789,7 @@ struct ResolvedProviderReply {
     reply: String,
     usage: Option<Value>,
     checkpoint: TurnCheckpointSnapshot,
+    resumed_continuation_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -784,6 +802,7 @@ pub struct ConversationTurnOutcome {
 struct ResolvedProviderError {
     error: String,
     checkpoint: TurnCheckpointSnapshot,
+    resumed_continuation_request_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -811,11 +830,18 @@ impl<'a> ProviderTurnTerminalPhase<'a> {
                     &phase.tail_phase,
                     phase.usage,
                     phase.checkpoint,
+                    phase.resumed_continuation_request_id,
                     binding,
                 )
                 .await
             }
             Self::ReturnError(phase) => {
+                finalize_resumed_provider_turn_continuation_error(
+                    config,
+                    session_id,
+                    phase.resumed_continuation_request_id,
+                    phase.error,
+                )?;
                 persist_resolved_provider_error_checkpoint(
                     runtime,
                     session_id,
@@ -834,12 +860,14 @@ struct ProviderTurnPersistReplyPhase<'a> {
     checkpoint: &'a TurnCheckpointSnapshot,
     tail_phase: ProviderTurnReplyTailPhase,
     usage: Option<Value>,
+    resumed_continuation_request_id: Option<&'a str>,
 }
 
 #[derive(Debug)]
 struct ProviderTurnReturnErrorPhase<'a> {
     checkpoint: &'a TurnCheckpointSnapshot,
     error: &'a str,
+    resumed_continuation_request_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -861,6 +889,7 @@ impl ProviderTurnRequestTerminalPhase {
         self,
         preparation: &ProviderTurnPreparation,
         user_input: &str,
+        resumed_continuation_request_id: Option<&str>,
     ) -> ResolvedProviderTurn {
         match self {
             Self::PersistInlineProviderError { reply } => {
@@ -875,7 +904,12 @@ impl ProviderTurnRequestTerminalPhase {
                         ReplyPersistenceMode::InlineProviderError,
                     ),
                 );
-                ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
+                ResolvedProviderTurn::persist_reply(
+                    reply,
+                    None,
+                    checkpoint,
+                    resumed_continuation_request_id.map(str::to_owned),
+                )
             }
             Self::ReturnError { error } => {
                 let checkpoint = build_resolved_provider_checkpoint(
@@ -887,7 +921,12 @@ impl ProviderTurnRequestTerminalPhase {
                     None,
                     TurnFinalizationCheckpoint::ReturnError,
                 );
-                ResolvedProviderTurn::return_error(error, checkpoint)
+                ResolvedProviderTurn::ReturnError(ResolvedProviderError {
+                    error,
+                    checkpoint,
+                    resumed_continuation_request_id: resumed_continuation_request_id
+                        .map(str::to_owned),
+                })
             }
         }
     }
@@ -1874,16 +1913,36 @@ impl ConversationTurnCoordinator {
             emit_turn_ingress_event(runtime, session_id, visible_ingress, binding).await;
 
             let turn_id = next_conversation_turn_id();
+            let pending_continuation =
+                load_pending_provider_turn_continuation(config, session_id, user_input)?;
+            let active_user_input = pending_continuation
+                .as_ref()
+                .map(|continuation| continuation.original_user_input.as_str())
+                .unwrap_or(user_input);
             let assembled_context = runtime
                 .build_context(config, session_id, true, binding)
                 .await?;
-            let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
-                config,
-                assembled_context,
-                user_input,
-                turn_id.as_str(),
-                visible_ingress,
-            );
+            let preparation = match pending_continuation.as_ref() {
+                Some(continuation) => {
+                    let resume_prompt =
+                        provider_turn_resume_prompt_from_reason(continuation.reason_code.as_str());
+                    ProviderTurnPreparation::from_saved_messages_with_turn_id(
+                        config,
+                        assembled_context,
+                        continuation.resume_messages.clone(),
+                        resume_prompt,
+                        continuation.original_user_input.as_str(),
+                        turn_id.as_str(),
+                    )
+                }
+                None => ProviderTurnPreparation::from_assembled_context_with_turn_id(
+                    config,
+                    assembled_context,
+                    active_user_input,
+                    turn_id.as_str(),
+                    visible_ingress,
+                ),
+            };
             let context_message_count = preparation.session.messages.len();
             let context_estimated_tokens = preparation.session.estimated_tokens;
             let initial_request_event = ConversationTurnPhaseEvent::requesting_provider(
@@ -1924,8 +1983,11 @@ impl ConversationTurnCoordinator {
                 config,
                 runtime,
                 session_id,
-                user_input,
+                active_user_input,
                 &preparation,
+                pending_continuation
+                    .as_ref()
+                    .map(|continuation| continuation.continuation_request_id.as_str()),
                 provider_turn_result,
                 error_mode,
                 binding,
@@ -1938,7 +2000,7 @@ impl ConversationTurnCoordinator {
                 config,
                 runtime,
                 session_id,
-                user_input,
+                active_user_input,
                 &preparation,
                 &resolved_turn,
                 binding,
@@ -2051,6 +2113,7 @@ impl ConversationTurnCoordinator {
             session_id,
             user_input,
             &preparation,
+            None,
             Ok(approval_turn),
             error_mode,
             binding,
@@ -2733,6 +2796,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     session_id: &str,
     user_input: &str,
     preparation: &ProviderTurnPreparation,
+    resumed_continuation_request_id: Option<&str>,
     result: CliResult<ProviderTurn>,
     error_mode: ProviderErrorMode,
     binding: ConversationRuntimeBinding<'_>,
@@ -2749,11 +2813,41 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
             if let Some(reply) =
                 turn_loop_state.circuit_breaker_reply(&turn_loop_policy, turn.tool_intents.len())
             {
+                let prospective_total = turn_loop_state
+                    .total_tool_calls
+                    .saturating_add(turn.tool_intents.len());
+                let persistence_result = persist_provider_turn_continuation_request(
+                    config,
+                    session_id,
+                    preparation.turn_id.as_str(),
+                    user_input,
+                    &preparation.session.messages,
+                    prospective_total,
+                    turn_loop_policy.max_total_tool_calls,
+                );
+                if let Err(error) = persistence_result {
+                    let failure = ResolvedProviderTurn::ReturnError(ResolvedProviderError {
+                        error: format!("persist_continuation_request_failed: {error}"),
+                        checkpoint: build_resolved_provider_checkpoint(
+                            preparation,
+                            user_input,
+                            None,
+                            TurnCheckpointRequest::ReturnError,
+                            None,
+                            None,
+                            TurnFinalizationCheckpoint::ReturnError,
+                        ),
+                        resumed_continuation_request_id: resumed_continuation_request_id
+                            .map(str::to_owned),
+                    });
+                    return failure;
+                }
                 return build_turn_loop_circuit_breaker_resolved_turn(
                     preparation,
                     user_input,
                     turn.tool_intents.len(),
                     reply,
+                    resumed_continuation_request_id,
                 );
             }
             let continue_phase = prepare_provider_turn_continue_phase(
@@ -2785,17 +2879,25 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                         .max_discovery_followup_rounds
                         .saturating_add(1)
                         .max(1),
+                    resumed_continuation_request_id,
                     binding,
                     observer,
                 )
                 .await
         }
         ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
-            ProviderTurnRequestTerminalPhase::persist_inline_provider_error(reply)
-                .resolve(preparation, user_input)
+            ProviderTurnRequestTerminalPhase::persist_inline_provider_error(reply).resolve(
+                preparation,
+                user_input,
+                resumed_continuation_request_id,
+            )
         }
         ProviderTurnRequestAction::ReturnError { error } => {
-            ProviderTurnRequestTerminalPhase::return_error(error).resolve(preparation, user_input)
+            ProviderTurnRequestTerminalPhase::return_error(error).resolve(
+                preparation,
+                user_input,
+                resumed_continuation_request_id,
+            )
         }
     }
 }
@@ -2832,6 +2934,7 @@ fn build_turn_loop_circuit_breaker_resolved_turn(
     user_input: &str,
     tool_intents: usize,
     reply: String,
+    resumed_continuation_request_id: Option<&str>,
 ) -> ResolvedProviderTurn {
     let checkpoint = build_resolved_provider_checkpoint(
         preparation,
@@ -2842,7 +2945,231 @@ fn build_turn_loop_circuit_breaker_resolved_turn(
         None,
         TurnFinalizationCheckpoint::persist_reply(ReplyPersistenceMode::Success),
     );
-    ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
+    ResolvedProviderTurn::persist_reply(
+        reply,
+        None,
+        checkpoint,
+        resumed_continuation_request_id.map(str::to_owned),
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_pending_provider_turn_continuation(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> Result<Option<PendingProviderTurnContinuation>, String> {
+    if !user_requested_provider_turn_resume(user_input) {
+        return Ok(None);
+    }
+
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let Some(record) = repo.latest_pending_continuation_request_for_session(session_id)? else {
+        return Ok(None);
+    };
+    if record.kind != ContinuationRequestKind::ToolLoopCircuitBreaker {
+        return Ok(None);
+    }
+
+    let claimed_record = repo
+        .transition_continuation_request_if_current(
+            &record.continuation_request_id,
+            TransitionContinuationRequestIfCurrentRequest {
+                expected_status: ContinuationRequestStatus::Pending,
+                next_status: ContinuationRequestStatus::Resumed,
+                resolved_by_session_id: Some(session_id.to_owned()),
+                last_error: None,
+            },
+        )?
+        .ok_or_else(|| {
+            format!(
+                "continuation_request_not_pending: `{}`",
+                record.continuation_request_id
+            )
+        })?;
+    let original_user_input =
+        decode_provider_turn_continuation_user_input(&claimed_record.request_payload_json)?;
+    let resume_messages =
+        decode_provider_turn_continuation_messages(&claimed_record.request_payload_json)?;
+    Ok(Some(PendingProviderTurnContinuation {
+        continuation_request_id: claimed_record.continuation_request_id,
+        reason_code: claimed_record.reason_code,
+        original_user_input,
+        resume_messages,
+    }))
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn load_pending_provider_turn_continuation(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _user_input: &str,
+) -> Result<Option<PendingProviderTurnContinuation>, String> {
+    Ok(None)
+}
+
+fn user_requested_provider_turn_resume(user_input: &str) -> bool {
+    let normalized = user_input.trim();
+    normalized.eq_ignore_ascii_case("resume")
+}
+
+fn provider_turn_resume_prompt_from_reason(reason_code: &str) -> &str {
+    match reason_code {
+        "tool_loop_circuit_breaker" => {
+            "Resume the interrupted request from the saved runtime state and continue the original user request without restarting from scratch."
+        }
+        _ => "Resume the interrupted request from the saved runtime state.",
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn decode_provider_turn_continuation_messages(payload: &Value) -> Result<Vec<Value>, String> {
+    let Some(messages_value) = payload.get("messages") else {
+        return Err("continuation_request_missing_messages".to_owned());
+    };
+    let messages = serde_json::from_value::<Vec<Value>>(messages_value.clone())
+        .map_err(|error| format!("decode continuation request messages failed: {error}"))?;
+    Ok(messages)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn decode_provider_turn_continuation_user_input(payload: &Value) -> Result<String, String> {
+    let Some(user_input_value) = payload.get("user_input") else {
+        return Err("continuation_request_missing_user_input".to_owned());
+    };
+    let Some(user_input) = user_input_value.as_str() else {
+        return Err("continuation_request_invalid_user_input".to_owned());
+    };
+    let normalized_user_input = user_input.trim();
+    if normalized_user_input.is_empty() {
+        return Err("continuation_request_invalid_user_input".to_owned());
+    }
+    Ok(normalized_user_input.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_provider_turn_continuation_request(
+    config: &LoongConfig,
+    session_id: &str,
+    turn_id: &str,
+    user_input: &str,
+    messages: &[Value],
+    prospective_total: usize,
+    max_total_tool_calls: usize,
+) -> Result<(), String> {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let continuation_request_id =
+        provider_turn_continuation_request_id(session_id, turn_id, "tool_loop_circuit_breaker");
+    let request_payload_json = json!({
+        "user_input": user_input,
+        "messages": messages,
+        "prospective_total_tool_calls": prospective_total,
+        "max_total_tool_calls": max_total_tool_calls,
+    });
+    let _record = repo.ensure_continuation_request(NewContinuationRequestRecord {
+        continuation_request_id,
+        session_id: session_id.to_owned(),
+        kind: ContinuationRequestKind::ToolLoopCircuitBreaker,
+        reason_code: "tool_loop_circuit_breaker".to_owned(),
+        request_payload_json,
+    })?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn persist_provider_turn_continuation_request(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _turn_id: &str,
+    _user_input: &str,
+    _messages: &[Value],
+    _prospective_total: usize,
+    _max_total_tool_calls: usize,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_resumed_provider_turn_continuation(
+    config: &LoongConfig,
+    session_id: &str,
+    continuation_request_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(continuation_request_id) = continuation_request_id else {
+        return Ok(());
+    };
+
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let _record = repo.transition_continuation_request_if_current(
+        continuation_request_id,
+        TransitionContinuationRequestIfCurrentRequest {
+            expected_status: ContinuationRequestStatus::Resumed,
+            next_status: ContinuationRequestStatus::Resumed,
+            resolved_by_session_id: Some(session_id.to_owned()),
+            last_error: None,
+        },
+    )?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn finalize_resumed_provider_turn_continuation(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _continuation_request_id: Option<&str>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_resumed_provider_turn_continuation_error(
+    config: &LoongConfig,
+    session_id: &str,
+    continuation_request_id: Option<&str>,
+    error: &str,
+) -> Result<(), String> {
+    let Some(continuation_request_id) = continuation_request_id else {
+        return Ok(());
+    };
+
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let _record = repo.transition_continuation_request_if_current(
+        continuation_request_id,
+        TransitionContinuationRequestIfCurrentRequest {
+            expected_status: ContinuationRequestStatus::Resumed,
+            next_status: ContinuationRequestStatus::Resumed,
+            resolved_by_session_id: Some(session_id.to_owned()),
+            last_error: Some(error.to_owned()),
+        },
+    )?;
+    Ok(())
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn finalize_resumed_provider_turn_continuation_error(
+    _config: &LoongConfig,
+    _session_id: &str,
+    _continuation_request_id: Option<&str>,
+    _error: &str,
+) -> Result<(), String> {
+    Ok(())
+}
+
+fn provider_turn_continuation_request_id(
+    session_id: &str,
+    turn_id: &str,
+    reason_code: &str,
+) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    turn_id.hash(&mut hasher);
+    reason_code.hash(&mut hasher);
+    let digest = hasher.finish();
+    format!("ctr_{digest:016x}")
 }
 
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
@@ -2913,6 +3240,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     turn_loop_policy: &ProviderTurnLoopPolicy,
     turn_loop_state: &mut ProviderTurnLoopState,
     remaining_provider_rounds: usize,
+    resumed_continuation_request_id: Option<&str>,
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
@@ -2936,6 +3264,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     let mut current_continue_phase = continue_phase.clone();
     let mut remaining_provider_rounds = remaining_provider_rounds.max(1);
     let mut provider_round_index = 0usize;
+    let resumed_continuation_request_id = resumed_continuation_request_id.map(ToOwned::to_owned);
 
     loop {
         let current_provider_round = provider_round_index.saturating_add(1);
@@ -3031,6 +3360,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     reply,
                     current_continue_phase.lane_execution.provider_usage.clone(),
                     checkpoint,
+                    resumed_continuation_request_id.clone(),
                 );
             }
             ReplyLoopDecision::Followup {
@@ -3086,6 +3416,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 raw_reply,
                                 current_continue_phase.lane_execution.provider_usage.clone(),
                                 checkpoint,
+                                resumed_continuation_request_id.clone(),
                             );
                         }
                     };
@@ -3172,11 +3503,45 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             if let Some(reply) = turn_loop_state
                                 .circuit_breaker_reply(turn_loop_policy, turn.tool_intents.len())
                             {
+                                let prospective_total = turn_loop_state
+                                    .total_tool_calls
+                                    .saturating_add(turn.tool_intents.len());
+                                let persistence_result = persist_provider_turn_continuation_request(
+                                    &current_continue_phase.followup_config,
+                                    session_id,
+                                    followup_preparation.turn_id.as_str(),
+                                    user_input,
+                                    &followup_preparation.session.messages,
+                                    prospective_total,
+                                    turn_loop_policy.max_total_tool_calls,
+                                );
+                                if let Err(error) = persistence_result {
+                                    let checkpoint = build_resolved_provider_checkpoint(
+                                        preparation,
+                                        user_input,
+                                        None,
+                                        TurnCheckpointRequest::ReturnError,
+                                        None,
+                                        None,
+                                        TurnFinalizationCheckpoint::ReturnError,
+                                    );
+                                    return ResolvedProviderTurn::ReturnError(
+                                        ResolvedProviderError {
+                                            error: format!(
+                                                "persist_continuation_request_failed: {error}"
+                                            ),
+                                            checkpoint,
+                                            resumed_continuation_request_id:
+                                                resumed_continuation_request_id.clone(),
+                                        },
+                                    );
+                                }
                                 return build_turn_loop_circuit_breaker_resolved_turn(
                                     preparation,
                                     user_input,
                                     turn.tool_intents.len(),
                                     reply,
+                                    resumed_continuation_request_id.as_deref(),
                                 );
                             }
                             current_continue_phase = prepare_provider_turn_continue_phase(
@@ -3242,6 +3607,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 raw_reply,
                                 current_continue_phase.lane_execution.provider_usage.clone(),
                                 checkpoint,
+                                resumed_continuation_request_id.clone(),
                             );
                         }
                     }
@@ -3257,7 +3623,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     .await;
                     let checkpoint =
                         current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                    return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
+                    return ResolvedProviderTurn::persist_reply(
+                        reply,
+                        None,
+                        checkpoint,
+                        resumed_continuation_request_id.clone(),
+                    );
                 }
 
                 let checkpoint =
@@ -3266,6 +3637,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     raw_reply,
                     current_continue_phase.lane_execution.provider_usage.clone(),
                     checkpoint,
+                    resumed_continuation_request_id.clone(),
                 );
             }
             ReplyLoopDecision::GuardFollowup {
@@ -3293,7 +3665,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 .await;
                 let checkpoint =
                     current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
+                return ResolvedProviderTurn::persist_reply(
+                    reply,
+                    None,
+                    checkpoint,
+                    resumed_continuation_request_id.clone(),
+                );
             }
         }
     }
@@ -3641,6 +4018,7 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     tail_phase: &ProviderTurnReplyTailPhase,
     usage: Option<Value>,
     checkpoint: &TurnCheckpointSnapshot,
+    resumed_continuation_request_id: Option<&str>,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<ConversationTurnOutcome> {
     let Some(persistence_mode) = checkpoint.finalization.persistence_mode() else {
@@ -3658,6 +4036,11 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await?;
+    finalize_resumed_provider_turn_continuation(
+        config,
+        session_id,
+        resumed_continuation_request_id,
+    )?;
 
     persist_turn_checkpoint_event(
         runtime,
@@ -8816,6 +9199,37 @@ mod tests {
     }
 
     #[test]
+    fn provider_turn_preparation_from_saved_messages_preserves_original_request_semantics() {
+        let mut config = LoongConfig::default();
+        config.conversation.fast_lane_max_tool_steps_per_turn = 2;
+        config.conversation.safe_lane_max_tool_steps_per_turn = 5;
+
+        let preparation = ProviderTurnPreparation::from_saved_messages_with_turn_id(
+            &config,
+            AssembledConversationContext::from_messages(vec![serde_json::json!({
+                "role": "system",
+                "content": "sys"
+            })]),
+            vec![serde_json::json!({
+                "role": "user",
+                "content": "deploy to production and show raw tool output"
+            })],
+            "Resume the interrupted request from the saved runtime state.",
+            "deploy to production and show raw tool output",
+            "turn-resume",
+        );
+
+        assert_eq!(preparation.session.messages.len(), 2);
+        assert_eq!(
+            preparation.session.messages[1]["content"],
+            "Resume the interrupted request from the saved runtime state."
+        );
+        assert!(preparation.raw_tool_output_requested);
+        assert_eq!(preparation.lane_plan.decision.lane, ExecutionLane::Safe);
+        assert_eq!(preparation.lane_plan.max_tool_steps, 5);
+    }
+
+    #[test]
     fn provider_turn_lane_plan_safe_plan_path_requires_safe_lane_and_tool_intents() {
         let mut config = LoongConfig::default();
         config.conversation.safe_lane_plan_execution_enabled = true;
@@ -9156,6 +9570,7 @@ mod tests {
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "preface\nsafe lane terminal".to_owned(),
             usage: None,
+            resumed_continuation_request_id: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn(
                     "deploy to production",
@@ -9264,6 +9679,7 @@ mod tests {
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "provider unavailable".to_owned(),
             usage: None,
+            resumed_continuation_request_id: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn(
                     "say hello",
@@ -9313,6 +9729,7 @@ mod tests {
     fn resolved_provider_turn_checkpoint_marks_return_error_finalization() {
         let resolved = ResolvedProviderTurn::ReturnError(ResolvedProviderError {
             error: "provider unavailable".to_owned(),
+            resumed_continuation_request_id: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: None,
                 preparation: ProviderTurnPreparation::from_assembled_context(
@@ -9363,6 +9780,7 @@ mod tests {
         let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
             reply: "done".to_owned(),
             usage: None,
+            resumed_continuation_request_id: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: Some(TurnCheckpointIdentity::from_turn("say hello", "done")),
                 preparation: ProviderTurnPreparation::from_assembled_context(
@@ -9425,6 +9843,7 @@ mod tests {
         );
         let resolved = ResolvedProviderTurn::ReturnError(ResolvedProviderError {
             error: "provider unavailable".to_owned(),
+            resumed_continuation_request_id: None,
             checkpoint: TurnCheckpointSnapshot {
                 identity: None,
                 preparation: ProviderTurnPreparation::from_assembled_context(
@@ -9472,7 +9891,7 @@ mod tests {
         let resolved = ProviderTurnRequestTerminalPhase::persist_inline_provider_error(
             "provider unavailable".to_owned(),
         )
-        .resolve(&preparation, "say hello");
+        .resolve(&preparation, "say hello", None);
 
         match resolved {
             ResolvedProviderTurn::PersistReply(reply) => {
@@ -9511,7 +9930,7 @@ mod tests {
 
         let resolved =
             ProviderTurnRequestTerminalPhase::return_error("provider unavailable".to_owned())
-                .resolve(&preparation, "say hello");
+                .resolve(&preparation, "say hello", None);
 
         match resolved {
             ResolvedProviderTurn::ReturnError(error) => {

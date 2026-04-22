@@ -162,6 +162,8 @@ pub struct ControlPlaneSnapshot {
     pub presence_count: usize,
     pub session_count: usize,
     pub pending_approval_count: usize,
+    #[serde(default)]
+    pub pending_continuation_count: usize,
     pub acp_session_count: usize,
     pub runtime_ready: bool,
 }
@@ -582,6 +584,74 @@ impl ControlPlaneApprovalDecision {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlPlaneApprovalExecutionIntegrityState {
+    Clean,
+    PendingDecision,
+    ResumeIncomplete,
+    ResumeFailed,
+}
+
+impl ControlPlaneApprovalExecutionIntegrityState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::PendingDecision => "pending_decision",
+            Self::ResumeIncomplete => "resume_incomplete",
+            Self::ResumeFailed => "resume_failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlPlaneApprovalExecutionLifecycleState {
+    PendingDecision,
+    AwaitingReplay,
+    ExecutingReplay,
+    ReplaySucceeded,
+    ReplayFailed,
+    Denied,
+    Expired,
+    Cancelled,
+}
+
+impl ControlPlaneApprovalExecutionLifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PendingDecision => "pending_decision",
+            Self::AwaitingReplay => "awaiting_replay",
+            Self::ExecutingReplay => "executing_replay",
+            Self::ReplaySucceeded => "replay_succeeded",
+            Self::ReplayFailed => "replay_failed",
+            Self::Denied => "denied",
+            Self::Expired => "expired",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlPlaneApprovalGrantReviewState {
+    NotApplicable,
+    Clean,
+    MissingGrant,
+    ReviewStale,
+}
+
+impl ControlPlaneApprovalGrantReviewState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not_applicable",
+            Self::Clean => "clean",
+            Self::MissingGrant => "missing_grant",
+            Self::ReviewStale => "review_stale",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneApprovalSummary {
     pub approval_request_id: String,
@@ -610,6 +680,14 @@ pub struct ControlPlaneApprovalSummary {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_integrity_state: Option<ControlPlaneApprovalExecutionIntegrityState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_lifecycle_state: Option<ControlPlaneApprovalExecutionLifecycleState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_review_state: Option<ControlPlaneApprovalGrantReviewState>,
+    #[serde(default)]
+    pub needs_attention: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

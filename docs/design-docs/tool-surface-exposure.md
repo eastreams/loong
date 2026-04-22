@@ -162,6 +162,7 @@ This metadata is shared across:
 - conversation advisory rendering
 - followup request summaries and reduced result envelopes
 - approval request summaries/details (with visible tool names plus sanitized request summaries)
+- typed continuation request inspection and trajectory export
 - runtime snapshots
 - gateway read models
 - status surfaces
