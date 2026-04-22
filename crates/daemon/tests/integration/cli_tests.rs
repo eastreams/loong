@@ -1,4 +1,34 @@
 use super::*;
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    static NEXT_TEMP_DIR_SEED: AtomicUsize = AtomicUsize::new(1);
+    let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_nanos();
+    let process_id = std::process::id();
+    std::env::temp_dir().join(format!("{prefix}-{process_id}-{seed}-{nanos}"))
+}
+
+fn render_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn write_empty_config(prefix: &str) -> PathBuf {
+    let root = unique_temp_dir(prefix);
+    fs::create_dir_all(&root).expect("create fixture root");
+    let config_path = root.join("loong.toml");
+    fs::write(&config_path, "").expect("write empty config fixture");
+    config_path
+}
 
 fn try_parse_cli_slice(args: &[&str]) -> Result<Cli, clap::Error> {
     let owned_args = args
@@ -259,6 +289,70 @@ fn grouped_channels_serve_accepts_a_canonical_shape() {
             "--stop",
         ],
     ]);
+}
+
+#[test]
+fn grouped_channels_serve_accepts_bridge_backed_shapes() {
+    for channel in ["qqbot", "onebot", "weixin"] {
+        let _cli = parse_first_candidate(&[
+            &["loong", "channels", "serve", channel, "--stop"],
+            &["loong", "channels", "serve", "--channel", channel, "--stop"],
+        ]);
+    }
+}
+
+#[test]
+fn grouped_channels_serve_native_surfaces_fail_with_account_configuration_errors() {
+    let config_path = write_empty_config("loong-cli-native-serve-empty");
+    let config_path_text = config_path.to_str().expect("config path should be utf-8");
+
+    for channel in ["telegram", "matrix", "whatsapp", "wecom", "line", "webhook"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_loong"))
+            .arg("channels")
+            .arg("serve")
+            .arg(channel)
+            .arg("--config")
+            .arg(config_path_text)
+            .output()
+            .expect("run grouped native serve command");
+        let stderr = render_output(&output.stderr);
+
+        assert!(
+            !output.status.success(),
+            "empty config should not start `{channel}` serve successfully: {stderr}"
+        );
+        assert!(
+            stderr.contains("account `default` is disabled by configuration"),
+            "`{channel}` serve should reach the native runtime-backed config gate, stderr={stderr:?}"
+        );
+    }
+}
+
+#[test]
+fn grouped_channels_serve_bridge_surfaces_fail_with_managed_runtime_errors() {
+    let config_path = write_empty_config("loong-cli-bridge-serve-empty");
+    let config_path_text = config_path.to_str().expect("config path should be utf-8");
+
+    for channel in ["qqbot", "onebot", "weixin"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_loong"))
+            .arg("channels")
+            .arg("serve")
+            .arg(channel)
+            .arg("--config")
+            .arg(config_path_text)
+            .output()
+            .expect("run grouped bridge serve command");
+        let stderr = render_output(&output.stderr);
+
+        assert!(
+            !output.status.success(),
+            "empty config should not start bridge-backed `{channel}` serve successfully: {stderr}"
+        );
+        assert!(
+            stderr.contains("managed bridge runtime is disabled"),
+            "`{channel}` serve should reach the managed bridge runtime gate, stderr={stderr:?}"
+        );
+    }
 }
 
 #[test]

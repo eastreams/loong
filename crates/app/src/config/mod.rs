@@ -282,7 +282,7 @@ mod tests {
             weixin.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(weixin.serve_subcommand, None);
+        assert_eq!(weixin.serve_subcommand, Some("channels serve weixin"));
 
         let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
         assert_eq!(qqbot.id, "qqbot");
@@ -292,7 +292,7 @@ mod tests {
             qqbot.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(qqbot.serve_subcommand, None);
+        assert_eq!(qqbot.serve_subcommand, Some("channels serve qqbot"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
         assert_eq!(onebot.id, "onebot");
@@ -302,7 +302,7 @@ mod tests {
             onebot.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(onebot.serve_subcommand, None);
+        assert_eq!(onebot.serve_subcommand, Some("channels serve onebot"));
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");
