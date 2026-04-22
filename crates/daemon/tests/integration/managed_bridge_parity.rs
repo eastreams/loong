@@ -105,6 +105,11 @@ fn managed_bridge_parity_keeps_summary_aligned_across_text_json_and_operator_vie
             approved_device_count: 0,
             last_activity_ms: None,
         },
+        loong_daemon::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+            paired_device_count: 0,
+            managed_bridge_count: 0,
+            total_count: 0,
+        },
     );
     let weixin_channels_surface = channels_payload
         .channel_surfaces

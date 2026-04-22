@@ -5,7 +5,7 @@ use std::{
 };
 
 use loong_protocol::{
-    ControlPlanePairingListResponse, ControlPlanePairingResolveRequest,
+    ControlPlaneConnectRequest, ControlPlanePairingListResponse, ControlPlanePairingResolveRequest,
     ControlPlanePairingResolveResponse,
 };
 use reqwest::blocking::Client as BlockingClient;
@@ -16,7 +16,11 @@ use serde_json::Value;
 use crate::CliResult;
 
 use super::{
-    read_models::GatewayOperatorSummaryReadModel,
+    read_models::{
+        GatewayOperatorSummaryReadModel, GatewayPairingCompleteReadModel,
+        GatewayPairingEventsReadModel, GatewayPairingSessionReadModel,
+        GatewayPairingStartReadModel,
+    },
     state::{
         GatewayOwnerStatus, default_gateway_runtime_state_dir, gateway_control_token_path,
         load_gateway_owner_status,
@@ -261,6 +265,11 @@ impl GatewayLocalClient {
         self.request_json(Method::GET, path).await
     }
 
+    pub async fn nodes(&self) -> CliResult<Value> {
+        let path = "/v1/nodes";
+        self.request_json(Method::GET, path).await
+    }
+
     pub async fn acp_sessions(&self, request: &GatewayAcpSessionsRequest) -> CliResult<Value> {
         let path = "/api/gateway/acp/sessions";
         self.request_json_with_query(Method::GET, path, request)
@@ -332,6 +341,11 @@ impl GatewayLocalClient {
             .await
     }
 
+    pub async fn pairing_start(&self) -> CliResult<GatewayPairingStartReadModel> {
+        let path = "/v1/pairing/start";
+        self.request_json(Method::POST, path).await
+    }
+
     pub async fn pairing_resolve(
         &self,
         request: &ControlPlanePairingResolveRequest,
@@ -345,6 +359,88 @@ impl GatewayLocalClient {
             .send_gateway_request(request_builder, endpoint.as_str())
             .await?;
         self.decode_gateway_json_response(response, endpoint.as_str(), "POST", path)
+            .await
+    }
+
+    pub async fn pairing_complete(
+        &self,
+        request: &ControlPlaneConnectRequest,
+    ) -> CliResult<GatewayPairingCompleteReadModel> {
+        let path = "/v1/pairing/complete";
+        let endpoint = self.endpoint_url(path)?;
+        let request_builder = self.http_client.post(endpoint.as_str());
+        let request_builder = request_builder.bearer_auth(self.discovery.bearer_token());
+        let request_builder = request_builder.json(request);
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), "POST", path)
+            .await
+    }
+
+    pub async fn pairing_session(
+        &self,
+        session_token: &str,
+    ) -> CliResult<GatewayPairingSessionReadModel> {
+        let path = "/v1/pairing/session";
+        let endpoint = self.endpoint_url(path)?;
+        let request_builder = self.http_client.get(endpoint.as_str());
+        let request_builder = request_builder.bearer_auth(session_token);
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), "GET", path)
+            .await
+    }
+
+    pub async fn pairing_events(
+        &self,
+        session_token: &str,
+        after_seq: Option<u64>,
+        limit: Option<usize>,
+        ack_seq: Option<u64>,
+    ) -> CliResult<GatewayPairingEventsReadModel> {
+        let path = "/v1/pairing/events";
+        let endpoint = self.endpoint_url(path)?;
+        let mut query = Vec::new();
+        if let Some(after_seq) = after_seq {
+            query.push(("after_seq", after_seq.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit", limit.to_string()));
+        }
+        if let Some(ack_seq) = ack_seq {
+            query.push(("ack_seq", ack_seq.to_string()));
+        }
+        let request_builder = self.http_client.get(endpoint.as_str());
+        let request_builder = request_builder.query(&query);
+        let request_builder = request_builder.bearer_auth(session_token);
+        let response = self
+            .send_gateway_request(request_builder, endpoint.as_str())
+            .await?;
+        self.decode_gateway_json_response(response, endpoint.as_str(), "GET", path)
+            .await
+    }
+
+    pub async fn pairing_stream(
+        &self,
+        session_token: &str,
+        after_seq: Option<u64>,
+        limit: Option<usize>,
+    ) -> CliResult<Response> {
+        let path = "/v1/pairing/stream";
+        let endpoint = self.endpoint_url(path)?;
+        let mut query = Vec::new();
+        if let Some(after_seq) = after_seq {
+            query.push(("after_seq", after_seq.to_string()));
+        }
+        if let Some(limit) = limit {
+            query.push(("limit", limit.to_string()));
+        }
+        let request_builder = self.http_client.get(endpoint.as_str());
+        let request_builder = request_builder.query(&query);
+        let request_builder = request_builder.bearer_auth(session_token);
+        self.send_gateway_request(request_builder, endpoint.as_str())
             .await
     }
 

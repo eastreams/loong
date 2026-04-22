@@ -1100,6 +1100,15 @@ pub struct ControlPlanePairingRequestRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneApprovedDeviceSummary {
+    pub device_id: String,
+    pub public_key: String,
+    pub role: String,
+    pub approved_scopes: BTreeSet<String>,
+    pub issued_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlPlanePairingConnectDecision {
     Authorized,
     PairingRequired {
@@ -1301,6 +1310,28 @@ impl ControlPlanePairingRegistry {
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .len()
+    }
+
+    pub fn list_approved_devices(&self, limit: usize) -> Vec<ControlPlaneApprovedDeviceSummary> {
+        let mut approved_devices = self
+            .approved_devices
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        approved_devices.sort_by(|left, right| {
+            right
+                .approved_at_ms
+                .cmp(&left.approved_at_ms)
+                .then_with(|| left.device_id.cmp(&right.device_id))
+        });
+        approved_devices.truncate(limit.max(1));
+
+        approved_devices
+            .iter()
+            .map(approved_device_summary_from_record)
+            .collect()
     }
 
     pub fn last_activity_ms(&self) -> Option<u64> {
@@ -1598,6 +1629,18 @@ fn approved_device_requires_pairing(
     }
     let scopes_within_approved = requested_scopes.is_subset(&approved.approved_scopes);
     !scopes_within_approved
+}
+
+fn approved_device_summary_from_record(
+    approved: &ControlPlaneApprovedDeviceRecord,
+) -> ControlPlaneApprovedDeviceSummary {
+    ControlPlaneApprovedDeviceSummary {
+        device_id: approved.device_id.clone(),
+        public_key: approved.public_key.clone(),
+        role: approved.role.clone(),
+        approved_scopes: approved.approved_scopes.clone(),
+        issued_at_ms: approved.approved_at_ms,
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
