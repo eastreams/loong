@@ -1098,6 +1098,20 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
             .await
             .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
     } else {
+        #[cfg(feature = "memory-sqlite")]
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &turn_config.memory,
+            );
+        #[cfg(feature = "memory-sqlite")]
+        let hosted_runtime = crate::conversation::HostedConversationRuntime::new_with_memory_config(
+            crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+            memory_config,
+        );
+        #[cfg(not(feature = "memory-sqlite"))]
+        let hosted_runtime =
+            crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+
         runtime
             .turn_coordinator
             .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
@@ -1105,7 +1119,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 address,
                 input,
                 provider_error_mode,
-                &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+                &hosted_runtime,
                 &acp_options,
                 binding,
                 None,

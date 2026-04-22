@@ -694,6 +694,10 @@ fn record_audit_event_supports_provider_failover_summary() {
                 attempt: 2,
                 max_attempts: 3,
                 status_code: Some(429),
+                request_id: Some("req-kernel-1".to_owned()),
+                cf_ray: None,
+                auth_error: None,
+                auth_error_code: Some("token_expired".to_owned()),
                 try_next_model: true,
                 auto_model_mode: true,
                 candidate_index: 1,
@@ -718,6 +722,10 @@ fn record_audit_event_supports_provider_failover_summary() {
             attempt,
             max_attempts,
             status_code,
+            request_id,
+            cf_ray,
+            auth_error,
+            auth_error_code,
             try_next_model,
             auto_model_mode,
             candidate_index,
@@ -730,6 +738,10 @@ fn record_audit_event_supports_provider_failover_summary() {
             && *attempt == 2
             && *max_attempts == 3
             && *status_code == Some(429)
+            && request_id.as_deref() == Some("req-kernel-1")
+            && cf_ray.is_none()
+            && auth_error.is_none()
+            && auth_error_code.as_deref() == Some("token_expired")
             && *try_next_model
             && *auto_model_mode
             && *candidate_index == 1

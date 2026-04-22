@@ -878,6 +878,95 @@ fn runtime_snapshot_cli_parses() {
 }
 
 #[test]
+fn debug_bundle_cli_parses() {
+    let cli = try_parse_cli([
+        "loong",
+        "debug",
+        "--config",
+        "/tmp/loong.toml",
+        "--json",
+        "--session",
+        "root-session",
+        "bundle",
+        "--session-id",
+        "target-session",
+        "--output",
+        "/tmp/debug-bundle.json",
+        "--audit-limit",
+        "25",
+        "--session-event-limit",
+        "40",
+        "--history-limit",
+        "50",
+        "--acp-event-limit",
+        "120",
+        "--include-history",
+    ])
+    .expect("`debug bundle` should parse");
+
+    match cli.command {
+        Some(Commands::Debug {
+            config,
+            json,
+            session,
+            command:
+                crate::debug_cli::DebugCommands::Bundle {
+                    session_id,
+                    output,
+                    audit_limit,
+                    session_event_limit,
+                    history_limit,
+                    acp_event_limit,
+                    include_history,
+                },
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loong.toml"));
+            assert!(json);
+            assert_eq!(session, "root-session");
+            assert_eq!(session_id.as_deref(), Some("target-session"));
+            assert_eq!(output.as_deref(), Some("/tmp/debug-bundle.json"));
+            assert_eq!(audit_limit, 25);
+            assert_eq!(session_event_limit, 40);
+            assert_eq!(history_limit, 50);
+            assert_eq!(acp_event_limit, 120);
+            assert!(include_history);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn debug_show_cli_parses() {
+    let cli = try_parse_cli([
+        "loong",
+        "debug",
+        "--config",
+        "/tmp/loong.toml",
+        "--session",
+        "root-session",
+        "show",
+        "--artifact",
+        "/tmp/debug-bundle.json",
+    ])
+    .expect("`debug show` should parse");
+
+    match cli.command {
+        Some(Commands::Debug {
+            config,
+            json,
+            session,
+            command: crate::debug_cli::DebugCommands::Show { artifact },
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loong.toml"));
+            assert!(!json);
+            assert_eq!(session, "root-session");
+            assert_eq!(artifact, "/tmp/debug-bundle.json");
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn runtime_restore_cli_parses() {
     let cli = try_parse_cli([
         "loong",

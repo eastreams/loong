@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::mvp;
 
 #[derive(Debug, Clone)]
@@ -10,12 +12,18 @@ pub struct RuntimeSnapshotProviderState {
     pub profiles: Vec<RuntimeSnapshotProviderProfileState>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RuntimeSnapshotProviderTransportState {
     pub http_client_cache_entries: usize,
     pub http_client_cache_hits: u64,
     pub http_client_cache_misses: u64,
     pub built_http_clients: u64,
+    pub failover_total_events: usize,
+    pub failover_continued_events: usize,
+    pub failover_exhausted_events: usize,
+    pub failover_by_reason: BTreeMap<String, usize>,
+    pub failover_by_stage: BTreeMap<String, usize>,
+    pub failover_by_provider: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone)]

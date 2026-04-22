@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use crate::{
@@ -37,6 +39,21 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
             snapshot.provider.transport_runtime.http_client_cache_hits,
             snapshot.provider.transport_runtime.http_client_cache_misses,
             snapshot.provider.transport_runtime.built_http_clients
+        ),
+        format!(
+            "provider failover total={} continued={} exhausted={} reasons={} stages={} providers={}",
+            snapshot.provider.transport_runtime.failover_total_events,
+            snapshot
+                .provider
+                .transport_runtime
+                .failover_continued_events,
+            snapshot
+                .provider
+                .transport_runtime
+                .failover_exhausted_events,
+            format_count_rollup(&snapshot.provider.transport_runtime.failover_by_reason),
+            format_count_rollup(&snapshot.provider.transport_runtime.failover_by_stage),
+            format_count_rollup(&snapshot.provider.transport_runtime.failover_by_provider),
         ),
     ];
 
@@ -481,6 +498,18 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
     lines
 }
 
+fn format_count_rollup(counts: &BTreeMap<String, usize>) -> String {
+    if counts.is_empty() {
+        return "-".to_owned();
+    }
+
+    counts
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 pub(crate) fn runtime_snapshot_provider_json(snapshot: &RuntimeSnapshotProviderState) -> Value {
     json!({
         "active_profile_id": snapshot.active_profile_id,
@@ -492,6 +521,12 @@ pub(crate) fn runtime_snapshot_provider_json(snapshot: &RuntimeSnapshotProviderS
             "http_client_cache_hits": snapshot.transport_runtime.http_client_cache_hits,
             "http_client_cache_misses": snapshot.transport_runtime.http_client_cache_misses,
             "built_http_clients": snapshot.transport_runtime.built_http_clients,
+            "failover_total_events": snapshot.transport_runtime.failover_total_events,
+            "failover_continued_events": snapshot.transport_runtime.failover_continued_events,
+            "failover_exhausted_events": snapshot.transport_runtime.failover_exhausted_events,
+            "failover_by_reason": snapshot.transport_runtime.failover_by_reason,
+            "failover_by_stage": snapshot.transport_runtime.failover_by_stage,
+            "failover_by_provider": snapshot.transport_runtime.failover_by_provider,
         },
         "profiles": snapshot
             .profiles
