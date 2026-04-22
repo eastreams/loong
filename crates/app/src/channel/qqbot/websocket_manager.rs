@@ -55,10 +55,7 @@ pub(super) struct QqbotWebsocketManager {
     last_seq: u64,
     heartbeat_timer: Option<Interval>,
     policy: ChannelOutboundHttpPolicy,
-    /// Session ID from ReadyEvent; used for resume on reconnect.
     session_id: Option<String>,
-    /// Whether the current connection has completed the handshake.
-    handshake_complete: bool,
 }
 
 impl QqbotWebsocketManager {
@@ -84,7 +81,6 @@ impl QqbotWebsocketManager {
             heartbeat_timer: None,
             policy,
             session_id: None,
-            handshake_complete: false,
         }
     }
 
@@ -109,7 +105,7 @@ impl QqbotWebsocketManager {
     }
 
     /// Fetch the WebSocket gateway URL from the QQBot API.
-    async fn fetch_gateway_url(&self, token: &str) -> CliResult<String> {
+    async fn fetch_wss_gateway_url(&self, token: &str) -> CliResult<String> {
         let raw_url = format!("{QQBOT_API_BASE_URL}{QQBOT_GATEWAY_PATH}");
         let url = validate_outbound_http_target("qqbot gateway_url", &raw_url, self.policy)?;
 
@@ -136,7 +132,6 @@ impl QqbotWebsocketManager {
 
     async fn connect_and_run(&mut self) -> CliResult<()> {
         // Reset per-connection state
-        self.handshake_complete = false;
         self.heartbeat_timer = None;
 
         let token = self
@@ -146,7 +141,7 @@ impl QqbotWebsocketManager {
             .map_err(|e| format!("qqbot token unavailable: {e}"))?;
 
         // Step 1: Fetch WSS gateway URL
-        let gateway_url = self.fetch_gateway_url(&token).await?;
+        let gateway_url = self.fetch_wss_gateway_url(&token).await?;
 
         let (stream, _) = connect_async(&gateway_url)
             .await
@@ -155,13 +150,10 @@ impl QqbotWebsocketManager {
         self.wss_tx = Some(tx);
         self.wss_rx = Some(rx);
 
-        // Perform WebSocket handshake (identify or resume).
         self.perform_handshake(&token).await?;
         loop {
             tokio::select! {
                 biased;
-
-                // Outbound AI replies
                 Some(outbound) = self.outbound_rx.recv() => {
                     if let Err(e) = self.send_outbound_message(outbound).await {
                         tracing::warn!(
@@ -171,12 +163,9 @@ impl QqbotWebsocketManager {
                         );
                     }
                 }
-
-                // Heartbeat send
-                _ = Self::tick_heartbeat(&mut self.heartbeat_timer), if self.handshake_complete && self.heartbeat_timer.is_some() => {
+                _ = Self::tick_heartbeat(&mut self.heartbeat_timer), if self.heartbeat_timer.is_some() => {
                     self.send_heartbeat().await?;
                 }
-
                 // Inbound WebSocket messages
                 msg = Self::wss_next(&mut self.wss_rx) => {
                     let msg = msg?;
@@ -184,8 +173,7 @@ impl QqbotWebsocketManager {
                         Message::Text(text) => {
                             let payload: serde_json::Value = serde_json::from_str(&text)
                                 .map_err(|e| format!("qqbot ws json parse failed: {e}"))?;
-                            self.handle_ws_frame(&payload)?;
-                            self.msg_manager.lock().await.enqueue(payload);
+                            self.handle_ws_frame(payload).await?;
                         }
                         Message::Close(_) => return Err("qqbot ws closed by remote".to_owned()),
                         Message::Ping(_) => {
@@ -221,70 +209,111 @@ impl QqbotWebsocketManager {
                 }
                 msg = Self::wss_next(&mut self.wss_rx) => {
                     let msg = msg?;
-                    match msg {
-                        Message::Text(text) => {
-                            let payload: serde_json::Value = serde_json::from_str(&text)
-                                .map_err(|e| format!("qqbot ws json parse failed: {e}"))?;
-
-                            let op = payload.get("op").and_then(serde_json::Value::as_u64);
-                            match op {
-                                Some(0) => {
-                                    // Dispatch event — check for READY
-                                    let event_type = payload.get("t").and_then(serde_json::Value::as_str).unwrap_or("");
-                                    if event_type == "READY" {
-                                        let data = payload.get("d").cloned().unwrap_or(serde_json::Value::Null);
-                                        if let Some(sid) = data.get("session_id").and_then(serde_json::Value::as_str) {
-                                            self.session_id = Some(sid.to_string());
-                                            self.handshake_complete = true;
-                                            // Also update last_seq if present
-                                            if let Some(s) = payload.get("s").and_then(serde_json::Value::as_u64) {
-                                                self.last_seq = s;
-                                            }
-                                            tracing::info!(
-                                                account_id = %self.account_id,
-                                                session_id = %sid,
-                                                "qqbot handshake complete (Ready)"
-                                            );
-                                            return Ok(());
-                                        }
-                                    }
-                                    // Not READY yet, enqueue for message manager to process later
-                                    self.msg_manager.lock().await.enqueue(payload);
-                                }
-                                Some(10) => {
-                                    // Hello — set heartbeat interval (but don't start until handshake done)
-                                    let heartbeat_intv_ms = payload
-                                        .get("d")
-                                        .and_then(serde_json::Value::as_object)
-                                        .and_then(|obj| obj.get("heartbeat_interval").and_then(serde_json::Value::as_u64))
-                                        .ok_or_else(|| format!("qqbot hello missing heartbeat_interval: {}", payload))?;
-                                    if self.heartbeat_timer.is_none() {
-                                        self.heartbeat_timer = Some(tokio::time::interval(Duration::from_millis(heartbeat_intv_ms)));
-                                    }
-                                }
-                                Some(9) => {
-                                    // Invalid Session — must re-identify
-                                    tracing::warn!(
-                                        account_id = %self.account_id,
-                                        "qqbot invalid session, clearing session_id and retrying identify"
-                                    );
-                                    self.session_id = None;
-                                    self.send_identify(token).await?;
-                                }
-                                _ => {
-                                    // Ignore other opcodes during handshake
-                                }
-                            }
-                        }
-                        Message::Close(_) => return Err("qqbot ws closed during handshake".to_owned()),
-                        Message::Ping(_) => {
-                            let _ = Self::wss_send(&mut self.wss_tx, Message::Pong(Bytes::new())).await;
-                        }
-                        _ => {}
+                    match self.handle_handshake_message(msg, token).await {
+                        Ok(()) => return Ok(()),
+                        Err(e) if e == "continue" => {},
+                        Err(e) => return Err(e),
                     }
                 }
             }
         }
+    }
+
+    async fn handle_handshake_message(&mut self, msg: Message, token: &str) -> CliResult<()> {
+        match msg {
+            Message::Text(text) => {
+                let payload: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|e| format!("qqbot ws json parse failed: {e}"))?;
+                self.handle_handshake_payload(payload, token).await
+            }
+            Message::Close(_) => Err("qqbot ws closed during handshake".to_owned()),
+            Message::Ping(_) => {
+                self.send_pong().await?;
+                Err("continue".to_owned())
+            }
+            _ => Err("continue".to_owned()),
+        }
+    }
+
+    async fn handle_handshake_payload(
+        &mut self,
+        payload: serde_json::Value,
+        token: &str,
+    ) -> CliResult<()> {
+        let op = payload.get("op").and_then(serde_json::Value::as_u64);
+        match op {
+            Some(0) => self.handle_handshake_dispatch(payload).await,
+            Some(10) => {
+                self.handle_handshake_hello(payload).await?;
+                Err("continue".to_owned())
+            }
+            Some(9) => {
+                self.handle_handshake_invalid_session(token).await?;
+                Err("continue".to_owned())
+            }
+            _ => Err("continue".to_owned()),
+        }
+    }
+
+    async fn handle_handshake_dispatch(&mut self, payload: serde_json::Value) -> CliResult<()> {
+        let event_type = payload
+            .get("t")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        if event_type == "READY" {
+            let data = payload.get("d").cloned().unwrap_or(serde_json::Value::Null);
+            if let Some(sid) = data.get("session_id").and_then(serde_json::Value::as_str) {
+                self.session_id = Some(sid.to_string());
+                if let Some(s) = payload.get("s").and_then(serde_json::Value::as_u64) {
+                    self.last_seq = s;
+                }
+                tracing::info!(
+                    account_id = %self.account_id,
+                    session_id = %sid,
+                    "qqbot handshake complete (Ready)"
+                );
+                return Ok(());
+            }
+        }
+
+        // Not READY yet, enqueue for message manager to process later
+        self.msg_manager.lock().await.enqueue(payload);
+        Err("continue".to_owned())
+    }
+
+    /// Handle Hello event (op=10) during handshake — set heartbeat interval.
+    async fn handle_handshake_hello(&mut self, payload: serde_json::Value) -> CliResult<()> {
+        let heartbeat_intv_ms = payload
+            .get("d")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|obj| {
+                obj.get("heartbeat_interval")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .ok_or_else(|| format!("qqbot hello missing heartbeat_interval: {}", payload))?;
+
+        if self.heartbeat_timer.is_none() {
+            self.heartbeat_timer = Some(tokio::time::interval(Duration::from_millis(
+                heartbeat_intv_ms,
+            )));
+        }
+        Ok(())
+    }
+
+    /// Handle Invalid Session event (op=9) during handshake — clear session and re-identify.
+    async fn handle_handshake_invalid_session(&mut self, token: &str) -> CliResult<()> {
+        tracing::warn!(
+            account_id = %self.account_id,
+            "qqbot invalid session, clearing session_id and retrying identify"
+        );
+        self.session_id = None;
+        self.send_identify(token).await
+    }
+
+    /// Send a Pong response to a Ping frame.
+    async fn send_pong(&mut self) -> CliResult<()> {
+        Self::wss_send(&mut self.wss_tx, Message::Pong(Bytes::new())).await
     }
 
     async fn send_identify(&mut self, token: &str) -> CliResult<()> {
@@ -340,7 +369,7 @@ impl QqbotWebsocketManager {
     }
 
     /// Handle a single WebSocket frame after handshake is complete.
-    fn handle_ws_frame(&mut self, payload: &serde_json::Value) -> CliResult<()> {
+    async fn handle_ws_frame(&mut self, payload: serde_json::Value) -> CliResult<()> {
         let seq = payload.get("s").and_then(serde_json::Value::as_u64);
         if let Some(s) = seq {
             self.last_seq = s;
@@ -349,9 +378,7 @@ impl QqbotWebsocketManager {
         let op = payload.get("op").and_then(serde_json::Value::as_u64);
         match op {
             Some(0) => {
-                // Dispatch event — enqueue for message manager
-                // Note: enqueue is called synchronously; the background processing task
-                // will pick it up via process_all().
+                self.msg_manager.lock().await.enqueue(payload);
             }
             Some(10) => {
                 let heartbeat_intv_ms = payload

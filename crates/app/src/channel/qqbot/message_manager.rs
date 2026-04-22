@@ -84,52 +84,57 @@ impl QqbotMsgManager {
         }
     }
 
-    /// Take the session_id from a ReadyEvent if one was processed.
-    pub(super) fn take_ready_session_id(&mut self) -> Option<String> {
-        self.ready_session_id.take()
-    }
-
     async fn process_single(&mut self, payload: &Value) -> CliResult<()> {
         let event = parse_qqbot_ws_frame(payload)?;
         match event {
-            QqBotWsEvent::C2cMessage(data) => {
-                let inbound = build_qqbot_inbound_message(&data, &self.account_id)?;
-                let reply = process_inbound_with_provider(
-                    &self.config,
-                    Some(&self.resolved_path),
-                    &inbound,
-                    &self.kernel_ctx,
-                    ChannelTurnFeedbackPolicy::final_trace_significant(),
-                )
-                .await?;
-
-                let openid = inbound.session.conversation_id.clone();
-                if self
-                    .outbound_tx
-                    .send(QqbotOutboundMessage {
-                        openid,
-                        text: reply,
-                    })
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(
-                        account_id = %self.account_id,
-                        "qqbot outbound channel closed"
-                    );
-                }
-
-                Ok(())
-            }
+            QqBotWsEvent::C2cMessage(data) => self.process_c2c_message(data).await,
             QqBotWsEvent::ReadyEvent(session_id) => {
-                self.ready_session_id = Some(session_id);
-                tracing::info!(
-                    account_id = %self.account_id,
-                    "qqbot ready event processed"
-                );
+                self.process_ready_event(session_id);
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Process a C2C (user-to-bot) message: build inbound, get AI reply, send outbound.
+    async fn process_c2c_message(&mut self, data: Value) -> CliResult<()> {
+        let inbound = build_qqbot_inbound_message(&data, &self.account_id)?;
+        let reply = process_inbound_with_provider(
+            &self.config,
+            Some(&self.resolved_path),
+            &inbound,
+            &self.kernel_ctx,
+            ChannelTurnFeedbackPolicy::final_trace_significant(),
+        )
+        .await?;
+
+        let openid = inbound.session.conversation_id.clone();
+        self.send_outbound(openid, reply).await;
+
+        Ok(())
+    }
+
+    /// Store the session ID from a Ready event.
+    fn process_ready_event(&mut self, session_id: String) {
+        self.ready_session_id = Some(session_id);
+        tracing::info!(
+            account_id = %self.account_id,
+            "qqbot ready event processed"
+        );
+    }
+
+    /// Send an outbound message to the WebSocket manager, logging on channel closure.
+    async fn send_outbound(&self, openid: String, text: String) {
+        if self
+            .outbound_tx
+            .send(QqbotOutboundMessage { openid, text })
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                account_id = %self.account_id,
+                "qqbot outbound channel closed"
+            );
         }
     }
 }
