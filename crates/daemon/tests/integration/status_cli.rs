@@ -54,6 +54,7 @@ fn write_status_config(
     let mut config = mvp::config::LoongConfig::default();
     config.memory.sqlite_path = sqlite_path.display().to_string();
     config.tools.file_root = Some(root.display().to_string());
+    config.gateway.port = 0;
     config.set_active_provider_profile(
         "demo-openai",
         mvp::config::ProviderProfileConfig {
