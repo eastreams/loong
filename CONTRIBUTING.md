@@ -128,6 +128,12 @@ source of truth, with a fallback to the full `integration` binary for broad
 harness edits. These fast loops **do not** replace the Track A required checks
 or CI parity.
 
+When you open a pull request, record the exact Rust validation that matches the
+touched package and feature surface. If a known baseline or platform-specific
+repository issue blocks full local parity, document the blocker together with
+the narrower checks you did run instead of checking boxes for commands you
+could not complete.
+
 If `task` or its transitive dependencies are unavailable locally, run at least
 CI parity plus architecture/dep-graph checks directly:
 
