@@ -1578,17 +1578,18 @@ mod tests {
         .expect("system message");
         let content = system["content"].as_str().expect("system content");
 
-        let runtime_self_index = content
-            .find("## Runtime Self Context")
-            .expect("runtime self section");
+        let runtime_contract_index = content
+            .find("## Workspace Guidance")
+            .or_else(|| content.find("## Runtime Self Context"))
+            .expect("workspace guidance or runtime self section");
         let execution_discipline_index = content
             .find("## Execution Discipline")
             .expect("execution discipline section");
         let tool_access_index = content.find("## Tool Access").expect("tool access section");
 
         assert!(
-            runtime_self_index < execution_discipline_index,
-            "runtime self should come before execution discipline"
+            runtime_contract_index < execution_discipline_index,
+            "workspace guidance/runtime self should come before execution discipline"
         );
         assert!(
             execution_discipline_index < tool_access_index,
