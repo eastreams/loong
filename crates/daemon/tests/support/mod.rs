@@ -113,7 +113,7 @@ impl Drop for MigrationEnvironmentGuard {
     }
 }
 
-fn with_cli_stack<T, F>(thread_name: &str, operation: F) -> T
+pub(crate) fn with_cli_stack<T, F>(thread_name: &str, operation: F) -> T
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,

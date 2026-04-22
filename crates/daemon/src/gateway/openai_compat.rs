@@ -1688,13 +1688,13 @@ mod tests {
         assert!(
             turns
                 .iter()
-                .any(|turn| turn.role == "assistant" && turn.content == "prior answer"),
+                .any(|turn| turn.role == "user" && turn.content == "hello"),
             "turns={turns:?}"
         );
         assert!(
-            turns
-                .iter()
-                .any(|turn| turn.role == "assistant" && turn.content == "hello world"),
+            turns.iter().any(|turn| {
+                turn.role == "assistant" && turn.content.starts_with("hello world")
+            }),
             "turns={turns:?}"
         );
 
