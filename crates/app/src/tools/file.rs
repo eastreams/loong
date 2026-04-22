@@ -512,7 +512,7 @@ fn apply_exact_edit_blocks(
         let located_block = locate_exact_edit_block(content, block, index)?;
         located_blocks.push(located_block);
     }
-    located_blocks.sort_by(|left, right| left.start.cmp(&right.start));
+    located_blocks.sort_by_key(|left| left.start);
 
     for window in located_blocks.windows(2) {
         let [left, right] = window else {

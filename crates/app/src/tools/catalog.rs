@@ -2199,13 +2199,11 @@ fn build_delegate_child_tool_view(
             && descriptor.availability == ToolAvailability::Runtime
     }) {
         match descriptor.name {
-            "shell.exec" =>
-            {
-                #[cfg(feature = "tool-shell")]
-                if allow_shell_in_child {
-                    names.push(descriptor.name);
-                }
+            #[cfg(feature = "tool-shell")]
+            "shell.exec" if allow_shell_in_child => {
+                names.push(descriptor.name);
             }
+            "shell.exec" => {}
             name if allowlist.contains(name)
                 && tool_visibility_gate_enabled_for_delegate_child(
                     descriptor.visibility_gate,
