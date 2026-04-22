@@ -79,6 +79,122 @@ struct GatewayPortResolution {
     source: GatewayPortSource,
 }
 
+struct GatewayControlRequest<'a> {
+    app_state: &'a GatewayControlAppState,
+}
+
+impl<'a> GatewayControlRequest<'a> {
+    fn authorize(
+        headers: &HeaderMap,
+        app_state: &'a GatewayControlAppState,
+    ) -> Result<Self, GatewayControlJsonResponse> {
+        authorize_request_from_state(headers, app_state).map_err(|error| {
+            json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str())
+        })?;
+        Ok(Self { app_state })
+    }
+
+    fn app_state(&self) -> &'a GatewayControlAppState {
+        self.app_state
+    }
+
+    fn status(&self) -> Result<super::state::GatewayOwnerStatus, GatewayControlJsonResponse> {
+        load_gateway_owner_status(self.app_state.runtime_dir.as_path()).ok_or_else(|| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "status_unavailable",
+                "gateway owner status is unavailable",
+            )
+        })
+    }
+
+    fn config(&self) -> Result<&'a LoongConfig, GatewayControlJsonResponse> {
+        gateway_control_config(self.app_state).map_err(|error| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            )
+        })
+    }
+
+    fn acp_manager(&self) -> Result<&'a AcpSessionManager, GatewayControlJsonResponse> {
+        gateway_control_acp_manager(self.app_state).map_err(|error| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp_unavailable",
+                error.as_str(),
+            )
+        })
+    }
+
+    fn pairing_registry(
+        &self,
+    ) -> Result<mvp::control_plane::ControlPlanePairingRegistry, GatewayControlJsonResponse> {
+        gateway_pairing_registry(self.app_state).map_err(|error| {
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pairing_unavailable",
+                error.as_str(),
+            )
+        })
+    }
+}
+
+struct GatewayPairingSessionRequest {
+    token: String,
+    lease: mvp::control_plane::ControlPlaneConnectionLease,
+}
+
+impl GatewayPairingSessionRequest {
+    fn authorize(
+        headers: &HeaderMap,
+        app_state: &GatewayControlAppState,
+        required_scope: ControlPlaneScope,
+    ) -> Result<Self, GatewayControlJsonResponse> {
+        let token = extract_gateway_pairing_session_token(headers).ok_or_else(|| {
+            json_error(
+                StatusCode::UNAUTHORIZED,
+                "missing_session_token",
+                "missing gateway pairing session token",
+            )
+        })?;
+        let lease = resolve_gateway_pairing_session_lease(app_state, token.as_str())?;
+        ensure_gateway_pairing_session_scope(&lease, required_scope)?;
+        Ok(Self { token, lease })
+    }
+
+    fn lease(&self) -> &mvp::control_plane::ControlPlaneConnectionLease {
+        &self.lease
+    }
+
+    fn acknowledge_seq(
+        mut self,
+        app_state: &GatewayControlAppState,
+        ack_seq: u64,
+    ) -> Result<Self, GatewayControlJsonResponse> {
+        let lease = app_state
+            .connection_registry
+            .acknowledge_seq(self.token.as_str(), ack_seq)
+            .map_err(|error| {
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "session_registry_failed",
+                    error.as_str(),
+                )
+            })?
+            .ok_or_else(|| {
+                json_error(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_session_token",
+                    "invalid or expired gateway pairing session token",
+                )
+            })?;
+        self.lease = lease;
+        Ok(self)
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct GatewayAcpSessionsQuery {
     limit: Option<usize>,
@@ -468,106 +584,64 @@ async fn handle_gateway_status(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let status = load_gateway_owner_status(app_state.runtime_dir.as_path());
-    let Some(status) = status else {
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "status_unavailable",
-            "gateway owner status is unavailable",
-        );
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
-
-    let payload_result = serialize_json_value(&status, "gateway status payload");
-    match payload_result {
-        Ok(payload) => json_response(StatusCode::OK, payload),
-        Err(error) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serialize_failed",
-            error.as_str(),
-        ),
-    }
+    let status = match request.status() {
+        Ok(status) => status,
+        Err(response) => return response,
+    };
+    gateway_control_payload_response(&status, "gateway status payload")
 }
 
 async fn handle_gateway_channels(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let payload = serialize_json_value(
-        app_state.channel_inventory.as_ref(),
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    gateway_control_payload_response(
+        request.app_state().channel_inventory.as_ref(),
         "gateway channels payload",
-    );
-    match payload {
-        Ok(payload) => json_response(StatusCode::OK, payload),
-        Err(error) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serialize_failed",
-            error.as_str(),
-        ),
-    }
+    )
 }
 
 async fn handle_gateway_runtime_snapshot(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let payload = serialize_json_value(
-        app_state.runtime_snapshot.as_ref(),
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    gateway_control_payload_response(
+        request.app_state().runtime_snapshot.as_ref(),
         "gateway runtime snapshot payload",
-    );
-    match payload {
-        Ok(payload) => json_response(StatusCode::OK, payload),
-        Err(error) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serialize_failed",
-            error.as_str(),
-        ),
-    }
+    )
 }
 
 async fn handle_gateway_operator_summary(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let status = load_gateway_owner_status(app_state.runtime_dir.as_path());
-    let Some(status) = status else {
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "status_unavailable",
-            "gateway owner status is unavailable",
-        );
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
-
+    let status = match request.status() {
+        Ok(status) => status,
+        Err(response) => return response,
+    };
     let summary = build_gateway_operator_summary_read_model(
         &status,
-        app_state.channel_inventory.as_ref(),
-        app_state.runtime_snapshot.as_ref(),
-        app_state.as_ref(),
+        request.app_state().channel_inventory.as_ref(),
+        request.app_state().runtime_snapshot.as_ref(),
+        request.app_state(),
     );
-    let payload = serialize_json_value(&summary, "gateway operator summary payload");
-    match payload {
-        Ok(payload) => json_response(StatusCode::OK, payload),
-        Err(error) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serialize_failed",
-            error.as_str(),
-        ),
-    }
+    gateway_control_payload_response(&summary, "gateway operator summary payload")
 }
 
 async fn handle_gateway_acp_sessions(
@@ -575,19 +649,13 @@ async fn handle_gateway_acp_sessions(
     State(app_state): State<Arc<GatewayControlAppState>>,
     Query(query): Query<GatewayAcpSessionsQuery>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let manager = match gateway_control_acp_manager(app_state.as_ref()) {
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let manager = match request.acp_manager() {
         Ok(manager) => manager,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "acp_unavailable",
-                error.as_str(),
-            );
-        }
+        Err(response) => return response,
     };
 
     let sessions_result = manager.list_sessions();
@@ -608,22 +676,11 @@ async fn handle_gateway_acp_sessions(
     sessions.truncate(limit);
 
     let payload = build_acp_session_list_read_model(
-        app_state.config_path.as_str(),
+        request.app_state().config_path.as_str(),
         matched_count,
         sessions.as_slice(),
     );
-    let payload = match serialize_json_value(&payload, "gateway ACP sessions payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    gateway_control_payload_response(&payload, "gateway ACP sessions payload")
 }
 
 async fn handle_gateway_acp_status(
@@ -631,29 +688,17 @@ async fn handle_gateway_acp_status(
     State(app_state): State<Arc<GatewayControlAppState>>,
     Query(query): Query<GatewayAcpStatusQuery>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let config = match gateway_control_config(app_state.as_ref()) {
-        Ok(config) => config,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "acp_unavailable",
-                error.as_str(),
-            );
-        }
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
-    let manager = match gateway_control_acp_manager(app_state.as_ref()) {
+    let config = match request.config() {
+        Ok(config) => config,
+        Err(response) => return response,
+    };
+    let manager = match request.acp_manager() {
         Ok(manager) => manager,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "acp_unavailable",
-                error.as_str(),
-            );
-        }
+        Err(response) => return response,
     };
 
     let resolved_session_key = crate::resolve_acp_status_session_key(
@@ -690,54 +735,31 @@ async fn handle_gateway_acp_status(
     };
 
     let payload = build_acp_status_read_model(
-        app_state.config_path.as_str(),
+        request.app_state().config_path.as_str(),
         query.session.as_deref(),
         query.conversation_id.as_deref(),
         query.route_session_id.as_deref(),
         resolved_session_key.as_str(),
         &status,
     );
-    let payload = match serialize_json_value(&payload, "gateway ACP status payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    gateway_control_payload_response(&payload, "gateway ACP status payload")
 }
 
 async fn handle_gateway_acp_observability(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let config = match gateway_control_config(app_state.as_ref()) {
-        Ok(config) => config,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "acp_unavailable",
-                error.as_str(),
-            );
-        }
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
-    let manager = match gateway_control_acp_manager(app_state.as_ref()) {
+    let config = match request.config() {
+        Ok(config) => config,
+        Err(response) => return response,
+    };
+    let manager = match request.acp_manager() {
         Ok(manager) => manager,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "acp_unavailable",
-                error.as_str(),
-            );
-        }
+        Err(response) => return response,
     };
 
     let snapshot_result = manager.observability_snapshot(config).await;
@@ -752,19 +774,9 @@ async fn handle_gateway_acp_observability(
         }
     };
 
-    let payload = build_acp_observability_read_model(app_state.config_path.as_str(), &snapshot);
-    let payload = match serialize_json_value(&payload, "gateway ACP observability payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    let payload =
+        build_acp_observability_read_model(request.app_state().config_path.as_str(), &snapshot);
+    gateway_control_payload_response(&payload, "gateway ACP observability payload")
 }
 
 async fn handle_gateway_pairing_requests(
@@ -772,19 +784,13 @@ async fn handle_gateway_pairing_requests(
     State(app_state): State<Arc<GatewayControlAppState>>,
     Query(query): Query<GatewayPairingListQuery>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+    let request = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let pairing_registry = match request.pairing_registry() {
         Ok(pairing_registry) => pairing_registry,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "pairing_unavailable",
-                error.as_str(),
-            );
-        }
+        Err(response) => return response,
     };
 
     let status = match query.status.as_deref() {
@@ -810,26 +816,15 @@ async fn handle_gateway_pairing_requests(
             .map(map_gateway_pairing_request)
             .collect::<Vec<_>>(),
     };
-    let payload = match serialize_json_value(&payload, "gateway pairing requests payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    gateway_control_payload_response(&payload, "gateway pairing requests payload")
 }
 
 async fn handle_gateway_pairing_start(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    if let Err(response) = GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        return response;
     }
 
     let challenge = app_state.challenge_registry.issue();
@@ -839,18 +834,7 @@ async fn handle_gateway_pairing_start(
         expires_at_ms: challenge.expires_at_ms,
     };
     let payload = build_gateway_pairing_start_read_model(challenge);
-    let payload = match serialize_json_value(&payload, "gateway pairing start payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    gateway_control_payload_response(&payload, "gateway pairing start payload")
 }
 
 async fn handle_gateway_nodes(
@@ -881,19 +865,13 @@ async fn handle_gateway_pairing_resolve(
     State(app_state): State<Arc<GatewayControlAppState>>,
     Json(request): Json<ControlPlanePairingResolveRequest>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
-
-    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+    let request_context = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let pairing_registry = match request_context.pairing_registry() {
         Ok(pairing_registry) => pairing_registry,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "pairing_unavailable",
-                error.as_str(),
-            );
-        }
+        Err(response) => return response,
     };
 
     match pairing_registry.resolve_request(request.pairing_request_id.as_str(), request.approve) {
@@ -902,17 +880,7 @@ async fn handle_gateway_pairing_resolve(
                 request: map_gateway_pairing_request(record.clone()),
                 device_token: record.device_token,
             };
-            let payload = match serialize_json_value(&payload, "gateway pairing resolve payload") {
-                Ok(payload) => payload,
-                Err(error) => {
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "serialize_failed",
-                        error.as_str(),
-                    );
-                }
-            };
-            json_response(StatusCode::OK, payload)
+            gateway_control_payload_response(&payload, "gateway pairing resolve payload")
         }
         Ok(None) => json_error(
             StatusCode::NOT_FOUND,
@@ -936,9 +904,10 @@ async fn handle_gateway_pairing_complete(
     State(app_state): State<Arc<GatewayControlAppState>>,
     Json(request): Json<ControlPlaneConnectRequest>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
-    }
+    let request_context = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
 
     if request.max_protocol < loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION
         || request.min_protocol > loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION
@@ -968,15 +937,9 @@ async fn handle_gateway_pairing_complete(
         return response;
     }
 
-    let pairing_registry = match gateway_pairing_registry(app_state.as_ref()) {
+    let pairing_registry = match request_context.pairing_registry() {
         Ok(pairing_registry) => pairing_registry,
-        Err(error) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "pairing_unavailable",
-                error.as_str(),
-            );
-        }
+        Err(response) => return response,
     };
 
     let requested_scopes = request
@@ -1008,17 +971,7 @@ async fn handle_gateway_pairing_complete(
                 requested_scopes,
                 lease,
             );
-            let payload = match serialize_json_value(&payload, "gateway pairing complete payload") {
-                Ok(payload) => payload,
-                Err(error) => {
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "serialize_failed",
-                        error.as_str(),
-                    );
-                }
-            };
-            json_response(StatusCode::OK, payload)
+            gateway_control_payload_response(&payload, "gateway pairing complete payload")
         }
         Ok(mvp::control_plane::ControlPlanePairingConnectDecision::PairingRequired {
             request: pairing_request,
@@ -1064,16 +1017,16 @@ async fn handle_gateway_pairing_session(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    let lease = match authorize_gateway_pairing_session_scope_request(
+    let session = match GatewayPairingSessionRequest::authorize(
         &headers,
         app_state.as_ref(),
         ControlPlaneScope::OperatorRead,
     ) {
-        Ok(lease) => lease,
+        Ok(session) => session,
         Err(response) => return response,
     };
 
-    let principal = gateway_pairing_protocol_principal(&lease);
+    let principal = gateway_pairing_protocol_principal(session.lease());
     let replay_window = app_state
         .event_bus
         .as_ref()
@@ -1084,25 +1037,14 @@ async fn handle_gateway_pairing_session(
         });
     let payload = build_gateway_pairing_session_read_model(
         GatewayPairingSessionLeaseReadModel {
-            connection_token: lease.token,
-            connection_token_expires_at_ms: lease.expires_at_ms,
+            connection_token: session.lease().token.clone(),
+            connection_token_expires_at_ms: session.lease().expires_at_ms,
             principal,
-            last_acknowledged_seq: lease.acknowledged_seq,
+            last_acknowledged_seq: session.lease().acknowledged_seq,
         },
         replay_window,
     );
-    let payload = match serialize_json_value(&payload, "gateway pairing session payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    gateway_control_payload_response(&payload, "gateway pairing session payload")
 }
 
 async fn handle_gateway_pairing_events(
@@ -1110,93 +1052,49 @@ async fn handle_gateway_pairing_events(
     Query(query): Query<GatewayPairingEventsQuery>,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    let session_token = match extract_gateway_pairing_session_token(&headers) {
-        Some(token) => token,
-        None => {
-            return json_error(
-                StatusCode::UNAUTHORIZED,
-                "missing_session_token",
-                "missing gateway pairing session token",
-            );
-        }
-    };
-
-    let lease = match authorize_gateway_pairing_session_scope_request(
+    let session = match GatewayPairingSessionRequest::authorize(
         &headers,
         app_state.as_ref(),
         ControlPlaneScope::OperatorRead,
     ) {
-        Ok(lease) => lease,
+        Ok(session) => session,
         Err(response) => return response,
     };
 
-    let Some(event_bus) = app_state.event_bus.as_ref() else {
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "event_stream_unavailable",
-            "gateway event streaming is not available",
-        );
+    let event_bus = match gateway_pairing_event_bus(app_state.as_ref()) {
+        Ok(event_bus) => event_bus,
+        Err(response) => return response,
     };
 
     let after_seq = query.after_seq.unwrap_or(0);
     let limit = query.limit.unwrap_or(50).clamp(1, 256);
-    let lease = if let Some(ack_seq) = query.ack_seq {
-        match app_state
-            .connection_registry
-            .acknowledge_seq(session_token.as_str(), ack_seq)
-        {
-            Ok(Some(updated)) => updated,
-            Ok(None) => {
-                return json_error(
-                    StatusCode::UNAUTHORIZED,
-                    "invalid_session_token",
-                    "invalid or expired gateway pairing session token",
-                );
-            }
-            Err(error) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "session_registry_failed",
-                    error.as_str(),
-                );
-            }
+    let session = if let Some(ack_seq) = query.ack_seq {
+        match session.acknowledge_seq(app_state.as_ref(), ack_seq) {
+            Ok(session) => session,
+            Err(response) => return response,
         }
     } else {
-        lease
+        session
     };
     if query.ack_seq.is_some() {
         let _ = persist_gateway_pairing_runtime_state(app_state.as_ref());
     }
     let replay_window = event_bus.replay_window();
     if gateway_pairing_after_seq_is_stale(after_seq, replay_window) {
-        let message = match (replay_window.oldest_retained_seq, replay_window.latest_seq) {
-            (Some(oldest), Some(latest)) => format!(
-                "requested after_seq={} is older than retained replay window {}..{}",
-                after_seq, oldest, latest
-            ),
-            _ => format!("requested after_seq={after_seq} is outside the retained replay window"),
-        };
-        return json_stale_cursor_error(message.as_str(), lease.acknowledged_seq, replay_window);
+        return gateway_pairing_stale_cursor_response(
+            after_seq,
+            session.lease().acknowledged_seq,
+            replay_window,
+        );
     }
     let events = event_bus.recent_events_after(after_seq, limit);
     let payload = build_gateway_pairing_events_read_model(
         after_seq,
-        lease.acknowledged_seq,
+        session.lease().acknowledged_seq,
         replay_window,
         events,
     );
-    let payload = match serialize_json_value(&payload, "gateway pairing events payload") {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "serialize_failed",
-                error.as_str(),
-            );
-        }
-    };
-
-    json_response(StatusCode::OK, payload)
+    gateway_control_payload_response(&payload, "gateway pairing events payload")
 }
 
 async fn handle_gateway_pairing_stream(
@@ -1204,35 +1102,29 @@ async fn handle_gateway_pairing_stream(
     Query(query): Query<GatewayEventsQuery>,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> Response {
-    let lease = match authorize_gateway_pairing_session_scope_request(
+    let session = match GatewayPairingSessionRequest::authorize(
         &headers,
         app_state.as_ref(),
         ControlPlaneScope::OperatorRead,
     ) {
-        Ok(lease) => lease,
+        Ok(session) => session,
         Err(response) => return response.into_response(),
     };
 
-    let Some(event_bus) = app_state.event_bus.as_ref() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({"error": "gateway event streaming is not available"})),
-        )
-            .into_response();
+    let event_bus = match gateway_pairing_event_bus(app_state.as_ref()) {
+        Ok(event_bus) => event_bus,
+        Err(response) => return response.into_response(),
     };
 
     let after_seq = query.after_seq.unwrap_or(0);
     let replay_window = event_bus.replay_window();
     if gateway_pairing_after_seq_is_stale(after_seq, replay_window) {
-        let message = match (replay_window.oldest_retained_seq, replay_window.latest_seq) {
-            (Some(oldest), Some(latest)) => format!(
-                "requested after_seq={} is older than retained replay window {}..{}",
-                after_seq, oldest, latest
-            ),
-            _ => format!("requested after_seq={after_seq} is outside the retained replay window"),
-        };
-        return json_stale_cursor_error(message.as_str(), lease.acknowledged_seq, replay_window)
-            .into_response();
+        return gateway_pairing_stale_cursor_response(
+            after_seq,
+            session.lease().acknowledged_seq,
+            replay_window,
+        )
+        .into_response();
     }
 
     let limit = bounded_gateway_event_limit(query.limit);
@@ -1246,8 +1138,8 @@ async fn handle_gateway_stop(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
 ) -> GatewayControlJsonResponse {
-    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
-        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    if let Err(response) = GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        return response;
     }
 
     let stop_result = request_gateway_stop(app_state.runtime_dir.as_path());
@@ -1597,20 +1489,13 @@ fn gateway_pairing_protocol_principal(
     }
 }
 
-fn authorize_gateway_pairing_session_request(
-    headers: &HeaderMap,
+fn resolve_gateway_pairing_session_lease(
     app_state: &GatewayControlAppState,
+    token: &str,
 ) -> Result<mvp::control_plane::ControlPlaneConnectionLease, GatewayControlJsonResponse> {
-    let Some(token) = extract_gateway_pairing_session_token(headers) else {
-        return Err(json_error(
-            StatusCode::UNAUTHORIZED,
-            "missing_session_token",
-            "missing gateway pairing session token",
-        ));
-    };
     let lease = app_state
         .connection_registry
-        .resolve(token.as_str())
+        .resolve(token)
         .map_err(|error| {
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1628,12 +1513,10 @@ fn authorize_gateway_pairing_session_request(
     Ok(lease)
 }
 
-fn authorize_gateway_pairing_session_scope_request(
-    headers: &HeaderMap,
-    app_state: &GatewayControlAppState,
+fn ensure_gateway_pairing_session_scope(
+    lease: &mvp::control_plane::ControlPlaneConnectionLease,
     required_scope: ControlPlaneScope,
-) -> Result<mvp::control_plane::ControlPlaneConnectionLease, GatewayControlJsonResponse> {
-    let lease = authorize_gateway_pairing_session_request(headers, app_state)?;
+) -> Result<(), GatewayControlJsonResponse> {
     let has_required_scope = lease.principal.scopes.iter().any(|scope| {
         scope == required_scope.as_str() || scope == ControlPlaneScope::OperatorAdmin.as_str()
     });
@@ -1644,7 +1527,7 @@ fn authorize_gateway_pairing_session_scope_request(
             "gateway pairing session token does not grant the required scope",
         ));
     }
-    Ok(lease)
+    Ok(())
 }
 
 fn extract_gateway_pairing_session_token(headers: &HeaderMap) -> Option<String> {
@@ -1673,6 +1556,33 @@ fn gateway_pairing_after_seq_is_stale(
         return false;
     };
     after_seq < oldest_retained_seq.saturating_sub(1)
+}
+
+fn gateway_pairing_event_bus(
+    app_state: &GatewayControlAppState,
+) -> Result<&GatewayEventBus, GatewayControlJsonResponse> {
+    app_state.event_bus.as_ref().ok_or_else(|| {
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "event_stream_unavailable",
+            "gateway event streaming is not available",
+        )
+    })
+}
+
+fn gateway_pairing_stale_cursor_response(
+    after_seq: u64,
+    last_acknowledged_seq: Option<u64>,
+    replay_window: super::event_bus::GatewayEventReplayWindow,
+) -> GatewayControlJsonResponse {
+    let message = match (replay_window.oldest_retained_seq, replay_window.latest_seq) {
+        (Some(oldest), Some(latest)) => format!(
+            "requested after_seq={} is older than retained replay window {}..{}",
+            after_seq, oldest, latest
+        ),
+        _ => format!("requested after_seq={after_seq} is outside the retained replay window"),
+    };
+    json_stale_cursor_error(message.as_str(), last_acknowledged_seq, replay_window)
 }
 
 fn verify_gateway_pairing_device_challenge(
@@ -2083,6 +1993,20 @@ fn gateway_stop_outcome_code(outcome: GatewayStopRequestOutcome) -> &'static str
     }
 }
 
+fn gateway_control_payload_response<T: Serialize>(
+    value: &T,
+    context: &str,
+) -> GatewayControlJsonResponse {
+    match serialize_json_value(value, context) {
+        Ok(payload) => json_response(StatusCode::OK, payload),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "serialize_failed",
+            error.as_str(),
+        ),
+    }
+}
+
 fn json_response(status_code: StatusCode, payload: Value) -> GatewayControlJsonResponse {
     (status_code, Json(payload))
 }
@@ -2136,6 +2060,28 @@ pub fn build_gateway_acp_test_router(
 }
 
 /// Minimal router for gateway pairing endpoint integration tests.
+#[doc(hidden)]
+pub fn build_gateway_pairing_test_router_without_event_bus(
+    bearer_token: String,
+    config: LoongConfig,
+) -> Router {
+    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    state.config = Some(config);
+    let app_state = Arc::new(state);
+    Router::new()
+        .route("/v1/pairing/start", post(handle_gateway_pairing_start))
+        .route("/v1/pairing/requests", get(handle_gateway_pairing_requests))
+        .route("/v1/pairing/resolve", post(handle_gateway_pairing_resolve))
+        .route(
+            "/v1/pairing/complete",
+            post(handle_gateway_pairing_complete),
+        )
+        .route("/v1/pairing/session", get(handle_gateway_pairing_session))
+        .route("/v1/pairing/events", get(handle_gateway_pairing_events))
+        .route("/v1/pairing/stream", get(handle_gateway_pairing_stream))
+        .with_state(app_state)
+}
+
 #[doc(hidden)]
 pub fn build_gateway_pairing_test_router(bearer_token: String, config: LoongConfig) -> Router {
     let event_bus = GatewayEventBus::new(64);
