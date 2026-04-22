@@ -56,11 +56,7 @@ impl AcpSessionManager {
             .read()
             .map_err(|_error| "ACP turn latency registry lock poisoned".to_owned())?;
         let total_turns = latency.completed + latency.failed;
-        let average_latency_ms = if total_turns > 0 {
-            latency.total_ms / total_turns
-        } else {
-            0
-        };
+        let average_latency_ms = latency.total_ms.checked_div(total_turns).unwrap_or(0);
         let errors_by_code = self
             .error_counts_by_code
             .read()
