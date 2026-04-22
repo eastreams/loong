@@ -484,9 +484,7 @@ fn channel_operational_model(
 fn channel_serve_subcommand(channel_id: &str) -> Option<&'static str> {
     let family_descriptor = resolve_channel_catalog_command_family_descriptor(channel_id)?;
     let serve_operation = family_descriptor.serve;
-    if serve_operation.availability
-        != super::catalog::ChannelCatalogOperationAvailability::Implemented
-    {
+    if !serve_operation.availability.is_runnable() {
         return None;
     }
 
@@ -1083,7 +1081,7 @@ mod tests {
             weixin.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(weixin.serve_subcommand, None);
+        assert_eq!(weixin.serve_subcommand, Some("channels serve weixin"));
 
         let qqbot = channel_descriptor("qq").expect("qq alias should resolve");
         assert_eq!(qqbot.id, "qqbot");
@@ -1094,7 +1092,7 @@ mod tests {
             qqbot.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(qqbot.serve_subcommand, None);
+        assert_eq!(qqbot.serve_subcommand, Some("channels serve qqbot"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
         assert_eq!(onebot.id, "onebot");
@@ -1105,7 +1103,7 @@ mod tests {
             onebot.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(onebot.serve_subcommand, None);
+        assert_eq!(onebot.serve_subcommand, Some("channels serve onebot"));
     }
 
     #[test]
