@@ -293,6 +293,324 @@ async fn automation_cli_show_loads_legacy_store_without_run_history() {
     drop(guard);
 }
 
+#[tokio::test]
+async fn automation_journal_inspect_surfaces_layout_and_cursor() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-journal-inspect");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(
+        loong_app::internal_events::internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        loong_app::internal_events::internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000002\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"legacy\",\"status\":\"legacy\"},\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":20},\n",
+            "    {\"segment_id\":\"segment-000002\",\"status\":\"active\",\"created_at_ms\":30}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write journal state");
+    fs::write(
+        automation_cursor_path(&loong_home),
+        concat!(
+            "{\n",
+            "  \"segment_id\": \"segment-000002\",\n",
+            "  \"line_cursor\": 3,\n",
+            "  \"byte_offset\": 120,\n",
+            "  \"journal_fingerprint\": \"abc\"\n",
+            "}\n"
+        ),
+    )
+    .expect("write cursor payload");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Journal(
+                loong_daemon::automation_cli::AutomationJournalCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationJournalCommands::Inspect(
+                        loong_daemon::automation_cli::AutomationJournalInspectCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inspect automation journal");
+
+    assert_eq!(payload["command"], "journal_inspect");
+    assert_eq!(payload["layout"]["active_segment_id"], "segment-000002");
+    assert_eq!(payload["layout"]["segments"][0]["segment_id"], "legacy");
+    assert_eq!(payload["layout"]["segments"][1]["status"], "sealed");
+    assert_eq!(payload["layout"]["segments"][2]["status"], "active");
+    assert_eq!(payload["cursor"]["segment_id"], "segment-000002");
+    assert_eq!(payload["cursor"]["line_cursor"], 3);
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_journal_rotate_updates_active_segment_for_future_appends() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-journal-rotate");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(
+        loong_app::internal_events::internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        loong_app::internal_events::internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000001\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"active\",\"created_at_ms\":10}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write initial journal state");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Journal(
+                loong_daemon::automation_cli::AutomationJournalCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationJournalCommands::Rotate(
+                        loong_daemon::automation_cli::AutomationJournalRotateCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("rotate automation journal");
+
+    assert_eq!(payload["command"], "journal_rotate");
+    assert_eq!(payload["next_segment_id"], "segment-000002");
+    append_internal_event_to_journal(
+        "session.cancelled",
+        &serde_json::json!({
+            "session_id": "delegate:journal-rotate"
+        }),
+    )
+    .expect("append after journal rotate");
+    let active_contents = fs::read_to_string(
+        loong_app::internal_events::internal_event_segment_path("segment-000002"),
+    )
+    .expect("read rotated active segment");
+    assert!(
+        active_contents.contains("delegate:journal-rotate"),
+        "future appends should land in the rotated active segment: {active_contents}"
+    );
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_journal_prune_uses_current_cursor_segment_as_floor() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-journal-prune");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(
+        loong_app::internal_events::internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        loong_app::internal_events::internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000003\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\"},\n",
+            "    {\"segment_id\":\"segment-000002\",\"status\":\"sealed\"},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"active\"}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write journal state");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"prune-a\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write first sealed segment");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000002"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"prune-b\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write second sealed segment");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000003"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"prune-c\"},\"recorded_at_ms\":3}\n",
+    )
+    .expect("write active segment");
+    fs::write(
+        automation_cursor_path(&loong_home),
+        concat!(
+            "{\n",
+            "  \"segment_id\": \"segment-000002\",\n",
+            "  \"line_cursor\": 1,\n",
+            "  \"byte_offset\": 10,\n",
+            "  \"journal_fingerprint\": \"abc\"\n",
+            "}\n"
+        ),
+    )
+    .expect("write cursor payload");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Journal(
+                loong_daemon::automation_cli::AutomationJournalCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationJournalCommands::Prune(
+                        loong_daemon::automation_cli::AutomationJournalPruneCommandOptions {
+                            retain_segment_id: None,
+                        },
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("prune automation journal");
+
+    assert_eq!(payload["command"], "journal_prune");
+    assert_eq!(payload["pruned_segments"][0], "segment-000001");
+    assert!(!loong_app::internal_events::internal_event_segment_path("segment-000001").exists());
+    assert!(loong_app::internal_events::internal_event_segment_path("segment-000002").exists());
+    assert!(loong_app::internal_events::internal_event_segment_path("segment-000003").exists());
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_journal_repair_reconciles_state_and_reports_updated_layout() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-journal-repair");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(
+        loong_app::internal_events::internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        loong_app::internal_events::internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000003\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":20},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"active\",\"created_at_ms\":30}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write stale journal state");
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000004\n",
+    )
+    .expect("write newer active marker");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"sealed\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write sealed segment");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000004"),
+        "{\"event_name\":\"session.archived\",\"payload\":{\"session_id\":\"active\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write recovered active segment");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Journal(
+                loong_daemon::automation_cli::AutomationJournalCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationJournalCommands::Repair(
+                        loong_daemon::automation_cli::AutomationJournalRepairCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("repair automation journal");
+
+    assert_eq!(payload["command"], "journal_repair");
+    assert_eq!(payload["layout"]["active_segment_id"], "segment-000004");
+    assert_eq!(
+        payload["layout"]["segments"][0]["segment_id"],
+        "segment-000001"
+    );
+    assert_eq!(payload["layout"]["segments"][0]["status"], "sealed");
+    assert_eq!(
+        payload["layout"]["segments"][1]["segment_id"],
+        "segment-000004"
+    );
+    assert_eq!(payload["layout"]["segments"][1]["status"], "active");
+    drop(guard);
+}
+
 fn set_session_event_ts(config_path: &Path, session_id: &str, event_kind: &str, ts: i64) {
     let (_, config) =
         mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
@@ -1789,6 +2107,411 @@ async fn automation_serve_matches_internal_journal_source_surface_metadata() {
         "journal cursor advanced but metadata-filtered trigger did not fire"
     );
     assert!(show_payload["trigger"]["last_error"].is_null());
+
+    serve.kill().expect("stop automation serve");
+    let _ = serve.wait();
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_serve_recovers_after_internal_journal_rotation_and_processes_new_rows_once() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-journal-rotation");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    let create_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::CreateEvent(
+                loong_daemon::automation_cli::AutomationCreateEventCommandOptions {
+                    name: "Rotation Recovery".to_owned(),
+                    event: "session.cancelled".to_owned(),
+                    json_pointer: Some("/session_id".to_owned()),
+                    equals_json: None,
+                    equals_text: None,
+                    contains_text: Some("rotation".to_owned()),
+                    session: "ops-root".to_owned(),
+                    task: "follow up on rotated journal event".to_owned(),
+                    label: Some("Rotation Recovery".to_owned()),
+                    timeout_seconds: Some(30),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("create rotation recovery trigger");
+    let trigger_id = create_payload["trigger"]["trigger_id"]
+        .as_str()
+        .expect("trigger id")
+        .to_owned();
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    append_internal_event_to_journal(
+        "session.cancelled",
+        &serde_json::json!({
+            "session_id": "delegate:rotation-first"
+        }),
+    )
+    .expect("append first rotation row");
+
+    let first_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 1).await;
+    assert!(first_show["trigger"]["last_error"].is_null());
+
+    let cursor_before_rotation: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(automation_cursor_path(&loong_home)).expect("read cursor payload"),
+    )
+    .expect("parse cursor payload");
+    let fingerprint_before_rotation = cursor_before_rotation["journal_fingerprint"].clone();
+
+    let journal_path = loong_app::internal_events::internal_event_journal_path();
+    fs::write(
+        &journal_path,
+        concat!(
+            "{\"event_name\":\"session.archived\",\"payload\":{\"session_id\":\"rotation-ignored-padding-with-longer-content\"},\"recorded_at_ms\":4}\n",
+            "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"delegate:rotation-second\"},\"recorded_at_ms\":5}\n"
+        ),
+    )
+    .expect("replace journal with rotated content");
+
+    let second_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 2).await;
+    assert!(second_show["trigger"]["last_error"].is_null());
+    let cursor_after_rotation: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(automation_cursor_path(&loong_home)).expect("read cursor payload"),
+    )
+    .expect("parse cursor payload");
+    assert_eq!(cursor_after_rotation["line_cursor"], 2);
+    assert!(
+        cursor_after_rotation["byte_offset"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0,
+        "rotation recovery should persist a nonzero byte offset"
+    );
+    assert_ne!(
+        cursor_after_rotation["journal_fingerprint"], fingerprint_before_rotation,
+        "rotation recovery should rewrite the cursor fingerprint"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let third_show = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Show(
+                loong_daemon::automation_cli::AutomationShowCommandOptions { id: trigger_id },
+            ),
+        },
+    )
+    .await
+    .expect("show trigger after rotation replay window");
+    assert_eq!(third_show["trigger"]["fire_count"], 2);
+
+    serve.kill().expect("stop automation serve");
+    let _ = serve.wait();
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_serve_processes_segment_rollover_once_without_skipping_or_replaying() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-segment-rollover");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(loong_app::internal_events::internal_event_segments_dir())
+        .expect("create internal event segments dir");
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000001\n",
+    )
+    .expect("seed active segment id");
+
+    let create_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::CreateEvent(
+                loong_daemon::automation_cli::AutomationCreateEventCommandOptions {
+                    name: "Segment Rollover".to_owned(),
+                    event: "session.cancelled".to_owned(),
+                    json_pointer: Some("/session_id".to_owned()),
+                    equals_json: None,
+                    equals_text: None,
+                    contains_text: Some("segment-rollover".to_owned()),
+                    session: "ops-root".to_owned(),
+                    task: "follow up on segment rollover event".to_owned(),
+                    label: Some("Segment Rollover".to_owned()),
+                    timeout_seconds: Some(30),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("create segment rollover trigger");
+    let trigger_id = create_payload["trigger"]["trigger_id"]
+        .as_str()
+        .expect("trigger id")
+        .to_owned();
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    append_internal_event_to_journal(
+        "session.cancelled",
+        &serde_json::json!({
+            "session_id": "delegate:segment-rollover-old"
+        }),
+    )
+    .expect("append first segment row");
+
+    let first_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 1).await;
+    assert!(first_show["trigger"]["last_error"].is_null());
+
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000002\n",
+    )
+    .expect("promote second segment to active");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000002"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"delegate:segment-rollover-new\"},\"recorded_at_ms\":9}\n",
+    )
+    .expect("write second segment");
+
+    let second_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 2).await;
+    assert!(second_show["trigger"]["last_error"].is_null());
+    let cursor_payload: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(automation_cursor_path(&loong_home)).expect("read cursor payload"),
+    )
+    .expect("parse cursor payload");
+    assert_eq!(cursor_payload["segment_id"], "segment-000002");
+    assert_eq!(cursor_payload["line_cursor"], 1);
+    assert!(
+        !loong_app::internal_events::internal_event_segment_path("segment-000001").exists(),
+        "serve should prune fully consumed sealed segments once the cursor is persisted on the newer segment"
+    );
+    assert!(
+        loong_app::internal_events::internal_event_segment_path("segment-000002").exists(),
+        "active segment should remain after pruning older sealed segments"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let third_show = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Show(
+                loong_daemon::automation_cli::AutomationShowCommandOptions { id: trigger_id },
+            ),
+        },
+    )
+    .await
+    .expect("show trigger after segment replay window");
+    assert_eq!(third_show["trigger"]["fire_count"], 2);
+
+    serve.kill().expect("stop automation serve");
+    let _ = serve.wait();
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_serve_missing_segment_cursor_skips_older_surviving_segment() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-missing-segment-cursor");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(loong_app::internal_events::internal_event_segments_dir())
+        .expect("create internal event segments dir");
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000003\n",
+    )
+    .expect("seed active segment id");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"delegate:missing-segment-older\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write older surviving segment");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000003"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"delegate:missing-segment-newer\"},\"recorded_at_ms\":3}\n",
+    )
+    .expect("write newer surviving segment");
+    fs::write(
+        automation_cursor_path(&loong_home),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "segment_id": "segment-000002",
+            "line_cursor": 5,
+            "byte_offset": 99,
+            "journal_fingerprint": "stale"
+        }))
+        .expect("serialize missing segment cursor"),
+    )
+    .expect("seed missing segment cursor");
+
+    let older_trigger_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::CreateEvent(
+                loong_daemon::automation_cli::AutomationCreateEventCommandOptions {
+                    name: "Older Missing Segment".to_owned(),
+                    event: "session.cancelled".to_owned(),
+                    json_pointer: Some("/session_id".to_owned()),
+                    equals_json: None,
+                    equals_text: Some("delegate:missing-segment-older".to_owned()),
+                    contains_text: None,
+                    session: "ops-root".to_owned(),
+                    task: "follow up on older missing-segment event".to_owned(),
+                    label: Some("Older Missing Segment".to_owned()),
+                    timeout_seconds: Some(30),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("create older missing segment trigger");
+    let older_trigger_id = older_trigger_payload["trigger"]["trigger_id"]
+        .as_str()
+        .expect("older trigger id")
+        .to_owned();
+
+    let newer_trigger_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::CreateEvent(
+                loong_daemon::automation_cli::AutomationCreateEventCommandOptions {
+                    name: "Newer Missing Segment".to_owned(),
+                    event: "session.cancelled".to_owned(),
+                    json_pointer: Some("/session_id".to_owned()),
+                    equals_json: None,
+                    equals_text: Some("delegate:missing-segment-newer".to_owned()),
+                    contains_text: None,
+                    session: "ops-root".to_owned(),
+                    task: "follow up on newer missing-segment event".to_owned(),
+                    label: Some("Newer Missing Segment".to_owned()),
+                    timeout_seconds: Some(30),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("create newer missing segment trigger");
+    let newer_trigger_id = newer_trigger_payload["trigger"]["trigger_id"]
+        .as_str()
+        .expect("newer trigger id")
+        .to_owned();
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    let newer_show = wait_for_trigger_fire_count(&config_path, &newer_trigger_id, 1).await;
+    assert!(newer_show["trigger"]["last_error"].is_null());
+    let older_show = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Show(
+                loong_daemon::automation_cli::AutomationShowCommandOptions {
+                    id: older_trigger_id,
+                },
+            ),
+        },
+    )
+    .await
+    .expect("show older trigger after missing segment normalization");
+    assert_eq!(older_show["trigger"]["fire_count"], 0);
+
+    let cursor_payload: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(automation_cursor_path(&loong_home)).expect("read cursor payload"),
+    )
+    .expect("parse cursor payload");
+    assert_eq!(cursor_payload["segment_id"], "segment-000003");
+    assert_eq!(cursor_payload["line_cursor"], 1);
 
     serve.kill().expect("stop automation serve");
     let _ = serve.wait();

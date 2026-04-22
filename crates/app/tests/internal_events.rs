@@ -5,9 +5,12 @@ use std::time::Duration;
 
 use loong_app::internal_events::{
     InternalEventJournalCursor, append_internal_event_to_journal,
-    emit_internal_event_with_metadata, internal_event_journal_cursor_from_line_cursor,
-    internal_event_journal_path, probe_internal_event_journal_runtime_ready,
+    emit_internal_event_with_metadata, inspect_internal_event_journal_layout,
+    internal_event_active_segment_id_path, internal_event_journal_cursor_from_line_cursor,
+    internal_event_journal_path, internal_event_journal_state_path, internal_event_segment_path,
+    probe_internal_event_journal_runtime_ready, prune_internal_event_journal_segments,
     read_internal_event_journal_after, read_internal_event_journal_since,
+    repair_internal_event_journal_state, rotate_internal_event_journal_segment,
 };
 use loong_app::test_support::ScopedEnv;
 use serde_json::json;
@@ -304,4 +307,457 @@ fn append_internal_event_to_journal_waits_for_existing_file_lock() {
 
     let contents = fs::read_to_string(&journal_path).expect("read journal contents");
     assert_eq!(contents.lines().count(), 1);
+}
+
+#[test]
+fn read_internal_event_journal_after_continues_across_segment_boundary_without_replay() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    let active_segment_path = internal_event_segment_path("segment-000001");
+    fs::create_dir_all(active_segment_path.parent().expect("segment parent"))
+        .expect("create segment parent");
+    fs::write(internal_event_active_segment_id_path(), "segment-000002\n")
+        .expect("write active segment id");
+    fs::write(
+        &active_segment_path,
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"seg-a\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write sealed segment");
+    fs::write(
+        internal_event_segment_path("segment-000002"),
+        "{\"event_name\":\"session.archived\",\"payload\":{\"session_id\":\"seg-b\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write active segment");
+
+    let (events, next_cursor) =
+        read_internal_event_journal_after(InternalEventJournalCursor::default())
+            .expect("read across segment boundary");
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].payload["session_id"], "seg-a");
+    assert_eq!(events[1].payload["session_id"], "seg-b");
+    assert_eq!(next_cursor.segment_id.as_deref(), Some("segment-000002"));
+
+    let (follow_up_events, follow_up_cursor) =
+        read_internal_event_journal_after(next_cursor.clone()).expect("read after final cursor");
+    assert!(follow_up_events.is_empty());
+    assert_eq!(follow_up_cursor, next_cursor);
+}
+
+#[test]
+fn internal_event_journal_cursor_from_line_cursor_maps_legacy_numeric_cursor_across_segment_boundary()
+ {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    let first_segment_path = internal_event_segment_path("segment-000001");
+    fs::create_dir_all(first_segment_path.parent().expect("segment parent"))
+        .expect("create segment parent");
+    fs::write(internal_event_active_segment_id_path(), "segment-000002\n")
+        .expect("write active segment id");
+    fs::write(
+        &first_segment_path,
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"legacy-a\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write first segment");
+    fs::write(
+        internal_event_segment_path("segment-000002"),
+        "{\"event_name\":\"session.archived\",\"payload\":{\"session_id\":\"legacy-b\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write second segment");
+
+    let cursor = internal_event_journal_cursor_from_line_cursor(1).expect("migrate numeric cursor");
+    assert_eq!(cursor.segment_id.as_deref(), Some("segment-000001"));
+    assert_eq!(cursor.line_cursor, 1);
+
+    let (events, next_cursor) =
+        read_internal_event_journal_after(cursor).expect("read after migrated cursor");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_name, "session.archived");
+    assert_eq!(events[0].payload["session_id"], "legacy-b");
+    assert_eq!(next_cursor.segment_id.as_deref(), Some("segment-000002"));
+}
+
+#[test]
+fn rotate_internal_event_journal_segment_moves_legacy_journal_into_first_segment() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    let legacy_path = temp_home
+        .path()
+        .join("automation")
+        .join("internal-events.jsonl");
+    fs::create_dir_all(legacy_path.parent().expect("legacy parent")).expect("create legacy parent");
+    fs::write(
+        &legacy_path,
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"legacy\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("seed legacy journal row");
+
+    let next_segment_id = rotate_internal_event_journal_segment().expect("rotate legacy segment");
+    assert_eq!(next_segment_id, "segment-000002");
+    assert_eq!(
+        fs::read_to_string(internal_event_active_segment_id_path()).expect("read active segment"),
+        "segment-000002\n"
+    );
+    let sealed_segment_path = internal_event_segment_path("segment-000001");
+    assert!(sealed_segment_path.exists());
+    let sealed_contents =
+        fs::read_to_string(&sealed_segment_path).expect("read sealed legacy segment");
+    assert!(
+        sealed_contents.contains("\"session_id\":\"legacy\""),
+        "sealed legacy segment should preserve the migrated row: {sealed_contents}"
+    );
+
+    append_internal_event_to_journal("session.archived", &json!({ "session_id": "active" }))
+        .expect("append active segment row");
+    let active_segment_path = internal_event_segment_path("segment-000002");
+    assert!(active_segment_path.exists());
+}
+
+#[test]
+fn rotate_internal_event_journal_segment_advances_active_segment_for_new_appends() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_active_segment_id_path()
+            .parent()
+            .expect("active segment parent"),
+    )
+    .expect("create active segment parent");
+    fs::write(internal_event_active_segment_id_path(), "segment-000001\n")
+        .expect("seed active segment id");
+    append_internal_event_to_journal("session.cancelled", &json!({ "session_id": "first" }))
+        .expect("append first active row");
+
+    let next_segment_id = rotate_internal_event_journal_segment().expect("rotate active segment");
+    assert_eq!(next_segment_id, "segment-000002");
+
+    append_internal_event_to_journal("session.archived", &json!({ "session_id": "second" }))
+        .expect("append second active row");
+    assert!(internal_event_segment_path("segment-000001").exists());
+    assert!(internal_event_segment_path("segment-000002").exists());
+}
+
+#[test]
+fn prune_internal_event_journal_segments_removes_only_fully_consumed_sealed_segments() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(internal_event_active_segment_id_path(), "segment-000003\n")
+        .expect("write active segment");
+    fs::write(
+        internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"oldest\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write first sealed segment");
+    fs::write(
+        internal_event_segment_path("segment-000002"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"cursor\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write cursor segment");
+    fs::write(
+        internal_event_segment_path("segment-000003"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"active\"},\"recorded_at_ms\":3}\n",
+    )
+    .expect("write active segment");
+
+    let pruned = prune_internal_event_journal_segments(&InternalEventJournalCursor {
+        segment_id: Some("segment-000002".to_owned()),
+        line_cursor: 1,
+        byte_offset: 1,
+        journal_fingerprint: None,
+    })
+    .expect("prune consumed segments");
+    assert_eq!(pruned, vec!["segment-000001".to_owned()]);
+    assert!(!internal_event_segment_path("segment-000001").exists());
+    assert!(internal_event_segment_path("segment-000002").exists());
+    assert!(internal_event_segment_path("segment-000003").exists());
+}
+
+#[test]
+fn read_internal_event_journal_after_missing_segment_cursor_skips_older_surviving_segments() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(internal_event_active_segment_id_path(), "segment-000003\n")
+        .expect("write active segment id");
+    fs::write(
+        internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"older\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write older surviving segment");
+    fs::write(
+        internal_event_segment_path("segment-000003"),
+        "{\"event_name\":\"session.archived\",\"payload\":{\"session_id\":\"newer\"},\"recorded_at_ms\":3}\n",
+    )
+    .expect("write newer surviving segment");
+
+    let (events, next_cursor) = read_internal_event_journal_after(InternalEventJournalCursor {
+        segment_id: Some("segment-000002".to_owned()),
+        line_cursor: 5,
+        byte_offset: 99,
+        journal_fingerprint: Some("stale".to_owned()),
+    })
+    .expect("read after missing segment cursor");
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_name, "session.archived");
+    assert_eq!(events[0].payload["session_id"], "newer");
+    assert_eq!(next_cursor.segment_id.as_deref(), Some("segment-000003"));
+}
+
+#[test]
+fn inspect_internal_event_journal_layout_reports_active_and_legacy_segments() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    let legacy_path = temp_home
+        .path()
+        .join("automation")
+        .join("internal-events.jsonl");
+    fs::create_dir_all(legacy_path.parent().expect("legacy parent")).expect("create legacy parent");
+    fs::write(
+        &legacy_path,
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"legacy\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write legacy journal");
+    fs::write(internal_event_active_segment_id_path(), "segment-000002\n")
+        .expect("write active segment id");
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"sealed\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write sealed segment");
+
+    let layout = inspect_internal_event_journal_layout().expect("inspect journal layout");
+    assert_eq!(layout.active_segment_id, "segment-000002");
+    assert_eq!(layout.segments.len(), 3);
+    assert_eq!(layout.segments[0].segment_id, "legacy");
+    assert!(!layout.segments[0].is_active);
+    assert_eq!(layout.segments[1].segment_id, "segment-000001");
+    assert!(!layout.segments[1].is_active);
+    assert_eq!(layout.segments[2].segment_id, "segment-000002");
+    assert!(layout.segments[2].is_active);
+}
+
+#[test]
+fn rotate_internal_event_journal_segment_persists_layout_state_and_active_marker() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    let next_segment_id = rotate_internal_event_journal_segment().expect("rotate segment");
+    assert_eq!(next_segment_id, "segment-000002");
+
+    let state_payload: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(internal_event_journal_state_path()).expect("read journal state"),
+    )
+    .expect("parse journal state");
+    assert_eq!(state_payload["schema_version"], 1);
+    assert_eq!(state_payload["active_segment_id"], "segment-000002");
+    assert_eq!(
+        state_payload["segments"]
+            .as_array()
+            .expect("segments array")
+            .len(),
+        2
+    );
+    assert_eq!(state_payload["segments"][0]["segment_id"], "segment-000001");
+    assert_eq!(state_payload["segments"][0]["status"], "sealed");
+    assert_eq!(state_payload["segments"][1]["segment_id"], "segment-000002");
+    assert_eq!(state_payload["segments"][1]["status"], "active");
+    assert_eq!(
+        fs::read_to_string(internal_event_active_segment_id_path()).expect("read active marker"),
+        "segment-000002\n"
+    );
+}
+
+#[test]
+fn append_internal_event_to_journal_auto_rotates_when_segment_exceeds_threshold() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+    env.set("LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES", "1");
+
+    append_internal_event_to_journal("session.cancelled", &json!({ "session_id": "first" }))
+        .expect("append first row");
+    append_internal_event_to_journal("session.archived", &json!({ "session_id": "second" }))
+        .expect("append second row");
+
+    let first_segment = internal_event_segment_path("segment-000001");
+    let second_segment = internal_event_segment_path("segment-000002");
+    let first_contents = fs::read_to_string(&first_segment).expect("read first segment");
+    let second_contents = fs::read_to_string(&second_segment).expect("read second segment");
+    assert!(first_contents.contains("\"session_id\":\"first\""));
+    assert!(second_contents.contains("\"session_id\":\"second\""));
+
+    let layout = inspect_internal_event_journal_layout().expect("inspect journal layout");
+    assert_eq!(layout.active_segment_id, "segment-000002");
+}
+
+#[test]
+fn inspect_internal_event_journal_layout_prefers_state_file_over_stale_active_marker() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_active_segment_id_path()
+            .parent()
+            .expect("automation parent"),
+    )
+    .expect("create automation parent");
+    fs::write(internal_event_active_segment_id_path(), "segment-000001\n")
+        .expect("write stale active marker");
+    fs::write(
+        internal_event_journal_state_path(),
+        "{\n  \"active_segment_id\": \"segment-000003\"\n}\n",
+    )
+    .expect("write journal state");
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"sealed\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write sealed segment");
+
+    let layout = inspect_internal_event_journal_layout().expect("inspect journal layout");
+    assert_eq!(layout.active_segment_id, "segment-000003");
+    assert_eq!(
+        layout
+            .segments
+            .last()
+            .expect("active segment entry")
+            .segment_id,
+        "segment-000003"
+    );
+    assert!(
+        layout
+            .segments
+            .last()
+            .expect("active segment entry")
+            .is_active
+    );
+}
+
+#[test]
+fn repair_internal_event_journal_state_reconciles_disk_layout_and_preserves_known_metadata() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000003\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":20},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"active\",\"created_at_ms\":30}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write journal state");
+    fs::write(
+        internal_event_segment_path("segment-000001"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"sealed\"},\"recorded_at_ms\":1}\n",
+    )
+    .expect("write sealed segment");
+    fs::write(
+        internal_event_segment_path("segment-000004"),
+        "{\"event_name\":\"session.archived\",\"payload\":{\"session_id\":\"new-active\"},\"recorded_at_ms\":2}\n",
+    )
+    .expect("write recovered active segment");
+    fs::write(internal_event_active_segment_id_path(), "segment-000004\n")
+        .expect("write newer active marker");
+
+    let repaired_layout =
+        repair_internal_event_journal_state().expect("repair internal event journal state");
+    assert_eq!(repaired_layout.active_segment_id, "segment-000004");
+    assert_eq!(repaired_layout.segments.len(), 2);
+    assert_eq!(repaired_layout.segments[0].segment_id, "segment-000001");
+    assert_eq!(repaired_layout.segments[0].status, "sealed");
+    assert_eq!(repaired_layout.segments[0].created_at_ms, Some(10));
+    assert_eq!(repaired_layout.segments[0].sealed_at_ms, Some(20));
+    assert_eq!(repaired_layout.segments[1].segment_id, "segment-000004");
+    assert_eq!(repaired_layout.segments[1].status, "active");
+}
+
+#[test]
+fn inspect_internal_event_journal_layout_reads_manifest_statuses() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_journal_state_path()
+            .parent()
+            .expect("automation parent"),
+    )
+    .expect("create automation parent");
+    fs::write(
+        internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000003\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"legacy\",\"status\":\"legacy\"},\n",
+            "    {\"segment_id\":\"segment-000002\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":20},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"active\",\"created_at_ms\":30}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write manifest state");
+
+    let layout = inspect_internal_event_journal_layout().expect("inspect journal layout");
+    assert_eq!(layout.active_segment_id, "segment-000003");
+    assert_eq!(layout.segments[0].status, "legacy");
+    assert_eq!(layout.segments[1].status, "sealed");
+    assert_eq!(layout.segments[1].created_at_ms, Some(10));
+    assert_eq!(layout.segments[1].sealed_at_ms, Some(20));
+    assert_eq!(layout.segments[2].status, "active");
+    assert_eq!(layout.segments[2].created_at_ms, Some(30));
+    assert_eq!(layout.segments[2].sealed_at_ms, None);
 }

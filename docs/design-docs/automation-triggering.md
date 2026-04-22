@@ -84,15 +84,35 @@ journal:
 - producers emit named internal events from app/runtime surfaces
 - internal events are appended to `internal-events.jsonl`
 - automation consumers can read from that journal with a persisted cursor
-- the cursor now stores both `line_cursor` and `byte_offset`, so long-running
-  consumers can resume with incremental reads instead of rescanning the whole
-  journal on every poll
+- the cursor now stores `segment_id`, `line_cursor`, and `byte_offset`, so
+  long-running consumers can resume with incremental reads instead of
+  rescanning the whole journal on every poll
 - the cursor also carries a lightweight journal fingerprint so consumers can
   detect file replacement/rotation instead of blindly seeking into a different
   file that happens to be the same size or larger
 - journal appends now take an OS file lock before writing, which makes the
   append path safer under concurrent emitters and gives future rotation work a
   clearer synchronization boundary
+- cursor persistence now follows the same temp-write plus rename pattern as the
+  automation trigger store, so serve-side cursor updates do not rely on
+  truncate-in-place writes
+- the journal can now be read across multiple ordered segments, which is the
+  first step toward safe rotation and retention instead of treating every file
+  replacement as a full replay boundary
+- the active segment marker now acts as writer truth, so future appends can
+  move onto a new segment without relying on “last discovered file” heuristics
+- `automation serve` can now prune sealed segments that are strictly older than
+  the persisted cursor segment after a successful cursor write, which gives
+  Loong a first minimal retention behavior without touching the active segment
+- `internal-events.state.json` is now the richer layout truth for segmented
+  journals, with the legacy `internal-events.active` marker retained as a
+  compatibility shadow
+- operators can now inspect, rotate, and prune the automation journal through
+  the automation CLI surface instead of relying on direct file manipulation
+- append paths can now auto-rotate onto a fresh segment when the active
+  segment exceeds the configured byte budget
+  (`LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES`), with a conservative built-in
+  default
 
 This is still a transition state rather than the final architecture. Some
 surfaces still retain an immediate compatibility bridge so automation can work
@@ -201,7 +221,10 @@ The intentionally reserved next steps are:
 
 - move remaining daemon-side bridges onto the same app-owned internal event
   substrate
-- make `automation serve` journal-first so the durable journal becomes the
-  primary consumer path
 - runtime lifecycle emitters for hook-style events
 - singleton ownership and lease-backed serving for multi-process automation
+- broader retention policy and GC beyond the current minimal “older sealed
+  segments only” pruning rule
+- richer operator-facing journal health and repair/reporting surfaces
+- policy/config hardening around automatic rotation thresholds and retention
+  controls

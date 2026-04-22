@@ -48,6 +48,8 @@ pub enum AutomationCommands {
     Fire(AutomationFireCommandOptions),
     /// Emit one named event to matching triggers
     Emit(AutomationEmitCommandOptions),
+    /// Inspect or manage the internal automation journal
+    Journal(AutomationJournalCommandOptions),
     /// Run the scheduler loop and optional webhook ingress
     Serve(AutomationServeCommandOptions),
 }
@@ -176,6 +178,39 @@ pub struct AutomationServeCommandOptions {
     #[arg(long, default_value_t = AUTOMATION_DEFAULT_POLL_MS)]
     pub poll_ms: u64,
 }
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AutomationJournalCommandOptions {
+    #[command(subcommand)]
+    pub command: AutomationJournalCommands,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AutomationJournalCommands {
+    /// Inspect the internal automation journal layout and cursor
+    Inspect(AutomationJournalInspectCommandOptions),
+    /// Rotate the active internal automation journal segment
+    Rotate(AutomationJournalRotateCommandOptions),
+    /// Prune sealed internal automation journal segments older than the retained segment
+    Prune(AutomationJournalPruneCommandOptions),
+    /// Repair the internal automation journal state from on-disk layout
+    Repair(AutomationJournalRepairCommandOptions),
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationJournalInspectCommandOptions {}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationJournalRotateCommandOptions {}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationJournalPruneCommandOptions {
+    #[arg(long)]
+    pub retain_segment_id: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationJournalRepairCommandOptions {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -374,6 +409,9 @@ pub async fn execute_automation_command(options: AutomationCommandOptions) -> Cl
             )
             .await
         }
+        AutomationCommands::Journal(command) => {
+            execute_journal_command(options.config, command).await
+        }
         AutomationCommands::Serve(command) => {
             execute_serve_command(store_path.as_path(), options.config, command).await
         }
@@ -400,6 +438,14 @@ fn automation_event_cursor_path() -> PathBuf {
     crate::mvp::config::default_loong_home()
         .join("automation")
         .join("internal-events.cursor")
+}
+
+fn automation_journal_state_path() -> PathBuf {
+    crate::mvp::internal_events::internal_event_journal_state_path()
+}
+
+fn automation_active_segment_marker_path() -> PathBuf {
+    crate::mvp::internal_events::internal_event_active_segment_id_path()
 }
 
 fn now_ms() -> i64 {
@@ -1035,6 +1081,18 @@ async fn execute_emit_value_command(
     }))
 }
 
+async fn execute_journal_command(
+    config: Option<String>,
+    options: AutomationJournalCommandOptions,
+) -> CliResult<Value> {
+    match options.command {
+        AutomationJournalCommands::Inspect(_command) => execute_journal_inspect_command(),
+        AutomationJournalCommands::Rotate(_command) => execute_journal_rotate_command(config).await,
+        AutomationJournalCommands::Prune(command) => execute_journal_prune_command(command),
+        AutomationJournalCommands::Repair(_command) => execute_journal_repair_command(),
+    }
+}
+
 pub(crate) async fn emit_named_automation_event(
     config: Option<String>,
     event_name: &str,
@@ -1049,6 +1107,74 @@ pub(crate) async fn emit_named_automation_event(
         payload,
     )
     .await
+}
+
+fn execute_journal_inspect_command() -> CliResult<Value> {
+    let cursor_path = automation_event_cursor_path();
+    let cursor = load_internal_event_cursor(cursor_path.as_path())?;
+    let layout = mvp::internal_events::inspect_internal_event_journal_layout()?;
+    Ok(json!({
+        "command": "journal_inspect",
+        "serve_owner_active": automation_serve_owner_is_active(),
+        "cursor_path": cursor_path.display().to_string(),
+        "cursor": cursor,
+        "layout": layout,
+        "state_path": automation_journal_state_path().display().to_string(),
+        "active_marker_path": automation_active_segment_marker_path().display().to_string(),
+    }))
+}
+
+async fn execute_journal_rotate_command(config: Option<String>) -> CliResult<Value> {
+    let next_segment_id = mvp::internal_events::rotate_internal_event_journal_segment()?;
+    let inspection = execute_journal_inspect_command()?;
+    Ok(json!({
+        "command": "journal_rotate",
+        "next_segment_id": next_segment_id,
+        "serve_owner_active": automation_serve_owner_is_active(),
+        "inspection": inspection,
+        "config": config,
+    }))
+}
+
+fn execute_journal_prune_command(
+    options: AutomationJournalPruneCommandOptions,
+) -> CliResult<Value> {
+    let cursor_path = automation_event_cursor_path();
+    let cursor = load_internal_event_cursor(cursor_path.as_path())?;
+    let retain_cursor = if let Some(retain_segment_id) = options.retain_segment_id {
+        mvp::internal_events::InternalEventJournalCursor {
+            segment_id: Some(retain_segment_id),
+            ..mvp::internal_events::InternalEventJournalCursor::default()
+        }
+    } else {
+        cursor.clone()
+    };
+    let pruned_segments =
+        mvp::internal_events::prune_internal_event_journal_segments(&retain_cursor)?;
+    let inspection = execute_journal_inspect_command()?;
+    Ok(json!({
+        "command": "journal_prune",
+        "cursor_path": cursor_path.display().to_string(),
+        "cursor": cursor,
+        "retain_cursor": retain_cursor,
+        "pruned_segments": pruned_segments,
+        "inspection": inspection,
+    }))
+}
+
+fn execute_journal_repair_command() -> CliResult<Value> {
+    let layout = mvp::internal_events::repair_internal_event_journal_state()?;
+    let cursor_path = automation_event_cursor_path();
+    let cursor = load_internal_event_cursor(cursor_path.as_path())?;
+    Ok(json!({
+        "command": "journal_repair",
+        "serve_owner_active": automation_serve_owner_is_active(),
+        "cursor_path": cursor_path.display().to_string(),
+        "cursor": cursor,
+        "layout": layout,
+        "state_path": automation_journal_state_path().display().to_string(),
+        "active_marker_path": automation_active_segment_marker_path().display().to_string(),
+    }))
 }
 
 pub(crate) async fn publish_daemon_internal_event(
@@ -1212,7 +1338,10 @@ async fn process_internal_journal_events(config: Option<&String>) -> CliResult<(
     if changed {
         save_store(store_path.as_path(), &store)?;
     }
-    store_internal_event_cursor(cursor_path.as_path(), next_cursor)?;
+    store_internal_event_cursor(cursor_path.as_path(), next_cursor.clone())?;
+    if next_cursor.segment_id != current_cursor.segment_id {
+        let _ = mvp::internal_events::prune_internal_event_journal_segments(&next_cursor)?;
+    }
     Ok(())
 }
 
@@ -1257,10 +1386,18 @@ fn store_internal_event_cursor(
     }
     let encoded = serde_json::to_string_pretty(&cursor)
         .map_err(|error| format!("serialize automation event cursor failed: {error}"))?;
-    fs::write(path, format!("{encoded}\n")).map_err(|error| {
+    let tmp_path = path.with_extension("cursor.tmp");
+    fs::write(&tmp_path, format!("{encoded}\n")).map_err(|error| {
         format!(
-            "write automation event cursor {} failed: {error}",
-            path.display()
+            "write automation temp event cursor {} failed: {error}",
+            tmp_path.display()
+        )
+    })?;
+    fs::rename(&tmp_path, path).map_err(|error| {
+        format!(
+            "publish automation event cursor {} from {} failed: {error}",
+            path.display(),
+            tmp_path.display()
         )
     })
 }
@@ -1567,6 +1704,10 @@ fn render_automation_text(payload: &Value) -> CliResult<String> {
             render_fire_result(result)
         }
         "emit" => render_emit_result(payload),
+        "journal_inspect" => render_journal_inspect(payload),
+        "journal_rotate" => render_journal_rotate(payload),
+        "journal_prune" => render_journal_prune(payload),
+        "journal_repair" => render_journal_repair(payload),
         "serve" => Ok("Automation runner stopped.".to_owned()),
         other => Err(format!("unsupported automation render command `{other}`")),
     }
@@ -1721,6 +1862,96 @@ fn render_emit_result(payload: &Value) -> CliResult<String> {
         lines.push(render_fire_result(result)?);
     }
     Ok(lines.join("\n"))
+}
+
+fn render_journal_inspect(payload: &Value) -> CliResult<String> {
+    let layout = payload
+        .get("layout")
+        .ok_or_else(|| "automation journal inspect payload missing layout".to_owned())?;
+    let active_segment_id = layout["active_segment_id"]
+        .as_str()
+        .ok_or_else(|| "automation journal inspect payload missing active_segment_id".to_owned())?;
+    let segments = layout["segments"]
+        .as_array()
+        .ok_or_else(|| "automation journal inspect payload missing segments".to_owned())?;
+    let mut lines = vec![
+        "Automation journal".to_owned(),
+        format!("serve_owner_active: {}", payload["serve_owner_active"]),
+        format!("active_segment_id: {active_segment_id}"),
+        format!("cursor: {}", payload["cursor"]),
+        format!(
+            "state_path: {}",
+            payload["state_path"].as_str().unwrap_or("unknown")
+        ),
+        format!(
+            "active_marker_path: {}",
+            payload["active_marker_path"].as_str().unwrap_or("unknown")
+        ),
+        String::new(),
+        "segments:".to_owned(),
+    ];
+    for segment in segments {
+        let segment_id = segment["segment_id"].as_str().unwrap_or("unknown");
+        let status = segment["status"].as_str().unwrap_or("unknown");
+        let path = segment["path"].as_str().unwrap_or("unknown");
+        lines.push(format!("- {segment_id} [{status}] {path}"));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn render_journal_rotate(payload: &Value) -> CliResult<String> {
+    let next_segment_id = payload["next_segment_id"]
+        .as_str()
+        .ok_or_else(|| "automation journal rotate payload missing next_segment_id".to_owned())?;
+    let inspection = payload
+        .get("inspection")
+        .ok_or_else(|| "automation journal rotate payload missing inspection".to_owned())?;
+    Ok(format!(
+        "Rotated automation journal to `{next_segment_id}`.\n\n{}",
+        render_journal_inspect(inspection)?
+    ))
+}
+
+fn render_journal_prune(payload: &Value) -> CliResult<String> {
+    let pruned_segments = payload["pruned_segments"]
+        .as_array()
+        .ok_or_else(|| "automation journal prune payload missing pruned_segments".to_owned())?;
+    let inspection = payload
+        .get("inspection")
+        .ok_or_else(|| "automation journal prune payload missing inspection".to_owned())?;
+    if pruned_segments.is_empty() {
+        return Ok(format!(
+            "No sealed automation journal segments were pruned.\n\n{}",
+            render_journal_inspect(inspection)?
+        ));
+    }
+    let pruned_list = pruned_segments
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!(
+        "Pruned automation journal segments: {pruned_list}\n\n{}",
+        render_journal_inspect(inspection)?
+    ))
+}
+
+fn render_journal_repair(payload: &Value) -> CliResult<String> {
+    let layout = payload
+        .get("layout")
+        .ok_or_else(|| "automation journal repair payload missing layout".to_owned())?;
+    Ok(format!(
+        "Repaired automation journal state.\n\n{}",
+        render_journal_inspect(&json!({
+            "command": "journal_inspect",
+            "serve_owner_active": payload["serve_owner_active"],
+            "cursor_path": payload["cursor_path"],
+            "cursor": payload["cursor"],
+            "layout": layout,
+            "state_path": payload["state_path"],
+            "active_marker_path": payload["active_marker_path"],
+        }))?
+    ))
 }
 
 #[cfg(test)]
