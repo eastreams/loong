@@ -17,9 +17,9 @@ use crate::CliResult;
 
 use super::{
     read_models::{
-        GatewayOperatorSummaryReadModel, GatewayPairingCompleteReadModel,
-        GatewayPairingEventsReadModel, GatewayPairingSessionReadModel,
-        GatewayPairingStartReadModel,
+        GatewayNodeInventoryReadModel, GatewayOperatorSummaryReadModel,
+        GatewayPairingCompleteReadModel, GatewayPairingEventsReadModel,
+        GatewayPairingSessionReadModel, GatewayPairingStartReadModel,
     },
     state::{
         GatewayOwnerStatus, default_gateway_runtime_state_dir, gateway_control_token_path,
@@ -318,7 +318,7 @@ impl GatewayLocalClient {
         self.request_json(Method::GET, path).await
     }
 
-    pub async fn nodes(&self) -> CliResult<Value> {
+    pub async fn nodes(&self) -> CliResult<GatewayNodeInventoryReadModel> {
         let path = "/v1/nodes";
         self.request_json(Method::GET, path).await
     }

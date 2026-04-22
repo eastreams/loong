@@ -935,6 +935,7 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         .operator_summary()
         .await
         .expect("read gateway operator summary");
+    let nodes = client.nodes().await.expect("read gateway nodes");
     let channel_surfaces = channels["channel_surfaces"]
         .as_array()
         .expect("channel surfaces array");
@@ -975,6 +976,27 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         weixin_operator_surface
             .plugin_bridge_account_summary
             .as_deref(),
+        Some(expected_summary)
+    );
+    assert_eq!(
+        operator_summary.nodes.paired_device_count,
+        nodes.summary.paired_device_count
+    );
+    assert_eq!(
+        operator_summary.nodes.managed_bridge_count,
+        nodes.summary.managed_bridge_count
+    );
+    assert_eq!(
+        operator_summary.nodes.total_count,
+        nodes.summary.total_count
+    );
+    let weixin_managed_bridge = nodes
+        .managed_bridges
+        .iter()
+        .find(|node| node.channel_id == "weixin")
+        .expect("weixin managed bridge node");
+    assert_eq!(
+        weixin_managed_bridge.account_summary.as_deref(),
         Some(expected_summary)
     );
 
