@@ -372,11 +372,13 @@ fn fetch_browser_page(
                 let Some(chunk) = stream.next().await else {
                     break;
                 };
-                let chunk =
-                    chunk.map_err(|error| format!("failed to read browser response body: {error}"))?;
+                let chunk = chunk
+                    .map_err(|error| format!("failed to read browser response body: {error}"))?;
                 let mut offset = 0usize;
                 while offset < chunk.len() && remaining_read > 0 {
-                    let read = chunk.len().saturating_sub(offset)
+                    let read = chunk
+                        .len()
+                        .saturating_sub(offset)
                         .min(remaining_read)
                         .min(BROWSER_READ_BUFFER_BYTES);
                     budget.try_consume(read, "browser response")?;
