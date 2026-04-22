@@ -8225,9 +8225,7 @@ mod tests {
         .expect("create child session");
 
         let stored_continuity = runtime_self_continuity::RuntimeSelfContinuity {
-            workspace_guidance: crate::workspace_guidance::WorkspaceGuidanceModel {
-                entries: vec!["Keep standing instructions visible.".to_owned()],
-            },
+            workspace_guidance: crate::workspace_guidance::WorkspaceGuidanceModel::default(),
             runtime_self: crate::runtime_self::RuntimeSelfModel {
                 identity_context: vec![stored_identity_text.to_owned()],
                 ..Default::default()
@@ -8268,8 +8266,14 @@ mod tests {
             .expect("decode persisted continuity payload");
 
         assert_eq!(
-            persisted_continuity.runtime_self.standing_instructions,
+            persisted_continuity.workspace_guidance.entries,
             vec![live_agents_text.to_owned()]
+        );
+        assert!(
+            persisted_continuity
+                .runtime_self
+                .standing_instructions
+                .is_empty()
         );
         assert_eq!(
             persisted_continuity.runtime_self.identity_context,

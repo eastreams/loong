@@ -3377,10 +3377,19 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
     assert!(merged.contains("- browser max sessions: 1"));
     assert!(merged.contains("- browser max links: 8"));
     assert!(merged.contains("- browser max text chars: 512"));
-    assert!(merged.ends_with("base-system-prompt"));
+    let base_system_index = merged
+        .find("base-system-prompt")
+        .expect("base system prompt should remain in merged prompt");
+    let contract_index = merged
+        .find("[delegate_child_runtime_contract]")
+        .expect("delegate runtime contract marker should exist");
     assert!(
         merged.find("runtime-policy-addition") < merged.find("[delegate_child_runtime_contract]"),
         "expected the existing system prompt addition to remain ahead of the child contract block, got: {merged}"
+    );
+    assert!(
+        base_system_index < contract_index,
+        "expected base system prompt to remain ahead of the child contract block, got: {merged}"
     );
 }
 
