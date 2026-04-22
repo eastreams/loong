@@ -8074,6 +8074,82 @@ async fn handle_turn_with_runtime_repairs_malformed_inline_function_followup_rou
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_repairs_malformed_json_tool_block_followup_round() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let note_contents = "hello from malformed-json-tool repair test";
+    std::fs::write(harness.temp_dir.join("note.md"), note_contents).expect("seed note");
+
+    let runtime = FakeRuntime::with_fake_turn_responses(
+        vec![],
+        vec![
+            Ok(FakeTurnResponse::RawBody(json!({
+                "choices": [{
+                    "message": {
+                        "content": "let me search for the right tool first.\n{\n  \"name\": \"tool_search\",\n  \"arguments\": \"{bad\"\n}"
+                    }
+                }]
+            }))),
+            Ok(FakeTurnResponse::Parsed(ProviderTurn {
+                assistant_text: "Now I'm reading the file.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    "session-malformed-json-followup",
+                    "turn-malformed-json-followup",
+                    "call-read",
+                )],
+                raw_meta: Value::Null,
+            })),
+            Ok(FakeTurnResponse::Parsed(ProviderTurn {
+                assistant_text: format!("The note says: {note_contents}"),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            })),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config_with_file_root(&harness.temp_dir);
+    config.conversation.turn_loop.max_discovery_followup_rounds = 4;
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-malformed-json-followup",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("malformed json tool block followup should be repaired");
+
+    assert_eq!(reply, format!("The note says: {note_contents}"));
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 3);
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.starts_with("[tool_failure]\nmissing_tool_call_followup:")
+                    })
+        }),
+        "second provider turn should receive malformed-json repair context: {requested_turn_messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_repairs_empty_followup_round() {
     use crate::test_support::TurnTestHarness;
 
