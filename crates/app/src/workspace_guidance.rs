@@ -160,10 +160,22 @@ pub fn load_workspace_guidance_model_with_config(
     workspace_root: &Path,
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> WorkspaceGuidanceModel {
+    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
+    load_workspace_guidance_model_with_budget(
+        workspace_root,
+        tool_runtime_config,
+        &mut remaining_total_chars,
+    )
+}
+
+pub(crate) fn load_workspace_guidance_model_with_budget(
+    workspace_root: &Path,
+    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+    remaining_total_chars: &mut usize,
+) -> WorkspaceGuidanceModel {
     let source_candidates = workspace_guidance_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = WorkspaceGuidanceModel::default();
-    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
 
     for source_path in source_candidates {
         let maybe_content =
@@ -172,11 +184,11 @@ pub fn load_workspace_guidance_model_with_config(
             continue;
         };
 
-        let budget_was_exhausted = remaining_total_chars == 0;
+        let budget_was_exhausted = *remaining_total_chars == 0;
         let appended_content = ingest_workspace_guidance_source(
             &mut model,
             &mut loaded_paths,
-            &mut remaining_total_chars,
+            remaining_total_chars,
             &source_path,
             content.as_str(),
             tool_runtime_config,

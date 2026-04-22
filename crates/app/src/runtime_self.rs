@@ -85,10 +85,22 @@ pub(crate) fn load_runtime_self_model_with_config(
     workspace_root: &Path,
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> RuntimeSelfModel {
+    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
+    load_runtime_self_model_with_budget(
+        workspace_root,
+        tool_runtime_config,
+        &mut remaining_total_chars,
+    )
+}
+
+pub(crate) fn load_runtime_self_model_with_budget(
+    workspace_root: &Path,
+    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+    remaining_total_chars: &mut usize,
+) -> RuntimeSelfModel {
     let source_candidates = runtime_self_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = RuntimeSelfModel::default();
-    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
 
     for (candidate_path, lane) in source_candidates {
         let Some(content) =
@@ -97,11 +109,11 @@ pub(crate) fn load_runtime_self_model_with_config(
             continue;
         };
 
-        let budget_was_exhausted = remaining_total_chars == 0;
+        let budget_was_exhausted = *remaining_total_chars == 0;
         let appended_content = ingest_runtime_self_source(
             &mut model,
             &mut loaded_paths,
-            &mut remaining_total_chars,
+            remaining_total_chars,
             lane,
             &candidate_path,
             content.as_str(),
