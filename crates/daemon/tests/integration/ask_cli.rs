@@ -66,7 +66,10 @@ fn read_provider_request(stream: &mut TcpStream) -> String {
         if expected_total_length.is_none()
             && let Some(header_end) = header_end_offset(request_bytes.as_slice())
         {
-            let content_length = parse_content_length(&request_bytes[..header_end]).unwrap_or(0);
+            let header_bytes = request_bytes
+                .get(..header_end)
+                .expect("header_end should be within request bytes");
+            let content_length = parse_content_length(header_bytes).unwrap_or(0);
             expected_total_length = Some(header_end + content_length);
         }
 

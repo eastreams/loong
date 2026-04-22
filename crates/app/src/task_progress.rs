@@ -306,6 +306,33 @@ pub(crate) fn resolve_canonical_task_id_for_session(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub(crate) fn resolve_task_identity_for_event(
+    event_kind: &str,
+    payload: &Value,
+    session_id: &str,
+) -> Option<ResolvedTaskIdentity> {
+    if event_kind == TASK_PROGRESS_EVENT_KIND {
+        let task_progress = task_progress_from_event_payload(payload)?;
+        let task_id = task_progress.task_id.trim();
+        if task_id.is_empty() {
+            return None;
+        }
+
+        return Some(ResolvedTaskIdentity {
+            task_id: task_id.to_owned(),
+            task_session_id: session_id.to_owned(),
+        });
+    }
+
+    let is_delegate_spawn_event = matches!(event_kind, "delegate_queued" | "delegate_started");
+    if is_delegate_spawn_event {
+        return task_identity_from_delegate_payload(payload, session_id);
+    }
+
+    None
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub(crate) fn resolve_task_identity_for_session(
     repo: &SessionRepository,
     session_id: &str,
@@ -314,15 +341,10 @@ pub(crate) fn resolve_task_identity_for_session(
     let latest_task_progress = repo.load_latest_event_by_kind(session_id, TASK_PROGRESS_EVENT_KIND);
     if let Ok(Some(latest_task_progress)) = latest_task_progress {
         let payload = &latest_task_progress.payload_json;
-        let task_progress = task_progress_from_event_payload(payload);
-        if let Some(task_progress) = task_progress {
-            let task_id = task_progress.task_id.trim();
-            if !task_id.is_empty() {
-                return ResolvedTaskIdentity {
-                    task_id: task_id.to_owned(),
-                    task_session_id: session_id.to_owned(),
-                };
-            }
+        let task_identity =
+            resolve_task_identity_for_event(TASK_PROGRESS_EVENT_KIND, payload, session_id);
+        if let Some(task_identity) = task_identity {
+            return task_identity;
         }
     }
 
@@ -330,14 +352,8 @@ pub(crate) fn resolve_task_identity_for_session(
     if let Ok(delegate_events) = delegate_events {
         for delegate_event in delegate_events.into_iter().rev() {
             let event_kind = delegate_event.event_kind.as_str();
-            let is_delegate_spawn_event =
-                matches!(event_kind, "delegate_queued" | "delegate_started");
-            if !is_delegate_spawn_event {
-                continue;
-            }
-
             let payload = &delegate_event.payload_json;
-            let task_identity = task_identity_from_delegate_payload(payload, session_id);
+            let task_identity = resolve_task_identity_for_event(event_kind, payload, session_id);
             if let Some(task_identity) = task_identity {
                 return task_identity;
             }
