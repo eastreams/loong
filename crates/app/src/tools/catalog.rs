@@ -23,9 +23,9 @@ use metadata_support::{
 #[path = "catalog_core_definition_support.rs"]
 mod core_definition_support;
 use core_definition_support::{
-    direct_browser_definition, direct_exec_definition, direct_memory_definition,
-    direct_read_definition, direct_web_definition, direct_write_definition, tool_invoke_definition,
-    tool_search_definition,
+    direct_bash_definition, direct_browser_definition, direct_edit_definition,
+    direct_exec_definition, direct_memory_definition, direct_read_definition,
+    direct_web_definition, direct_write_definition, tool_invoke_definition, tool_search_definition,
 };
 #[path = "catalog_browser_definition_support.rs"]
 mod browser_definition_support;
@@ -272,6 +272,7 @@ pub enum ToolExposureClass {
     Direct,
     Gateway,
     Discoverable,
+    Internal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -311,7 +312,17 @@ pub struct ToolDescriptor {
 fn primary_surface_id(raw: &str) -> bool {
     matches!(
         raw,
-        "read" | "write" | "exec" | "web" | "browser" | "memory" | "agent" | "skills" | "channel"
+        "read"
+            | "edit"
+            | "write"
+            | "bash"
+            | "exec"
+            | "web"
+            | "browser"
+            | "memory"
+            | "agent"
+            | "skills"
+            | "channel"
     )
 }
 
@@ -331,14 +342,18 @@ impl ToolDescriptor {
             return false;
         }
 
-        let discovery_name = super::tool_surface::discovery_tool_name_for_tool_name(self.name);
-        if discovery_name == raw {
-            return true;
+        if self.is_discoverable() {
+            let discovery_name = super::tool_surface::discovery_tool_name_for_tool_name(self.name);
+            if discovery_name == raw {
+                return true;
+            }
+
+            return super::tool_surface::legacy_discovery_tool_names_for_tool_name(self.name)
+                .iter()
+                .any(|legacy_name| legacy_name == raw);
         }
 
-        super::tool_surface::legacy_discovery_tool_names_for_tool_name(self.name)
-            .iter()
-            .any(|legacy_name| legacy_name == raw)
+        false
     }
 
     pub fn provider_definition(&self) -> Value {
@@ -387,6 +402,10 @@ impl ToolDescriptor {
 
     pub fn is_discoverable(&self) -> bool {
         self.exposure == ToolExposureClass::Discoverable
+    }
+
+    pub fn is_provider_invokable_discoverable(&self) -> bool {
+        self.is_discoverable() && self.execution_kind == ToolExecutionKind::Core
     }
 
     pub fn capability_action_class(&self) -> CapabilityActionClass {
@@ -739,10 +758,24 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: direct_read_definition,
         },
         ToolDescriptor {
+            name: "edit",
+            provider_name: "edit",
+            aliases: &[],
+            description: "Apply one or more exact text edits to an existing workspace file",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_edit_definition,
+        },
+        ToolDescriptor {
             name: "write",
             provider_name: "write",
             aliases: &[],
-            description: "Write workspace files or apply one or more exact text edits",
+            description: "Create a workspace file or replace one file with whole-file content",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -753,10 +786,24 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: direct_write_definition,
         },
         ToolDescriptor {
+            name: "bash",
+            provider_name: "bash",
+            aliases: &[],
+            description: "Run shell commands or shell scripts in the workspace",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_bash_definition,
+        },
+        ToolDescriptor {
             name: "exec",
             provider_name: "exec",
             aliases: &[],
-            description: "Run guarded workspace commands or raw shell scripts",
+            description: "Execute a program directly with argv-style arguments",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -829,7 +876,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Download external skills artifacts with domain policy and approval guards",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityFetch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -843,7 +890,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Normalize an external skill reference into a source-aware candidate",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -871,7 +918,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Recommend the best-fit resolved external skills for an operator goal",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -885,7 +932,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Search preferred external skill ecosystems and return normalized source-aware candidates",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -969,7 +1016,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Remove an installed external skill from the managed runtime",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,

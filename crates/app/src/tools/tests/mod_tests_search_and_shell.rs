@@ -63,7 +63,7 @@ fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
     let shell_entry = results
         .iter()
         .find(|entry| entry["tool_id"] == "exec")
-        .expect("direct exec should remain discoverable");
+        .expect("direct exec should remain discoverable for shell.exec refresh");
 
     assert!(shell_entry.get("lease").is_none());
 
@@ -787,7 +787,8 @@ fn tool_search_result_includes_compact_argument_hints() {
     let root = std::env::temp_dir().join(format!("loong-tool-search-hints-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("create fixture root");
 
-    let config = test_tool_runtime_config(root.clone());
+    let mut config = test_tool_runtime_config(root.clone());
+    config.bash_exec = ready_bash_exec_runtime_policy();
     let outcome = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
@@ -799,9 +800,9 @@ fn tool_search_result_includes_compact_argument_hints() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(results.iter().any(|entry| {
-        let is_exec = entry["tool_id"] == "exec";
+        let is_bash = entry["tool_id"] == "bash";
         let argument_hint = entry["argument_hint"].as_str().unwrap_or_default();
-        is_exec && argument_hint.contains("command?:string")
+        is_bash && argument_hint.contains("command?:string")
     }));
 
     std::fs::remove_dir_all(&root).ok();

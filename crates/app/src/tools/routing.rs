@@ -23,7 +23,7 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
 
     let is_direct_tool = matches!(
         canonical_name,
-        "read" | "write" | "exec" | "web" | "browser" | "memory"
+        "read" | "edit" | "write" | "bash" | "exec" | "web" | "browser" | "memory"
     );
     if !is_direct_tool {
         return "-".to_owned();
@@ -50,7 +50,7 @@ fn route_direct_tool_request(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreRequest, String> {
     let tool_name = request.tool_name;
-    let payload = request.payload;
+    let mut payload = request.payload;
     let runtime_view = runtime_tool_view_for_runtime_config(config);
     let routed_tool_name =
         route_direct_tool_name_for_view(tool_name.as_str(), &payload, &runtime_view)?;
@@ -64,10 +64,36 @@ fn route_direct_tool_request(
         ));
     }
 
+    if tool_name == "bash" {
+        normalize_direct_bash_payload(&mut payload)?;
+    }
+
     Ok(ToolCoreRequest {
         tool_name: routed_tool_name.to_owned(),
         payload,
     })
+}
+
+fn normalize_direct_bash_payload(payload: &mut Value) -> Result<(), String> {
+    let Some(payload_object) = payload.as_object_mut() else {
+        return Err("direct_bash_requires_object_payload".to_owned());
+    };
+
+    let command_value = payload_object.get("command").cloned();
+    let script_value = payload_object.get("script").cloned();
+
+    let Some(script_value) = script_value else {
+        return Ok(());
+    };
+
+    if command_value.is_some() {
+        payload_object.remove("script");
+        return Ok(());
+    }
+
+    payload_object.insert("command".to_owned(), script_value);
+    payload_object.remove("script");
+    Ok(())
 }
 
 fn route_direct_tool_name_for_view(
@@ -87,7 +113,9 @@ pub(crate) fn route_direct_tool_name(
 ) -> Result<&'static str, String> {
     match tool_name {
         "read" => route_direct_read_tool_name(payload),
+        "edit" => route_direct_edit_tool_name(payload),
         "write" => route_direct_write_tool_name(payload),
+        "bash" => route_direct_bash_tool_name(payload),
         "exec" => route_direct_exec_tool_name(payload),
         "web" => route_direct_web_tool_name(payload),
         "browser" => route_direct_browser_tool_name(payload),
@@ -107,47 +135,80 @@ fn route_direct_exec_tool_name(payload: &Value) -> Result<&'static str, String> 
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let has_script = payload_has_non_null_field(payload, "script");
+
+    match script {
+        Some(script_value) if command == Some(script_value) => {
+            let uses_shell_syntax = command_uses_shell_syntax(script_value);
+            if uses_shell_syntax {
+                return Ok(BASH_EXEC_TOOL_NAME);
+            }
+            return Ok(SHELL_EXEC_TOOL_NAME);
+        }
+        _ => {}
+    }
+
+    if has_script {
+        return Err(
+            "direct_exec_shell_moved_to_bash: `exec` only supports direct program execution; use `bash` for shell command strings or scripts"
+                .to_owned(),
+        );
+    }
+
+    let command = command.ok_or_else(|| {
+        "direct_exec_requires_command: expected `command` for direct program execution".to_owned()
+    })?;
+    let uses_shell_syntax = command_uses_shell_syntax(command);
+
+    if uses_shell_syntax {
+        return Err(
+            "direct_exec_shell_syntax_moved_to_bash: `exec` does not accept shell syntax; use `bash` for pipelines, redirects, chaining, or shell builtins"
+                .to_owned(),
+        );
+    }
+
+    Ok(SHELL_EXEC_TOOL_NAME)
+}
+
+fn route_direct_bash_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let command = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let script = payload
+        .get("script")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let has_args = payload_has_non_null_field(payload, "args");
     let mode_count = count_true([command.is_some(), script.is_some()]);
 
+    if has_args {
+        return Err(
+            "direct_bash_argv_moved_to_exec: `bash` accepts shell command strings; use `exec` for argv-style process execution"
+                .to_owned(),
+        );
+    }
+
     if mode_count == 0 {
         return Err(
-            "direct_exec_requires_command_or_script: expected `command` for argv mode, or `script` for raw shell mode"
+            "direct_bash_requires_command_or_script: expected `command` for a shell command string, or `script` for legacy shell-script mode"
                 .to_owned(),
         );
     }
 
     if mode_count > 1 {
-        if command == script
-            && let Some(value) = command
-        {
-            return Ok(if !has_args && command_uses_shell_syntax(value) {
-                BASH_EXEC_TOOL_NAME
-            } else {
-                SHELL_EXEC_TOOL_NAME
-            });
+        if command == script {
+            return Ok(BASH_EXEC_TOOL_NAME);
         }
 
         return Err(
-            "direct_exec_ambiguous: provide either `command` or `script`, not both".to_owned(),
+            "direct_bash_ambiguous: provide either `command` or `script`, not both".to_owned(),
         );
     }
 
-    if script.is_some() {
-        return Ok(BASH_EXEC_TOOL_NAME);
-    }
-
-    let command = command.ok_or_else(|| {
-        "direct_exec_requires_command_or_script: expected `command` for argv mode, or `script` for raw shell mode"
-            .to_owned()
-    })?;
-    let uses_shell_syntax = command_uses_shell_syntax(command);
-
-    if !has_args && uses_shell_syntax {
-        return Ok(BASH_EXEC_TOOL_NAME);
-    }
-
-    Ok(SHELL_EXEC_TOOL_NAME)
+    Ok(BASH_EXEC_TOOL_NAME)
 }
 
 fn command_uses_shell_syntax(command: &str) -> bool {
@@ -193,36 +254,37 @@ fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> 
     Ok("glob.search")
 }
 
-fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String> {
-    let has_content = payload_has_non_null_field(payload, "content");
+fn route_direct_edit_tool_name(payload: &Value) -> Result<&'static str, String> {
+    if !payload_has_non_null_field(payload, "path") {
+        return Err("direct_edit_requires_path: expected `path` for direct edit".to_owned());
+    }
+
     let has_edits = payload_has_non_null_field(payload, "edits");
     let has_old_string = payload_has_non_null_field(payload, "old_string");
     let has_new_string = payload_has_non_null_field(payload, "new_string");
+    let has_content = payload_has_non_null_field(payload, "content");
     let legacy_exact_edit_mode = has_old_string || has_new_string;
-    let exact_edit_mode = has_edits || legacy_exact_edit_mode;
-    let create_mode = has_content;
-    let mode_count = count_true([create_mode, exact_edit_mode]);
+    let mode_count = count_true([has_edits, legacy_exact_edit_mode]);
+
+    if has_content {
+        return Err(
+            "direct_edit_ambiguous: `edit` only supports exact replacement mode; use `write` for whole-file content"
+                .to_owned(),
+        );
+    }
 
     if mode_count == 0 {
         return Err(
-            "direct_write_requires_one_mode: expected `path` plus `content`, `path` plus `edits`, or legacy `path` plus `old_string` and `new_string`"
+            "direct_edit_requires_one_mode: expected `path` plus `edits`, or legacy `path` plus `old_string` and `new_string`"
                 .to_owned(),
         );
     }
 
     if mode_count > 1 {
         return Err(
-            "direct_write_ambiguous: do not mix whole-file write fields with exact-edit fields"
+            "direct_edit_ambiguous: do not mix `edits` with legacy `old_string` / `new_string` fields"
                 .to_owned(),
         );
-    }
-
-    if !payload_has_non_null_field(payload, "path") {
-        return Err("direct_write_requires_path: expected `path` for direct write".to_owned());
-    }
-
-    if create_mode {
-        return Ok("file.write");
     }
 
     if has_edits {
@@ -231,12 +293,38 @@ fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String>
 
     if !has_old_string || !has_new_string {
         return Err(
-            "direct_write_edit_requires_complete_legacy_fields: expected `edits`, or legacy `old_string` and `new_string` for exact-edit mode"
+            "direct_edit_requires_complete_legacy_fields: expected `edits`, or legacy `old_string` and `new_string` for exact-edit mode"
                 .to_owned(),
         );
     }
 
     Ok("file.edit")
+}
+
+fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String> {
+    let has_content = payload_has_non_null_field(payload, "content");
+    let has_edits = payload_has_non_null_field(payload, "edits");
+    let has_old_string = payload_has_non_null_field(payload, "old_string");
+    let has_new_string = payload_has_non_null_field(payload, "new_string");
+    if !payload_has_non_null_field(payload, "path") {
+        return Err("direct_write_requires_path: expected `path` for direct write".to_owned());
+    }
+
+    if has_edits || has_old_string || has_new_string {
+        return Err(
+            "direct_write_exact_edit_moved: `write` only supports whole-file content; use `edit` for exact replacements"
+                .to_owned(),
+        );
+    }
+
+    if !has_content {
+        return Err(
+            "direct_write_requires_content: expected `path` plus `content` for whole-file write mode"
+                .to_owned(),
+        );
+    }
+
+    Ok("file.write")
 }
 
 pub(super) fn route_direct_web_tool_name(payload: &Value) -> Result<&'static str, String> {
@@ -710,9 +798,6 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
             "run" | "invoke" => Ok("external_skills.invoke"),
             "list" => Ok("external_skills.list"),
             "policy" => Ok("external_skills.policy"),
-            "fetch" => Ok("external_skills.fetch"),
-            "resolve" => Ok("external_skills.resolve"),
-            "remove" => Ok("external_skills.remove"),
             _ => Err(format!(
                 "hidden_skills_unknown_operation: unknown skills operation `{operation}`"
             )),
@@ -721,9 +806,6 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
 
     let has_query = payload_has_non_null_field(payload, "query");
     let has_sources = payload_has_non_null_field(payload, "sources");
-    let has_url = payload_has_non_null_field(payload, "url");
-    let has_reference = payload_has_non_null_field(payload, "reference");
-    let has_save_as = payload_has_non_null_field(payload, "save_as");
     let has_skill_id = payload_has_non_null_field(payload, "skill_id");
     let has_path = payload_has_non_null_field(payload, "path");
     let has_bundled_skill_id = payload_has_non_null_field(payload, "bundled_skill_id");
@@ -742,19 +824,6 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
 
     if has_path || has_bundled_skill_id || has_source_skill_id {
         return Ok("external_skills.install");
-    }
-
-    if has_url || has_save_as {
-        return Ok("external_skills.fetch");
-    }
-
-    if has_reference {
-        let fetch_by_reference = payload_has_non_null_field(payload, "approval_granted")
-            || payload_has_non_null_field(payload, "max_bytes");
-        if fetch_by_reference {
-            return Ok("external_skills.fetch");
-        }
-        return Ok("external_skills.resolve");
     }
 
     if has_query {
@@ -778,7 +847,7 @@ fn route_hidden_skills_tool_name(payload: &Value) -> Result<&'static str, String
     }
 
     Err(
-        "hidden_skills_requires_actionable_fields: expected search, inspect, install, fetch, resolve, policy, or list fields; add `operation` when the request is ambiguous"
+        "hidden_skills_requires_actionable_fields: expected search, inspect, install, run, or list fields; add `operation` when the request is ambiguous"
             .to_owned(),
     )
 }
@@ -852,9 +921,6 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
             "external_skills.invoke" => Some("run".to_owned()),
             "external_skills.list" => Some("list".to_owned()),
             "external_skills.policy" => Some("policy".to_owned()),
-            "external_skills.fetch" => Some("fetch".to_owned()),
-            "external_skills.resolve" => Some("resolve".to_owned()),
-            "external_skills.remove" => Some("remove".to_owned()),
             _ => None,
         },
         HIDDEN_CHANNEL_TOOL_NAME => canonical_name.strip_prefix("feishu.").map(str::to_owned),
@@ -926,14 +992,14 @@ mod tests {
     }
 
     #[test]
-    fn direct_exec_ignores_blank_aliases() {
-        let routed = route_direct_exec_tool_name(&json!({
+    fn direct_exec_rejects_blank_command_shell_alias() {
+        let error = route_direct_exec_tool_name(&json!({
             "command": "   ",
             "script": "echo hello"
         }))
-        .expect("blank command alias should be ignored");
+        .expect_err("blank command alias should not keep exec in shell mode");
 
-        assert_eq!(routed, BASH_EXEC_TOOL_NAME);
+        assert!(error.contains("direct_exec_shell_moved_to_bash"));
     }
 
     #[test]

@@ -485,13 +485,23 @@ fn tool_catalog_entries_expose_concurrency_class() {
     assert!(
         file_write
             .usage_guidance
-            .is_some_and(|guidance| guidance.contains("normal patching and file creation"))
+            .is_some_and(|guidance| guidance.contains("new files and full rewrites"))
+    );
+
+    let file_edit = find_tool_catalog_entry("file.edit").expect("file.edit catalog entry");
+    assert_eq!(file_edit.scheduling_class, ToolSchedulingClass::SerialOnly);
+    assert_eq!(file_edit.concurrency_class, ToolConcurrencyClass::Mutating);
+    assert_eq!(file_edit.surface_id, Some("edit"));
+    assert!(
+        file_edit
+            .usage_guidance
+            .is_some_and(|guidance| guidance.contains("surgical changes"))
     );
 
     let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
     assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
     assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
-    assert_eq!(bash_exec.surface_id, Some("exec"));
+    assert_eq!(bash_exec.surface_id, Some("bash"));
 }
 
 #[test]
@@ -908,6 +918,36 @@ fn external_skills_policy_definition_surfaces_update_controls() {
     assert!(properties["blocked_domains"].is_object());
 }
 
+#[test]
+fn external_skills_plumbing_tools_are_internal_only() {
+    let catalog = tool_catalog();
+    let internal_only = [
+        "external_skills.fetch",
+        "external_skills.resolve",
+        "external_skills.recommend",
+        "external_skills.source_search",
+        "external_skills.remove",
+    ];
+
+    for tool_name in internal_only {
+        let descriptor = catalog
+            .descriptor(tool_name)
+            .unwrap_or_else(|| panic!("missing descriptor `{tool_name}`"));
+        assert!(
+            descriptor.exposure == ToolExposureClass::Internal,
+            "{tool_name} should be internal-only"
+        );
+        assert!(
+            !descriptor.is_discoverable(),
+            "{tool_name} should not be discoverable"
+        );
+        assert!(
+            !descriptor.is_provider_exposed(),
+            "{tool_name} should not be provider-exposed"
+        );
+    }
+}
+
 #[cfg(feature = "tool-websearch")]
 #[test]
 fn web_search_definition_requires_query_and_exposes_provider_override() {
@@ -1014,13 +1054,31 @@ fn read_definitions_surface_line_window_fields() {
 }
 
 #[test]
-fn exec_definition_supports_script_mode() {
+fn exec_definition_uses_direct_program_shape() {
     let catalog = tool_catalog();
     let descriptor = catalog.descriptor("exec").expect("exec descriptor");
     let definition = descriptor.provider_definition();
     let properties = &definition["function"]["parameters"]["properties"];
+
+    assert!(properties.get("script").is_none());
+    assert!(descriptor.argument_hint().contains("args?:string[]"));
+    assert!(descriptor.parameter_types().contains(&("args", "array")));
+    assert_eq!(descriptor.required_fields(), vec!["command"]);
+    assert_eq!(
+        definition["function"]["parameters"]["required"],
+        json!(["command"])
+    );
+}
+
+#[test]
+fn bash_definition_supports_shell_command_shape() {
+    let catalog = tool_catalog();
+    let descriptor = catalog.descriptor("bash").expect("bash descriptor");
+    let definition = descriptor.provider_definition();
+    let properties = &definition["function"]["parameters"]["properties"];
     let any_of = &definition["function"]["parameters"]["anyOf"];
 
+    assert!(properties.get("command").is_some());
     assert!(properties.get("script").is_some());
     assert!(descriptor.argument_hint().contains("script?:string"));
     assert!(descriptor.parameter_types().contains(&("script", "string")));

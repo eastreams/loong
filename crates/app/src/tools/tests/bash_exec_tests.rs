@@ -95,7 +95,7 @@ fn tool_search_hides_bash_exec_when_governance_rules_failed_to_load() {
 
 #[cfg(feature = "tool-shell")]
 #[test]
-fn tool_search_routes_bash_capabilities_to_exec_when_runtime_is_available() {
+fn tool_search_routes_bash_capabilities_to_bash_when_runtime_is_available() {
     let root = unique_tool_temp_dir("loong-bash-tool-search-visible");
     std::fs::create_dir_all(&root).expect("create root dir");
 
@@ -114,17 +114,17 @@ fn tool_search_routes_bash_capabilities_to_exec_when_runtime_is_available() {
     .expect("tool search should succeed");
 
     let results = outcome.payload["results"].as_array().expect("results");
-    let exec_entry = results
+    let bash_entry = results
         .iter()
-        .find(|entry| entry["tool_id"] == "exec")
-        .expect("exec should absorb bash-oriented search queries");
+        .find(|entry| entry["tool_id"] == "bash")
+        .expect("bash should surface shell-oriented search queries");
 
-    assert!(exec_entry.get("lease").is_none());
+    assert!(bash_entry.get("lease").is_none());
 }
 
 #[cfg(feature = "tool-shell")]
 #[test]
-fn tool_search_exact_bash_query_surfaces_exec() {
+fn tool_search_exact_bash_query_surfaces_bash() {
     let root = unique_tool_temp_dir("loong-bash-tool-search-exact-query");
     std::fs::create_dir_all(&root).expect("create root dir");
 
@@ -144,8 +144,8 @@ fn tool_search_exact_bash_query_surfaces_exec() {
 
     let results = outcome.payload["results"].as_array().expect("results");
     assert!(
-        results.iter().any(|entry| entry["tool_id"] == "exec"),
-        "exact bash query should surface exec, got: {results:?}"
+        results.iter().any(|entry| entry["tool_id"] == "bash"),
+        "exact bash query should surface bash, got: {results:?}"
     );
 }
 
@@ -776,10 +776,24 @@ fn bash_exec_times_out_when_timeout_ms_is_small() {
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
-fn direct_exec_routes_script_mode_to_bash_exec() {
+fn direct_exec_rejects_script_mode() {
+    let error = route_direct_tool_name(
+        "exec",
+        &json!({
+            "script": "printf 'script-mode' | cat"
+        }),
+    )
+    .expect_err("script mode should be rejected for exec");
+
+    assert!(error.contains("direct_exec_shell_moved_to_bash"));
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
+fn direct_bash_routes_script_mode_to_bash_exec() {
     assert_eq!(
         route_direct_tool_name(
-            "exec",
+            "bash",
             &json!({
                 "script": "printf 'script-mode' | cat"
             })

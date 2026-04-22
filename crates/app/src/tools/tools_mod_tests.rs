@@ -120,7 +120,7 @@ fn expected_tool_request_error_classifies_validation_failures() {
         "tool `tool.invoke` payload._loong is reserved for trusted internal tool context; retry without that field"
     ));
     assert!(super::is_expected_tool_request_error(
-        "direct_exec_ambiguous: provide either `command` or `script`, not both"
+        "direct_exec_shell_moved_to_bash: `exec` only supports direct program execution; use `bash` for shell command strings or scripts"
     ));
     assert!(super::is_expected_tool_request_error(
         "tool_surface_unavailable: `browser` cannot route to `managed browser actions` in this runtime; read-only browser inspection is still available"
@@ -221,7 +221,9 @@ fn capability_snapshot_is_deterministic() {
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
+    assert!(snapshot.contains("- edit:"));
     assert!(snapshot.contains("- write:"));
+    assert!(snapshot.contains("- bash:"));
     assert!(snapshot.contains("- exec:"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains(
@@ -233,10 +235,12 @@ fn capability_snapshot_is_deterministic() {
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Keep tool.search queries short and capability-focused."));
     assert!(snapshot.contains("Use read for repo inspection before shelling out."));
+    assert!(snapshot.contains("Use edit for precise changes to existing files."));
+    assert!(snapshot.contains("Use bash for shell commands"));
     assert!(snapshot.contains(
             "Use `offset` and `limit` to page through large files instead of reading everything at once."
         ));
-    assert!(snapshot.contains("Use exec for normal command-line work."));
+    assert!(snapshot.contains("Use exec for direct program execution"));
     assert!(snapshot.contains(
             "Use agent only for Loong's own approvals, sessions, delegation, provider routing, or config work."
         ));
@@ -311,7 +315,9 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     let snapshot = capability_snapshot();
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
+    assert!(snapshot.contains("- edit:"));
     assert!(snapshot.contains("- write:"));
+    assert!(snapshot.contains("- bash:"));
     assert!(snapshot.contains("- exec:"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains(
@@ -322,6 +328,8 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     assert!(snapshot.contains("Additional specialized tools available through tool.search:"));
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Keep tool.search queries short and capability-focused."));
+    assert!(snapshot.contains("Use edit for precise changes to existing files."));
+    assert!(snapshot.contains("Use bash for shell commands"));
     assert!(snapshot.contains("Use write for new files or whole-file rewrites."));
     assert!(!snapshot.contains("claw.migrate"));
     assert!(!snapshot.contains("external_skills.fetch"));
@@ -348,29 +356,7 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<BTreeSet<_>>();
-    let expected = BTreeSet::from([
-        "approval_request_resolve",
-        "approval_request_status",
-        "approval_requests_list",
-        "config.import",
-        "delegate",
-        "delegate_async",
-        "external_skills.policy",
-        "provider.switch",
-        "session_archive",
-        "session_cancel",
-        "session_continue",
-        "session_events",
-        "session_recover",
-        "session_search",
-        "session_status",
-        "session_tool_policy_clear",
-        "session_tool_policy_set",
-        "session_tool_policy_status",
-        "session_wait",
-        "sessions_history",
-        "sessions_list",
-    ]);
+    let expected = BTreeSet::from(["agent", "skills"]);
     assert_eq!(names, expected);
 }
 
@@ -388,29 +374,7 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websea
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<BTreeSet<_>>();
-    let expected = BTreeSet::from([
-        "approval_request_resolve",
-        "approval_request_status",
-        "approval_requests_list",
-        "config.import",
-        "delegate",
-        "delegate_async",
-        "external_skills.policy",
-        "provider.switch",
-        "session_archive",
-        "session_cancel",
-        "session_continue",
-        "session_events",
-        "session_recover",
-        "session_search",
-        "session_status",
-        "session_tool_policy_clear",
-        "session_tool_policy_set",
-        "session_tool_policy_status",
-        "session_wait",
-        "sessions_history",
-        "sessions_list",
-    ]);
+    let expected = BTreeSet::from(["agent", "skills"]);
 
     assert_eq!(names, expected);
 }
@@ -430,12 +394,30 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
         .map(|entry| entry.name.clone())
         .collect::<Vec<_>>();
 
-    assert!(names.contains(&"session_archive".to_owned()));
-    assert!(names.contains(&"session_cancel".to_owned()));
-    assert!(names.contains(&"session_continue".to_owned()));
-    assert!(names.contains(&"session_recover".to_owned()));
-    assert!(names.contains(&"session_tool_policy_set".to_owned()));
-    assert!(names.contains(&"session_tool_policy_clear".to_owned()));
+    assert_eq!(names, vec!["agent".to_owned(), "skills".to_owned()]);
+}
+
+#[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn tool_registry_groups_external_skills_behind_skills_surface_when_runtime_enabled() {
+    let root = unique_tool_temp_dir("loong-tool-registry-skills-surface");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let entries = tool_registry_with_config(Some(&config));
+    let names = entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert!(names.contains("skills"));
+    assert!(!names.contains("external_skills.search"));
+    assert!(!names.contains("external_skills.inspect"));
+    assert!(!names.contains("external_skills.install"));
+    assert!(!names.contains("external_skills.invoke"));
+    assert!(!names.contains("external_skills.list"));
+
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -695,6 +677,7 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     let defs = provider_tool_definitions_with_config(Some(&config));
     let expected_names = vec![
         "browser",
+        "edit",
         "exec",
         "read",
         "tool_invoke",
@@ -795,9 +778,33 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     );
 }
 
+#[cfg(all(
+    feature = "tool-file",
+    feature = "tool-shell",
+    feature = "memory-sqlite"
+))]
+#[test]
+fn provider_tool_definitions_include_bash_when_runtime_is_available() {
+    let config = runtime_config::ToolRuntimeConfig {
+        bash_exec: ready_bash_exec_runtime_policy(),
+        ..runtime_config::ToolRuntimeConfig::default()
+    };
+
+    let defs = provider_tool_definitions_with_config(Some(&config));
+    let names: Vec<&str> = defs
+        .iter()
+        .filter_map(|item| item.get("function"))
+        .filter_map(|function| function.get("name"))
+        .filter_map(Value::as_str)
+        .collect();
+
+    assert!(names.contains(&"bash"));
+}
+
 #[test]
 fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
     assert!(is_provider_exposed_tool_name("read"));
+    assert!(is_provider_exposed_tool_name("edit"));
     assert!(is_provider_exposed_tool_name("write"));
     assert!(is_provider_exposed_tool_name("exec"));
     assert!(is_provider_exposed_tool_name("tool.search"));
@@ -911,35 +918,35 @@ fn file_write_catalog_exposes_overwrite_flag() {
 fn file_edit_catalog_exposes_exact_edit_blocks() {
     let catalog = tool_catalog();
     let direct_descriptor = catalog
-        .descriptor("write")
-        .expect("write should be in the catalog");
+        .descriptor("edit")
+        .expect("edit should be in the catalog");
     let direct_definition = direct_descriptor.provider_definition();
     let direct_properties = direct_definition["function"]["parameters"]["properties"]
         .as_object()
-        .expect("write parameters");
+        .expect("edit parameters");
     let direct_any_of = direct_definition["function"]["parameters"]["anyOf"]
         .as_array()
-        .expect("write anyOf");
+        .expect("edit anyOf");
 
     assert!(
         direct_properties.contains_key("edits"),
-        "write schema should expose exact edit blocks"
+        "edit schema should expose exact edit blocks"
     );
     assert!(
         direct_descriptor.argument_hint().contains("edits?:array"),
-        "write argument hint should expose edits"
+        "edit argument hint should expose edits"
     );
     assert!(
         direct_descriptor
             .parameter_types()
             .contains(&("edits", "array")),
-        "write parameter types should expose edits"
+        "edit parameter types should expose edits"
     );
     assert!(
         direct_any_of
             .iter()
             .any(|branch| branch["required"] == json!(["edits"])),
-        "write anyOf should include edits mode"
+        "edit anyOf should include edits mode"
     );
 
     let file_edit_descriptor = catalog
@@ -1674,7 +1681,7 @@ fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
 
     let config = test_tool_runtime_config(root.clone());
     let cases = vec![
-        ("edit file", "write"),
+        ("edit file", "edit"),
         ("read repo file", "read"),
         ("search memory notes", "memory"),
         ("search the web", "web"),
@@ -1758,14 +1765,14 @@ fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
 
 #[cfg(feature = "tool-file")]
 #[test]
-fn direct_write_routes_exact_edit_blocks_to_file_edit() {
+fn direct_write_rejects_exact_edit_blocks() {
     let root = unique_tool_temp_dir("loongclaw-direct-write-edit-blocks");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let target = root.join("notes.txt");
     std::fs::write(&target, "alpha\nbeta\ngamma\n").expect("seed target file");
 
     let config = test_tool_runtime_config(root.clone());
-    let outcome = execute_tool_core_with_config(
+    let error = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "write".to_owned(),
             payload: json!({
@@ -1778,7 +1785,39 @@ fn direct_write_routes_exact_edit_blocks_to_file_edit() {
         },
         &config,
     )
-    .expect("direct write edit mode should succeed");
+    .expect_err("direct write should reject exact-edit payloads");
+
+    assert!(
+        error.contains("direct_write_exact_edit_moved"),
+        "error={error}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn direct_edit_routes_exact_edit_blocks_to_file_edit() {
+    let root = unique_tool_temp_dir("loongclaw-direct-edit-edit-blocks");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+    let target = root.join("notes.txt");
+    std::fs::write(&target, "alpha\nbeta\ngamma\n").expect("seed target file");
+
+    let config = test_tool_runtime_config(root.clone());
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "edit".to_owned(),
+            payload: json!({
+                "path": "notes.txt",
+                "edits": [
+                    {"old_text": "alpha", "new_text": "ALPHA"},
+                    {"old_text": "gamma", "new_text": "GAMMA"}
+                ]
+            }),
+        },
+        &config,
+    )
+    .expect("direct edit mode should succeed");
 
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload["edit_blocks_applied"], 2);
@@ -2340,7 +2379,7 @@ fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surfac
     config.sessions_enabled = false;
 
     let injected = ToolView::from_tool_names(["sessions_list", "config.import"]);
-    let names = runtime_discoverable_tool_entries(&config, Some(&injected))
+    let names = runtime_discoverable_tool_entries(&config, Some(&injected), false)
         .into_iter()
         .map(|entry| entry.canonical_name)
         .collect::<Vec<_>>();
@@ -3068,19 +3107,7 @@ fn tool_registry_with_config_includes_feishu_tools_when_runtime_configured() {
         .map(|entry| entry.name.clone())
         .collect::<Vec<_>>();
 
-    assert!(names.contains(&"feishu.whoami".to_owned()));
-    assert!(names.contains(&"feishu.doc.create".to_owned()));
-    assert!(names.contains(&"feishu.doc.append".to_owned()));
-    assert!(names.contains(&"feishu.doc.read".to_owned()));
-    assert!(names.contains(&"feishu.messages.history".to_owned()));
-    assert!(names.contains(&"feishu.messages.get".to_owned()));
-    assert!(names.contains(&"feishu.messages.resource.get".to_owned()));
-    assert!(names.contains(&"feishu.messages.search".to_owned()));
-    assert!(names.contains(&"feishu.messages.send".to_owned()));
-    assert!(names.contains(&"feishu.messages.reply".to_owned()));
-    assert!(names.contains(&"feishu.card.update".to_owned()));
-    assert!(names.contains(&"feishu.calendar.list".to_owned()));
-    assert!(names.contains(&"feishu.calendar.freebusy".to_owned()));
+    assert!(names.contains(&"channel".to_owned()));
 }
 
 #[cfg(feature = "feishu-integration")]
@@ -3106,13 +3133,14 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"browser"));
+    assert!(names.contains(&"edit"));
     assert!(names.contains(&"exec"));
     assert!(names.contains(&"read"));
     assert!(names.contains(&"tool_invoke"));
     assert!(names.contains(&"tool_search"));
     assert!(names.contains(&"web"));
     assert!(names.contains(&"write"));
-    assert_eq!(names.len(), 7);
+    assert_eq!(names.len(), 8);
 }
 
 #[cfg(feature = "feishu-integration")]

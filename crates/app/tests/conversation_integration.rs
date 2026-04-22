@@ -6,6 +6,15 @@ use loong_app::tools::runtime_config::ToolRuntimeConfig;
 use loong_contracts::Capability;
 use serde_json::json;
 
+fn shell_exec_capabilities() -> BTreeSet<Capability> {
+    BTreeSet::from([
+        Capability::InvokeTool,
+        Capability::FilesystemRead,
+        Capability::FilesystemWrite,
+        Capability::NetworkEgress,
+    ])
+}
+
 #[test]
 fn fake_provider_builder_text_only() {
     let turn = FakeProviderBuilder::new().with_text("hello world").build();
@@ -138,11 +147,7 @@ async fn integ_file_write_then_read_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integ_shell_exec_echo() {
     let harness = TurnTestHarness::with_tool_config(
-        BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
+        shell_exec_capabilities(),
         ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned()]),
             ..ToolRuntimeConfig::default()
@@ -169,7 +174,7 @@ async fn integ_shell_exec_echo() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integ_shell_exec_blocked_command() {
     let harness = TurnTestHarness::with_tool_config(
-        BTreeSet::from([Capability::InvokeTool]),
+        shell_exec_capabilities(),
         ToolRuntimeConfig {
             shell_deny: BTreeSet::from(["echo".to_owned()]),
             ..ToolRuntimeConfig::default()
@@ -242,11 +247,7 @@ async fn integ_missing_capability_denies_tool() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integ_audit_captures_tool_plane_invocation() {
     let harness = TurnTestHarness::with_tool_config(
-        BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]),
+        shell_exec_capabilities(),
         ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned()]),
             ..ToolRuntimeConfig::default()

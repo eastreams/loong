@@ -51,7 +51,9 @@ They must be short, high-prior, and assistant-first.
 Current direct tool vocabulary:
 
 - `read`
+- `edit`
 - `write`
+- `bash`
 - `exec`
 - `web`
 - `browser`
@@ -66,11 +68,12 @@ Examples:
 - `read { path, offset, limit }` -> `file.read`
 - `read { query }` -> `content.search`
 - `read { pattern }` -> `glob.search`
+- `edit { path, edits }` -> `file.edit`
+- `edit { path, old_string, new_string }` -> `file.edit` (legacy exact-edit mode)
 - `write { path, content }` -> `file.write`
-- `write { path, edits }` -> `file.edit`
-- `write { path, old_string, new_string }` -> `file.edit` (legacy exact-edit mode)
-- `exec { command }` -> `shell.exec`
-- `exec { script }` -> `bash.exec`
+- `bash { command }` -> `bash.exec`
+- `bash { script }` -> `bash.exec` (legacy alias mode)
+- `exec { command, args }` -> `shell.exec`
 
 Exec results keep a stable structured payload. Inline `stdout` / `stderr` previews remain easy to read, while `details.stdout` / `details.stderr` report truncation metadata and expose any saved `full_output_path` handoff targets. When output is truncated, callers should first try `details.handoff.recommended_payload` with `read`; `details.handoff.recipes.<stream>.*` then exposes alternate first-page / last-page / wider-byte windows without forcing the model to invent paging arguments.
 - `web { url }` -> `web.fetch`
@@ -132,7 +135,9 @@ lease-bearing tool card.
 Every tool belongs to a structured surface such as:
 
 - `read`
+- `edit`
 - `write`
+- `bash`
 - `exec`
 - `web`
 - `browser`
@@ -173,7 +178,7 @@ system prompt short while still teaching high-frequency behaviors like:
 - read before shell for normal inspection
 - `offset` / `limit` paging for large files
 - `edits` for surgical exact replacements
-- `script` for shell-heavy exec tasks
+- `bash` for shell-heavy command strings and scripts
 
 The shared metadata keeps prompt guidance, discovery cards, followup/approval
 surfaces, and operator-facing read models aligned without exposing every

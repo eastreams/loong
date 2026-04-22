@@ -157,6 +157,27 @@ pub(super) fn direct_write_definition(descriptor: &ToolDescriptor) -> Value {
                     "overwrite": {
                         "type": "boolean",
                         "description": "Allow replacing an existing file. Defaults to false."
+                    }
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn direct_edit_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Target file path."
                     },
                     "edits": {
                         "type": "array",
@@ -181,9 +202,6 @@ pub(super) fn direct_write_definition(descriptor: &ToolDescriptor) -> Value {
                 "required": ["path"],
                 "anyOf": [
                     {
-                        "required": ["content"]
-                    },
-                    {
                         "required": ["edits"]
                     },
                     {
@@ -207,16 +225,47 @@ pub(super) fn direct_exec_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Executable command or simple shell command. Routes to argv mode unless it clearly uses shell syntax."
-                    },
-                    "script": {
-                        "type": "string",
-                        "description": "Raw shell or bash script text. Use this for pipes, redirects, chaining, or multi-line commands."
+                        "description": "Program or command to execute in argv mode."
                     },
                     "args": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional command arguments for argv mode."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 600000,
+                        "description": "Optional command timeout in milliseconds."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory."
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn direct_bash_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command string. Use this for pipes, redirects, shell builtins, or normal shell workflows."
+                    },
+                    "script": {
+                        "type": "string",
+                        "description": "Legacy alias for a shell command string. Prefer `command` for new requests."
                     },
                     "timeout_ms": {
                         "type": "integer",
