@@ -1,5 +1,12 @@
 # Background Tasks
 
+This document remains the product contract for the task-shaped async delegate
+surface itself.
+
+Scheduled and event-driven automation now live beside it, not inside it. See
+[`../design-docs/automation-triggering.md`](../design-docs/automation-triggering.md)
+for the newer trigger model that can queue these background tasks.
+
 ## User Story
 
 As a Loong operator, I want a task-shaped background work surface so that I
@@ -44,7 +51,7 @@ The current runtime already ships the substrate for this surface:
 The missing part is the operator-facing product contract that turns those
 session primitives into a coherent task workflow.
 
-## Out of Scope
+## Out of Scope For This Task Surface
 
 - cron
 - heartbeat jobs

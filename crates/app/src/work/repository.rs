@@ -295,8 +295,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit create transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)?
-            .ok_or_else(|| format!("work unit `{work_unit_id}` disappeared after insert"))
+        let snapshot = self
+            .load_work_unit_snapshot(&work_unit_id)?
+            .ok_or_else(|| format!("work unit `{work_unit_id}` disappeared after insert"))?;
+        emit_work_unit_snapshot_event("work_unit.created", &snapshot, json!({}));
+        Ok(snapshot)
     }
 
     pub fn load_work_unit_snapshot(
@@ -447,7 +450,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit lease transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&raw_record.work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&raw_record.work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event("work_unit.leased", snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn mark_leased_running(
@@ -507,7 +514,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit start transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event("work_unit.started", snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn heartbeat_lease(
@@ -568,7 +579,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit heartbeat transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event("work_unit.heartbeat", snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn complete_work_unit(
@@ -664,7 +679,17 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit complete transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            let event_name = match request.disposition {
+                WorkUnitCompletionDisposition::Completed => "work_unit.completed",
+                WorkUnitCompletionDisposition::RetryPending => "work_unit.retry_pending",
+                WorkUnitCompletionDisposition::FailedTerminal => "work_unit.failed_terminal",
+                WorkUnitCompletionDisposition::Cancelled => "work_unit.cancelled",
+            };
+            emit_work_unit_snapshot_event(event_name, snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn archive_work_unit(
@@ -719,7 +744,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit archive transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event("work_unit.archived", snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn update_work_unit(
@@ -883,7 +912,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit update transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event("work_unit.updated", snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn assign_work_unit(
@@ -942,7 +975,11 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit assignment transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event("work_unit.assigned", snapshot, json!({}));
+        }
+        Ok(snapshot)
     }
 
     pub fn add_dependency(
@@ -1014,7 +1051,18 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit dependency transaction failed: {error}"))?;
 
-        self.load_work_unit_snapshot(&blocked_work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&blocked_work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event(
+                "work_unit.dependency_added",
+                snapshot,
+                json!({
+                    "blocking_work_unit_id": blocking_work_unit_id,
+                    "blocked_work_unit_id": blocked_work_unit_id,
+                }),
+            );
+        }
+        Ok(snapshot)
     }
 
     pub fn remove_dependency(
@@ -1071,7 +1119,18 @@ impl WorkUnitRepository {
             format!("commit work unit dependency removal transaction failed: {error}")
         })?;
 
-        self.load_work_unit_snapshot(&blocked_work_unit_id)
+        let snapshot = self.load_work_unit_snapshot(&blocked_work_unit_id)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            emit_work_unit_snapshot_event(
+                "work_unit.dependency_removed",
+                snapshot,
+                json!({
+                    "blocking_work_unit_id": blocking_work_unit_id,
+                    "blocked_work_unit_id": blocked_work_unit_id,
+                }),
+            );
+        }
+        Ok(snapshot)
     }
 
     pub fn append_note(
@@ -1109,6 +1168,7 @@ impl WorkUnitRepository {
             .commit()
             .map_err(|error| format!("commit work unit note transaction failed: {error}"))?;
 
+        emit_work_unit_event_record("work_unit.noted", &event);
         Ok(Some(event))
     }
 
@@ -1190,6 +1250,7 @@ impl WorkUnitRepository {
             let snapshot = self
                 .load_work_unit_snapshot(&recovered_id)?
                 .ok_or_else(|| format!("recovered work unit `{recovered_id}` disappeared"))?;
+            emit_work_unit_snapshot_event("work_unit.recovered", &snapshot, json!({}));
             recovered_snapshots.push(snapshot);
         }
 
@@ -1335,6 +1396,35 @@ impl WorkUnitRepository {
         Connection::open(&self.db_path)
             .map_err(|error| format!("open work unit repository sqlite db failed: {error}"))
     }
+}
+
+fn emit_work_unit_snapshot_event(event_name: &str, snapshot: &WorkUnitSnapshot, extra: Value) {
+    let snapshot_json = match serde_json::to_value(snapshot) {
+        Ok(value) => value,
+        Err(_) => {
+            return;
+        }
+    };
+    crate::internal_events::emit_internal_event_with_metadata(
+        event_name,
+        "app.work.repository",
+        json!({
+            "work_unit": snapshot_json,
+            "extra": extra,
+        }),
+    );
+}
+
+fn emit_work_unit_event_record(event_name: &str, event: &WorkUnitEventRecord) {
+    let payload = match serde_json::to_value(event) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    crate::internal_events::emit_internal_event_with_metadata(
+        event_name,
+        "app.work.repository",
+        payload,
+    );
 }
 
 fn insert_event_in_tx(

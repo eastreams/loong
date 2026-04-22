@@ -30,6 +30,7 @@ impl Commands {
             Self::Skills { .. } => "skills",
             Self::Status { .. } => "status",
             Self::Tasks { .. } => "tasks",
+            Self::Automation { .. } => "automation",
             Self::DelegateChildRun { .. } => "delegate_child_run",
             Self::Sessions { .. } => "sessions",
             Self::Plugins { .. } => "plugins",
@@ -134,6 +135,20 @@ mod tests {
             }
             .command_kind_for_logging(),
             "status"
+        );
+        assert_eq!(
+            Commands::Automation {
+                config: None,
+                json: false,
+                command: crate::automation_cli::AutomationCommands::List(
+                    crate::automation_cli::AutomationListCommandOptions {
+                        limit: 20,
+                        include_completed: false,
+                    },
+                ),
+            }
+            .command_kind_for_logging(),
+            "automation"
         );
         assert_eq!(
             Commands::WorkUnit {

@@ -34,6 +34,7 @@ design backlog artifacts are intentionally out of the public docs flow.
 | [Core Beliefs](core-beliefs.md) | you need the engineering principles that should survive refactors |
 | [Layered Kernel Design](layered-kernel-design.md) | you need the crate and layer boundary model before changing runtime shape |
 | [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) | you need the shortest source-facing map of how CLI, channel, gateway, control-plane, and daemon task turns enter the shared runtime |
+| [Automation Triggering](automation-triggering.md) | you are changing schedule, webhook, event-driven, or future hook-triggered automation and need the repository-native trigger model |
 | [Single-Entry Runtime Convergence](single-entry-runtime-convergence.md) | you are working on session-vs-memory ownership or converging host turn seams without breaking the current crate contract |
 | [Harness Engineering](harness-engineering.md) | you are working on the agent-driven development environment itself |
 | [Tool Surface Exposure](tool-surface-exposure.md) | you are changing provider-visible tool exposure, discovery, or hidden-tool progressive disclosure |

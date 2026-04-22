@@ -112,6 +112,7 @@ pub use {base64, kernel, sha2};
 
 pub mod acp_cli;
 pub mod audit_cli;
+pub mod automation_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
 mod channel_access_policy_render;
@@ -801,6 +802,15 @@ pub enum Commands {
         session: String,
         #[command(subcommand)]
         command: tasks_cli::TasksCommands,
+    },
+    /// Manage schedule and event-driven automation triggers
+    Automation {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[command(subcommand)]
+        command: automation_cli::AutomationCommands,
     },
     #[command(hide = true)]
     DelegateChildRun {

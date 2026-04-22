@@ -480,6 +480,18 @@ async fn run_command(command: Commands) -> CliResult<()> {
             })
             .await
         }
+        Commands::Automation {
+            config,
+            json,
+            command,
+        } => {
+            automation_cli::run_automation_cli(automation_cli::AutomationCommandOptions {
+                config,
+                json,
+                command,
+            })
+            .await
+        }
         Commands::DelegateChildRun {
             config_path,
             payload_file,
@@ -541,7 +553,7 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::RuntimeCapability { command } => {
             runtime_capability_cli::run_runtime_capability_cli(command)
         }
-        Commands::WorkUnit { command } => work_unit_cli::run_work_unit_cli(command),
+        Commands::WorkUnit { command } => work_unit_cli::run_work_unit_cli(command).await,
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
         }

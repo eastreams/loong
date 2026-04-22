@@ -193,7 +193,7 @@ pub(super) fn write_tasks_config(root: &Path) -> PathBuf {
     write_tasks_config_with(root, |_| {})
 }
 
-fn seed_background_task(config_path: &Path, root_session_id: &str, task_id: &str) {
+pub(super) fn seed_background_task(config_path: &Path, root_session_id: &str, task_id: &str) {
     let repo = load_session_repository(config_path);
     seed_background_task_record(&repo, root_session_id, task_id, true);
 }

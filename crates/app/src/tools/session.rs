@@ -1114,6 +1114,14 @@ fn execute_session_recover(
         if let Some(object) = payload.as_object_mut() {
             object.insert("recovery_action".to_owned(), outcome.action);
         }
+        crate::internal_events::emit_internal_event_with_metadata(
+            "session.recovered",
+            "app.tools.session",
+            json!({
+                "session_id": target_session_id,
+                "inspection": payload,
+            }),
+        );
         return Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
             payload,
@@ -1129,6 +1137,21 @@ fn execute_session_recover(
             tool_config,
             request.dry_run,
         )?);
+    }
+    if !request.dry_run {
+        for result in &results {
+            if result.result == "applied" {
+                crate::internal_events::emit_internal_event_with_metadata(
+                    "session.recovered",
+                    "app.tools.session",
+                    json!({
+                        "session_id": result.session_id,
+                        "action": result.action,
+                        "inspection": result.inspection,
+                    }),
+                );
+            }
+        }
     }
 
     Ok(ToolCoreOutcome {
@@ -1181,6 +1204,14 @@ fn execute_session_cancel(
         if let Some(object) = payload.as_object_mut() {
             object.insert("cancel_action".to_owned(), outcome.action);
         }
+        crate::internal_events::emit_internal_event_with_metadata(
+            "session.cancelled",
+            "app.tools.session",
+            json!({
+                "session_id": target_session_id,
+                "inspection": payload,
+            }),
+        );
         return Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
             payload,
@@ -1196,6 +1227,21 @@ fn execute_session_cancel(
             tool_config,
             request.dry_run,
         )?);
+    }
+    if !request.dry_run {
+        for result in &results {
+            if result.result == "applied" {
+                crate::internal_events::emit_internal_event_with_metadata(
+                    "session.cancelled",
+                    "app.tools.session",
+                    json!({
+                        "session_id": result.session_id,
+                        "action": result.action,
+                        "inspection": result.inspection,
+                    }),
+                );
+            }
+        }
     }
 
     Ok(ToolCoreOutcome {
@@ -1248,6 +1294,14 @@ fn execute_session_archive(
         if let Some(object) = payload.as_object_mut() {
             object.insert("archive_action".to_owned(), outcome.action);
         }
+        crate::internal_events::emit_internal_event_with_metadata(
+            "session.archived",
+            "app.tools.session",
+            json!({
+                "session_id": target_session_id,
+                "inspection": payload,
+            }),
+        );
         return Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
             payload,
@@ -1263,6 +1317,21 @@ fn execute_session_archive(
             tool_config,
             request.dry_run,
         )?);
+    }
+    if !request.dry_run {
+        for result in &results {
+            if result.result == "applied" {
+                crate::internal_events::emit_internal_event_with_metadata(
+                    "session.archived",
+                    "app.tools.session",
+                    json!({
+                        "session_id": result.session_id,
+                        "action": result.action,
+                        "inspection": result.inspection,
+                    }),
+                );
+            }
+        }
     }
 
     Ok(ToolCoreOutcome {

@@ -8,6 +8,7 @@ pub mod context;
 pub mod control_plane;
 pub mod conversation;
 pub mod crypto;
+pub mod internal_events;
 pub mod mcp;
 pub mod memory;
 pub mod migration;

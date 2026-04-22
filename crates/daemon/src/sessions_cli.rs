@@ -115,6 +115,11 @@ pub async fn execute_sessions_command(
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     let tool_config = &config.tools;
     let resolved_config_path = resolved_path.display().to_string();
+    if !crate::automation_cli::automation_serve_owner_is_active() {
+        crate::automation_cli::install_daemon_automation_event_sink(Some(
+            resolved_config_path.clone(),
+        ));
+    }
 
     let payload = match command {
         SessionsCommands::List {
@@ -188,45 +193,54 @@ pub async fn execute_sessions_command(
         SessionsCommands::Cancel {
             session_id,
             dry_run,
-        } => execute_mutation_command(
-            "cancel",
-            "session_cancel",
-            "cancel_action",
-            &resolved_config_path,
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &session_id,
-            dry_run,
-        )?,
+        } => {
+            execute_mutation_command(
+                "cancel",
+                "session_cancel",
+                "cancel_action",
+                &resolved_config_path,
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &session_id,
+                dry_run,
+            )
+            .await?
+        }
         SessionsCommands::Recover {
             session_id,
             dry_run,
-        } => execute_mutation_command(
-            "recover",
-            "session_recover",
-            "recovery_action",
-            &resolved_config_path,
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &session_id,
-            dry_run,
-        )?,
+        } => {
+            execute_mutation_command(
+                "recover",
+                "session_recover",
+                "recovery_action",
+                &resolved_config_path,
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &session_id,
+                dry_run,
+            )
+            .await?
+        }
         SessionsCommands::Archive {
             session_id,
             dry_run,
-        } => execute_mutation_command(
-            "archive",
-            "session_archive",
-            "archive_action",
-            &resolved_config_path,
-            &current_session_id,
-            &memory_config,
-            tool_config,
-            &session_id,
-            dry_run,
-        )?,
+        } => {
+            execute_mutation_command(
+                "archive",
+                "session_archive",
+                "archive_action",
+                &resolved_config_path,
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &session_id,
+                dry_run,
+            )
+            .await?
+        }
     };
 
     Ok(SessionsCommandExecution {
@@ -477,7 +491,7 @@ fn execute_history_command(
     }))
 }
 
-fn execute_mutation_command(
+async fn execute_mutation_command(
     command_name: &str,
     tool_name: &str,
     action_field: &str,
@@ -512,7 +526,7 @@ fn execute_mutation_command(
     let inspection = result.get("inspection").cloned().unwrap_or(Value::Null);
     let mutation_result = result.get("result").cloned().unwrap_or(Value::Null);
 
-    Ok(json!({
+    let output = json!({
         "command": command_name,
         "config": resolved_config_path,
         "current_session_id": current_session_id,
@@ -522,7 +536,8 @@ fn execute_mutation_command(
         "message": message,
         "action": action,
         "inspection": inspection,
-    }))
+    });
+    Ok(output)
 }
 
 fn execute_app_tool_request(

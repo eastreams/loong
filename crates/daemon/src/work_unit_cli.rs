@@ -439,28 +439,28 @@ impl From<WorkUnitDispositionArg> for mvp::work::repository::WorkUnitCompletionD
     }
 }
 
-pub fn run_work_unit_cli(command: WorkUnitCommands) -> CliResult<()> {
+pub async fn run_work_unit_cli(command: WorkUnitCommands) -> CliResult<()> {
     match command {
-        WorkUnitCommands::Create(options) => run_create_command(options),
+        WorkUnitCommands::Create(options) => run_create_command(options).await,
         WorkUnitCommands::Show(options) => run_show_command(options),
         WorkUnitCommands::List(options) => run_list_command(options),
         WorkUnitCommands::Events(options) => run_events_command(options),
-        WorkUnitCommands::Claim(options) => run_claim_command(options),
-        WorkUnitCommands::Start(options) => run_start_command(options),
-        WorkUnitCommands::Heartbeat(options) => run_heartbeat_command(options),
-        WorkUnitCommands::Complete(options) => run_complete_command(options),
-        WorkUnitCommands::Recover(options) => run_recover_command(options),
-        WorkUnitCommands::Archive(options) => run_archive_command(options),
-        WorkUnitCommands::Assign(options) => run_assign_command(options),
-        WorkUnitCommands::Update(options) => run_update_command(options),
-        WorkUnitCommands::Depend(options) => run_depend_command(options),
-        WorkUnitCommands::Undepend(options) => run_undepend_command(options),
-        WorkUnitCommands::Note(options) => run_note_command(options),
+        WorkUnitCommands::Claim(options) => run_claim_command(options).await,
+        WorkUnitCommands::Start(options) => run_start_command(options).await,
+        WorkUnitCommands::Heartbeat(options) => run_heartbeat_command(options).await,
+        WorkUnitCommands::Complete(options) => run_complete_command(options).await,
+        WorkUnitCommands::Recover(options) => run_recover_command(options).await,
+        WorkUnitCommands::Archive(options) => run_archive_command(options).await,
+        WorkUnitCommands::Assign(options) => run_assign_command(options).await,
+        WorkUnitCommands::Update(options) => run_update_command(options).await,
+        WorkUnitCommands::Depend(options) => run_depend_command(options).await,
+        WorkUnitCommands::Undepend(options) => run_undepend_command(options).await,
+        WorkUnitCommands::Note(options) => run_note_command(options).await,
         WorkUnitCommands::Health(options) => run_health_command(options),
     }
 }
 
-fn run_create_command(options: WorkUnitCreateCommandOptions) -> CliResult<()> {
+async fn run_create_command(options: WorkUnitCreateCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let retry_policy = WorkUnitRetryPolicy {
         max_attempts: options.max_attempts,
@@ -522,7 +522,7 @@ fn run_events_command(options: WorkUnitEventsCommandOptions) -> CliResult<()> {
     })
 }
 
-fn run_claim_command(options: WorkUnitClaimCommandOptions) -> CliResult<()> {
+async fn run_claim_command(options: WorkUnitClaimCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::AcquireWorkUnitLeaseRequest {
         owner: options.owner,
@@ -544,7 +544,7 @@ fn run_claim_command(options: WorkUnitClaimCommandOptions) -> CliResult<()> {
     Ok(())
 }
 
-fn run_start_command(options: WorkUnitStartCommandOptions) -> CliResult<()> {
+async fn run_start_command(options: WorkUnitStartCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::StartWorkUnitLeaseRequest {
         work_unit_id: options.id,
@@ -557,7 +557,7 @@ fn run_start_command(options: WorkUnitStartCommandOptions) -> CliResult<()> {
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_heartbeat_command(options: WorkUnitHeartbeatCommandOptions) -> CliResult<()> {
+async fn run_heartbeat_command(options: WorkUnitHeartbeatCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::WorkUnitHeartbeatRequest {
         work_unit_id: options.id,
@@ -571,7 +571,7 @@ fn run_heartbeat_command(options: WorkUnitHeartbeatCommandOptions) -> CliResult<
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_complete_command(options: WorkUnitCompleteCommandOptions) -> CliResult<()> {
+async fn run_complete_command(options: WorkUnitCompleteCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let result_payload_json = options
         .result_payload_json
@@ -593,7 +593,7 @@ fn run_complete_command(options: WorkUnitCompleteCommandOptions) -> CliResult<()
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_recover_command(options: WorkUnitRecoverCommandOptions) -> CliResult<()> {
+async fn run_recover_command(options: WorkUnitRecoverCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let snapshots = repository.recover_expired_leases(options.actor.as_deref(), options.now_ms)?;
     render_json_or_text(&snapshots, options.json, |value| {
@@ -601,7 +601,7 @@ fn run_recover_command(options: WorkUnitRecoverCommandOptions) -> CliResult<()> 
     })
 }
 
-fn run_archive_command(options: WorkUnitArchiveCommandOptions) -> CliResult<()> {
+async fn run_archive_command(options: WorkUnitArchiveCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::ArchiveWorkUnitRequest {
         work_unit_id: options.id,
@@ -614,7 +614,7 @@ fn run_archive_command(options: WorkUnitArchiveCommandOptions) -> CliResult<()> 
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
+async fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::AssignWorkUnitRequest {
         work_unit_id: options.id,
@@ -627,7 +627,7 @@ fn run_assign_command(options: WorkUnitAssignCommandOptions) -> CliResult<()> {
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_update_command(options: WorkUnitUpdateCommandOptions) -> CliResult<()> {
+async fn run_update_command(options: WorkUnitUpdateCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::UpdateWorkUnitRequest {
         work_unit_id: options.id,
@@ -646,7 +646,7 @@ fn run_update_command(options: WorkUnitUpdateCommandOptions) -> CliResult<()> {
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {
+async fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::AddWorkUnitDependencyRequest {
         blocking_work_unit_id: options.blocking_id,
@@ -659,7 +659,7 @@ fn run_depend_command(options: WorkUnitDependCommandOptions) -> CliResult<()> {
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_undepend_command(options: WorkUnitUndependCommandOptions) -> CliResult<()> {
+async fn run_undepend_command(options: WorkUnitUndependCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::RemoveWorkUnitDependencyRequest {
         blocking_work_unit_id: options.blocking_id,
@@ -672,7 +672,7 @@ fn run_undepend_command(options: WorkUnitUndependCommandOptions) -> CliResult<()
     render_optional_snapshot(snapshot, options.json, missing_message)
 }
 
-fn run_note_command(options: WorkUnitNoteCommandOptions) -> CliResult<()> {
+async fn run_note_command(options: WorkUnitNoteCommandOptions) -> CliResult<()> {
     let repository = load_work_unit_repository(options.config.as_deref())?;
     let request = mvp::work::repository::AppendWorkUnitNoteRequest {
         work_unit_id: options.id,
@@ -705,6 +705,11 @@ fn load_work_unit_repository(
     #[cfg(feature = "memory-sqlite")]
     {
         let (_, config) = mvp::config::load(config_path)?;
+        if !crate::automation_cli::automation_serve_owner_is_active() {
+            crate::automation_cli::install_daemon_automation_event_sink(
+                config_path.map(str::to_owned),
+            );
+        }
         let memory_config =
             mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         mvp::work::repository::WorkUnitRepository::new(&memory_config)

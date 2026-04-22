@@ -125,6 +125,7 @@ fn validation_diagnostic_with_severity(
 mod acp;
 mod architecture;
 mod ask_cli;
+mod automation_cli;
 mod chat_cli;
 mod cli_tests;
 mod doctor_feishu;

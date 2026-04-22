@@ -275,6 +275,13 @@ async fn execute_create_command(
         "recipes": recipes,
         "next_steps": next_steps,
     });
+    let _ = crate::automation_cli::publish_daemon_internal_event(
+        Some(resolved_config_path.to_owned()),
+        "background_task.queued",
+        "tasks_cli",
+        Some(payload.clone()),
+    )
+    .await;
     Ok(payload)
 }
 
@@ -522,6 +529,15 @@ async fn execute_cancel_command(
         "task": task,
         "task_lookup_error": task_lookup_error,
     });
+    if !dry_run && !action.is_null() {
+        let _ = crate::automation_cli::publish_daemon_internal_event(
+            Some(resolved_config_path.to_owned()),
+            "background_task.cancelled",
+            "tasks_cli",
+            Some(output.clone()),
+        )
+        .await;
+    }
     Ok(output)
 }
 
@@ -581,6 +597,15 @@ async fn execute_recover_command(
         "task": task,
         "task_lookup_error": task_lookup_error,
     });
+    if !dry_run && !action.is_null() {
+        let _ = crate::automation_cli::publish_daemon_internal_event(
+            Some(resolved_config_path.to_owned()),
+            "background_task.recovered",
+            "tasks_cli",
+            Some(output.clone()),
+        )
+        .await;
+    }
     Ok(output)
 }
 

@@ -15,6 +15,7 @@ Not every file under `docs/` belongs in the normal public reading path.
 | --- | --- | --- |
 | read Loong like a public docs site visitor | [`../site/index.mdx`](../site/index.mdx) | `site/` is the main reader-facing docs surface |
 | understand runtime shape, boundaries, and crate responsibilities | [`design-docs/index.md`](design-docs/index.md) | source-facing architecture references live there |
+| understand how Loong should model scheduled work, webhook ingress, and future hook-triggered automation | [`design-docs/automation-triggering.md`](design-docs/automation-triggering.md) | the trigger model now lives in one source-facing design document |
 | trace how turns enter the runtime from CLI, channels, gateway, control plane, or daemon tasks | [`design-docs/runtime-entrypoint-map.md`](design-docs/runtime-entrypoint-map.md) | this is the fastest repo-native map for bootstrap and handoff differences |
 | edit or review product specs or implementation plans | `eastreams/knowledge-base` | source contracts and plans no longer live in the main repository |
 | check roadmap, reliability, product, or security references from the repository | [`ROADMAP.md`](ROADMAP.md), [`RELIABILITY.md`](RELIABILITY.md), [`PRODUCT_SENSE.md`](PRODUCT_SENSE.md), [`SECURITY.md`](SECURITY.md) | these are the repository-native reference documents |
