@@ -1,4 +1,3 @@
-use std::fmt::format;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -51,7 +50,6 @@ impl QqbotTokenManager {
             let current_token = self.current_token.read().await;
             if let Some(token) = &*current_token {
                 return Ok(token.access_token.clone());
-            } else {
             }
         }
         self.refresh_token().await
