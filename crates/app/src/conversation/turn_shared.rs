@@ -2092,6 +2092,14 @@ fn render_tool_failure_repair_guidance(
     let summary_tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
     let repair_tool_name = repair_guidance_tool_name(summary_tool_name, tool_failure_reason);
     let request_summary_request = request_summary_json.get("request");
+    let routing_guidance = render_direct_routing_failure_repair_guidance(
+        repair_tool_name.as_str(),
+        request_summary_request,
+        tool_failure_reason,
+    );
+    if routing_guidance.is_some() {
+        return routing_guidance;
+    }
     let reason_mentions_repairable_shape = tool_failure_reason.contains("tool input needs repair")
         || tool_failure_reason.contains("payload must be an object")
         || tool_failure_reason.contains("payload.");
@@ -2118,6 +2126,45 @@ fn render_tool_failure_repair_guidance(
     }
 
     render_tool_input_repair_guidance_from_reason(repair_tool_name.as_str(), tool_failure_reason)
+}
+
+fn render_direct_routing_failure_repair_guidance(
+    tool_name: &str,
+    request_summary_request: Option<&Value>,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    let guidance = if tool_failure_reason.starts_with("direct_read_requires_one_of:") {
+        "Provide exactly one of `path`, `query`, or `pattern`. Use `path` to read one file, `query` to search file contents, or `pattern` to run a glob search.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_read_ambiguous:") {
+        "Remove the extra fields and keep only one of `path`, `query`, or `pattern`.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_exec_requires_command:") {
+        "Add `command` for direct program execution. If the request is really a shell string, switch to `bash` instead.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_exec_shell_moved_to_bash:")
+        || tool_failure_reason.starts_with("direct_exec_shell_syntax_moved_to_bash:")
+    {
+        "Use `bash` for shell command strings, pipelines, redirects, chaining, or shell builtins. Keep `exec` only for direct argv-style program execution.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_bash_argv_moved_to_exec:") {
+        "Use `exec` when you already have a program plus argv-style arguments. Keep `bash` for a single shell command string.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_bash_requires_command_or_script:") {
+        "Provide `command` for a shell command string, or legacy `script` if you are replaying an older payload.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_write_requires_content:") {
+        "Add whole-file `content`, or switch to `edit` if you meant an exact replacement instead of rewriting the entire file.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_web_requires_query_or_url:") {
+        "Provide `query` for search mode, or `url` for fetch/request mode.".to_owned()
+    } else if tool_failure_reason.starts_with("direct_web_ambiguous:") {
+        "Choose either search mode (`query`) or request/fetch mode (`url` plus optional request fields), but not both at once.".to_owned()
+    } else {
+        return None;
+    };
+
+    let visible_tool_name = repair_guidance_visible_tool_name(tool_name);
+    let request_preview = request_summary_request
+        .and_then(|request| serde_json::to_string(request).ok())
+        .unwrap_or_else(|| "{}".to_owned());
+
+    Some(format!(
+        "Repair guidance for {visible_tool_name}:\n{guidance}\nCurrent request preview: {request_preview}"
+    ))
 }
 
 fn repair_guidance_tool_name(summary_tool_name: &str, tool_failure_reason: &str) -> String {
@@ -3359,6 +3406,62 @@ mod tests {
             "Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer."
         ));
         assert!(user_prompt.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_direct_read_mode_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason:
+                "direct_read_requires_one_of: expected exactly one of `path`, `query`, or `pattern`"
+                    .to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"read","request":{}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "read the file",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for read"));
+        assert!(user_prompt.contains("Provide exactly one of `path`, `query`, or `pattern`"));
+        assert!(user_prompt.contains("Current request preview: {}"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_direct_exec_to_bash_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "direct_exec_shell_syntax_moved_to_bash: `exec` does not accept shell syntax; use `bash` for pipelines, redirects, chaining, or shell builtins".to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"exec","request":{"command":"ls | wc -l"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "count files",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for exec"));
+        assert!(user_prompt.contains("Use `bash` for shell command strings"));
+        assert!(user_prompt.contains(r#"Current request preview: {"command":"ls | wc -l"}"#));
     }
 
     #[test]
