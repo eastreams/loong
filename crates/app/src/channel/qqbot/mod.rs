@@ -21,6 +21,7 @@ use self::websocket_manager::QqbotWebsocketManager;
 
 use std::time::Duration;
 
+#[allow(dead_code)]
 /// One-time send command: `loong qqbot-send`.
 pub(super) async fn run_qqbot_send(
     resolved: &ResolvedQqbotChannelConfig,
