@@ -853,7 +853,7 @@ async fn handle_feishu_inbound_event(
                 let mut adapter = state.adapter.lock().await;
                 if let Err(first_error) = send_channel_message_via_message_send_api(
                     &*adapter,
-                    &reply_target,
+                    reply_target,
                     outbound.clone(),
                 )
                 .await
@@ -866,7 +866,7 @@ async fn handle_feishu_inbound_event(
                             ),
                         ));
                     }
-                    send_channel_message_via_message_send_api(&*adapter, &reply_target, outbound)
+                    send_channel_message_via_message_send_api(&*adapter, reply_target, outbound)
                         .await
                         .map_err(|error| {
                             (
@@ -885,7 +885,7 @@ async fn handle_feishu_inbound_event(
             let outbound = outbound_reply_message_from_text(render_feishu_user_facing_reply(reply));
             let mut adapter = state.adapter.lock().await;
             if let Err(first_error) =
-                send_channel_message_via_message_send_api(&*adapter, &reply_target, outbound.clone())
+                send_channel_message_via_message_send_api(&*adapter, reply_target, outbound.clone())
                     .await
             {
                 if let Err(error) = adapter.refresh_tenant_token().await {
@@ -896,7 +896,7 @@ async fn handle_feishu_inbound_event(
                         ),
                     ));
                 }
-                send_channel_message_via_message_send_api(&*adapter, &reply_target, outbound)
+                send_channel_message_via_message_send_api(&*adapter, reply_target, outbound)
                     .await
                     .map_err(|error| {
                         (
@@ -2550,30 +2550,29 @@ data: [DONE]\n\n",
         });
         let raw_body = serde_json::to_string(&payload).expect("serialize payload");
         let headers = signed_headers(&raw_body, "encrypt-key");
-        let error = handle_feishu_webhook_payload(
+        let first_response = handle_feishu_webhook_payload(
             state.clone(),
             &headers,
             raw_body.as_str(),
             serde_json::from_str(raw_body.as_str()).expect("payload value"),
         )
         .await
-        .expect_err("webhook should surface provider failure");
+        .expect("webhook should return a safe success response after failure handling");
+        assert_eq!(first_response.body["code"], 0);
+        assert_eq!(first_response.body["msg"], "ok");
 
-        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(error.1.contains("provider processing failed"));
-
-        let error_retry = handle_feishu_webhook_payload(
+        let retry_response = handle_feishu_webhook_payload(
             state,
             &headers,
             raw_body.as_str(),
             serde_json::from_str(raw_body.as_str()).expect("payload value"),
         )
         .await
-        .expect_err("webhook retry should still surface provider failure");
-        assert_eq!(error_retry.0, StatusCode::INTERNAL_SERVER_ERROR);
+        .expect("webhook retry should stay safely handled after failure finalization");
+        assert_eq!(retry_response.body["code"], 0);
+        assert_eq!(retry_response.body["msg"], "duplicate_event");
 
         let feishu_requests = wait_for_request_count(&feishu_requests, 2).await;
-        assert_eq!(feishu_requests.len(), 2);
         assert_eq!(
             feishu_requests
                 .iter()
@@ -2584,9 +2583,15 @@ data: [DONE]\n\n",
             "retrying a failed inbound turn must not duplicate ack reactions"
         );
         assert!(
-            feishu_requests.iter().all(|request| request.path
-                != "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply"),
-            "failed inbound handling must not send a reply"
+            feishu_requests
+                .iter()
+                .filter(|request| {
+                    request.path
+                        == "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply"
+                })
+                .count()
+                == 1,
+            "retrying a failed inbound turn must not duplicate retry-status replies"
         );
 
         provider_server.abort();

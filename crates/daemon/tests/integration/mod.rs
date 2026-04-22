@@ -1544,8 +1544,26 @@ fn memory_system_metadata_json_includes_stage_families_summary_and_source() {
     );
 }
 
+fn clear_memory_runtime_env_overrides(env: &mut loong_daemon::test_support::ScopedEnv) {
+    for key in [
+        "LOONG_MEMORY_BACKEND",
+        "LOONG_MEMORY_SYSTEM",
+        "LOONG_MEMORY_PROFILE",
+        "LOONG_MEMORY_FAIL_OPEN",
+        "LOONG_MEMORY_INGEST_MODE",
+        "LOONG_SQLITE_PATH",
+        "LOONG_SLIDING_WINDOW",
+        "LOONG_MEMORY_SUMMARY_MAX_CHARS",
+        "LOONG_MEMORY_PROFILE_NOTE",
+    ] {
+        env.remove(key);
+    }
+}
+
 #[test]
 fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
+    let mut env = loong_daemon::test_support::ScopedEnv::new();
+    clear_memory_runtime_env_overrides(&mut env);
     let config = mvp::config::LoongConfig {
         memory: mvp::config::MemoryConfig {
             profile: mvp::config::MemoryProfile::WindowPlusSummary,
@@ -1603,19 +1621,7 @@ fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
 #[test]
 fn render_memory_system_snapshot_text_reports_fail_open_policy() {
     let mut env = loong_daemon::test_support::ScopedEnv::new();
-    for key in [
-        "LOONG_MEMORY_BACKEND",
-        "LOONG_MEMORY_SYSTEM",
-        "LOONG_MEMORY_PROFILE",
-        "LOONG_MEMORY_FAIL_OPEN",
-        "LOONG_MEMORY_INGEST_MODE",
-        "LOONG_SQLITE_PATH",
-        "LOONG_SLIDING_WINDOW",
-        "LOONG_MEMORY_SUMMARY_MAX_CHARS",
-        "LOONG_MEMORY_PROFILE_NOTE",
-    ] {
-        env.remove(key);
-    }
+    clear_memory_runtime_env_overrides(&mut env);
     let config = mvp::config::LoongConfig {
         memory: mvp::config::MemoryConfig {
             profile: mvp::config::MemoryProfile::WindowPlusSummary,

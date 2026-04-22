@@ -988,10 +988,13 @@ fn resolve_internal_event_read_start(
                 .is_ge()
         })
     {
+        let Some(normalized_segment) = segments.get(index) else {
+            return (0, InternalEventJournalCursor::default());
+        };
         return (
             index,
             InternalEventJournalCursor {
-                segment_id: Some(segments[index].segment_id.clone()),
+                segment_id: Some(normalized_segment.segment_id.clone()),
                 ..InternalEventJournalCursor::default()
             },
         );

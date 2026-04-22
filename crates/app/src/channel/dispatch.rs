@@ -3309,6 +3309,7 @@ pub(crate) async fn send_text_to_known_session(
     Err(format!("sessions_send_channel_unsupported: `{session_id}`"))
 }
 
+#[cfg(test)]
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",

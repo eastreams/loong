@@ -602,7 +602,7 @@ fn validate_json_pointer(raw: Option<&str>) -> CliResult<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    if raw == "" || raw.starts_with('/') {
+    if raw.is_empty() || raw.starts_with('/') {
         return Ok(Some(raw.to_owned()));
     }
     Err("automation event filters require RFC6901 json pointers beginning with `/`".to_owned())
@@ -744,12 +744,34 @@ fn parse_cron_expression(raw: &str) -> CliResult<CronExpression> {
                 .to_owned(),
         );
     }
+
+    let minute_field = fields
+        .first()
+        .copied()
+        .ok_or_else(|| "cron expression missing minute field".to_owned())?;
+    let hour_field = fields
+        .get(1)
+        .copied()
+        .ok_or_else(|| "cron expression missing hour field".to_owned())?;
+    let day_of_month_field = fields
+        .get(2)
+        .copied()
+        .ok_or_else(|| "cron expression missing day_of_month field".to_owned())?;
+    let month_field = fields
+        .get(3)
+        .copied()
+        .ok_or_else(|| "cron expression missing month field".to_owned())?;
+    let day_of_week_field = fields
+        .get(4)
+        .copied()
+        .ok_or_else(|| "cron expression missing day_of_week field".to_owned())?;
+
     Ok(CronExpression {
-        minute: parse_cron_field(fields[0], 0, 59, false)?,
-        hour: parse_cron_field(fields[1], 0, 23, false)?,
-        day_of_month: parse_cron_field(fields[2], 1, 31, false)?,
-        month: parse_cron_field(fields[3], 1, 12, false)?,
-        day_of_week: parse_cron_field(fields[4], 0, 6, true)?,
+        minute: parse_cron_field(minute_field, 0, 59, false)?,
+        hour: parse_cron_field(hour_field, 0, 23, false)?,
+        day_of_month: parse_cron_field(day_of_month_field, 1, 31, false)?,
+        month: parse_cron_field(month_field, 1, 12, false)?,
+        day_of_week: parse_cron_field(day_of_week_field, 0, 6, true)?,
     })
 }
 
@@ -770,7 +792,7 @@ fn next_cron_fire_at_ms(expression: &str, after_ms: i64) -> CliResult<i64> {
         let hour_matches = cron_field_matches(&parsed.hour, candidate.hour());
         let month_matches = cron_field_matches(&parsed.month, candidate.month() as u8);
         let dom_matches = cron_field_matches(&parsed.day_of_month, candidate.day());
-        let weekday = candidate.weekday().number_days_from_sunday() as u8;
+        let weekday = candidate.weekday().number_days_from_sunday();
         let dow_matches = cron_field_matches(&parsed.day_of_week, weekday);
         let day_matches = if parsed.day_of_month.any && parsed.day_of_week.any {
             true
@@ -1323,7 +1345,7 @@ async fn execute_emit_command(
 ) -> CliResult<Value> {
     let normalized_event_name = normalize_event_name(event_name)?;
     let parsed_payload = payload_json
-        .map(|raw| serde_json::from_str::<Value>(raw))
+        .map(serde_json::from_str::<Value>)
         .transpose()
         .map_err(|error| format!("parse --payload-json failed: {error}"))?;
     execute_emit_value_command(
@@ -1436,21 +1458,23 @@ fn execute_journal_health_command() -> CliResult<Value> {
         .map(Value::String)
         .unwrap_or(Value::Null);
     let cursor_segment_id = cursor.get("segment_id").cloned().unwrap_or(Value::Null);
-    let layout_segments = layout["segments"]
-        .as_array()
+    let layout_segments = layout
+        .get("segments")
+        .and_then(Value::as_array)
         .ok_or_else(|| "automation journal inspect payload missing segments".to_owned())?;
     let cursor_segment_exists = cursor_segment_id.as_str().is_some_and(|segment_id| {
-        layout_segments
-            .iter()
-            .any(|segment| segment["segment_id"].as_str() == Some(segment_id))
+        layout_segments.iter().any(|segment| {
+            let layout_segment_id = segment.get("segment_id").and_then(Value::as_str);
+            layout_segment_id == Some(segment_id)
+        })
     });
-    let active_segment_exists = layout["active_segment_id"]
-        .as_str()
-        .is_some_and(|segment_id| {
-            layout_segments
-                .iter()
-                .any(|segment| segment["segment_id"].as_str() == Some(segment_id))
-        });
+    let layout_active_segment_id = layout.get("active_segment_id").and_then(Value::as_str);
+    let active_segment_exists = layout_active_segment_id.is_some_and(|segment_id| {
+        layout_segments.iter().any(|segment| {
+            let layout_segment_id = segment.get("segment_id").and_then(Value::as_str);
+            layout_segment_id == Some(segment_id)
+        })
+    });
     let active_marker_matches_state = match (
         active_marker_segment_id.as_str(),
         state_active_segment_id.as_str(),
@@ -1568,11 +1592,9 @@ pub(crate) async fn publish_daemon_internal_event(
 }
 
 pub(crate) fn install_daemon_automation_event_sink(config: Option<String>) {
-    let sink_config = config.clone();
     let sink = std::sync::Arc::new(move |event_name: &str, payload: Value| {
-        let config = sink_config.clone();
+        let config = config.clone();
         let event_name = event_name.to_owned();
-        let payload = payload.clone();
         let handle = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1812,18 +1834,18 @@ async fn process_due_schedule_triggers(
     let now = now_ms();
     let mut changed = false;
     for trigger in &mut store.triggers {
-        let is_due = trigger.status == AutomationTriggerStatus::Active
-            && matches!(
-                &trigger.source,
-                AutomationTriggerSource::Schedule { schedule }
-                    if schedule.next_fire_at_ms <= now
-            )
-            || trigger.status == AutomationTriggerStatus::Active
-                && matches!(
-                    &trigger.source,
-                    AutomationTriggerSource::Cron { cron }
-                        if cron.next_fire_at_ms <= now
-                );
+        let is_active = trigger.status == AutomationTriggerStatus::Active;
+        let schedule_due = matches!(
+            &trigger.source,
+            AutomationTriggerSource::Schedule { schedule }
+                if schedule.next_fire_at_ms <= now
+        );
+        let cron_due = matches!(
+            &trigger.source,
+            AutomationTriggerSource::Cron { cron }
+                if cron.next_fire_at_ms <= now
+        );
+        let is_due = is_active && (schedule_due || cron_due);
         if !is_due {
             continue;
         }
@@ -2116,31 +2138,49 @@ fn render_automation_text(payload: &Value) -> CliResult<String> {
     }
 }
 
+fn json_pointer_array<'a>(value: &'a Value, pointer: &str) -> Option<&'a Vec<Value>> {
+    value.pointer(pointer).and_then(Value::as_array)
+}
+
+fn json_pointer_i64(value: &Value, pointer: &str) -> Option<i64> {
+    value.pointer(pointer).and_then(Value::as_i64)
+}
+
+fn json_pointer_str<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
+    value.pointer(pointer).and_then(Value::as_str)
+}
+
+fn json_pointer_u64(value: &Value, pointer: &str) -> Option<u64> {
+    value.pointer(pointer).and_then(Value::as_u64)
+}
+
+fn json_pointer_value<'a>(value: &'a Value, pointer: &str) -> Option<&'a Value> {
+    value.pointer(pointer)
+}
+
 fn render_trigger_list(payload: &Value) -> CliResult<String> {
-    let triggers = payload["triggers"]
-        .as_array()
+    let triggers = json_pointer_array(payload, "/triggers")
         .ok_or_else(|| "automation list payload missing triggers".to_owned())?;
     if triggers.is_empty() {
         return Ok("No automation triggers found.".to_owned());
     }
     let mut lines = vec!["Automation triggers".to_owned(), String::new()];
     for trigger in triggers {
-        let id = trigger["trigger_id"].as_str().unwrap_or("unknown");
-        let name = trigger["name"].as_str().unwrap_or("unnamed");
-        let status = trigger["status"].as_str().unwrap_or("unknown");
-        let kind = trigger["source"]["type"].as_str().unwrap_or("unknown");
+        let id = json_pointer_str(trigger, "/trigger_id").unwrap_or("unknown");
+        let name = json_pointer_str(trigger, "/name").unwrap_or("unnamed");
+        let status = json_pointer_str(trigger, "/status").unwrap_or("unknown");
+        let kind = json_pointer_str(trigger, "/source/type").unwrap_or("unknown");
         lines.push(format!("- {id} [{status}] {kind} {name}"));
     }
     Ok(lines.join("\n"))
 }
 
 fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
-    let id = trigger["trigger_id"]
-        .as_str()
+    let id = json_pointer_str(trigger, "/trigger_id")
         .ok_or_else(|| "automation trigger missing trigger_id".to_owned())?;
-    let name = trigger["name"].as_str().unwrap_or("unnamed");
-    let status = trigger["status"].as_str().unwrap_or("unknown");
-    let source_kind = trigger["source"]["type"].as_str().unwrap_or("unknown");
+    let name = json_pointer_str(trigger, "/name").unwrap_or("unnamed");
+    let status = json_pointer_str(trigger, "/status").unwrap_or("unknown");
+    let source_kind = json_pointer_str(trigger, "/source/type").unwrap_or("unknown");
     let mut lines = vec![
         format!("{name} ({id})"),
         format!("status: {status}"),
@@ -2149,78 +2189,62 @@ fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
 
     match source_kind {
         "schedule" => {
-            lines.push(format!(
-                "next_fire_at_ms: {}",
-                trigger["source"]["schedule"]["next_fire_at_ms"]
-                    .as_i64()
-                    .unwrap_or_default()
-            ));
-            if let Some(interval_ms) = trigger["source"]["schedule"]["interval_ms"].as_u64() {
+            let next_fire_at_ms =
+                json_pointer_i64(trigger, "/source/schedule/next_fire_at_ms").unwrap_or_default();
+            lines.push(format!("next_fire_at_ms: {next_fire_at_ms}"));
+            let interval_ms = json_pointer_u64(trigger, "/source/schedule/interval_ms");
+            if let Some(interval_ms) = interval_ms {
                 lines.push(format!("interval_ms: {interval_ms}"));
             } else {
                 lines.push("interval_ms: none".to_owned());
             }
         }
         "event" => {
-            lines.push(format!(
-                "event: {}",
-                trigger["source"]["event"]["event_name"]
-                    .as_str()
-                    .unwrap_or("unknown")
-            ));
-            if let Some(pointer) = trigger["source"]["event"]["json_pointer"].as_str() {
+            let event_name =
+                json_pointer_str(trigger, "/source/event/event_name").unwrap_or("unknown");
+            lines.push(format!("event: {event_name}"));
+            let json_pointer = json_pointer_str(trigger, "/source/event/json_pointer");
+            if let Some(pointer) = json_pointer {
                 lines.push(format!("json_pointer: {pointer}"));
             }
-            if !trigger["source"]["event"]["equals_json"].is_null() {
-                lines.push(format!(
-                    "equals_json: {}",
-                    trigger["source"]["event"]["equals_json"]
-                ));
+            let equals_json = json_pointer_value(trigger, "/source/event/equals_json");
+            if let Some(equals_json) = equals_json
+                && !equals_json.is_null()
+            {
+                lines.push(format!("equals_json: {equals_json}"));
             }
-            if let Some(contains_text) = trigger["source"]["event"]["contains_text"].as_str() {
+            let contains_text = json_pointer_str(trigger, "/source/event/contains_text");
+            if let Some(contains_text) = contains_text {
                 lines.push(format!("contains_text: {contains_text}"));
             }
         }
         "cron" => {
-            lines.push(format!(
-                "cron: {}",
-                trigger["source"]["cron"]["expression"]
-                    .as_str()
-                    .unwrap_or("unknown")
-            ));
-            lines.push(format!(
-                "next_fire_at_ms: {}",
-                trigger["source"]["cron"]["next_fire_at_ms"]
-                    .as_i64()
-                    .unwrap_or_default()
-            ));
+            let expression =
+                json_pointer_str(trigger, "/source/cron/expression").unwrap_or("unknown");
+            lines.push(format!("cron: {expression}"));
+            let next_fire_at_ms =
+                json_pointer_i64(trigger, "/source/cron/next_fire_at_ms").unwrap_or_default();
+            lines.push(format!("next_fire_at_ms: {next_fire_at_ms}"));
         }
         _ => {}
     }
 
-    lines.push(format!(
-        "session: {}",
-        trigger["action"]["background_task"]["session"]
-            .as_str()
-            .unwrap_or("unknown")
-    ));
-    lines.push(format!(
-        "task: {}",
-        trigger["action"]["background_task"]["task"]
-            .as_str()
-            .unwrap_or("")
-    ));
-    if let Some(label) = trigger["action"]["background_task"]["label"].as_str() {
+    let session = json_pointer_str(trigger, "/action/background_task/session").unwrap_or("unknown");
+    lines.push(format!("session: {session}"));
+    let task = json_pointer_str(trigger, "/action/background_task/task").unwrap_or("");
+    lines.push(format!("task: {task}"));
+    let label = json_pointer_str(trigger, "/action/background_task/label");
+    if let Some(label) = label {
         lines.push(format!("label: {label}"));
     }
-    if let Some(timeout_seconds) = trigger["action"]["background_task"]["timeout_seconds"].as_u64()
-    {
+    let timeout_seconds = json_pointer_u64(trigger, "/action/background_task/timeout_seconds");
+    if let Some(timeout_seconds) = timeout_seconds {
         lines.push(format!("timeout_seconds: {timeout_seconds}"));
     }
-    if let Some(last_fired_at_ms) = trigger["last_fired_at_ms"].as_i64() {
+    if let Some(last_fired_at_ms) = json_pointer_i64(trigger, "/last_fired_at_ms") {
         lines.push(format!("last_fired_at_ms: {last_fired_at_ms}"));
     }
-    if let Some(last_task_id) = trigger["last_task_id"].as_str() {
+    if let Some(last_task_id) = json_pointer_str(trigger, "/last_task_id") {
         lines.push(format!("last_task_id: {last_task_id}"));
     }
     if let Some(last_error) = trigger["last_error"].as_str() {

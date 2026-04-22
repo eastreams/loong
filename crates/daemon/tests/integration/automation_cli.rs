@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing)]
+
 use super::*;
 use loong_app::internal_events::append_internal_event_to_journal;
 use rusqlite::params;
@@ -5,20 +7,18 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::OnceLock,
     sync::atomic::{AtomicUsize, Ordering},
-    sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-fn automation_integration_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+fn automation_integration_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-fn lock_automation_integration() -> std::sync::MutexGuard<'static, ()> {
-    automation_integration_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+async fn lock_automation_integration() -> tokio::sync::MutexGuard<'static, ()> {
+    automation_integration_lock().lock().await
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -228,7 +228,7 @@ fn parse_cursor_line_cursor(raw: &str) -> Option<String> {
 
 #[tokio::test]
 async fn automation_cli_show_loads_legacy_store_without_run_history() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-cli-legacy-store");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -308,7 +308,7 @@ async fn automation_cli_show_loads_legacy_store_without_run_history() {
 
 #[tokio::test]
 async fn automation_journal_inspect_surfaces_layout_and_cursor() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-inspect");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -383,7 +383,7 @@ async fn automation_journal_inspect_surfaces_layout_and_cursor() {
 
 #[tokio::test]
 async fn automation_journal_health_reports_state_marker_drift_and_missing_cursor_segment() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-health");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -472,7 +472,7 @@ async fn automation_journal_health_reports_state_marker_drift_and_missing_cursor
 
 #[tokio::test]
 async fn automation_journal_rotate_updates_active_segment_for_future_appends() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-rotate");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -543,7 +543,7 @@ async fn automation_journal_rotate_updates_active_segment_for_future_appends() {
 
 #[tokio::test]
 async fn automation_journal_prune_uses_current_cursor_segment_as_floor() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-prune");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -633,7 +633,7 @@ async fn automation_journal_prune_uses_current_cursor_segment_as_floor() {
 
 #[tokio::test]
 async fn automation_journal_repair_reconciles_state_and_reports_updated_layout() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-repair");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -715,7 +715,7 @@ async fn automation_journal_repair_reconciles_state_and_reports_updated_layout()
 
 #[tokio::test]
 async fn automation_runner_inspect_reports_active_owner_status() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-runner-inspect");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -783,7 +783,7 @@ async fn automation_runner_inspect_reports_active_owner_status() {
 
 #[tokio::test]
 async fn automation_runner_stop_requests_shutdown_for_running_owner() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-runner-stop");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -902,7 +902,7 @@ fn seed_overdue_background_task(config_path: &Path, root_session_id: &str, task_
 
 #[tokio::test]
 async fn automation_cli_emit_matches_event_trigger_and_queues_background_task() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-cli-emit");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1012,7 +1012,7 @@ async fn automation_cli_emit_matches_event_trigger_and_queues_background_task() 
 
 #[tokio::test]
 async fn work_unit_create_emits_automation_event_and_queues_background_task() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-work-unit-automation");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1129,7 +1129,7 @@ async fn work_unit_create_emits_automation_event_and_queues_background_task() {
 
 #[tokio::test]
 async fn work_unit_create_can_filter_on_app_layer_source_surface_metadata() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-work-unit-source-surface");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1224,7 +1224,7 @@ async fn work_unit_create_can_filter_on_app_layer_source_surface_metadata() {
 
 #[tokio::test]
 async fn automation_cli_create_cron_persists_next_fire_cursor() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-cli-cron");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1302,7 +1302,7 @@ async fn automation_cli_create_cron_persists_next_fire_cursor() {
 
 #[tokio::test]
 async fn automation_cli_event_filter_exists_and_contains_text_gate_delivery() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-cli-filter");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1459,7 +1459,7 @@ async fn automation_cli_event_filter_exists_and_contains_text_gate_delivery() {
 
 #[tokio::test]
 async fn background_task_cancel_emits_automation_event_and_queues_followup() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-background-task-cancel-automation");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1558,7 +1558,7 @@ async fn background_task_cancel_emits_automation_event_and_queues_followup() {
 
 #[tokio::test]
 async fn background_task_cancel_can_filter_on_internal_source_surface_metadata() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-background-task-cancel-source-surface");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1635,7 +1635,7 @@ async fn background_task_cancel_can_filter_on_internal_source_surface_metadata()
 
 #[tokio::test]
 async fn background_task_recover_emits_automation_event_and_queues_followup() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-background-task-recover-automation");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1719,7 +1719,7 @@ async fn background_task_recover_emits_automation_event_and_queues_followup() {
 
 #[tokio::test]
 async fn session_cancel_emits_automation_event_and_queues_followup() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-session-cancel-automation");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1801,7 +1801,7 @@ async fn session_cancel_emits_automation_event_and_queues_followup() {
 
 #[tokio::test]
 async fn session_cancel_can_filter_on_app_layer_source_surface_metadata() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-session-source-surface");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1866,7 +1866,7 @@ async fn session_cancel_can_filter_on_app_layer_source_surface_metadata() {
 
 #[tokio::test]
 async fn session_archive_emits_automation_event_and_queues_followup() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-session-archive-automation");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -1967,7 +1967,7 @@ async fn session_archive_emits_automation_event_and_queues_followup() {
 
 #[tokio::test]
 async fn session_recover_emits_automation_event_and_queues_followup() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = super::tasks_cli::TempDirGuard::new("loong-session-recover-automation");
     let config_path = super::tasks_cli::write_tasks_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -2044,7 +2044,7 @@ async fn session_recover_emits_automation_event_and_queues_followup() {
 
 #[tokio::test]
 async fn automation_serve_processes_internal_journal_once_and_advances_cursor() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-cursor");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -2147,7 +2147,7 @@ async fn automation_serve_processes_internal_journal_once_and_advances_cursor() 
 
 #[tokio::test]
 async fn automation_serve_migrates_legacy_numeric_cursor_without_replaying_consumed_rows() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-legacy-cursor");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -2246,7 +2246,7 @@ async fn automation_serve_migrates_legacy_numeric_cursor_without_replaying_consu
 
 #[tokio::test]
 async fn automation_serve_matches_internal_journal_source_surface_metadata() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-source-surface");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -2361,7 +2361,7 @@ async fn automation_serve_matches_internal_journal_source_surface_metadata() {
 
 #[tokio::test]
 async fn automation_serve_recovers_after_internal_journal_rotation_and_processes_new_rows_once() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-journal-rotation");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -2489,7 +2489,7 @@ async fn automation_serve_recovers_after_internal_journal_rotation_and_processes
 
 #[tokio::test]
 async fn automation_serve_processes_segment_rollover_once_without_skipping_or_replaying() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-segment-rollover");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
@@ -2618,7 +2618,7 @@ async fn automation_serve_processes_segment_rollover_once_without_skipping_or_re
 
 #[tokio::test]
 async fn automation_serve_missing_segment_cursor_skips_older_surviving_segment() {
-    let guard = lock_automation_integration();
+    let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-missing-segment-cursor");
     let config_path = write_automation_config(root.path());
     let loong_home = root.path().join("loong-home");
