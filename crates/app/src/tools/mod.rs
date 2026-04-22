@@ -421,6 +421,7 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "tasks_list"
         | "sessions_history"
         | "task_history"
+        | "task_events"
         | "session_tool_policy_status"
         | "session_tool_policy_set"
         | "session_tool_policy_clear"
@@ -654,6 +655,7 @@ fn required_capabilities_for_tool_name_and_payload(
         | "task_status"
         | "task_wait"
         | "task_history"
+        | "task_events"
         | "session_search"
         | "session_tool_policy_status" => {
             caps.insert(Capability::MemoryRead);

@@ -2124,7 +2124,10 @@ fn requested_file_tool_path(
 }
 
 fn task_scope_injection_required(tool_name: &str) -> bool {
-    matches!(tool_name, "task_status" | "task_wait" | "task_history")
+    matches!(
+        tool_name,
+        "task_status" | "task_wait" | "task_history" | "task_events"
+    )
 }
 
 fn inject_task_scope_field(payload: serde_json::Value, task_id: &str) -> serde_json::Value {
@@ -7170,6 +7173,54 @@ mod tests {
 
         let augmented = augment_tool_payload_for_kernel(
             "task_wait",
+            json!({}),
+            &session_context,
+            &memory_config,
+        );
+
+        assert_eq!(augmented.payload["task_id"], "task-root");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn augment_tool_payload_injects_canonical_task_id_for_task_events() {
+        let memory_config = isolated_memory_config("task-events-tool-scope");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: None,
+            state: SessionState::Running,
+        })
+        .expect("create session");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-root".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Waiting,
+                    intent_summary: None,
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 123,
+                },
+            ),
+        })
+        .expect("append task progress");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["task_events"]),
+        );
+
+        let augmented = augment_tool_payload_for_kernel(
+            "task_events",
             json!({}),
             &session_context,
             &memory_config,

@@ -355,6 +355,38 @@ pub(super) fn task_history_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+pub(super) fn task_events_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Durable task identifier to inspect."
+                    },
+                    "after_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Optional global event id cursor; when present only newer task events are returned."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Maximum task event rows to return across the visible task lineage."
+                    }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 pub(super) fn tasks_list_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
