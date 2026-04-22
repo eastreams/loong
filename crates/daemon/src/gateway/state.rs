@@ -798,6 +798,12 @@ fn sync_parent_dir(path: &Path, context: &str) -> CliResult<()> {
         return Ok(());
     }
 
+    #[cfg(windows)]
+    {
+        let _ = (path, context, parent);
+        return Ok(());
+    }
+
     let dir = fs::File::open(parent).map_err(|error| {
         format!(
             "open {context} parent directory failed for {}: {error}",
