@@ -1923,7 +1923,7 @@ async fn session_list(
         let Some(repository_view) = state.repository_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "session/list requires control-plane-serve --config <path>",
+                "session/list requires runtime control-plane serve --config <path>",
             );
         };
         match repository_view.list_sessions(
@@ -1967,7 +1967,7 @@ async fn session_read(
         let Some(repository_view) = state.repository_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "session/read requires control-plane-serve --config <path>",
+                "session/read requires runtime control-plane serve --config <path>",
             );
         };
         match repository_view.read_session(
@@ -2021,7 +2021,7 @@ async fn task_list(
         let Some(repository_view) = state.repository_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "task/list requires control-plane-serve --config <path>",
+                "task/list requires runtime control-plane serve --config <path>",
             );
         };
         let limit = query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT);
@@ -2066,7 +2066,7 @@ async fn task_read(
         let Some(repository_view) = state.repository_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "task/read requires control-plane-serve --config <path>",
+                "task/read requires runtime control-plane serve --config <path>",
             );
         };
         match repository_view.read_background_task(&query.task_id) {
@@ -2114,7 +2114,7 @@ async fn approval_list(
         let Some(repository_view) = state.repository_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "approval/list requires control-plane-serve --config <path>",
+                "approval/list requires runtime control-plane serve --config <path>",
             );
         };
         let status = match query.status.as_deref() {
@@ -2243,7 +2243,7 @@ async fn acp_session_list(
         let Some(acp_view) = state.acp_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "acp/session/list requires control-plane-serve --config <path>",
+                "acp/session/list requires runtime control-plane serve --config <path>",
             );
         };
         match acp_view.list_sessions(query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT)) {
@@ -2285,7 +2285,7 @@ async fn acp_session_read(
         let Some(acp_view) = state.acp_view.as_ref() else {
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "acp/session/read requires control-plane-serve --config <path>",
+                "acp/session/read requires runtime control-plane serve --config <path>",
             );
         };
         match acp_view.read_session(&query.session_key).await {
@@ -2322,7 +2322,7 @@ async fn turn_submit(
     let Some(turn_runtime) = state.turn_runtime.as_ref() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "turn/submit requires control-plane-serve --config <path>",
+            "turn/submit requires runtime control-plane serve --config <path>",
         );
     };
 
@@ -2456,7 +2456,7 @@ async fn turn_result(
     let Some(turn_runtime) = state.turn_runtime.as_ref() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "turn/result requires control-plane-serve --config <path>",
+            "turn/result requires runtime control-plane serve --config <path>",
         );
     };
 
@@ -2492,7 +2492,7 @@ async fn turn_stream(
     let Some(turn_runtime) = state.turn_runtime.as_ref() else {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "turn/stream requires control-plane-serve --config <path>",
+            "turn/stream requires runtime control-plane serve --config <path>",
         );
     };
 
@@ -2666,7 +2666,7 @@ pub async fn run_control_plane_serve_cli(
     // turn execution and repository-backed views only come online when a
     // concrete config is available to seed runtime state.
     if current_session_id.is_some() && config_path.is_none() {
-        return Err("control-plane-serve --session requires --config".to_owned());
+        return Err("runtime control-plane serve --session requires --config".to_owned());
     }
     let bind_addr = resolve_control_plane_bind_addr(bind_override, port)?;
     let loaded_config = match config_path {

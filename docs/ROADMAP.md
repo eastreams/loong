@@ -464,7 +464,7 @@ reader-facing docs flow until their public contracts are ready.
     `gateway run`, `gateway status`, and `gateway stop`, while keeping
     `channels serve` as the durable operator surface instead of carrying a
     compatibility-only runtime-owner noun at the root
-  - extract channel, ACP, and runtime-snapshot payload builders into shared
+  - extract channel, ACP, and runtime snapshot payload builders into shared
     service read models that can feed CLI, dashboard, Web UI, and future
     paired/browser/mobile clients
   - centralize bind ownership, route mounting, local admin auth, pairing, and
@@ -592,7 +592,7 @@ Current baseline:
 
 - a real ACP control plane
 - a durable session repository
-- operator-facing `onboard`, `doctor`, `acp-status`, and observability surfaces
+- operator-facing `onboard`, `doctor`, `runtime acp status`, and observability surfaces
 
 Missing contract:
 
