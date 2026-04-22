@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 
 use std::{
@@ -43,6 +45,10 @@ type BoxedShutdownFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send
 const GATEWAY_TURN_TEST_TIMEOUT: Duration = Duration::from_secs(2);
 const GATEWAY_CONTROL_SURFACE_WAIT_ATTEMPTS: usize = 400;
 const GATEWAY_CONTROL_SURFACE_WAIT_INTERVAL: Duration = Duration::from_millis(10);
+
+fn gateway_control_surface_test_lock() -> MutexGuard<'static, ()> {
+    lock_gateway_control_surface_tests()
+}
 
 struct GatewayEchoBackend {
     id: &'static str,
@@ -338,6 +344,7 @@ async fn gateway_turn_accepts_structured_session_scope_before_backend_check() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_run_turn_persists_acp_session_metadata_into_configured_sqlite_store() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let backend_id = register_gateway_echo_backend("gateway-turn");
     let sqlite_path = unique_sqlite_path("gateway-turn-store");
     let runtime_dir = super::unique_temp_dir("gateway-turn-runtime");
@@ -411,6 +418,7 @@ async fn gateway_run_turn_persists_acp_session_metadata_into_configured_sqlite_s
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let backend_id = register_gateway_echo_backend("gateway-acp-surface");
     let sqlite_path = unique_sqlite_path("gateway-acp-surface-store");
     let config_path = gateway_config_path(sqlite_path.as_path());

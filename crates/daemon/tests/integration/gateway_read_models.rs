@@ -484,6 +484,10 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         encoded["tools"]["tool_calling"]["structured_tool_schema_enabled"],
         true
     );
+    assert!(encoded["provider"]["transport_runtime"]["failover_total_events"].is_number());
+    assert!(encoded["provider"]["transport_runtime"]["failover_by_reason"].is_object());
+    assert!(encoded["provider"]["transport_runtime"]["failover_by_stage"].is_object());
+    assert!(encoded["provider"]["transport_runtime"]["failover_by_provider"].is_object());
     assert!(encoded["tools"]["web_access"]["ordinary_network_access_enabled"].is_boolean());
     assert!(encoded["tools"]["web_access"]["query_search_enabled"].is_boolean());
     assert!(encoded["tools"]["web_access"]["query_search_default_provider"].is_string());

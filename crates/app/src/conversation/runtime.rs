@@ -525,7 +525,8 @@ struct PersistedSessionSnapshot {
 
 #[cfg(feature = "memory-sqlite")]
 fn open_session_repository(config: &LoongConfig) -> CliResult<SessionRepository> {
-    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let memory_config =
+        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
     SessionRepository::new(&memory_config)
         .map_err(|error| format!("open session repository failed: {error}"))
 }
@@ -964,7 +965,8 @@ pub async fn execute_async_delegate_spawn_request(
         ));
     }
 
-    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let memory_config =
+        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
     let runtime = load_default_conversation_runtime(config)?;
     let runtime_ref = &runtime;
@@ -1042,6 +1044,7 @@ pub type BoxedDefaultConversationRuntime =
 #[derive(Clone)]
 pub struct HostedConversationRuntime<R> {
     inner: R,
+    memory_config: store::SessionStoreConfig,
     async_delegate_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
     background_task_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
 }
@@ -1049,8 +1052,14 @@ pub struct HostedConversationRuntime<R> {
 #[cfg(feature = "memory-sqlite")]
 impl<R> HostedConversationRuntime<R> {
     pub fn new(inner: R) -> Self {
+        let memory_config = store::current_session_store_config().clone();
+        Self::new_with_memory_config(inner, memory_config)
+    }
+
+    pub fn new_with_memory_config(inner: R, memory_config: store::SessionStoreConfig) -> Self {
         Self {
             inner,
+            memory_config,
             async_delegate_spawner_override: None,
             background_task_spawner_override: None,
         }
@@ -1510,7 +1519,9 @@ pub fn load_hosted_default_conversation_runtime(
     config: &LoongConfig,
 ) -> CliResult<HostedConversationRuntime<BoxedDefaultConversationRuntime>> {
     let inner_runtime = load_default_conversation_runtime(config)?;
-    let runtime = HostedConversationRuntime::new(inner_runtime);
+    let memory_config =
+        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
+    let runtime = HostedConversationRuntime::new_with_memory_config(inner_runtime, memory_config);
     Ok(runtime)
 }
 
@@ -1868,9 +1879,17 @@ where
         content: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<()> {
-        self.inner
-            .persist_turn(session_id, role, content, binding)
-            .await
+        if binding.kernel_context().is_some() {
+            return self
+                .inner
+                .persist_turn(session_id, role, content, binding)
+                .await;
+        }
+
+        store::append_session_turn_direct(session_id, role, content, &self.memory_config)
+            .map_err(|error| format!("persist {role} turn failed: {error}"))?;
+
+        Ok(())
     }
 
     async fn after_turn(
@@ -2742,6 +2761,48 @@ mod tests {
 
         assert!(async_delegate_spawner.is_some());
         assert!(background_task_spawner.is_none());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_direct_binding() {
+        let root = unique_temp_dir("hosted-runtime-explicit-memory");
+        let sqlite_path = root.join("explicit-memory.db");
+        let memory_config =
+            crate::session::store::SessionStoreConfig::for_sqlite_path(sqlite_path.clone());
+        let session_id = "hosted-runtime-explicit-session";
+        let runtime = HostedConversationRuntime::new_with_memory_config(
+            SpawnerAwareRuntime {
+                async_delegate_spawner: None,
+                background_task_spawner: None,
+            },
+            memory_config.clone(),
+        );
+
+        crate::session::store::ensure_session_store_ready(Some(sqlite_path), &memory_config)
+            .expect("initialize explicit session store");
+
+        runtime
+            .persist_turn(
+                session_id,
+                "assistant",
+                "persist via explicit memory config",
+                ConversationRuntimeBinding::Direct,
+            )
+            .await
+            .expect("persist hosted runtime turn");
+
+        let turns = crate::session::store::window_session_turns(session_id, 8, &memory_config)
+            .expect("load persisted turns");
+        let persisted_turn = turns
+            .iter()
+            .find(|turn| {
+                turn.role == "assistant" && turn.content == "persist via explicit memory config"
+            })
+            .expect("persisted assistant turn");
+
+        assert_eq!(persisted_turn.role, "assistant");
+        assert_eq!(persisted_turn.content, "persist via explicit memory config");
     }
 
     #[tokio::test]

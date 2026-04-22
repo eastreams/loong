@@ -21,13 +21,14 @@ use super::{
     },
     failover::{
         ModelRequestError, ProviderFailoverReason, ProviderFailoverStage,
-        build_model_request_error, build_model_request_error_with_rate_limit,
+        build_model_request_error, build_model_request_error_with_context_and_rate_limit,
     },
     policy,
     request_planner::{
         ModelRequestStatusPlan, classify_model_status_failure_reason_with_capability,
         plan_model_request_status_with_capability, plan_transport_error_retry,
     },
+    response_debug_context::extract_provider_response_debug_context,
     transport,
     transport_trait::{ProviderTransport, TransportEventStream, TransportStream},
 };
@@ -315,6 +316,8 @@ where
                 let response_headers = response.headers;
                 let response_body = response.body;
                 let response_rate_limit = response.rate_limit;
+                let response_debug_context =
+                    extract_provider_response_debug_context(&response_headers, &response_body);
 
                 if status.is_success() {
                     let parsed = parse_success(&response_body).ok_or_else(|| {
@@ -384,7 +387,7 @@ where
                         continue;
                     }
                     ModelStatusOutcome::TryNextModel => {
-                        return Err(build_model_request_error(
+                        return Err(build_model_request_error_with_context_and_rate_limit(
                             format!(
                                 "model `{}` rejected by provider endpoint; trying next candidate. status {status_code}: {response_body}",
                                 runtime.model
@@ -397,10 +400,12 @@ where
                             runtime.request_policy.max_attempts,
                             Some(status_code),
                             Some(api_error.clone()),
+                            None,
+                            response_debug_context.clone(),
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error_with_rate_limit(
+                        return Err(build_model_request_error_with_context_and_rate_limit(
                             render_status_failure_message(
                                 runtime.provider,
                                 reason,
@@ -419,6 +424,7 @@ where
                             Some(status_code),
                             Some(api_error.clone()),
                             response_rate_limit,
+                            response_debug_context.clone(),
                         ));
                     }
                 }
@@ -621,6 +627,8 @@ where
                 let response_headers = response.headers;
                 let response_body = response.body;
                 let response_rate_limit = response.rate_limit;
+                let response_debug_context =
+                    extract_provider_response_debug_context(&response_headers, &response_body);
 
                 let api_error = parse_provider_api_error(&response_body);
                 if let Some(next_mode) = adapt_payload_mode_for_error(
@@ -666,7 +674,7 @@ where
                         continue;
                     }
                     ModelStatusOutcome::TryNextModel => {
-                        return Err(build_model_request_error(
+                        return Err(build_model_request_error_with_context_and_rate_limit(
                             format!(
                                 "model `{}` rejected by provider endpoint; trying next candidate. status {status_code}: {response_body}",
                                 runtime.model
@@ -679,10 +687,12 @@ where
                             runtime.request_policy.max_attempts,
                             Some(status_code),
                             Some(api_error.clone()),
+                            None,
+                            response_debug_context.clone(),
                         ));
                     }
                     ModelStatusOutcome::Fail { reason } => {
-                        return Err(build_model_request_error_with_rate_limit(
+                        return Err(build_model_request_error_with_context_and_rate_limit(
                             render_status_failure_message(
                                 runtime.provider,
                                 reason,
@@ -701,6 +711,7 @@ where
                             Some(status_code),
                             Some(api_error.clone()),
                             response_rate_limit,
+                            response_debug_context.clone(),
                         ));
                     }
                 }

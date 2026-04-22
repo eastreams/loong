@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 
 use std::{
@@ -33,6 +35,12 @@ type TestBackgroundChannelRunner =
     Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static>;
 
 const GATEWAY_OWNER_TEST_TIMEOUT: Duration = Duration::from_secs(2);
+const GATEWAY_OWNER_WAIT_ATTEMPTS: usize = 400;
+const GATEWAY_OWNER_WAIT_INTERVAL: Duration = Duration::from_millis(10);
+
+fn gateway_control_surface_test_lock() -> MutexGuard<'static, ()> {
+    lock_gateway_control_surface_tests()
+}
 
 fn boxed_cli_result(f: impl Future<Output = CliResult<()>> + Send + 'static) -> BoxedCliFuture {
     Box::pin(f)
@@ -117,11 +125,11 @@ fn background_channel_runner_registry(
 }
 
 async fn wait_until(description: &str, predicate: impl Fn() -> bool) {
-    for _ in 0..200 {
+    for _ in 0..GATEWAY_OWNER_WAIT_ATTEMPTS {
         if predicate() {
             return;
         }
-        sleep(Duration::from_millis(5)).await;
+        sleep(GATEWAY_OWNER_WAIT_INTERVAL).await;
     }
 
     panic!("timed out waiting for {description}");
@@ -149,6 +157,7 @@ async fn wait_for_gateway_control_surface(
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("headless-stop");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -213,6 +222,7 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_rejects_second_active_owner_slot() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("exclusive-slot");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -286,6 +296,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("duplicate-start-pending-stop");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -362,6 +373,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_session() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("compat-wrapper");
     let telegram_runner = idle_background_channel_runner();
     let background_channel_runners = background_channel_runner_registry(vec![(
@@ -427,6 +439,7 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
 #[allow(clippy::await_holding_lock)]
 async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_runtime() {
     let _lock = lock_daemon_test_environment();
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("localhost-control");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -722,6 +735,7 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("turn-policy-disabled");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -794,6 +808,7 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stops_runtime() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("local-client");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -902,6 +917,7 @@ async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stop
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plugin_backed_parity()
 {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("plugin-backed-parity");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({

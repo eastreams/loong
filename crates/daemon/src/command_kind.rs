@@ -26,6 +26,7 @@ impl Commands {
             Self::Import { .. } => "import",
             Self::Migrate { .. } => "migrate",
             Self::Doctor { .. } => "doctor",
+            Self::Debug { .. } => "debug",
             Self::Audit { .. } => "audit",
             Self::Skills { .. } => "skills",
             Self::Status { .. } => "status",
@@ -70,6 +71,24 @@ mod tests {
             }
             .command_kind_for_logging(),
             "status"
+        );
+        assert_eq!(
+            Commands::Debug {
+                config: None,
+                json: false,
+                session: "default".to_owned(),
+                command: crate::debug_cli::DebugCommands::Bundle {
+                    session_id: None,
+                    output: None,
+                    audit_limit: 10,
+                    session_event_limit: 10,
+                    history_limit: 10,
+                    acp_event_limit: 50,
+                    include_history: false,
+                },
+            }
+            .command_kind_for_logging(),
+            "debug"
         );
         assert_eq!(
             Commands::Runtime {

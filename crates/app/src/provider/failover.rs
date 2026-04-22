@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use super::contracts::ProviderApiError;
 use super::rate_limit::RateLimitObservation;
+use super::response_debug_context::ProviderResponseDebugContext;
 
 const PROVIDER_FAILOVER_MARKER: &str = "provider_failover=";
 
@@ -89,6 +90,7 @@ pub(super) struct ProviderFailoverSnapshot {
     pub(super) attempt: usize,
     pub(super) max_attempts: usize,
     pub(super) status_code: Option<u16>,
+    pub(super) response_debug_context: Option<ProviderResponseDebugContext>,
 }
 
 impl ProviderFailoverSnapshot {
@@ -101,6 +103,20 @@ impl ProviderFailoverSnapshot {
         payload.insert("max_attempts".to_owned(), json!(self.max_attempts));
         if let Some(status_code) = self.status_code {
             payload.insert("status_code".to_owned(), json!(status_code));
+        }
+        if let Some(context) = &self.response_debug_context {
+            if let Some(request_id) = &context.request_id {
+                payload.insert("request_id".to_owned(), json!(request_id));
+            }
+            if let Some(cf_ray) = &context.cf_ray {
+                payload.insert("cf_ray".to_owned(), json!(cf_ray));
+            }
+            if let Some(auth_error) = &context.auth_error {
+                payload.insert("auth_error".to_owned(), json!(auth_error));
+            }
+            if let Some(auth_error_code) = &context.auth_error_code {
+                payload.insert("auth_error_code".to_owned(), json!(auth_error_code));
+            }
         }
         Value::Object(payload)
     }
@@ -153,6 +169,34 @@ pub(super) fn build_model_request_error_with_rate_limit(
     api_error: Option<ProviderApiError>,
     rate_limit: Option<RateLimitObservation>,
 ) -> ModelRequestError {
+    build_model_request_error_with_context_and_rate_limit(
+        message,
+        try_next_model,
+        reason,
+        stage,
+        model,
+        attempt,
+        max_attempts,
+        status_code,
+        api_error,
+        rate_limit,
+        None,
+    )
+}
+
+pub(super) fn build_model_request_error_with_context_and_rate_limit(
+    message: String,
+    try_next_model: bool,
+    reason: ProviderFailoverReason,
+    stage: ProviderFailoverStage,
+    model: &str,
+    attempt: usize,
+    max_attempts: usize,
+    status_code: Option<u16>,
+    api_error: Option<ProviderApiError>,
+    rate_limit: Option<RateLimitObservation>,
+    response_debug_context: Option<ProviderResponseDebugContext>,
+) -> ModelRequestError {
     let snapshot = ProviderFailoverSnapshot {
         reason,
         stage,
@@ -160,6 +204,7 @@ pub(super) fn build_model_request_error_with_rate_limit(
         attempt,
         max_attempts,
         status_code,
+        response_debug_context,
     };
     let message = format!("{message} | provider_failover={}", snapshot.to_json_value());
     ModelRequestError {
@@ -180,17 +225,21 @@ pub fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
 
 fn validate_provider_failover_snapshot_payload(payload: Value) -> Option<Value> {
     let payload_object = payload.as_object()?;
-    let payload_has_status_code = payload_object.contains_key("status_code");
-    let expected_key_count = if payload_has_status_code { 6 } else { 5 };
     let has_only_known_keys = payload_object.keys().all(|key| {
         matches!(
             key.as_str(),
-            "reason" | "stage" | "model" | "attempt" | "max_attempts" | "status_code"
+            "reason"
+                | "stage"
+                | "model"
+                | "attempt"
+                | "max_attempts"
+                | "status_code"
+                | "request_id"
+                | "cf_ray"
+                | "auth_error"
+                | "auth_error_code"
         )
     });
-    if payload_object.len() != expected_key_count {
-        return None;
-    }
     if !has_only_known_keys {
         return None;
     }
@@ -215,6 +264,18 @@ fn validate_provider_failover_snapshot_payload(payload: Value) -> Option<Value> 
     let status_code_value = payload_object.get("status_code");
     if let Some(status_code_value) = status_code_value {
         let _status_code = status_code_value.as_u64()?;
+    }
+    if let Some(request_id) = payload_object.get("request_id") {
+        let _request_id = request_id.as_str()?;
+    }
+    if let Some(cf_ray) = payload_object.get("cf_ray") {
+        let _cf_ray = cf_ray.as_str()?;
+    }
+    if let Some(auth_error) = payload_object.get("auth_error") {
+        let _auth_error = auth_error.as_str()?;
+    }
+    if let Some(auth_error_code) = payload_object.get("auth_error_code") {
+        let _auth_error_code = auth_error_code.as_str()?;
     }
 
     Some(payload)
@@ -273,6 +334,7 @@ mod tests {
             attempt: 2,
             max_attempts: 4,
             status_code: None,
+            response_debug_context: None,
         };
         assert_eq!(
             snapshot.to_json_value(),
@@ -374,5 +436,21 @@ mod tests {
         let payload = parse_provider_failover_snapshot_payload(error);
 
         assert!(payload.is_none());
+    }
+
+    #[test]
+    fn parse_provider_failover_snapshot_payload_accepts_response_debug_context() {
+        let error = concat!(
+            "provider request failed | provider_failover=",
+            "{\"reason\":\"auth_rejected\",\"stage\":\"status_failure\",\"model\":\"openai/gpt-4o\",\"attempt\":1,\"max_attempts\":3,\"status_code\":401,\"request_id\":\"req-123\",\"cf_ray\":\"ray-123\",\"auth_error\":\"missing_authorization_header\",\"auth_error_code\":\"token_expired\"}",
+        );
+
+        let payload = parse_provider_failover_snapshot_payload(error)
+            .expect("provider failover suffix with debug context should parse");
+
+        assert_eq!(payload["request_id"], "req-123");
+        assert_eq!(payload["cf_ray"], "ray-123");
+        assert_eq!(payload["auth_error"], "missing_authorization_header");
+        assert_eq!(payload["auth_error_code"], "token_expired");
     }
 }

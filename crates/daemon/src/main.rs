@@ -430,6 +430,20 @@ async fn run_command(command: Commands) -> CliResult<()> {
             })
             .await
         }
+        Commands::Debug {
+            config,
+            json,
+            session,
+            command,
+        } => {
+            debug_cli::run_debug_cli(debug_cli::DebugCommandOptions {
+                config,
+                json,
+                session,
+                command,
+            })
+            .await
+        }
         Commands::Audit {
             config,
             json,

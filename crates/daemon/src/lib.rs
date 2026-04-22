@@ -131,6 +131,7 @@ mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
 mod copilot_onboarding;
+pub mod debug_cli;
 mod delegate_child_cli;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
@@ -786,6 +787,17 @@ pub enum Commands {
         skip_model_probe: bool,
         #[command(subcommand)]
         command: Option<doctor_cli::DoctorCommands>,
+    },
+    /// Build one developer-facing debug bundle over runtime, provider, ACP, session, and audit signals
+    Debug {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[arg(long, global = true, default_value = "default")]
+        session: String,
+        #[command(subcommand)]
+        command: debug_cli::DebugCommands,
     },
     /// Inspect the retained audit journal through a bounded CLI surface
     Audit {
@@ -2006,11 +2018,18 @@ fn collect_runtime_snapshot_provider_state(
     };
 
     let transport_metrics = mvp::provider::provider_http_client_runtime_metrics_snapshot();
+    let failover_metrics = mvp::provider::provider_failover_metrics_snapshot();
     let transport_runtime = RuntimeSnapshotProviderTransportState {
         http_client_cache_entries: transport_metrics.cache_entry_count,
         http_client_cache_hits: transport_metrics.cache_hit_count,
         http_client_cache_misses: transport_metrics.cache_miss_count,
         built_http_clients: transport_metrics.built_client_count,
+        failover_total_events: failover_metrics.total_events,
+        failover_continued_events: failover_metrics.continued_events,
+        failover_exhausted_events: failover_metrics.exhausted_events,
+        failover_by_reason: failover_metrics.by_reason,
+        failover_by_stage: failover_metrics.by_stage,
+        failover_by_provider: failover_metrics.by_provider,
     };
 
     RuntimeSnapshotProviderState {
