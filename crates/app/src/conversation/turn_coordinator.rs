@@ -144,13 +144,13 @@ use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
-    decide_provider_turn_request_action, effective_followup_tool_name,
+    compose_assistant_reply, decide_provider_turn_request_action, effective_followup_tool_name,
     effective_followup_visible_tool_name, format_approval_required_reply,
-    next_conversation_turn_id, reduce_followup_payload_for_model,
-    request_completion_with_raw_fallback, summarize_provider_lane_tool_request,
-    summarize_single_tool_followup_request, tool_driven_followup_payload,
-    tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
-    user_requested_raw_tool_output,
+    missing_tool_call_followup_payload, next_conversation_turn_id,
+    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
+    summarize_provider_lane_tool_request, summarize_single_tool_followup_request,
+    tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
+    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
 #[cfg(test)]
 use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
@@ -220,6 +220,7 @@ pub struct ConversationTurnCoordinator;
 
 const PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING: &str =
     "production conversation runtime requires kernel-bound execution";
+const MAX_MISSING_TOOL_CALL_RECOVERY_ROUNDS: usize = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextCompactionReport {
@@ -2935,6 +2936,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     let mut current_preparation = preparation.clone();
     let mut current_continue_phase = continue_phase.clone();
     let mut remaining_provider_rounds = remaining_provider_rounds.max(1);
+    let mut missing_tool_call_retry_count = 0usize;
     let mut provider_round_index = 0usize;
 
     loop {
@@ -2968,11 +2970,24 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     current_continue_phase.lane_execution.had_tool_intents,
                     &current_continue_phase.lane_execution.turn_result,
                 );
+                let missing_tool_call_followup = provider_turn_missing_tool_call_followup(
+                    &current_continue_phase.lane_execution,
+                    missing_tool_call_retry_count,
+                );
                 if let Some(reason) = current_continue_phase.hard_stop_reason() {
                     ReplyLoopDecision::GuardFollowup {
                         raw_reply: reply.clone(),
                         reason: reason.to_owned(),
                         latest_tool_payload,
+                    }
+                } else if let Some(payload) = missing_tool_call_followup {
+                    ReplyLoopDecision::Followup {
+                        raw_reply: reply.clone(),
+                        payload,
+                        requires_completion_pass: false,
+                        loop_warning_reason: current_continue_phase
+                            .loop_warning_reason()
+                            .map(ToOwned::to_owned),
                     }
                 } else if current_continue_phase
                     .lane_execution
@@ -3039,6 +3054,16 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 requires_completion_pass,
                 loop_warning_reason,
             } => {
+                let is_missing_tool_call_recovery = matches!(
+                    &followup,
+                    ToolDrivenFollowupPayload::ToolFailure { reason }
+                        if reason.starts_with("missing_tool_call_followup:")
+                );
+                if is_missing_tool_call_recovery {
+                    missing_tool_call_retry_count += 1;
+                } else if current_continue_phase.lane_execution.had_tool_intents {
+                    missing_tool_call_retry_count = 0;
+                }
                 let follow_up_messages = build_turn_reply_followup_messages_with_warning(
                     &current_preparation.session.messages,
                     current_continue_phase
@@ -5001,6 +5026,32 @@ fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> 
 
     contains_first || contains_then || contains_next || contains_after_that || contains_afterwards
 }
+
+fn provider_turn_missing_tool_call_followup(
+    lane_execution: &ProviderTurnLaneExecution,
+    missing_tool_call_retry_count: usize,
+) -> Option<ToolDrivenFollowupPayload> {
+    if !lane_execution.supports_provider_turn_followup {
+        return None;
+    }
+
+    if lane_execution.had_tool_intents {
+        return None;
+    }
+
+    if missing_tool_call_retry_count >= MAX_MISSING_TOOL_CALL_RECOVERY_ROUNDS {
+        return None;
+    }
+
+    let reply_text = compose_assistant_reply(
+        lane_execution.assistant_preface.as_str(),
+        lane_execution.had_tool_intents,
+        lane_execution.turn_result.clone(),
+    );
+
+    missing_tool_call_followup_payload(reply_text.as_str())
+}
+
 async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
@@ -8850,6 +8901,57 @@ mod tests {
         let fast_plan = ProviderTurnLanePlan::from_user_input(&config, "say hello");
         assert_eq!(fast_plan.decision.lane, ExecutionLane::Fast);
         assert!(!fast_plan.should_use_safe_lane_plan_path(&config, &tool_turn));
+    }
+
+    #[test]
+    fn provider_turn_missing_tool_call_followup_detects_pseudo_tool_reply() {
+        let lane_execution = ProviderTurnLaneExecution {
+            lane: ExecutionLane::Safe,
+            assistant_preface: "/tool.search:disk usage".to_owned(),
+            provider_usage: None,
+            had_tool_intents: false,
+            tool_request_summary: None,
+            discovery_search_turn: false,
+            search_tool_intents: 0,
+            supports_provider_turn_followup: true,
+            raw_tool_output_requested: false,
+            turn_result: TurnResult::FinalText("/tool.search:disk usage".to_owned()),
+            safe_lane_terminal_route: None,
+            tool_events: Vec::new(),
+        };
+
+        let payload =
+            provider_turn_missing_tool_call_followup(&lane_execution, 0).expect("repair followup");
+
+        let ToolDrivenFollowupPayload::ToolFailure { reason } = payload else {
+            panic!("expected tool failure payload");
+        };
+
+        assert!(reason.contains("missing_tool_call_followup:"));
+    }
+
+    #[test]
+    fn provider_turn_missing_tool_call_followup_ignores_normal_direct_answer() {
+        let lane_execution = ProviderTurnLaneExecution {
+            lane: ExecutionLane::Safe,
+            assistant_preface: "The cache directory is consuming most of the disk.".to_owned(),
+            provider_usage: None,
+            had_tool_intents: false,
+            tool_request_summary: None,
+            discovery_search_turn: false,
+            search_tool_intents: 0,
+            supports_provider_turn_followup: true,
+            raw_tool_output_requested: false,
+            turn_result: TurnResult::FinalText(
+                "The cache directory is consuming most of the disk.".to_owned(),
+            ),
+            safe_lane_terminal_route: None,
+            tool_events: Vec::new(),
+        };
+
+        let payload = provider_turn_missing_tool_call_followup(&lane_execution, 0);
+
+        assert!(payload.is_none());
     }
 
     #[test]

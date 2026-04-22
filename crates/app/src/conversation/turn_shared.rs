@@ -22,7 +22,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::CliResult;
 
-pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue solving the original user request. If more tool work is needed, emit the next tool call instead of only describing the plan in natural language. Only answer directly when the current evidence is already sufficient. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
@@ -30,6 +30,8 @@ pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call cou
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
+const MISSING_TOOL_CALL_REASON_PREFIX: &str = "missing_tool_call_followup:";
+const MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS: usize = 240;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_OMISSION_MARKER: &str = "\n[... omitted ...]\n";
 const THINK_OPEN_TAG: &str = "<think>";
@@ -94,6 +96,136 @@ fn sanitize_reply_text(text: &str) -> String {
     let trimmed_text = stripped_text.trim();
     trimmed_text.to_owned()
 }
+
+pub fn missing_tool_call_followup_payload(reply_text: &str) -> Option<ToolDrivenFollowupPayload> {
+    let sanitized_reply = sanitize_reply_text(reply_text);
+    let detection_kind = detect_missing_tool_call_kind(sanitized_reply.as_str())?;
+    let excerpt = truncated_missing_tool_call_excerpt(sanitized_reply.as_str());
+    let reason = match detection_kind {
+        MissingToolCallKind::PseudoToolCommand => format!(
+            "{MISSING_TOOL_CALL_REASON_PREFIX} previous assistant reply emitted pseudo-tool text instead of a real tool call. If another tool is required, emit the exact next tool call now instead of formatting it as plain text.\nReply excerpt:\n{excerpt}"
+        ),
+        MissingToolCallKind::NarratedToolPlan => format!(
+            "{MISSING_TOOL_CALL_REASON_PREFIX} previous assistant reply described another tool step in prose but did not emit the tool call. If another tool is required, emit the exact next tool call now instead of narrating the plan.\nReply excerpt:\n{excerpt}"
+        ),
+    };
+
+    Some(ToolDrivenFollowupPayload::ToolFailure { reason })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingToolCallKind {
+    PseudoToolCommand,
+    NarratedToolPlan,
+}
+
+fn detect_missing_tool_call_kind(reply_text: &str) -> Option<MissingToolCallKind> {
+    let normalized_reply = reply_text.trim();
+    if normalized_reply.is_empty() {
+        return None;
+    }
+
+    let has_pseudo_tool_command = normalized_reply
+        .lines()
+        .map(str::trim)
+        .any(line_looks_like_pseudo_tool_command);
+    if has_pseudo_tool_command {
+        return Some(MissingToolCallKind::PseudoToolCommand);
+    }
+
+    let normalized_reply = normalized_reply.to_ascii_lowercase();
+    let has_tool_marker = missing_tool_call_tool_markers()
+        .iter()
+        .any(|marker| normalized_reply.contains(marker));
+    if !has_tool_marker {
+        return None;
+    }
+
+    let has_intent_phrase = missing_tool_call_intent_phrases()
+        .iter()
+        .any(|phrase| normalized_reply.contains(phrase));
+    if !has_intent_phrase {
+        return None;
+    }
+
+    Some(MissingToolCallKind::NarratedToolPlan)
+}
+
+fn line_looks_like_pseudo_tool_command(line: &str) -> bool {
+    let Some(trimmed_line) = line.strip_prefix('/') else {
+        return false;
+    };
+    let Some((surface, remainder)) = trimmed_line.split_once(':') else {
+        return false;
+    };
+    let has_surface = !surface.trim().is_empty();
+    let has_remainder = !remainder.trim().is_empty();
+    let surface_is_tool_like = surface
+        .chars()
+        .all(|character| character.is_ascii_lowercase() || ".-_".contains(character));
+
+    has_surface && has_remainder && surface_is_tool_like
+}
+
+fn missing_tool_call_tool_markers() -> &'static [&'static str] {
+    &[
+        "tool.search",
+        "tool_search",
+        "tool.invoke",
+        "tool_invoke",
+        "shell.exec",
+        "bash.exec",
+        "file.read",
+        "file.write",
+        "file.edit",
+        "`read`",
+        "`edit`",
+        "`write`",
+        "`bash`",
+        "`exec`",
+        "`web`",
+        "`browser`",
+        "`memory`",
+    ]
+}
+
+fn missing_tool_call_intent_phrases() -> &'static [&'static str] {
+    &[
+        "i will ",
+        "i'll ",
+        "let me ",
+        "i need to ",
+        "i should ",
+        "i can try ",
+        "i can use ",
+        "next i ",
+        "then i ",
+        "after that i ",
+        "retry with ",
+        "rerun with ",
+        "call ",
+        "invoke ",
+        "use ",
+    ]
+}
+
+fn truncated_missing_tool_call_excerpt(reply_text: &str) -> String {
+    let total_chars = reply_text.chars().count();
+    if total_chars <= MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS {
+        return reply_text.to_owned();
+    }
+
+    let truncated_reply = reply_text
+        .chars()
+        .take(MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS)
+        .collect::<String>();
+
+    format!(
+        "{truncated_reply}\n[reply_excerpt_truncated] omitted_chars={}",
+        total_chars - MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS
+    )
+}
+
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -3283,6 +3415,7 @@ mod tests {
             None,
         );
         assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
+        assert!(prompt.contains("emit the next tool call"));
         assert!(prompt.contains("Original request:\nsummarize this result"));
     }
 
@@ -3333,6 +3466,45 @@ mod tests {
 
         assert!(prompt.contains(DISCOVERY_RESULT_FOLLOWUP_PROMPT));
         assert!(prompt.contains("Original request:\nfind the latest ai news and summarize it"));
+    }
+
+    #[test]
+    fn missing_tool_call_followup_detects_pseudo_tool_commands() {
+        let payload = missing_tool_call_followup_payload(
+            "/workspace:df -h\n/tool.search:disk usage\n/web:disk usage command line",
+        )
+        .expect("pseudo-tool lines should trigger missing-tool-call recovery");
+
+        let ToolDrivenFollowupPayload::ToolFailure { reason } = payload else {
+            panic!("expected tool failure payload");
+        };
+
+        assert!(reason.contains("pseudo-tool text"));
+        assert!(reason.contains("Reply excerpt"));
+    }
+
+    #[test]
+    fn missing_tool_call_followup_detects_narrated_tool_plan() {
+        let payload = missing_tool_call_followup_payload(
+            "I should use `bash` next to retry with a simpler shell command.",
+        )
+        .expect("narrated tool plan should trigger missing-tool-call recovery");
+
+        let ToolDrivenFollowupPayload::ToolFailure { reason } = payload else {
+            panic!("expected tool failure payload");
+        };
+
+        assert!(reason.contains("described another tool step"));
+        assert!(reason.contains("emit the exact next tool call"));
+    }
+
+    #[test]
+    fn missing_tool_call_followup_ignores_normal_final_answer_text() {
+        let payload = missing_tool_call_followup_payload(
+            "The disk is nearly full because the cache directory is consuming most of the space.",
+        );
+
+        assert!(payload.is_none());
     }
 
     #[test]

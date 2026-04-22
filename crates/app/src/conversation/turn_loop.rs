@@ -22,10 +22,13 @@ use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupLabel,
     ToolDrivenFollowupPayload, ToolDrivenFollowupTextRef, ToolDrivenReplyBaseDecision,
     ToolDrivenReplyPhase, build_tool_driven_followup_tail_with_request_summary,
-    build_tool_loop_guard_tail, decide_provider_turn_request_action,
-    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
-    tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
+    build_tool_loop_guard_tail, compose_assistant_reply, decide_provider_turn_request_action,
+    missing_tool_call_followup_payload, reduce_followup_payload_for_model,
+    request_completion_with_raw_fallback, tool_loop_circuit_breaker_reply,
+    user_requested_raw_tool_output,
 };
+
+const MAX_MISSING_TOOL_CALL_RECOVERY_ROUNDS: usize = 1;
 
 #[derive(Default)]
 pub struct ConversationTurnLoop;
@@ -37,6 +40,8 @@ struct TurnLoopSessionState {
     last_raw_reply: String,
     loop_supervisor: ToolLoopSupervisor,
     followup_payload_budget: FollowupPayloadBudget,
+    followup_chain_active: bool,
+    missing_tool_call_retry_count: usize,
     total_tool_calls: usize,
 }
 
@@ -234,6 +239,11 @@ impl ConversationTurnLoop {
             session.total_tool_calls = prospective_total;
 
             let reply_phase = evaluation.reply_phase(session.raw_tool_output_requested);
+            let missing_tool_call_followup = missing_tool_call_followup_for_round(
+                session.followup_chain_active,
+                session.missing_tool_call_retry_count,
+                &evaluation,
+            );
             if let Some(raw_reply) = reply_phase.raw_reply() {
                 session.last_raw_reply = raw_reply.to_owned();
             }
@@ -241,7 +251,9 @@ impl ConversationTurnLoop {
                 TurnRoundBudget::for_round_index(round_index, policy.max_rounds),
                 evaluation,
                 reply_phase,
+                missing_tool_call_followup,
             );
+            update_missing_tool_call_retry_state(&mut session, &decision);
 
             if let Some(action) = resolve_round_kernel_terminal_action(
                 runtime,
@@ -370,7 +382,64 @@ fn initialize_turn_loop_session(
             policy.max_followup_tool_payload_chars,
             policy.max_followup_tool_payload_chars_total,
         ),
+        followup_chain_active: false,
+        missing_tool_call_retry_count: 0,
         total_tool_calls: 0,
+    }
+}
+
+fn missing_tool_call_followup_for_round(
+    followup_chain_active: bool,
+    missing_tool_call_retry_count: usize,
+    evaluation: &RoundKernelEvaluation,
+) -> Option<ToolDrivenFollowupPayload> {
+    if !followup_chain_active {
+        return None;
+    }
+
+    if evaluation.had_tool_intents {
+        return None;
+    }
+
+    if missing_tool_call_retry_count >= MAX_MISSING_TOOL_CALL_RECOVERY_ROUNDS {
+        return None;
+    }
+
+    let reply_text = compose_assistant_reply(
+        evaluation.assistant_preface.as_str(),
+        evaluation.had_tool_intents,
+        evaluation.turn_result.clone(),
+    );
+
+    missing_tool_call_followup_payload(reply_text.as_str())
+}
+
+fn update_missing_tool_call_retry_state(
+    session: &mut TurnLoopSessionState,
+    decision: &RoundKernelDecision,
+) {
+    match decision {
+        RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool { payload, .. }) => {
+            session.followup_chain_active = true;
+            let is_missing_tool_call_recovery = matches!(
+                payload,
+                ToolDrivenFollowupPayload::ToolFailure { reason }
+                    if reason.starts_with("missing_tool_call_followup:")
+            );
+            if is_missing_tool_call_recovery {
+                session.missing_tool_call_retry_count += 1;
+            } else {
+                session.missing_tool_call_retry_count = 0;
+            }
+        }
+        RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Guard { .. }) => {
+            session.followup_chain_active = true;
+        }
+        RoundKernelDecision::FinalizeDirect { .. }
+        | RoundKernelDecision::FinalizeWithCompletionPass { .. } => {
+            session.followup_chain_active = false;
+            session.missing_tool_call_retry_count = 0;
+        }
     }
 }
 
@@ -471,9 +540,25 @@ fn decide_round_kernel_action(
     round_budget: TurnRoundBudget,
     evaluation: RoundKernelEvaluation,
     reply_phase: ToolDrivenReplyPhase,
+    missing_tool_call_followup: Option<ToolDrivenFollowupPayload>,
 ) -> RoundKernelDecision {
+    let followup_decision = round_budget.followup_decision();
     let (raw_reply, tool_payload) = match reply_phase.into_decision() {
         ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
+            if let Some(followup_payload) = missing_tool_call_followup
+                && matches!(
+                    followup_decision,
+                    TurnRoundBudgetDecision::ContinueWithFollowup
+                )
+            {
+                let loop_warning_reason = evaluation.loop_warning_reason();
+                return RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool {
+                    assistant_preface: evaluation.assistant_preface,
+                    payload: followup_payload,
+                    tool_request_summary: evaluation.tool_request_summary,
+                    loop_warning_reason,
+                });
+            }
             return RoundKernelDecision::FinalizeDirect { reply };
         }
         ToolDrivenReplyBaseDecision::RequireFollowup { raw_reply, payload } => (raw_reply, payload),
@@ -498,7 +583,7 @@ fn decide_round_kernel_action(
         loop_warning_reason,
     };
 
-    match round_budget.followup_decision() {
+    match followup_decision {
         TurnRoundBudgetDecision::ContinueWithFollowup => {
             RoundKernelDecision::ContinueWithFollowup(followup)
         }
@@ -1573,6 +1658,7 @@ mod tests {
             TurnRoundBudget::for_round_index(0, 3),
             evaluation,
             reply_phase,
+            None,
         );
 
         if let RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool {
@@ -1609,6 +1695,7 @@ mod tests {
             TurnRoundBudget::for_round_index(0, 3),
             evaluation,
             reply_phase,
+            None,
         );
 
         if let RoundKernelDecision::FinalizeWithCompletionPass {
@@ -1650,6 +1737,7 @@ mod tests {
             TurnRoundBudget::for_round_index(0, 3),
             evaluation,
             reply_phase,
+            None,
         );
 
         if let RoundKernelDecision::FinalizeWithCompletionPass {
@@ -1691,10 +1779,73 @@ mod tests {
             TurnRoundBudget::for_round_index(0, 3),
             evaluation,
             reply_phase,
+            None,
         );
 
         if let RoundKernelDecision::FinalizeDirect { reply } = decision {
             assert_eq!(reply, "preface\ntool output");
+        } else {
+            panic!("unexpected decision: {decision:?}");
+        }
+    }
+
+    #[test]
+    fn decide_round_kernel_action_repairs_missing_tool_call_when_followup_budget_remains() {
+        let evaluation = RoundKernelEvaluation {
+            assistant_preface: "I should use `bash` next to retry with a simpler command."
+                .to_owned(),
+            had_tool_intents: false,
+            tool_request_summary: None,
+            turn_result: TurnResult::FinalText(
+                "I should use `bash` next to retry with a simpler command.".to_owned(),
+            ),
+            loop_verdict: None,
+        };
+
+        let reply_phase = evaluation.reply_phase(false);
+        let missing_tool_call_followup = missing_tool_call_followup_payload(
+            "I should use `bash` next to retry with a simpler command.",
+        );
+        let decision = decide_round_kernel_action(
+            TurnRoundBudget::for_round_index(0, 3),
+            evaluation,
+            reply_phase,
+            missing_tool_call_followup,
+        );
+
+        if let RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool {
+            payload: ToolDrivenFollowupPayload::ToolFailure { reason },
+            ..
+        }) = decision
+        {
+            assert!(reason.contains("missing_tool_call_followup:"));
+        } else {
+            panic!("unexpected decision: {decision:?}");
+        }
+    }
+
+    #[test]
+    fn decide_round_kernel_action_keeps_direct_reply_without_missing_tool_call_signal() {
+        let evaluation = RoundKernelEvaluation {
+            assistant_preface: String::new(),
+            had_tool_intents: false,
+            tool_request_summary: None,
+            turn_result: TurnResult::FinalText(
+                "The cache directory is consuming most of the disk.".to_owned(),
+            ),
+            loop_verdict: None,
+        };
+
+        let reply_phase = evaluation.reply_phase(false);
+        let decision = decide_round_kernel_action(
+            TurnRoundBudget::for_round_index(0, 3),
+            evaluation,
+            reply_phase,
+            None,
+        );
+
+        if let RoundKernelDecision::FinalizeDirect { reply } = decision {
+            assert_eq!(reply, "The cache directory is consuming most of the disk.");
         } else {
             panic!("unexpected decision: {decision:?}");
         }
