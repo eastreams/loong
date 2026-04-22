@@ -605,6 +605,9 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         summary.channels.surfaces.len(),
         inventory.channel_surfaces.len()
     );
+    assert_eq!(summary.nodes.paired_device_count, 0);
+    assert_eq!(summary.nodes.managed_bridge_count, 0);
+    assert_eq!(summary.nodes.total_count, 0);
     assert_eq!(
         summary.runtime.visible_tool_count,
         runtime_snapshot.tools.visible_tool_count
