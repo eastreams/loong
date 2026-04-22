@@ -200,7 +200,7 @@ fn metadata_only_channel_bridge_manifest_is_discovery_ready_without_runtime_meta
             ("target_contract".to_owned(), "weixin_reply_loop".to_owned()),
         ]),
     );
-    let mut config = LoongClawConfig::default();
+    let mut config = LoongConfig::default();
 
     write_plugin_package_manifest(install_root.path(), "weixin-metadata-only", &manifest);
 

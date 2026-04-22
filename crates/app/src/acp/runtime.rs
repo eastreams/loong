@@ -414,7 +414,7 @@ pub fn evaluate_acp_conversation_turn_entry_for_address(
 }
 
 fn resolve_acp_turn_execution_manager(
-    config: &LoongClawConfig,
+    config: &LoongConfig,
     manager: Option<Arc<AcpSessionManager>>,
 ) -> CliResult<Arc<AcpSessionManager>> {
     match manager {

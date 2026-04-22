@@ -70,6 +70,7 @@ use self::operator_surfaces::render_cli_chat_status_lines_with_width;
 #[cfg(test)]
 use self::operator_surfaces::render_manual_compaction_lines_with_width;
 use self::operator_surfaces::should_run_missing_config_onboard;
+use self::render_support::*;
 #[cfg(test)]
 use crate::conversation::DefaultConversationRuntime;
 
@@ -1007,6 +1008,8 @@ pub(crate) async fn run_cli_turn_with_address(
         AcpTurnProvenance::default(),
         ProviderErrorMode::InlineMessage,
         observer_override,
+        None,
+        None,
     )
     .await
 }
@@ -1022,6 +1025,8 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
     provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<String> {
     run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
         runtime,
@@ -1034,7 +1039,8 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
         provenance,
         provider_error_mode,
         observer_override,
-        None,
+        retry_progress,
+        acp_manager,
     )
     .await
     .map(|outcome| outcome.reply)
@@ -1051,6 +1057,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
@@ -1072,7 +1079,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     } else {
         None
     };
-    let binding = crate::conversation::ConversationRuntimeBinding::kernel(&runtime.kernel_ctx);
+    let binding = runtime.conversation_binding();
     if let Some(ingress) = ingress {
         runtime
             .turn_coordinator
@@ -1085,6 +1092,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 binding,
                 Some(ingress),
                 live_surface_observer,
+                retry_progress,
                 acp_manager,
             )
             .await
@@ -1102,6 +1110,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 binding,
                 None,
                 live_surface_observer,
+                retry_progress,
                 acp_manager,
             )
             .await
