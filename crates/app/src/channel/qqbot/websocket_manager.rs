@@ -7,17 +7,17 @@ use crate::CliResult;
 use crate::channel::core::http::{read_json_or_text_response, validate_outbound_http_target};
 use crate::channel::http::ChannelOutboundHttpPolicy;
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt, stream::SplitSink, stream::SplitStream};
+use futures_util::{SinkExt, StreamExt, stream::SplitSink, stream::SplitStream};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::OnceLock;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::Interval;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use tracing;
-
 const QQBOT_API_BASE_URL: &str = "https://api.sgroup.qq.com";
 const QQBOT_GATEWAY_PATH: &str = "/gateway";
 const WS_RECONNECT_BASE_DELAY_MS: u64 = 1000;
@@ -25,6 +25,16 @@ const WS_RECONNECT_MAX_DELAY_MS: u64 = 30000;
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WsStream = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
+
+fn ensure_qqbot_websocket_rustls_provider() {
+    static RUSTLS_PROVIDER_INIT: OnceLock<()> = OnceLock::new();
+
+    RUSTLS_PROVIDER_INIT.get_or_init(|| {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+    });
+}
 
 /// Response from GET /gateway
 #[derive(Debug, Deserialize)]
@@ -80,6 +90,7 @@ impl QqbotWebsocketManager {
 
     /// Run the full WebSocket session with reconnect logic.
     pub(super) async fn run_session(&mut self) -> CliResult<()> {
+        ensure_qqbot_websocket_rustls_provider();
         let mut reconnect_delay_ms = WS_RECONNECT_BASE_DELAY_MS;
         loop {
             match self.connect_and_run().await {

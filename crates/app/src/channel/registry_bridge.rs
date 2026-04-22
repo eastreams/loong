@@ -606,23 +606,6 @@ pub(super) const WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         operations: WEIXIN_OPERATIONS,
     };
 
-pub(super) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
-    ChannelRegistryDescriptor {
-        id: "qqbot",
-        runtime: None,
-        snapshot_builder: Some(build_qqbot_snapshots),
-        selection_order: 37,
-        selection_label: "qq gateway bot",
-        blurb: "Plugin-backed QQ Bot surface for official gateway bots and compatible bridge plugins.",
-        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
-        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
-        label: "QQ Bot",
-        aliases: &["qq", "qq-bot", "tencent-qq"],
-        transport: "qq_official_bot_gateway_or_plugin_bridge",
-        onboarding: QQBOT_ONBOARDING_DESCRIPTOR,
-        operations: QQBOT_OPERATIONS,
-    };
-
 pub(super) const ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "onebot",
@@ -1944,24 +1927,6 @@ mod tests {
         assert!(
             snapshot.enabled,
             "invalid weixin snapshots should keep the configured enabled state"
-        );
-    }
-
-    #[test]
-    fn invalid_qqbot_snapshot_preserves_configured_enabled_state() {
-        let snapshot = build_invalid_qqbot_snapshot(
-            &QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
-            true,
-            true,
-            "default",
-            true,
-            ChannelDefaultAccountSelectionSource::ExplicitDefault,
-            "selection failed".to_owned(),
-        );
-
-        assert!(
-            snapshot.enabled,
-            "invalid qqbot snapshots should keep the configured enabled state"
         );
     }
 

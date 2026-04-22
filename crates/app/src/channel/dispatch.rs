@@ -3683,7 +3683,6 @@ fn resolve_channel_acp_turn_hints(
         ChannelPlatform::Onebot => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::WhatsApp => Ok(ChannelResolvedAcpTurnHints::default()),
         ChannelPlatform::Irc => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::Qqbot => Ok(ChannelResolvedAcpTurnHints::default()),
     }
 }
 
