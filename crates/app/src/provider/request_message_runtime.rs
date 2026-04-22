@@ -107,15 +107,24 @@ fn build_base_prompt_projection_with_tool_runtime_config(
     }
 
     let workspace_root = tool_runtime_config.effective_workspace_root();
-    let workspace_guidance_model = workspace_root.map(|workspace_root| {
-        workspace_guidance::load_workspace_guidance_model_with_config(
-            workspace_root,
-            tool_runtime_config,
-        )
-    });
-    let runtime_self_model = workspace_root.map(|workspace_root| {
-        runtime_self::load_runtime_self_model_with_config(workspace_root, tool_runtime_config)
-    });
+    let (workspace_guidance_model, runtime_self_model) = match workspace_root {
+        Some(workspace_root) => {
+            let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
+            let workspace_guidance_model =
+                workspace_guidance::load_workspace_guidance_model_with_budget(
+                    workspace_root,
+                    tool_runtime_config,
+                    &mut remaining_total_chars,
+                );
+            let runtime_self_model = runtime_self::load_runtime_self_model_with_budget(
+                workspace_root,
+                tool_runtime_config,
+                &mut remaining_total_chars,
+            );
+            (Some(workspace_guidance_model), Some(runtime_self_model))
+        }
+        None => (None, None),
+    };
 
     build_base_prompt_projection_from_prompt_sources(
         config,
@@ -157,23 +166,26 @@ async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     }
 
     let workspace_root = tool_runtime_config.effective_workspace_root();
-    let workspace_guidance_model = match workspace_root {
-        Some(workspace_root) => Some(
-            load_workspace_guidance_model_with_binding(
+    let (workspace_guidance_model, runtime_self_model) = match workspace_root {
+        Some(workspace_root) => {
+            let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
+            let workspace_guidance_model = load_workspace_guidance_model_with_binding_and_budget(
                 workspace_root,
                 tool_runtime_config,
+                &mut remaining_total_chars,
                 binding,
             )
-            .await,
-        ),
-        None => None,
-    };
-    let runtime_self_model = match workspace_root {
-        Some(workspace_root) => Some(
-            load_runtime_self_model_with_binding(workspace_root, tool_runtime_config, binding)
-                .await,
-        ),
-        None => None,
+            .await;
+            let runtime_self_model = load_runtime_self_model_with_binding_and_budget(
+                workspace_root,
+                tool_runtime_config,
+                &mut remaining_total_chars,
+                binding,
+            )
+            .await;
+            (Some(workspace_guidance_model), Some(runtime_self_model))
+        }
+        None => (None, None),
     };
 
     build_base_prompt_projection_from_prompt_sources(
@@ -412,15 +424,17 @@ fn render_execution_discipline_section() -> String {
     lines.join("\n")
 }
 
-async fn load_workspace_guidance_model_with_binding(
+async fn load_workspace_guidance_model_with_binding_and_budget(
     workspace_root: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+    remaining_total_chars: &mut usize,
     binding: ProviderRuntimeBinding<'_>,
 ) -> workspace_guidance::WorkspaceGuidanceModel {
     let Some(kernel_ctx) = binding.kernel_context() else {
-        return workspace_guidance::load_workspace_guidance_model_with_config(
+        return workspace_guidance::load_workspace_guidance_model_with_budget(
             workspace_root,
             tool_runtime_config,
+            remaining_total_chars,
         );
     };
 
@@ -428,7 +442,6 @@ async fn load_workspace_guidance_model_with_binding(
         workspace_guidance::workspace_guidance_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = workspace_guidance::WorkspaceGuidanceModel::default();
-    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
 
     for source_path in source_candidates {
         let maybe_content =
@@ -438,11 +451,11 @@ async fn load_workspace_guidance_model_with_binding(
             continue;
         };
 
-        let budget_was_exhausted = remaining_total_chars == 0;
+        let budget_was_exhausted = *remaining_total_chars == 0;
         let appended_content = workspace_guidance::ingest_workspace_guidance_source(
             &mut model,
             &mut loaded_paths,
-            &mut remaining_total_chars,
+            remaining_total_chars,
             &source_path,
             content.as_str(),
             tool_runtime_config,
@@ -560,22 +573,23 @@ fn build_base_artifacts(messages: &[Value]) -> Vec<ContextArtifactDescriptor> {
     ]
 }
 
-async fn load_runtime_self_model_with_binding(
+async fn load_runtime_self_model_with_binding_and_budget(
     workspace_root: &Path,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+    remaining_total_chars: &mut usize,
     binding: ProviderRuntimeBinding<'_>,
 ) -> runtime_self::RuntimeSelfModel {
     let Some(kernel_ctx) = binding.kernel_context() else {
-        return runtime_self::load_runtime_self_model_with_config(
+        return runtime_self::load_runtime_self_model_with_budget(
             workspace_root,
             tool_runtime_config,
+            remaining_total_chars,
         );
     };
 
     let source_candidates = runtime_self::runtime_self_source_candidates(workspace_root);
     let mut loaded_paths = BTreeSet::new();
     let mut model = runtime_self::RuntimeSelfModel::default();
-    let mut remaining_total_chars = tool_runtime_config.runtime_self.max_total_chars;
 
     for (candidate_path, lane) in source_candidates {
         let Some(content) =
@@ -584,11 +598,11 @@ async fn load_runtime_self_model_with_binding(
             continue;
         };
 
-        let budget_was_exhausted = remaining_total_chars == 0;
+        let budget_was_exhausted = *remaining_total_chars == 0;
         let appended_content = runtime_self::ingest_runtime_self_source(
             &mut model,
             &mut loaded_paths,
-            &mut remaining_total_chars,
+            remaining_total_chars,
             lane,
             &candidate_path,
             content.as_str(),
@@ -1367,8 +1381,14 @@ mod tests {
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains(&agents_text));
-        assert!(system_content.contains("workspace guidance source truncated"));
-        assert!(system_content.contains("remaining total budget"));
+        assert!(
+            system_content.contains("runtime self source truncated"),
+            "expected runtime-self truncation notice, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("remaining total budget"),
+            "expected total-budget wording, got: {system_content}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1396,8 +1416,86 @@ mod tests {
         let system_content = system_prompt_content(&messages);
 
         assert!(system_content.contains(&agents_text));
-        assert!(system_content.contains("workspace guidance truncated"));
-        assert!(!system_content.contains(raw_user_prefix));
+        assert!(
+            system_content.contains("runtime self truncated"),
+            "expected compact runtime-self truncation notice, got: {system_content}"
+        );
+        assert!(
+            !system_content.contains(raw_user_prefix),
+            "raw runtime-self prefix should be truncated, got: {system_content}"
+        );
+    }
+
+    #[test]
+    fn build_system_message_shares_total_budget_between_workspace_guidance_and_runtime_self() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let agents_path = workspace_root.join("AGENTS.md");
+        let tools_path = workspace_root.join("TOOLS.md");
+        let agents_text = "a".repeat(1_024);
+        let tools_prefix = "TOOLS_PREFIX_SHOULD_NOT_SURVIVE";
+        let tools_tail = "TOOLS_TAIL_SHOULD_NOT_SURVIVE";
+        let tools_text = format!("{tools_prefix}\n{}\n{tools_tail}", "b".repeat(900));
+        let mut config = LoongConfig::default();
+
+        std::fs::write(&agents_path, &agents_text).expect("write AGENTS");
+        std::fs::write(&tools_path, &tools_text).expect("write TOOLS");
+
+        config.tools.file_root = Some(workspace_root.display().to_string());
+        config.tools.runtime_self.max_source_chars = 10_000;
+        config.tools.runtime_self.max_total_chars = agents_text.chars().count();
+
+        let system_message =
+            build_system_message(&config, true).expect("system message when enabled");
+        let system_content = system_message["content"].as_str().expect("system content");
+
+        assert!(system_content.contains(&agents_text));
+        assert!(
+            system_content.contains("runtime self source truncated"),
+            "expected runtime-self truncation notice, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("remaining total budget"),
+            "expected total-budget wording, got: {system_content}"
+        );
+        assert!(!system_content.contains(tools_prefix));
+        assert!(!system_content.contains(tools_tail));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_base_messages_with_binding_shares_total_budget_between_workspace_guidance_and_runtime_self()
+     {
+        let harness = TurnTestHarness::new();
+        let agents_path = harness.temp_dir.join("AGENTS.md");
+        let tools_path = harness.temp_dir.join("TOOLS.md");
+        let agents_text = "a".repeat(1_024);
+        let tools_prefix = "BINDING_TOOLS_PREFIX_SHOULD_NOT_SURVIVE";
+        let tools_tail = "BINDING_TOOLS_TAIL_SHOULD_NOT_SURVIVE";
+        let tools_text = format!("{tools_prefix}\n{}\n{tools_tail}", "b".repeat(900));
+        let mut config = LoongConfig::default();
+
+        std::fs::write(&agents_path, &agents_text).expect("write AGENTS");
+        std::fs::write(&tools_path, &tools_text).expect("write TOOLS");
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.tools.runtime_self.max_source_chars = 10_000;
+        config.tools.runtime_self.max_total_chars = agents_text.chars().count();
+
+        let binding = ProviderRuntimeBinding::kernel(&harness.kernel_ctx);
+        let messages = build_base_messages_with_binding(&config, true, binding).await;
+        let system_content = system_prompt_content(&messages);
+
+        assert!(system_content.contains(&agents_text));
+        assert!(
+            system_content.contains("runtime self source truncated"),
+            "expected runtime-self truncation notice, got: {system_content}"
+        );
+        assert!(
+            system_content.contains("remaining total budget"),
+            "expected total-budget wording, got: {system_content}"
+        );
+        assert!(!system_content.contains(tools_prefix));
+        assert!(!system_content.contains(tools_tail));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

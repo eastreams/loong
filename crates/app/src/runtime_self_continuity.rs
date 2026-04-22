@@ -195,7 +195,7 @@ pub(crate) fn merge_runtime_self_continuity(
     };
 
     let Some(mut merged) = primary else {
-        return Some(fallback.clone());
+        return Some(fallback);
     };
 
     if merged.workspace_guidance.is_empty() {
@@ -219,7 +219,7 @@ pub(crate) fn merge_runtime_self_continuity(
 
     let merged_projection = normalize_projection(merged.session_profile_projection.as_deref());
     if merged_projection.is_none() {
-        merged.session_profile_projection = fallback.session_profile_projection.clone();
+        merged.session_profile_projection = fallback.session_profile_projection;
     }
 
     Some(merged)
@@ -234,7 +234,7 @@ pub(crate) fn missing_runtime_self_continuity(
         .cloned()
         .map(RuntimeSelfContinuity::normalize_legacy_workspace_guidance);
     let Some(live) = live else {
-        return stored.has_prompt_projection().then_some(stored.clone());
+        return stored.has_prompt_projection().then_some(stored);
     };
 
     let mut missing = RuntimeSelfContinuity::default();
@@ -260,7 +260,7 @@ pub(crate) fn missing_runtime_self_continuity(
 
     let live_projection = normalize_projection(live.session_profile_projection.as_deref());
     if live_projection.is_none() {
-        missing.session_profile_projection = stored.session_profile_projection.clone();
+        missing.session_profile_projection = stored.session_profile_projection;
     }
 
     missing.has_prompt_projection().then_some(missing)
