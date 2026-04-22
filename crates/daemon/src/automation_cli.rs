@@ -23,6 +23,8 @@ const AUTOMATION_SCHEMA_VERSION: u32 = 1;
 const AUTOMATION_DEFAULT_POLL_MS: u64 = 1_000;
 const AUTOMATION_DEFAULT_EVENT_PATH: &str = "/automation/events";
 const AUTOMATION_FAILURE_RETRY_MS: i64 = 60_000;
+const AUTOMATION_RUNTIME_HEARTBEAT_MS: u64 = 5_000;
+const AUTOMATION_RUNTIME_STALE_MS: u64 = 15_000;
 
 static AUTOMATION_TRIGGER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -48,6 +50,8 @@ pub enum AutomationCommands {
     Fire(AutomationFireCommandOptions),
     /// Emit one named event to matching triggers
     Emit(AutomationEmitCommandOptions),
+    /// Inspect or manage the automation runner owner lifecycle
+    Runner(AutomationRunnerCommandOptions),
     /// Inspect or manage the internal automation journal
     Journal(AutomationJournalCommandOptions),
     /// Run the scheduler loop and optional webhook ingress
@@ -178,6 +182,26 @@ pub struct AutomationServeCommandOptions {
     #[arg(long, default_value_t = AUTOMATION_DEFAULT_POLL_MS)]
     pub poll_ms: u64,
 }
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AutomationRunnerCommandOptions {
+    #[command(subcommand)]
+    pub command: AutomationRunnerCommands,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AutomationRunnerCommands {
+    /// Inspect the current automation runner owner state
+    Inspect(AutomationRunnerInspectCommandOptions),
+    /// Request graceful shutdown for the current automation runner owner
+    Stop(AutomationRunnerStopCommandOptions),
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationRunnerInspectCommandOptions {}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationRunnerStopCommandOptions {}
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct AutomationJournalCommandOptions {
@@ -334,14 +358,63 @@ struct AutomationServeState {
     auth_token: Option<String>,
 }
 
-struct AutomationServeLock {
-    path: PathBuf,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct AutomationRunnerStatus {
+    runtime_dir: String,
+    phase: String,
+    running: bool,
+    stale: bool,
+    pid: Option<u32>,
+    version: String,
+    config_path: Option<String>,
+    bind_address: Option<String>,
+    event_path: Option<String>,
+    poll_ms: u64,
+    started_at_ms: u64,
+    last_heartbeat_at: u64,
+    stopped_at_ms: Option<u64>,
+    shutdown_reason: Option<String>,
+    last_error: Option<String>,
 }
 
-impl Drop for AutomationServeLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PersistedAutomationRunnerState {
+    phase: String,
+    running: bool,
+    pid: Option<u32>,
+    version: String,
+    config_path: Option<String>,
+    bind_address: Option<String>,
+    event_path: Option<String>,
+    poll_ms: u64,
+    started_at_ms: u64,
+    last_heartbeat_at: u64,
+    stopped_at_ms: Option<u64>,
+    shutdown_reason: Option<String>,
+    last_error: Option<String>,
+    owner_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PersistedAutomationStopRequest {
+    requested_at_ms: u64,
+    requested_by_pid: u32,
+    target_owner_token: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutomationRunnerStopRequestOutcome {
+    Requested,
+    AlreadyRequested,
+    AlreadyStopped,
+}
+
+struct AutomationRunnerTracker {
+    active_owner_path: PathBuf,
+    status_snapshot_path: PathBuf,
+    stop_request_path: PathBuf,
+    owner_token: String,
+    state: std::sync::Mutex<PersistedAutomationRunnerState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +487,7 @@ pub async fn execute_automation_command(options: AutomationCommandOptions) -> Cl
             )
             .await
         }
+        AutomationCommands::Runner(command) => execute_runner_command(command),
         AutomationCommands::Journal(command) => {
             execute_journal_command(options.config, command).await
         }
@@ -443,6 +517,18 @@ fn automation_event_cursor_path() -> PathBuf {
     crate::mvp::config::default_loong_home()
         .join("automation")
         .join("internal-events.cursor")
+}
+
+fn automation_runner_status_snapshot_path() -> PathBuf {
+    crate::mvp::config::default_loong_home()
+        .join("automation")
+        .join("serve.status.json")
+}
+
+fn automation_runner_stop_request_path() -> PathBuf {
+    crate::mvp::config::default_loong_home()
+        .join("automation")
+        .join("serve.stop-request.json")
 }
 
 fn automation_journal_state_path() -> PathBuf {
@@ -711,49 +797,238 @@ fn next_cron_fire_at_ms(expression: &str, after_ms: i64) -> CliResult<i64> {
     ))
 }
 
-fn acquire_automation_serve_lock() -> CliResult<AutomationServeLock> {
-    let path = automation_serve_lock_path();
+impl AutomationRunnerTracker {
+    fn acquire(config: Option<&str>, options: &AutomationServeCommandOptions) -> CliResult<Self> {
+        let active_owner_path = automation_serve_lock_path();
+        let status_snapshot_path = automation_runner_status_snapshot_path();
+        let stop_request_path = automation_runner_stop_request_path();
+        if active_owner_path.exists()
+            && let Some(status) = load_automation_runner_status()
+        {
+            if status.running && !status.stale {
+                return Err(format!(
+                    "automation serve owner already active at {}",
+                    active_owner_path.display()
+                ));
+            }
+            let _ = fs::remove_file(active_owner_path.as_path());
+            let _ = fs::remove_file(status_snapshot_path.as_path());
+            let _ = fs::remove_file(stop_request_path.as_path());
+        }
+
+        let owner_token = new_automation_runner_owner_token(std::process::id());
+        let started_at_ms = u64::try_from(now_ms()).unwrap_or_default();
+        let initial_state = PersistedAutomationRunnerState {
+            phase: "starting".to_owned(),
+            running: true,
+            pid: Some(std::process::id()),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            config_path: config.map(ToOwned::to_owned),
+            bind_address: options.bind.clone(),
+            event_path: Some(options.path.clone()),
+            poll_ms: options.poll_ms.max(250),
+            started_at_ms,
+            last_heartbeat_at: started_at_ms,
+            stopped_at_ms: None,
+            shutdown_reason: None,
+            last_error: None,
+            owner_token: owner_token.clone(),
+        };
+        write_json_path(
+            active_owner_path.as_path(),
+            &initial_state,
+            "automation serve owner",
+        )?;
+        write_json_path(
+            status_snapshot_path.as_path(),
+            &initial_state,
+            "automation serve status snapshot",
+        )?;
+
+        Ok(Self {
+            active_owner_path,
+            status_snapshot_path,
+            stop_request_path,
+            owner_token,
+            state: std::sync::Mutex::new(initial_state),
+        })
+    }
+
+    fn owner_token(&self) -> &str {
+        self.owner_token.as_str()
+    }
+
+    fn heartbeat(&self, phase: &str) -> CliResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|error| format!("automation runner state lock poisoned: {error}"))?;
+        state.phase = phase.to_owned();
+        state.last_heartbeat_at = u64::try_from(now_ms()).unwrap_or_default();
+        write_json_path(
+            self.active_owner_path.as_path(),
+            &*state,
+            "automation serve owner",
+        )?;
+        write_json_path(
+            self.status_snapshot_path.as_path(),
+            &*state,
+            "automation serve status snapshot",
+        )
+    }
+
+    fn finalize(
+        &self,
+        phase: &str,
+        shutdown_reason: Option<&str>,
+        last_error: Option<&str>,
+    ) -> CliResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|error| format!("automation runner state lock poisoned: {error}"))?;
+        state.phase = phase.to_owned();
+        state.running = false;
+        state.last_heartbeat_at = u64::try_from(now_ms()).unwrap_or_default();
+        state.stopped_at_ms = Some(u64::try_from(now_ms()).unwrap_or_default());
+        state.shutdown_reason = shutdown_reason.map(ToOwned::to_owned);
+        state.last_error = last_error.map(ToOwned::to_owned);
+        write_json_path(
+            self.status_snapshot_path.as_path(),
+            &*state,
+            "automation serve status snapshot",
+        )?;
+        let _ = fs::remove_file(self.active_owner_path.as_path());
+        let _ = fs::remove_file(self.stop_request_path.as_path());
+        Ok(())
+    }
+}
+
+fn load_automation_runner_status() -> Option<AutomationRunnerStatus> {
+    let status_snapshot_path = automation_runner_status_snapshot_path();
+    let active_owner_path = automation_serve_lock_path();
+    let status_snapshot =
+        read_json_path::<PersistedAutomationRunnerState>(status_snapshot_path.as_path());
+    let active_owner =
+        read_json_path::<PersistedAutomationRunnerState>(active_owner_path.as_path());
+    let persisted_state = match (status_snapshot, active_owner) {
+        (Some(status_snapshot), Some(active_owner)) => {
+            if active_owner.last_heartbeat_at >= status_snapshot.last_heartbeat_at {
+                active_owner
+            } else {
+                status_snapshot
+            }
+        }
+        (Some(status_snapshot), None) => status_snapshot,
+        (None, Some(active_owner)) => active_owner,
+        (None, None) => return None,
+    };
+    let now_ms = u64::try_from(now_ms()).unwrap_or_default();
+    let stale = persisted_state.running
+        && now_ms.saturating_sub(persisted_state.last_heartbeat_at) > AUTOMATION_RUNTIME_STALE_MS;
+    Some(AutomationRunnerStatus {
+        runtime_dir: crate::mvp::config::default_loong_home()
+            .join("automation")
+            .display()
+            .to_string(),
+        phase: persisted_state.phase,
+        running: persisted_state.running,
+        stale,
+        pid: persisted_state.pid,
+        version: persisted_state.version,
+        config_path: persisted_state.config_path,
+        bind_address: persisted_state.bind_address,
+        event_path: persisted_state.event_path,
+        poll_ms: persisted_state.poll_ms,
+        started_at_ms: persisted_state.started_at_ms,
+        last_heartbeat_at: persisted_state.last_heartbeat_at,
+        stopped_at_ms: persisted_state.stopped_at_ms,
+        shutdown_reason: persisted_state.shutdown_reason,
+        last_error: persisted_state.last_error,
+    })
+}
+
+fn request_automation_runner_stop() -> CliResult<AutomationRunnerStopRequestOutcome> {
+    let active_owner_path = automation_serve_lock_path();
+    let stop_request_path = automation_runner_stop_request_path();
+    let active_owner =
+        read_json_path::<PersistedAutomationRunnerState>(active_owner_path.as_path());
+    let Some(active_owner) = active_owner else {
+        return Ok(AutomationRunnerStopRequestOutcome::AlreadyStopped);
+    };
+    let current_status = load_automation_runner_status();
+    let Some(current_status) = current_status else {
+        return Ok(AutomationRunnerStopRequestOutcome::AlreadyStopped);
+    };
+    if !current_status.running || current_status.stale {
+        return Ok(AutomationRunnerStopRequestOutcome::AlreadyStopped);
+    }
+    let existing_stop_request =
+        read_json_path::<PersistedAutomationStopRequest>(stop_request_path.as_path());
+    if existing_stop_request
+        .as_ref()
+        .is_some_and(|request| request.target_owner_token == active_owner.owner_token)
+    {
+        return Ok(AutomationRunnerStopRequestOutcome::AlreadyRequested);
+    }
+    let stop_request = PersistedAutomationStopRequest {
+        requested_at_ms: u64::try_from(now_ms()).unwrap_or_default(),
+        requested_by_pid: std::process::id(),
+        target_owner_token: active_owner.owner_token,
+    };
+    write_json_path(
+        stop_request_path.as_path(),
+        &stop_request,
+        "automation serve stop request",
+    )?;
+    Ok(AutomationRunnerStopRequestOutcome::Requested)
+}
+
+fn automation_runner_stop_requested(owner_token: &str) -> bool {
+    let stop_request_path = automation_runner_stop_request_path();
+    let request = read_json_path::<PersistedAutomationStopRequest>(stop_request_path.as_path());
+    request
+        .as_ref()
+        .is_some_and(|request| request.target_owner_token == owner_token)
+}
+
+fn read_json_path<T>(path: &Path) -> Option<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(raw.as_str()).ok()
+}
+
+fn write_json_path<T>(path: &Path, value: &T, label: &str) -> CliResult<()>
+where
+    T: Serialize,
+{
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
-                "create automation runtime directory {} failed: {error}",
+                "create {label} directory {} failed: {error}",
                 parent.display()
             )
         })?;
     }
+    let encoded = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("serialize {label} failed: {error}"))?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(tmp_path.as_path(), format!("{encoded}\n"))
+        .map_err(|error| format!("write {label} {} failed: {error}", tmp_path.display()))?;
+    fs::rename(tmp_path.as_path(), path).map_err(|error| {
+        format!(
+            "publish {label} {} from {} failed: {error}",
+            path.display(),
+            tmp_path.display()
+        )
+    })
+}
 
-    let write_lock = |path: &Path| -> CliResult<()> {
-        let payload = json!({
-            "pid": std::process::id(),
-            "started_at_ms": now_ms(),
-        });
-        let bytes = serde_json::to_vec_pretty(&payload)
-            .map_err(|error| format!("serialize automation serve lock failed: {error}"))?;
-        fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .and_then(|mut file| std::io::Write::write_all(&mut file, &bytes))
-            .map_err(|error| {
-                format!(
-                    "write automation serve lock {} failed: {error}",
-                    path.display()
-                )
-            })
-    };
-
-    match write_lock(path.as_path()) {
-        Ok(()) => Ok(AutomationServeLock { path }),
-        Err(error) if error.contains("File exists") || error.contains("file exists") => {
-            Err(format!(
-                "automation serve lock {} already exists; stop the active automation runner or remove the stale lock file manually",
-                path.display()
-            ))
-        }
-        Err(error) => Err(format!(
-            "automation serve is already active or lock acquisition failed: {error}"
-        )),
-    }
+fn new_automation_runner_owner_token(process_id: u32) -> String {
+    let millis = u64::try_from(now_ms()).unwrap_or_default();
+    format!("automation-{process_id:08x}-{millis:016x}")
 }
 
 fn load_store(path: &Path) -> CliResult<AutomationStore> {
@@ -1099,6 +1374,13 @@ async fn execute_journal_command(
     }
 }
 
+fn execute_runner_command(options: AutomationRunnerCommandOptions) -> CliResult<Value> {
+    match options.command {
+        AutomationRunnerCommands::Inspect(_command) => execute_runner_inspect_command(),
+        AutomationRunnerCommands::Stop(_command) => execute_runner_stop_command(),
+    }
+}
+
 pub(crate) async fn emit_named_automation_event(
     config: Option<String>,
     event_name: &str,
@@ -1241,6 +1523,32 @@ fn execute_journal_repair_command() -> CliResult<Value> {
     }))
 }
 
+fn execute_runner_inspect_command() -> CliResult<Value> {
+    let status = load_automation_runner_status();
+    Ok(json!({
+        "command": "runner_inspect",
+        "status": status,
+        "active_owner_path": automation_serve_lock_path().display().to_string(),
+        "status_snapshot_path": automation_runner_status_snapshot_path().display().to_string(),
+        "stop_request_path": automation_runner_stop_request_path().display().to_string(),
+    }))
+}
+
+fn execute_runner_stop_command() -> CliResult<Value> {
+    let outcome = request_automation_runner_stop()?;
+    let status = load_automation_runner_status();
+    Ok(json!({
+        "command": "runner_stop",
+        "outcome": match outcome {
+            AutomationRunnerStopRequestOutcome::Requested => "requested",
+            AutomationRunnerStopRequestOutcome::AlreadyRequested => "already_requested",
+            AutomationRunnerStopRequestOutcome::AlreadyStopped => "already_stopped",
+        },
+        "status": status,
+        "stop_request_path": automation_runner_stop_request_path().display().to_string(),
+    }))
+}
+
 pub(crate) async fn publish_daemon_internal_event(
     config: Option<String>,
     event_name: &str,
@@ -1312,14 +1620,23 @@ async fn execute_serve_command(
     config: Option<String>,
     options: AutomationServeCommandOptions,
 ) -> CliResult<Value> {
-    let _serve_lock = acquire_automation_serve_lock()?;
+    let runner_tracker = AutomationRunnerTracker::acquire(config.as_deref(), &options)?;
     let poll_ms = options.poll_ms.max(250);
     let stop_requested = Arc::new(AtomicBool::new(false));
     let scheduler_stop = stop_requested.clone();
     let scheduler_store_path = store_path.to_path_buf();
     let scheduler_config = config.clone();
+    let scheduler_owner_token = runner_tracker.owner_token().to_owned();
+    let finalize_owner_token = scheduler_owner_token.clone();
+    let scheduler_runner_tracker = Arc::new(runner_tracker);
+    let scheduler_runner_tracker_for_loop = scheduler_runner_tracker.clone();
     let scheduler_task = tokio::spawn(async move {
         while !scheduler_stop.load(Ordering::SeqCst) {
+            if automation_runner_stop_requested(scheduler_owner_token.as_str()) {
+                scheduler_stop.store(true, Ordering::SeqCst);
+                break;
+            }
+            let _ = scheduler_runner_tracker_for_loop.heartbeat("running");
             if let Err(error) = process_due_schedule_triggers(
                 scheduler_store_path.as_path(),
                 scheduler_config.as_ref(),
@@ -1331,14 +1648,29 @@ async fn execute_serve_command(
             if let Err(error) = process_internal_journal_events(scheduler_config.as_ref()).await {
                 eprintln!("automation internal event journal error: {error}");
             }
-            tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+            tokio::time::sleep(Duration::from_millis(
+                poll_ms.min(AUTOMATION_RUNTIME_HEARTBEAT_MS),
+            ))
+            .await;
         }
     });
 
     let shutdown_requested = stop_requested.clone();
     let shutdown_signal = async move {
-        let _ = tokio::signal::ctrl_c().await;
-        shutdown_requested.store(true, Ordering::SeqCst);
+        loop {
+            if shutdown_requested.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    shutdown_requested.store(true, Ordering::SeqCst);
+                    return;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(
+                    poll_ms.min(AUTOMATION_RUNTIME_HEARTBEAT_MS),
+                )) => {}
+            }
+        }
     };
 
     if let Some(bind) = options.bind {
@@ -1364,6 +1696,12 @@ async fn execute_serve_command(
 
     stop_requested.store(true, Ordering::SeqCst);
     let _ = scheduler_task.await;
+    let shutdown_reason = if automation_runner_stop_requested(finalize_owner_token.as_str()) {
+        Some("stop_requested")
+    } else {
+        Some("stopped")
+    };
+    let _ = scheduler_runner_tracker.finalize("stopped", shutdown_reason, None);
 
     Ok(json!({
         "command": "serve",

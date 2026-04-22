@@ -181,6 +181,19 @@ fn wait_for_serve_lock(child: &mut Child, path: &Path) {
     }
 }
 
+fn wait_for_child_exit(child: &mut Child, description: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(_status) = child.try_wait().expect("poll child exit") {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("timed out waiting for {description} to exit");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn wait_for_cursor_value(path: &Path, expected: &str) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
@@ -697,6 +710,150 @@ async fn automation_journal_repair_reconciles_state_and_reports_updated_layout()
         "segment-000004"
     );
     assert_eq!(payload["layout"]["segments"][1]["status"], "active");
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_runner_inspect_reports_active_owner_status() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-runner-inspect");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Inspect(
+                        loong_daemon::automation_cli::AutomationRunnerInspectCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inspect automation runner");
+
+    assert_eq!(payload["command"], "runner_inspect");
+    assert_eq!(payload["status"]["running"], true);
+    assert_eq!(payload["status"]["stale"], false);
+    assert_eq!(payload["status"]["poll_ms"], 250);
+    assert_eq!(
+        payload["active_owner_path"],
+        automation_serve_lock_path(&loong_home)
+            .display()
+            .to_string()
+    );
+
+    serve.kill().expect("stop automation serve");
+    let _ = serve.wait();
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_runner_stop_requests_shutdown_for_running_owner() {
+    let guard = lock_automation_integration();
+    let root = TempDirGuard::new("loong-automation-runner-stop");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Stop(
+                        loong_daemon::automation_cli::AutomationRunnerStopCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("stop automation runner");
+
+    assert_eq!(payload["command"], "runner_stop");
+    assert_eq!(payload["outcome"], "requested");
+    wait_for_child_exit(&mut serve, "automation serve");
+
+    let status_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Inspect(
+                        loong_daemon::automation_cli::AutomationRunnerInspectCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inspect automation runner after stop");
+    assert_eq!(status_payload["status"]["running"], false);
+
     drop(guard);
 }
 
