@@ -58,18 +58,14 @@ fn strip_hidden_root_bash_aliases(rendered: &str, hidden_root_subcommands: &[Str
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let lines = rendered.lines().collect::<Vec<_>>();
-    let mut filtered = Vec::with_capacity(lines.len());
-    let mut index = 0usize;
+    let line_count = rendered.lines().count();
+    let mut filtered = Vec::with_capacity(line_count);
+    let mut lines = rendered.lines().peekable();
 
-    while index < lines.len() {
-        let line = lines[index];
+    while let Some(line) = lines.next() {
 
         if should_strip_hidden_root_case_block(line, &hidden) {
-            index += 1;
-            while index < lines.len() {
-                let candidate = lines[index];
-                index += 1;
+            for candidate in lines.by_ref() {
                 if candidate.trim() == ";;" {
                     break;
                 }
@@ -78,7 +74,6 @@ fn strip_hidden_root_bash_aliases(rendered: &str, hidden_root_subcommands: &[Str
         }
 
         filtered.push(filter_hidden_root_opts_line(line, &hidden));
-        index += 1;
     }
 
     filtered.join("\n")
