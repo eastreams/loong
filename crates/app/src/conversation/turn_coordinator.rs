@@ -4841,7 +4841,10 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .filter(|intent| effective_followup_tool_name(intent) == "tool.search")
         .count();
     let discovery_search_turn = search_tool_intents > 0;
-    let supports_provider_turn_followup = followup_chain_active || discovery_search_turn;
+    let malformed_parse_followup_turn =
+        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
+    let supports_provider_turn_followup =
+        followup_chain_active || discovery_search_turn || malformed_parse_followup_turn;
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
     let session_context = match runtime.session_context(config, session_id, binding) {
@@ -5010,6 +5013,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         || discovery_search_turn
         || recovery_followup_turn
         || retryable_failure_followup_turn
+        || malformed_parse_followup_turn
         || preface_signals_provider_turn_followup;
     ProviderTurnLaneExecution {
         lane,
@@ -5036,6 +5040,20 @@ fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> 
     let contains_afterwards = normalized_preface.contains("afterwards");
 
     contains_first || contains_then || contains_next || contains_after_that || contains_afterwards
+}
+
+fn provider_turn_has_malformed_parse_followup_signal(raw_meta: &Value) -> bool {
+    let Some(parse_meta) = raw_meta.get("loong_provider_parse") else {
+        return false;
+    };
+    let Some(parse_meta_object) = parse_meta.as_object() else {
+        return false;
+    };
+
+    parse_meta_object.values().any(|entry| {
+        let status = entry.get("status").and_then(Value::as_str);
+        status == Some("malformed")
+    })
 }
 
 fn provider_turn_missing_tool_call_followup(
