@@ -110,6 +110,11 @@ pub async fn collect_status_cli_read_model(
             approved_device_count: 0,
             last_activity_ms: None,
         },
+        crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+            paired_device_count: 0,
+            managed_bridge_count: 0,
+            total_count: 0,
+        },
     );
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
@@ -1093,6 +1098,11 @@ mod tests {
                 approved_device_count: 0,
                 last_activity_ms: None,
             },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
+            },
         };
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
@@ -1291,6 +1301,11 @@ mod tests {
                 approved_device_count: 0,
                 last_activity_ms: None,
             },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
+            },
         };
 
         let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
@@ -1434,6 +1449,11 @@ mod tests {
                 approved_device_count: 0,
                 last_activity_ms: None,
             },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
+            },
         };
 
         let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
@@ -1564,6 +1584,11 @@ mod tests {
                 pending_request_count: 0,
                 approved_device_count: 0,
                 last_activity_ms: None,
+            },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
             },
         };
         let status = StatusCliReadModel {

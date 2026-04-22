@@ -55,6 +55,7 @@ use super::read_models::{
     build_acp_session_list_read_model, build_acp_status_read_model,
     build_gateway_pairing_complete_read_model, build_gateway_pairing_events_read_model,
     build_gateway_pairing_session_read_model, build_gateway_pairing_start_read_model,
+    build_node_inventory_read_model, build_operator_nodes_summary_read_model,
     build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
 use super::state::{
@@ -416,6 +417,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             "/api/gateway/pairing/start",
             post(handle_gateway_pairing_start),
         )
+        .route("/api/gateway/nodes", get(handle_gateway_nodes))
         .route(
             "/api/gateway/pairing/resolve",
             post(handle_gateway_pairing_resolve),
@@ -443,6 +445,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/acp/status", get(handle_acp_status))
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
+        .route("/v1/nodes", get(handle_gateway_nodes))
         .route("/v1/pairing/start", post(handle_gateway_pairing_start))
         .route("/v1/pairing/requests", get(handle_gateway_pairing_requests))
         .route("/v1/pairing/resolve", post(handle_gateway_pairing_resolve))
@@ -837,6 +840,29 @@ async fn handle_gateway_pairing_start(
     };
     let payload = build_gateway_pairing_start_read_model(challenge);
     let payload = match serialize_json_value(&payload, "gateway pairing start payload") {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialize_failed",
+                error.as_str(),
+            );
+        }
+    };
+
+    json_response(StatusCode::OK, payload)
+}
+
+async fn handle_gateway_nodes(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let payload = build_gateway_node_inventory_read_model(app_state.as_ref());
+    let payload = match serialize_json_value(&payload, "gateway node inventory payload") {
         Ok(payload) => payload,
         Err(error) => {
             return json_error(
@@ -1318,7 +1344,9 @@ fn build_gateway_operator_summary_read_model(
     app_state: &GatewayControlAppState,
 ) -> GatewayOperatorSummaryReadModel {
     let pairing = build_gateway_pairing_summary_read_model(app_state);
-    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot, pairing)
+    let node_inventory = build_gateway_node_inventory_read_model(app_state);
+    let nodes = build_operator_nodes_summary_read_model(&node_inventory);
+    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot, pairing, nodes)
 }
 
 fn build_gateway_pairing_summary_read_model(
@@ -1335,6 +1363,26 @@ fn build_gateway_pairing_summary_read_model(
             approved_device_count: 0,
             last_activity_ms: None,
         },
+    }
+}
+
+fn build_gateway_node_inventory_read_model(
+    app_state: &GatewayControlAppState,
+) -> super::read_models::GatewayNodeInventoryReadModel {
+    match gateway_pairing_registry(app_state) {
+        Ok(pairing_registry) => {
+            let paired_devices = pairing_registry.list_approved_devices(256);
+            build_node_inventory_read_model(
+                app_state.config_path.as_str(),
+                app_state.channel_inventory.as_ref(),
+                paired_devices.as_slice(),
+            )
+        }
+        Err(_) => build_node_inventory_read_model(
+            app_state.config_path.as_str(),
+            app_state.channel_inventory.as_ref(),
+            &[],
+        ),
     }
 }
 
@@ -2115,6 +2163,22 @@ pub fn build_gateway_pairing_test_router_with_event_bus(
         .route("/v1/pairing/session", get(handle_gateway_pairing_session))
         .route("/v1/pairing/events", get(handle_gateway_pairing_events))
         .route("/v1/pairing/stream", get(handle_gateway_pairing_stream))
+        .with_state(app_state)
+}
+
+/// Minimal router for gateway node inventory integration tests.
+#[doc(hidden)]
+pub fn build_gateway_nodes_test_router(
+    bearer_token: String,
+    config: LoongConfig,
+    channel_inventory: GatewayChannelInventoryReadModel,
+) -> Router {
+    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    state.config = Some(config);
+    state.channel_inventory = Arc::new(channel_inventory);
+    let app_state = Arc::new(state);
+    Router::new()
+        .route("/v1/nodes", get(handle_gateway_nodes))
         .with_state(app_state)
 }
 

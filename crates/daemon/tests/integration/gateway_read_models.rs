@@ -543,6 +543,11 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
             approved_device_count: 0,
             last_activity_ms: None,
         },
+        gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+            paired_device_count: 0,
+            managed_bridge_count: 0,
+            total_count: 0,
+        },
     );
     let encoded = serde_json::to_value(&summary).expect("serialize operator summary read model");
 

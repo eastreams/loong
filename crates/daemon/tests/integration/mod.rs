@@ -134,6 +134,7 @@ mod gateway_api_events;
 mod gateway_api_health;
 mod gateway_api_pairing;
 mod gateway_api_turn;
+mod gateway_nodes;
 mod gateway_owner_state;
 mod gateway_read_models;
 mod import_cli;
