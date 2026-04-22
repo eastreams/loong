@@ -103,6 +103,9 @@ pub fn missing_tool_call_followup_payload(reply_text: &str) -> Option<ToolDriven
     let detection_kind = detect_missing_tool_call_kind(sanitized_reply.as_str())?;
     let excerpt = truncated_missing_tool_call_excerpt(sanitized_reply.as_str());
     let reason = match detection_kind {
+        MissingToolCallKind::EmptyFollowup => format!(
+            "{MISSING_TOOL_CALL_REASON_PREFIX} previous assistant reply ended the tool-followup round without any content or tool call. If more tool work is needed, emit the exact next tool call now instead of returning an empty follow-up."
+        ),
         MissingToolCallKind::PseudoToolCommand => format!(
             "{MISSING_TOOL_CALL_REASON_PREFIX} previous assistant reply emitted pseudo-tool text instead of a real tool call. If another tool is required, emit the exact next tool call now instead of formatting it as plain text.\nReply excerpt:\n{excerpt}"
         ),
@@ -119,6 +122,7 @@ pub fn missing_tool_call_followup_payload(reply_text: &str) -> Option<ToolDriven
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MissingToolCallKind {
+    EmptyFollowup,
     PseudoToolCommand,
     NarratedToolPlan,
 }
@@ -126,7 +130,7 @@ enum MissingToolCallKind {
 fn detect_missing_tool_call_kind(reply_text: &str) -> Option<MissingToolCallKind> {
     let normalized_reply = reply_text.trim();
     if normalized_reply.is_empty() {
-        return None;
+        return Some(MissingToolCallKind::EmptyFollowup);
     }
 
     let has_pseudo_tool_command = normalized_reply
@@ -2153,6 +2157,14 @@ fn render_direct_routing_failure_repair_guidance(
         "Provide `query` for search mode, or `url` for fetch/request mode.".to_owned()
     } else if tool_failure_reason.starts_with("direct_web_ambiguous:") {
         "Choose either search mode (`query`) or request/fetch mode (`url` plus optional request fields), but not both at once.".to_owned()
+    } else if tool_failure_reason.starts_with("hidden_agent_requires_operation:") {
+        "Add `operation` for grouped agent/runtime control requests such as session archive, cancel, recover, or approval workflows.".to_owned()
+    } else if tool_failure_reason.starts_with("hidden_agent_requires_actionable_fields:") {
+        "Add the concrete session / approval / delegate / provider / config fields needed for the request, or set `operation` when the grouped `tool.invoke` request is ambiguous.".to_owned()
+    } else if tool_failure_reason.starts_with("hidden_skills_requires_actionable_fields:") {
+        "Add search, inspect, install, run, or list fields for the grouped `skills` surface, or provide `operation` to make the request explicit.".to_owned()
+    } else if tool_failure_reason.starts_with("hidden_channel_requires_operation:") {
+        "Add `operation` for the grouped channel surface, for example `messages.send`, `messages.reply`, `card.update`, or `feishu.whoami`.".to_owned()
     } else {
         return None;
     };
@@ -3465,6 +3477,60 @@ mod tests {
     }
 
     #[test]
+    fn tool_failure_followup_tail_renders_hidden_agent_operation_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "hidden_agent_requires_operation: provide `operation` for archive, cancel, recover, or other multi-session control work".to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"agent","request":{"session_ids":["child-1"]}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "archive these sessions",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for agent"));
+        assert!(user_prompt.contains("Add `operation`"));
+        assert!(user_prompt.contains(r#"Current request preview: {"session_ids":["child-1"]}"#));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_hidden_channel_operation_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "hidden_channel_requires_operation: provide `operation`, such as `messages.send`, `messages.reply`, `card.update`, or `feishu.whoami`".to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"channel","request":{"account_id":"default"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "send a message",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for channel"));
+        assert!(user_prompt.contains("messages.send"));
+        assert!(user_prompt.contains(r#"Current request preview: {"account_id":"default"}"#));
+    }
+
+    #[test]
     fn tool_failure_followup_tail_uses_failure_reason_when_shell_summary_redacts_args_type() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
@@ -3634,6 +3700,19 @@ mod tests {
 
         assert!(reason.contains("pseudo-tool text"));
         assert!(reason.contains("Reply excerpt"));
+        assert!(retryable);
+    }
+
+    #[test]
+    fn missing_tool_call_followup_detects_empty_followup() {
+        let payload = missing_tool_call_followup_payload("   ")
+            .expect("empty followup should trigger missing-tool-call recovery");
+
+        let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
+            panic!("expected tool failure payload");
+        };
+
+        assert!(reason.contains("without any content or tool call"));
         assert!(retryable);
     }
 
