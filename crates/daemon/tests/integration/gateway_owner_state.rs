@@ -60,6 +60,7 @@ fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
     let mut config = mvp::config::LoongConfig::default();
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
@@ -72,6 +73,7 @@ fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
     config.telegram.enabled = true;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
         config,
@@ -82,6 +84,7 @@ fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedS
     let mut config = super::mixed_account_weixin_plugin_bridge_config();
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
