@@ -736,8 +736,10 @@ mod tests {
         let workspace_root = Path::new("/tmp/workspace");
         let read_context =
             build_read_context_request_with_workspace_root("session-123", Some(workspace_root));
-        let staged =
-            build_read_stage_envelope_request_with_workspace_root("session-123", Some(workspace_root));
+        let staged = build_read_stage_envelope_request_with_workspace_root(
+            "session-123",
+            Some(workspace_root),
+        );
 
         assert_eq!(read_context.payload, staged.payload);
 

@@ -113,9 +113,11 @@ fn seed_approved_pairing_device(config: &mvp::config::LoongConfig) {
         loong_daemon::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
             &config.memory,
         );
+    let session_store_config =
+        loong_daemon::mvp::session::store::SessionStoreConfig::from(&memory_config);
     let registry =
         loong_daemon::mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(
-            memory_config,
+            session_store_config,
         )
         .expect("pairing registry");
     let requested_scopes = BTreeSet::from(["operator.read".to_owned()]);
