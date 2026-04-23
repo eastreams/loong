@@ -18,6 +18,7 @@
 .chat-shell > .panel {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -130,6 +131,8 @@
 .stack-list-scroll,
 .metric-grid-scroll {
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding-right: 0.2rem;
 }
@@ -137,6 +140,7 @@
 .chat-inspector-body {
   display: grid;
   gap: 0.9rem;
+  min-width: 0;
 }
 
 .session-item {
@@ -528,16 +532,19 @@
   display: grid;
   gap: 0.6rem;
   margin-top: 0.9rem;
+  min-width: 0;
 }
 
 .chat-inspector-tool-list {
   display: grid;
   gap: 0;
+  min-width: 0;
 }
 
 .chat-inspector-tool-item {
   display: grid;
   gap: 0.18rem;
+  min-width: 0;
   padding: 0.55rem 0;
   border-bottom: 1px solid var(--color-border-light);
   background: transparent;
@@ -553,6 +560,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 0.6rem;
+  min-width: 0;
 }
 
 .chat-inspector-tool-name {
@@ -576,12 +584,17 @@
 
 .chat-inspector-tool-meta {
   display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   font-size: 0.74rem;
   color: var(--color-text-secondary);
 }
 
 .chat-inspector-tool-meta span {
+  display: block;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

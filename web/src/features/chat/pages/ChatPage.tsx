@@ -648,7 +648,14 @@ export default function ChatPage() {
             ) : null}
 
             <div className="chat-composer-dock">
-              {showMascot ? <ChatMascot isChinese={isChinese} /> : null}
+              {showMascot ? (
+                <ChatMascot
+                  isChinese={isChinese}
+                  streamPhase={streamPhase}
+                  activeToolCount={activeTools.length}
+                  isSubmitting={isSubmitting}
+                />
+              ) : null}
 
               <form
                 className="composer composer-inline"
