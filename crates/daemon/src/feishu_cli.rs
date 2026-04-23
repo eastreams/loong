@@ -842,273 +842,329 @@ pub struct FeishuServeArgs {
     pub path: Option<String>,
 }
 
-pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
-    match command {
-        FeishuCommand::Auth { command } => match command {
-            FeishuAuthCommand::Start(args) => {
-                let payload = execute_feishu_auth_start(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_start_text)?;
+pub fn run_feishu_command(
+    command: FeishuCommand,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send>> {
+    Box::pin(async move {
+        match command {
+            FeishuCommand::Auth { command } => match command {
+                FeishuAuthCommand::Start(args) => {
+                    let payload = execute_feishu_auth_start(&args).await?;
+                    print_feishu_payload(&payload, args.common.json, render_auth_start_text)?;
+                }
+                FeishuAuthCommand::Exchange(args) => {
+                    let payload = execute_feishu_auth_exchange(&args).await?;
+                    print_feishu_payload(&payload, args.common.json, render_auth_exchange_text)?;
+                }
+                FeishuAuthCommand::List(args) => {
+                    let payload = execute_feishu_auth_list(&args).await?;
+                    print_feishu_payload(&payload, args.common.json, render_auth_list_text)?;
+                }
+                FeishuAuthCommand::Select(args) => {
+                    let payload = execute_feishu_auth_select(&args).await?;
+                    print_feishu_payload(&payload, args.common.json, render_auth_select_text)?;
+                }
+                FeishuAuthCommand::Status(args) => {
+                    let payload = execute_feishu_auth_status(&args).await?;
+                    print_feishu_payload(&payload, args.common.json, render_auth_status_text)?;
+                }
+                FeishuAuthCommand::Revoke(args) => {
+                    let payload = execute_feishu_auth_revoke(&args).await?;
+                    print_feishu_payload(&payload, args.common.json, render_auth_revoke_text)?;
+                }
+            },
+            FeishuCommand::Onboard(args) => {
+                let payload = execute_feishu_onboard(&args).await?;
+                print_feishu_payload(&payload, args.common.json, render_onboard_text)?;
             }
-            FeishuAuthCommand::Exchange(args) => {
-                let payload = execute_feishu_auth_exchange(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_exchange_text)?;
+            FeishuCommand::Whoami(args) => {
+                let payload = execute_feishu_whoami(&args).await?;
+                print_feishu_payload(&payload, args.common.json, render_whoami_text)?;
             }
-            FeishuAuthCommand::List(args) => {
-                let payload = execute_feishu_auth_list(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_list_text)?;
+            FeishuCommand::Doc { command } => match command {
+                FeishuDocCommand::Create(args) => {
+                    let payload = execute_feishu_doc_create(&args).await?;
+                    print_feishu_payload(&payload, args.grant.common.json, render_doc_create_text)?;
+                }
+                FeishuDocCommand::Append(args) => {
+                    let payload = execute_feishu_doc_append(&args).await?;
+                    print_feishu_payload(&payload, args.grant.common.json, render_doc_append_text)?;
+                }
+            },
+            FeishuCommand::Read { command } => match command {
+                FeishuReadCommand::Doc(args) => {
+                    let payload = execute_feishu_read_doc(&args).await?;
+                    print_feishu_payload(&payload, args.grant.common.json, render_read_doc_text)?;
+                }
+            },
+            FeishuCommand::Messages { command } => match command {
+                FeishuMessagesCommand::History(args) => {
+                    let payload = execute_feishu_messages_history(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_messages_history_text,
+                    )?;
+                }
+                FeishuMessagesCommand::Get(args) => {
+                    let payload = execute_feishu_messages_get(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_messages_get_text,
+                    )?;
+                }
+                FeishuMessagesCommand::Resource(args) => {
+                    let payload = execute_feishu_messages_resource(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_messages_resource_text,
+                    )?;
+                }
+            },
+            FeishuCommand::Search { command } => match command {
+                FeishuSearchCommand::Messages(args) => {
+                    let payload = execute_feishu_search_messages(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_search_messages_text,
+                    )?;
+                }
+            },
+            FeishuCommand::Calendar { command } => match command {
+                FeishuCalendarCommand::List(args) => {
+                    let payload = execute_feishu_calendar_list(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_calendar_list_text,
+                    )?;
+                }
+                FeishuCalendarCommand::Freebusy(args) => {
+                    let payload = execute_feishu_calendar_freebusy(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_calendar_freebusy_text,
+                    )?;
+                }
+            },
+            FeishuCommand::Bitable { command } => match command {
+                FeishuBitableCommand::AppCreate(args) => {
+                    let payload = execute_feishu_bitable_app_create(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_app_text,
+                    )?;
+                }
+                FeishuBitableCommand::AppGet(args) => {
+                    let payload = execute_feishu_bitable_app_get(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_app_text,
+                    )?;
+                }
+                FeishuBitableCommand::AppList(args) => {
+                    let payload = execute_feishu_bitable_app_list(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_app_list_text,
+                    )?;
+                }
+                FeishuBitableCommand::AppPatch(args) => {
+                    let payload = execute_feishu_bitable_app_patch(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_app_text,
+                    )?;
+                }
+                FeishuBitableCommand::AppCopy(args) => {
+                    let payload = execute_feishu_bitable_app_copy(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_app_text,
+                    )?;
+                }
+                FeishuBitableCommand::ListTables(args) => {
+                    let payload = execute_feishu_bitable_list_tables(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_list_tables_text,
+                    )?;
+                }
+                FeishuBitableCommand::CreateTable(args) => {
+                    let payload = execute_feishu_bitable_create_table(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_table_text,
+                    )?;
+                }
+                FeishuBitableCommand::PatchTable(args) => {
+                    let payload = execute_feishu_bitable_patch_table(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_table_text,
+                    )?;
+                }
+                FeishuBitableCommand::BatchCreateTables(args) => {
+                    let payload = execute_feishu_bitable_batch_create_tables(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_table_batch_create_text,
+                    )?;
+                }
+                FeishuBitableCommand::CreateRecord(args) => {
+                    let payload = execute_feishu_bitable_create_record(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_create_record_text,
+                    )?;
+                }
+                FeishuBitableCommand::UpdateRecord(args) => {
+                    let payload = execute_feishu_bitable_update_record(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_create_record_text,
+                    )?;
+                }
+                FeishuBitableCommand::DeleteRecord(args) => {
+                    let payload = execute_feishu_bitable_delete_record(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_delete_record_text,
+                    )?;
+                }
+                FeishuBitableCommand::BatchCreateRecords(args) => {
+                    let payload = execute_feishu_bitable_batch_create_records(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_batch_records_text,
+                    )?;
+                }
+                FeishuBitableCommand::BatchUpdateRecords(args) => {
+                    let payload = execute_feishu_bitable_batch_update_records(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_batch_records_text,
+                    )?;
+                }
+                FeishuBitableCommand::BatchDeleteRecords(args) => {
+                    let payload = execute_feishu_bitable_batch_delete_records(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_batch_records_text,
+                    )?;
+                }
+                FeishuBitableCommand::CreateField(args) => {
+                    let payload = execute_feishu_bitable_create_field(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_field_text,
+                    )?;
+                }
+                FeishuBitableCommand::ListFields(args) => {
+                    let payload = execute_feishu_bitable_list_fields(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_field_list_text,
+                    )?;
+                }
+                FeishuBitableCommand::UpdateField(args) => {
+                    let payload = execute_feishu_bitable_update_field(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_field_text,
+                    )?;
+                }
+                FeishuBitableCommand::DeleteField(args) => {
+                    let payload = execute_feishu_bitable_delete_field(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_delete_field_text,
+                    )?;
+                }
+                FeishuBitableCommand::CreateView(args) => {
+                    let payload = execute_feishu_bitable_create_view(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_view_text,
+                    )?;
+                }
+                FeishuBitableCommand::GetView(args) => {
+                    let payload = execute_feishu_bitable_get_view(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_view_text,
+                    )?;
+                }
+                FeishuBitableCommand::ListViews(args) => {
+                    let payload = execute_feishu_bitable_list_views(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_view_list_text,
+                    )?;
+                }
+                FeishuBitableCommand::PatchView(args) => {
+                    let payload = execute_feishu_bitable_patch_view(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_view_text,
+                    )?;
+                }
+                FeishuBitableCommand::SearchRecords(args) => {
+                    let payload = execute_feishu_bitable_search_records(&args).await?;
+                    print_feishu_payload(
+                        &payload,
+                        args.grant.common.json,
+                        render_bitable_search_records_text,
+                    )?;
+                }
+            },
+            FeishuCommand::Send(args) => {
+                let payload = execute_feishu_send(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_send_text)?;
             }
-            FeishuAuthCommand::Select(args) => {
-                let payload = execute_feishu_auth_select(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_select_text)?;
+            FeishuCommand::Reply(args) => {
+                let payload = execute_feishu_reply(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_reply_text)?;
             }
-            FeishuAuthCommand::Status(args) => {
-                let payload = execute_feishu_auth_status(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_status_text)?;
+            FeishuCommand::Serve(args) => {
+                mvp::channel::run_feishu_channel(
+                    args.common.config.as_deref(),
+                    args.common.account.as_deref(),
+                    args.bind.as_deref(),
+                    args.path.as_deref(),
+                )
+                .await?;
             }
-            FeishuAuthCommand::Revoke(args) => {
-                let payload = execute_feishu_auth_revoke(&args).await?;
-                print_feishu_payload(&payload, args.common.json, render_auth_revoke_text)?;
-            }
-        },
-        FeishuCommand::Onboard(args) => {
-            let payload = execute_feishu_onboard(&args).await?;
-            print_feishu_payload(&payload, args.common.json, render_onboard_text)?;
         }
-        FeishuCommand::Whoami(args) => {
-            let payload = execute_feishu_whoami(&args).await?;
-            print_feishu_payload(&payload, args.common.json, render_whoami_text)?;
-        }
-        FeishuCommand::Doc { command } => match command {
-            FeishuDocCommand::Create(args) => {
-                let payload = execute_feishu_doc_create(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_doc_create_text)?;
-            }
-            FeishuDocCommand::Append(args) => {
-                let payload = execute_feishu_doc_append(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_doc_append_text)?;
-            }
-        },
-        FeishuCommand::Read { command } => match command {
-            FeishuReadCommand::Doc(args) => {
-                let payload = execute_feishu_read_doc(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_read_doc_text)?;
-            }
-        },
-        FeishuCommand::Messages { command } => match command {
-            FeishuMessagesCommand::History(args) => {
-                let payload = execute_feishu_messages_history(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_messages_history_text,
-                )?;
-            }
-            FeishuMessagesCommand::Get(args) => {
-                let payload = execute_feishu_messages_get(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_messages_get_text)?;
-            }
-            FeishuMessagesCommand::Resource(args) => {
-                let payload = execute_feishu_messages_resource(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_messages_resource_text,
-                )?;
-            }
-        },
-        FeishuCommand::Search { command } => match command {
-            FeishuSearchCommand::Messages(args) => {
-                let payload = execute_feishu_search_messages(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_search_messages_text,
-                )?;
-            }
-        },
-        FeishuCommand::Calendar { command } => match command {
-            FeishuCalendarCommand::List(args) => {
-                let payload = execute_feishu_calendar_list(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_calendar_list_text)?;
-            }
-            FeishuCalendarCommand::Freebusy(args) => {
-                let payload = execute_feishu_calendar_freebusy(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_calendar_freebusy_text,
-                )?;
-            }
-        },
-        FeishuCommand::Bitable { command } => match command {
-            FeishuBitableCommand::AppCreate(args) => {
-                let payload = execute_feishu_bitable_app_create(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
-            }
-            FeishuBitableCommand::AppGet(args) => {
-                let payload = execute_feishu_bitable_app_get(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
-            }
-            FeishuBitableCommand::AppList(args) => {
-                let payload = execute_feishu_bitable_app_list(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_app_list_text,
-                )?;
-            }
-            FeishuBitableCommand::AppPatch(args) => {
-                let payload = execute_feishu_bitable_app_patch(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
-            }
-            FeishuBitableCommand::AppCopy(args) => {
-                let payload = execute_feishu_bitable_app_copy(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
-            }
-            FeishuBitableCommand::ListTables(args) => {
-                let payload = execute_feishu_bitable_list_tables(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_list_tables_text,
-                )?;
-            }
-            FeishuBitableCommand::CreateTable(args) => {
-                let payload = execute_feishu_bitable_create_table(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_table_text)?;
-            }
-            FeishuBitableCommand::PatchTable(args) => {
-                let payload = execute_feishu_bitable_patch_table(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_table_text)?;
-            }
-            FeishuBitableCommand::BatchCreateTables(args) => {
-                let payload = execute_feishu_bitable_batch_create_tables(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_table_batch_create_text,
-                )?;
-            }
-            FeishuBitableCommand::CreateRecord(args) => {
-                let payload = execute_feishu_bitable_create_record(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_create_record_text,
-                )?;
-            }
-            FeishuBitableCommand::UpdateRecord(args) => {
-                let payload = execute_feishu_bitable_update_record(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_create_record_text,
-                )?;
-            }
-            FeishuBitableCommand::DeleteRecord(args) => {
-                let payload = execute_feishu_bitable_delete_record(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_delete_record_text,
-                )?;
-            }
-            FeishuBitableCommand::BatchCreateRecords(args) => {
-                let payload = execute_feishu_bitable_batch_create_records(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_batch_records_text,
-                )?;
-            }
-            FeishuBitableCommand::BatchUpdateRecords(args) => {
-                let payload = execute_feishu_bitable_batch_update_records(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_batch_records_text,
-                )?;
-            }
-            FeishuBitableCommand::BatchDeleteRecords(args) => {
-                let payload = execute_feishu_bitable_batch_delete_records(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_batch_records_text,
-                )?;
-            }
-            FeishuBitableCommand::CreateField(args) => {
-                let payload = execute_feishu_bitable_create_field(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_field_text)?;
-            }
-            FeishuBitableCommand::ListFields(args) => {
-                let payload = execute_feishu_bitable_list_fields(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_field_list_text,
-                )?;
-            }
-            FeishuBitableCommand::UpdateField(args) => {
-                let payload = execute_feishu_bitable_update_field(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_field_text)?;
-            }
-            FeishuBitableCommand::DeleteField(args) => {
-                let payload = execute_feishu_bitable_delete_field(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_delete_field_text,
-                )?;
-            }
-            FeishuBitableCommand::CreateView(args) => {
-                let payload = execute_feishu_bitable_create_view(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_view_text)?;
-            }
-            FeishuBitableCommand::GetView(args) => {
-                let payload = execute_feishu_bitable_get_view(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_view_text)?;
-            }
-            FeishuBitableCommand::ListViews(args) => {
-                let payload = execute_feishu_bitable_list_views(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_view_list_text,
-                )?;
-            }
-            FeishuBitableCommand::PatchView(args) => {
-                let payload = execute_feishu_bitable_patch_view(&args).await?;
-                print_feishu_payload(&payload, args.grant.common.json, render_bitable_view_text)?;
-            }
-            FeishuBitableCommand::SearchRecords(args) => {
-                let payload = execute_feishu_bitable_search_records(&args).await?;
-                print_feishu_payload(
-                    &payload,
-                    args.grant.common.json,
-                    render_bitable_search_records_text,
-                )?;
-            }
-        },
-        FeishuCommand::Send(args) => {
-            let payload = execute_feishu_send(&args).await?;
-            print_feishu_payload(&payload, args.grant.common.json, render_send_text)?;
-        }
-        FeishuCommand::Reply(args) => {
-            let payload = execute_feishu_reply(&args).await?;
-            print_feishu_payload(&payload, args.grant.common.json, render_reply_text)?;
-        }
-        FeishuCommand::Serve(args) => {
-            mvp::channel::run_feishu_channel(
-                args.common.config.as_deref(),
-                args.common.account.as_deref(),
-                args.bind.as_deref(),
-                args.path.as_deref(),
-            )
-            .await?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 pub async fn execute_feishu_onboard(args: &FeishuOnboardArgs) -> CliResult<Value> {
