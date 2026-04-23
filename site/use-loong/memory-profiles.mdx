@@ -5,11 +5,15 @@ description: Choose how Loong preserves continuity without turning memory into a
 
 # Memory Profiles
 
-Loong exposes memory as an operator-visible choice rather than one hidden
-global mode.
+Loong exposes one public session-memory form rather than several competing
+runtime memory models.
+
+The operator-facing choice is the continuity profile, not the underlying
+retrieval implementation.
 
 The public contract is intentionally narrow: memory should help continuity, but
-it should not silently become a second runtime authority.
+it should not silently become a second runtime authority or a second product
+surface.
 
 ## Current Public Profiles
 
@@ -41,6 +45,8 @@ itself remains a normal operator-facing runtime setting.
 
 - preserves continuity through an explicit profile choice
 - keeps profile memory advisory rather than identity-overriding
+- keeps one public session-memory model instead of asking operators to choose
+  between multiple runtime memory forms
 - stays visible in onboarding and runtime config instead of hiding behind prompt magic
 - helps operators choose the right continuity cost for the job
 
@@ -50,6 +56,7 @@ itself remains a normal operator-facing runtime setting.
 - silent replacement of runtime identity through imported memory
 - automatic long-range autonomy just because persistence exists
 - a requirement that every assistant path use durable memory on day one
+- that most operators should need to reason about internal memory-system strategy
 
 ## Profile Note And Durable Context
 
@@ -62,6 +69,13 @@ That matters because:
 - it should enrich the assistant without becoming a second authority over the runtime
 - future richer recall can build on this lane without changing the public truth
   that operator-visible runtime identity stays explicit
+
+## Advanced Runtime Note
+
+Loong still has internal memory-system strategies for retrieval and staging.
+Those are runtime-facing implementation details. The public product contract
+should continue to center on one session-memory model with profile-driven
+continuity, not on multiple parallel memory forms.
 
 ## Recommended Progression
 

@@ -315,14 +315,8 @@ pub(crate) fn search_workspace_memory_documents(
 pub(crate) fn build_read_stage_envelope_request_for_memory_config(
     session_id: &str,
     workspace_root: Option<&Path>,
-    config: &crate::config::MemoryConfig,
 ) -> MemoryCoreRequest {
-    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
-    build_read_stage_envelope_request_with_workspace_root(
-        session_id,
-        workspace_root,
-        &runtime_config,
-    )
+    build_read_stage_envelope_request_with_workspace_root(session_id, workspace_root)
 }
 
 #[cfg(feature = "memory-sqlite")]

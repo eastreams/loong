@@ -357,8 +357,8 @@ Configuration for conversation memory and history management.
 | Field | Type | Default | Valid Values | Description |
 |-------|------|---------|--------------|-------------|
 | `backend` | string | `"sqlite"` | `"sqlite"` | Storage backend |
-| `profile` | string | `"window_only"` | `"window_only"`, `"window_plus_summary"`, `"profile_plus_window"` | Memory mode profile |
-| `system` | string | `"builtin"` | `"builtin"`, `"workspace_recall"`, `"recall_first"` | Memory system implementation |
+| `profile` | string | `"window_only"` | `"window_only"`, `"window_plus_summary"`, `"profile_plus_window"` | Public session-memory continuity profile |
+| `system` | string | `"builtin"` | `"builtin"`, `"workspace_recall"`, `"recall_first"` | Advanced runtime memory strategy override |
 | `fail_open` | boolean | `true` | `true`, `false` | Allow fallback on memory errors |
 | `ingest_mode` | string | `"sync_minimal"` | `"sync_minimal"`, `"async_background"` | Message ingestion mode |
 | `sqlite_path` | string | `~/.loong/memory.sqlite3` | Path | SQLite database location |
@@ -370,6 +370,9 @@ Note: `memory.summary_max_chars` values below `256` are accepted but normalized 
 
 Memory system notes:
 
+- Normal operator-facing memory selection should stay on `memory.profile`.
+  `memory.system` is an advanced/runtime-facing override, not the main public
+  memory form.
 - `builtin`: canonical SQLite-backed memory with structured retrieval planning and planner diagnostics.
 - `workspace_recall`: workspace-document recall path optimized for retrieved references and rank-stage reordering.
 - `recall_first`: provenance-aware recall path that suppresses summary context when retrieved memory is available.

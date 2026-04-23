@@ -4,8 +4,6 @@ use loong_contracts::MemoryCoreRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-
 use super::{
     DerivedMemoryKind, HydratedMemoryContext, MemoryContextProvenance, MemoryDiagnostics,
     MemoryRecallMode, MemoryRetrievalRequest, MemoryRetrievalStrategy, MemoryScope,
@@ -203,29 +201,19 @@ pub fn build_window_request(session_id: &str, limit: usize) -> MemoryCoreRequest
     }
 }
 
-pub fn build_read_context_request(
-    session_id: &str,
-    config: &MemoryRuntimeConfig,
-) -> MemoryCoreRequest {
-    build_read_context_request_with_workspace_root(session_id, None, config)
+pub fn build_read_context_request(session_id: &str) -> MemoryCoreRequest {
+    build_read_context_request_with_workspace_root(session_id, None)
 }
 
 pub fn build_read_context_request_with_workspace_root(
     session_id: &str,
     workspace_root: Option<&Path>,
-    config: &MemoryRuntimeConfig,
 ) -> MemoryCoreRequest {
     let workspace_root_value = workspace_root.map(|path| path.display().to_string());
     MemoryCoreRequest {
         operation: MEMORY_OP_READ_CONTEXT.to_owned(),
         payload: json!({
             "session_id": session_id,
-            "profile": config.profile.as_str(),
-            "system": config.system.as_str(),
-            "system_id": config.resolved_system_id.as_deref(),
-            "sliding_window": config.sliding_window,
-            "summary_max_chars": config.summary_max_chars,
-            "profile_note": config.profile_note,
             "workspace_root": workspace_root_value,
         }),
     }
@@ -266,7 +254,6 @@ pub fn build_read_stage_envelope_request(session_id: &str) -> MemoryCoreRequest 
 pub fn build_read_stage_envelope_request_with_workspace_root(
     session_id: &str,
     workspace_root: Option<&Path>,
-    config: &MemoryRuntimeConfig,
 ) -> MemoryCoreRequest {
     let mut payload = serde_json::Map::from_iter([("session_id".to_owned(), json!(session_id))]);
 
@@ -276,19 +263,6 @@ pub fn build_read_stage_envelope_request_with_workspace_root(
             json!(workspace_root.to_string_lossy().to_string()),
         );
     }
-
-    payload.insert("profile".to_owned(), json!(config.profile.as_str()));
-    payload.insert("system".to_owned(), json!(config.system.as_str()));
-    payload.insert(
-        "system_id".to_owned(),
-        json!(config.resolved_system_id.as_deref()),
-    );
-    payload.insert("sliding_window".to_owned(), json!(config.sliding_window));
-    payload.insert(
-        "summary_max_chars".to_owned(),
-        json!(config.summary_max_chars),
-    );
-    payload.insert("profile_note".to_owned(), json!(config.profile_note));
 
     MemoryCoreRequest {
         operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
@@ -710,18 +684,30 @@ mod tests {
 
     #[test]
     fn build_read_context_request_with_workspace_root_serializes_workspace_root() {
-        let config = MemoryRuntimeConfig::for_sqlite_path("/tmp/protocol-memory.sqlite3");
         let workspace_root = Path::new("/tmp/workspace");
 
-        let request = build_read_context_request_with_workspace_root(
-            "session-123",
-            Some(workspace_root),
-            &config,
-        );
+        let request =
+            build_read_context_request_with_workspace_root("session-123", Some(workspace_root));
 
         assert_eq!(request.operation, MEMORY_OP_READ_CONTEXT);
         assert_eq!(request.payload["session_id"], "session-123");
         assert_eq!(request.payload["workspace_root"], "/tmp/workspace");
+        assert_eq!(request.payload.as_object().map(|map| map.len()), Some(2));
+    }
+
+    #[test]
+    fn build_read_stage_envelope_request_with_workspace_root_uses_canonical_payload_shape() {
+        let workspace_root = Path::new("/tmp/workspace");
+
+        let request = build_read_stage_envelope_request_with_workspace_root(
+            "session-123",
+            Some(workspace_root),
+        );
+
+        assert_eq!(request.operation, MEMORY_OP_READ_STAGE_ENVELOPE);
+        assert_eq!(request.payload["session_id"], "session-123");
+        assert_eq!(request.payload["workspace_root"], "/tmp/workspace");
+        assert_eq!(request.payload.as_object().map(|map| map.len()), Some(2));
     }
 
     #[test]
