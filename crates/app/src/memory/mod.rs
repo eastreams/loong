@@ -61,9 +61,9 @@ pub use protocol::{
     decode_window_turns, encode_stage_envelope_payload, parse_exact_memory_core_operation,
 };
 #[cfg(feature = "memory-sqlite")]
-pub(crate) use sqlite::{CanonicalMemorySearchHit, WorkspaceMemoryIndexedSearchHit};
-#[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationSessionSummary;
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use sqlite::{CanonicalMemorySearchHit, WorkspaceMemoryIndexedSearchHit};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{
     ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics,

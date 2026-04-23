@@ -247,16 +247,20 @@ pub(super) async fn dashboard_tools(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardToolsPayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
-        &snapshot.config,
-        None,
-    );
+    let tool_runtime =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&snapshot.config, None);
     Ok(Json(ApiEnvelope {
         ok: true,
         data: DashboardToolsPayload {
             approval_mode: approval_mode_label(snapshot.config.tools.approval.mode).to_owned(),
             autonomy_profile: snapshot.config.tools.autonomy_profile.as_str().to_owned(),
-            consent_default_mode: snapshot.config.tools.consent.default_mode.as_str().to_owned(),
+            consent_default_mode: snapshot
+                .config
+                .tools
+                .consent
+                .default_mode
+                .as_str()
+                .to_owned(),
             shell_default_mode: snapshot.config.tools.shell_default_mode.clone(),
             shell_allow_count: snapshot.config.tools.shell_allow.len(),
             shell_deny_count: snapshot.config.tools.shell_deny.len(),
@@ -299,10 +303,8 @@ fn build_dashboard_approval_item(
         .and_then(|payload| payload.get("args_json"))
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    let request_summary = mvp::tools::summarize_tool_request_for_display(
-        approval.tool_name.as_str(),
-        raw_request,
-    );
+    let request_summary =
+        mvp::tools::summarize_tool_request_for_display(approval.tool_name.as_str(), raw_request);
 
     DashboardApprovalItemPayload {
         approval_request_id: approval.approval_request_id,

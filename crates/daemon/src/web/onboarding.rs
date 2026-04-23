@@ -245,7 +245,7 @@ fn apply_provider_request_to_config(
         provider.set_models_endpoint(None);
     } else {
         provider.set_base_url(route.to_owned());
-        provider.set_chat_completions_path(kind.profile().chat_completions_path.to_owned());
+        provider.set_chat_completions_path(chat_completions_path_for_base_route(kind, route));
         provider.set_endpoint(None);
         provider.set_models_endpoint(None);
     }
@@ -323,6 +323,39 @@ mod tests {
             config.provider.endpoint(),
             "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions"
         );
+    }
+
+    #[test]
+    fn apply_provider_request_keeps_versioned_kimi_base_route_from_doubling_v1() {
+        let mut config = mvp::config::LoongConfig::default();
+        let request = OnboardProviderWriteRequest {
+            kind: "kimi".to_owned(),
+            model: "kimi-k2.6".to_owned(),
+            base_url_or_endpoint: "https://api.moonshot.cn/v1".to_owned(),
+            api_key: Some("test-key".to_owned()),
+        };
+
+        apply_provider_request_to_config(&mut config, &request)
+            .expect("versioned kimi base route should apply");
+
+        assert_eq!(
+            config.provider.endpoint(),
+            "https://api.moonshot.cn/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn provider_probe_request_uses_kimi_k2_6_compatible_parameters() {
+        let mut provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Kimi);
+        provider.model = "kimi-k2.6".to_owned();
+
+        let request = provider_probe_request(&provider);
+
+        assert_eq!(request["model"], "kimi-k2.6");
+        assert_eq!(request["temperature"], json!(1.0));
+        assert_eq!(request["max_tokens"], json!(64));
+        assert_eq!(request["thinking"]["type"], "disabled");
     }
 
     #[test]
@@ -666,6 +699,30 @@ fn looks_like_provider_endpoint(value: &str) -> bool {
             || normalized.ends_with("/responses"))
 }
 
+fn chat_completions_path_for_base_route(kind: mvp::config::ProviderKind, route: &str) -> String {
+    let default_path = kind.profile().chat_completions_path;
+    let Ok(url) = reqwest::Url::parse(route.trim()) else {
+        return default_path.to_owned();
+    };
+
+    let route_path = url.path().trim_end_matches('/');
+    if route_path.is_empty() || route_path == "/" {
+        return default_path.to_owned();
+    }
+
+    if default_path == route_path {
+        return "/".to_owned();
+    }
+
+    if let Some(remainder) = default_path.strip_prefix(route_path)
+        && remainder.starts_with('/')
+    {
+        return remainder.to_owned();
+    }
+
+    default_path.to_owned()
+}
+
 fn build_provider_probe_headers(
     provider: &mvp::config::ProviderConfig,
 ) -> Result<reqwest::header::HeaderMap, WebApiError> {
@@ -739,6 +796,34 @@ fn provider_probe_model(provider: &mvp::config::ProviderConfig) -> String {
     }
 }
 
+fn provider_probe_request(provider: &mvp::config::ProviderConfig) -> Value {
+    let model = provider_probe_model(provider);
+    let mut request = json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "ping"
+            }
+        ],
+        "max_tokens": 1,
+        "temperature": 0,
+        "stream": false
+    });
+
+    if provider.kind == mvp::config::ProviderKind::Kimi {
+        let normalized_model = model.to_ascii_lowercase();
+        request["temperature"] = json!(1.0);
+        request["max_tokens"] = json!(64);
+
+        if normalized_model.starts_with("kimi-k2.") {
+            request["thinking"] = json!({ "type": "disabled" });
+        }
+    }
+
+    request
+}
+
 // Keep onboarding validation lightweight: prove the route is reachable and the
 // provider accepts an authenticated probe. For first-run onboarding, a provider-
 // specific request-shape rejection is still good enough to let users proceed,
@@ -792,18 +877,7 @@ async fn validate_provider_config(
 
     let credential_result = match provider.kind.protocol_family() {
         mvp::config::ProviderProtocolFamily::OpenAiChatCompletions => {
-            let request = json!({
-                "model": provider_probe_model(provider),
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "ping"
-                    }
-                ],
-                "max_tokens": 1,
-                "temperature": 0,
-                "stream": false
-            });
+            let request = provider_probe_request(provider);
 
             match client
                 .post(endpoint.as_str())

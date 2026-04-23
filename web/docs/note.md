@@ -12,7 +12,6 @@
 建议拆分：
 
 - 外观优化：重画形象、表情和气泡样式，补更自然的 idle / thinking / success / error 动效。
-- 布局优化：不要继续把它做成容易挤压 composer 的悬挂物，优先改成和 chat 面板结构更稳定的 dock / corner / inline companion。
 - 状态联动：直接消费 chat 现有 `streamPhase` 和 `turn.phase`，至少覆盖 `idle`、`connecting`、`thinking`、`running_tools`、`streaming`、`finalizing`、`error`。
 - 行为模型：先做有限状态机，不先上行为树。当前后端真值足够支撑状态驱动，但还不适合做复杂自主行为编排。
 - Agent 化边界：限定为聊天陪伴、读取当前 Web 页面内容、对当前 Web 页面做有限操作，不扩展到通用 OS 级控制。

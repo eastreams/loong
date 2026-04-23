@@ -48,6 +48,16 @@ function defaultRouteForKind(
   return normalized.length > 0 ? normalized : null;
 }
 
+function suggestedModelForKind(
+  kind: string,
+  catalog: ProviderCatalogItem[],
+): string | null {
+  const entry = catalog.find((item) => item.kind === kind);
+  const value = entry?.recommendedOnboardingModel ?? entry?.defaultModel ?? "";
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
 function shouldAutoReplaceRouteOnKindSwitch(params: {
   currentRoute: string;
   currentKind: string;
@@ -79,6 +89,43 @@ function shouldAutoReplaceRouteOnKindSwitch(params: {
 
   const nextDefaultRoute = defaultRouteForKind(nextKind, catalog);
   if (nextDefaultRoute && normalizedCurrentRoute === nextDefaultRoute) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldAutoReplaceModelOnKindSwitch(params: {
+  currentModel: string;
+  currentKind: string;
+  sourceModel: string;
+  nextKind: string;
+  catalog: ProviderCatalogItem[];
+}): boolean {
+  const {
+    currentModel,
+    currentKind,
+    sourceModel,
+    nextKind,
+    catalog,
+  } = params;
+  const normalizedCurrentModel = currentModel.trim();
+  if (!normalizedCurrentModel) {
+    return true;
+  }
+
+  const normalizedSourceModel = sourceModel.trim();
+  if (normalizedCurrentModel === normalizedSourceModel) {
+    return true;
+  }
+
+  const currentSuggestedModel = suggestedModelForKind(currentKind, catalog);
+  if (currentSuggestedModel && normalizedCurrentModel === currentSuggestedModel) {
+    return true;
+  }
+
+  const nextSuggestedModel = suggestedModelForKind(nextKind, catalog);
+  if (nextSuggestedModel && normalizedCurrentModel === nextSuggestedModel) {
     return true;
   }
 
@@ -170,20 +217,37 @@ export function useProviderConfigForm(
 
 function setKindWithRouteReset(nextKind: string) {
   const currentKind = kind;
+  const currentCatalog = catalogRef.current;
   setKind(nextKind);
   updateKindDirty(nextKind !== sourceRef.current.kind);
-  const defaultRoute = defaultRouteForKind(nextKind, catalogRef.current);
+  const defaultRoute = defaultRouteForKind(nextKind, currentCatalog);
   setBaseUrlOrEndpoint((current) => {
     const shouldReplaceRoute = shouldAutoReplaceRouteOnKindSwitch({
       currentRoute: current,
       currentKind,
       sourceRoute: sourceRef.current.baseUrlOrEndpoint,
       nextKind,
-      catalog: catalogRef.current,
+      catalog: currentCatalog,
     });
     const nextValue =
       defaultRoute && shouldReplaceRoute ? defaultRoute : current;
     updateBaseUrlDirty(nextValue !== sourceRef.current.baseUrlOrEndpoint);
+    return nextValue;
+  });
+  const suggestedModel = suggestedModelForKind(nextKind, currentCatalog);
+  setModel((current) => {
+    const shouldReplaceModel =
+      !modelDirtyRef.current ||
+      shouldAutoReplaceModelOnKindSwitch({
+        currentModel: current,
+        currentKind,
+        sourceModel: sourceRef.current.model,
+        nextKind,
+        catalog: currentCatalog,
+      });
+    const nextValue =
+      suggestedModel && shouldReplaceModel ? suggestedModel : current;
+    updateModelDirty(nextValue !== sourceRef.current.model);
     return nextValue;
   });
 }

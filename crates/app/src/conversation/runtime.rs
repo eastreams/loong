@@ -2128,14 +2128,7 @@ where
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ProviderTurn> {
         self.request_turn_with_runtime_signals(
-            config,
-            session_id,
-            turn_id,
-            messages,
-            tool_view,
-            None,
-            binding,
-            None,
+            config, session_id, turn_id, messages, tool_view, None, binding, None,
         )
         .await
     }

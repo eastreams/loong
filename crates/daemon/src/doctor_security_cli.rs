@@ -1658,8 +1658,8 @@ mod tests {
     use super::*;
 
     use crate::test_support::ScopedEnv;
-    use std::fs;
     use loong_contracts::SecretRef;
+    use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::MutexGuard;

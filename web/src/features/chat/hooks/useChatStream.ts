@@ -4,6 +4,9 @@ import { ApiRequestError } from "../../../lib/api/client";
 import { resolveTokenHintEnv, resolveTokenHintPath } from "../../../lib/auth/tokenHint";
 import {
   chatApi,
+  isInternalAssistantRecordContent,
+  looksLikeInternalAssistantRecordContent,
+  stripInternalAssistantRecordPrefix,
   type ChatMessage,
   type ChatSessionSummary,
   type ChatTurnStreamEvent,
@@ -132,6 +135,7 @@ export function useChatStream({
 }: UseChatStreamParams) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const internalContentBuffersRef = useRef<Map<string, string>>(new Map());
 
   const stopStream = useCallback(() => {
     if (abortControllerRef.current) {
@@ -164,7 +168,33 @@ export function useChatStream({
             streamPhase: "streaming",
             messages: current.messages.map((message) =>
               message.id === placeholderId
-                ? { ...message, content: `${message.content}${event.delta}` }
+                ? (() => {
+                    const bufferedInternalContent =
+                      internalContentBuffersRef.current.get(placeholderId);
+                    const nextContent = bufferedInternalContent
+                      ? `${bufferedInternalContent}${event.delta}`
+                      : `${message.content}${event.delta}`;
+                    if (
+                      ((message.content.trim().length === 0 ||
+                        bufferedInternalContent) &&
+                        looksLikeInternalAssistantRecordContent(event.delta)) ||
+                      bufferedInternalContent ||
+                      isInternalAssistantRecordContent(nextContent)
+                    ) {
+                      const visibleContent =
+                        stripInternalAssistantRecordPrefix(nextContent);
+                      if (visibleContent) {
+                        internalContentBuffersRef.current.delete(placeholderId);
+                        return { ...message, content: visibleContent };
+                      }
+                      internalContentBuffersRef.current.set(placeholderId, nextContent);
+                      return {
+                        ...message,
+                        content: "",
+                      };
+                    }
+                    return { ...message, content: nextContent };
+                  })()
                 : message,
             ),
           }));
@@ -222,6 +252,37 @@ export function useChatStream({
           }));
           break;
         case "turn.completed":
+          internalContentBuffersRef.current.delete(placeholderId);
+          if (
+            event.message.role === "assistant" &&
+            isInternalAssistantRecordContent(event.message.content)
+          ) {
+            const visibleContent = stripInternalAssistantRecordPrefix(
+              event.message.content,
+            );
+            if (visibleContent) {
+              updateSessionViewState(targetSessionId, (current) => ({
+                messages: current.messages.map((message) =>
+                  message.id === placeholderId
+                    ? { ...event.message, content: visibleContent }
+                    : message,
+                ),
+                activeTools: [],
+                recentTools: current.recentTools,
+                pendingAssistantId: null,
+                streamPhase: "idle",
+              }));
+              break;
+            }
+            updateSessionViewState(targetSessionId, (current) => ({
+              ...current,
+              messages: current.messages.filter((message) => message.id !== placeholderId),
+              activeTools: [],
+              pendingAssistantId: null,
+              streamPhase: "idle",
+            }));
+            break;
+          }
           updateSessionViewState(targetSessionId, (current) => ({
             messages: current.messages.map((message) =>
               message.id === placeholderId ? event.message : message,
@@ -233,6 +294,7 @@ export function useChatStream({
           }));
           break;
         case "turn.failed":
+          internalContentBuffersRef.current.delete(placeholderId);
           updateSessionViewState(targetSessionId, (current) => ({
             messages: current.messages.filter((message) => message.id !== placeholderId),
             activeTools: [],
