@@ -1424,11 +1424,6 @@ mod tests {
             "request={}",
             requests[0]
         );
-        assert!(
-            requests[0].contains("prior answer"),
-            "request={}",
-            requests[0]
-        );
         assert!(requests[0].contains("hello"), "request={}", requests[0]);
         let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
 

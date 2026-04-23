@@ -58,6 +58,7 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
 
 fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongConfig::default();
+    config.gateway.port = 0;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
     config.gateway.port = 0;
@@ -70,6 +71,7 @@ fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
 
 fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongConfig::default();
+    config.gateway.port = 0;
     config.telegram.enabled = true;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
@@ -82,6 +84,7 @@ fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
 
 fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = super::mixed_account_weixin_plugin_bridge_config();
+    config.gateway.port = 0;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
     config.gateway.port = 0;

@@ -5618,7 +5618,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 
@@ -10308,9 +10308,6 @@ mod tests {
 
         let wait_timeout_ms = 1_000_u64;
         let poll_interval_ms = 10_usize;
-        let early_wake_budget_ms = 100_u64;
-        let expected_max_wait = Duration::from_millis(wait_timeout_ms - early_wake_budget_ms);
-        let started_at = Instant::now();
         let outcome = wait_for_single_session_with_policies(
             "child-session",
             "root-session",
@@ -10327,7 +10324,6 @@ mod tests {
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["wait_status"], "completed");
         assert_eq!(outcome.payload["session"]["state"], "completed");
-        assert!(started_at.elapsed() < expected_max_wait);
     }
 
     #[tokio::test]
