@@ -180,13 +180,19 @@ model = "auto"
 - `api_key = { env = "OPENAI_API_KEY" }` reads the secret from that environment variable. `api_key = "OPENAI_API_KEY"` would instead treat the string as the literal key value — a common pitfall.
 - `model = "auto"` uses provider-side discovery; pin `model = "<id>"` when discovery is unreliable for your region or account.
 
-#### Channels — Lark
+#### Channels — Lark / Feishu
 
 Recommended first-run setup:
 
 ```bash
+# International Lark tenants (open.larksuite.com)
 loong feishu onboard --domain lark
+
+# China Feishu tenants (open.feishu.cn) — the CLI default
+loong feishu onboard --domain feishu
 ```
+
+Pick the `--domain` that matches the tenant you log in to: `lark` hits `open.larksuite.com` (international), `feishu` hits `open.feishu.cn` (China). Running with the wrong domain sends you to the wrong registration endpoint and the QR flow will fail to bind. If you omit `--domain` entirely the CLI defaults to `feishu`.
 
 That flow shows an in-terminal QR code, creates the bot app through the official Lark/Feishu registration API, and writes the generated credentials into `loong.toml`. Manual fallback is still available through `loong feishu onboard --manual --app-id ... --app-secret ...`.
 
