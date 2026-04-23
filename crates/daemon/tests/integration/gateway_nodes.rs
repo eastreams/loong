@@ -25,8 +25,9 @@ fn gateway_nodes_test_config(label: &str) -> (mvp::config::LoongConfig, std::pat
 fn seed_approved_pairing_device(config: &mvp::config::LoongConfig) {
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
     let registry =
-        mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)
+        mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(session_store_config)
             .expect("pairing registry");
     let requested_scopes =
         BTreeSet::from(["operator.read".to_owned(), "operator.pairing".to_owned()]);
