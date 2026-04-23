@@ -500,7 +500,7 @@ const fn default_turn_loop_max_consecutive_same_tool() -> usize {
 }
 
 const fn default_fast_lane_max_tool_steps_per_turn() -> usize {
-    10
+    1
 }
 
 const fn default_fast_lane_parallel_tool_execution_max_in_flight() -> usize {
@@ -508,7 +508,7 @@ const fn default_fast_lane_parallel_tool_execution_max_in_flight() -> usize {
 }
 
 const fn default_safe_lane_max_tool_steps_per_turn() -> usize {
-    10
+    1
 }
 
 const fn default_safe_lane_node_max_attempts() -> u8 {
