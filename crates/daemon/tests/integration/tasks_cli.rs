@@ -295,7 +295,9 @@ pub(super) fn load_session_repository(
     let config = loaded.1;
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    mvp::session::repository::SessionRepository::new(&memory_config).expect("session repository")
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    mvp::session::repository::SessionRepository::new(&session_store_config)
+        .expect("session repository")
 }
 
 fn load_memory_runtime_config(

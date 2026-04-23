@@ -3885,7 +3885,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 

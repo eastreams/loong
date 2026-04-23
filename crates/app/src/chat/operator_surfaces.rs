@@ -1090,7 +1090,7 @@ pub(super) async fn load_history_lines(
         return Ok(format_window_history_lines(&turns));
     }
 
-    let entries = memory::load_prompt_context(session_id, memory_config)
+    let entries = crate::session::store::load_session_prompt_context(session_id, memory_config)
         .map_err(|error| format!("load history failed: {error}"))?;
     Ok(format_prompt_context_history_lines(&entries))
 }

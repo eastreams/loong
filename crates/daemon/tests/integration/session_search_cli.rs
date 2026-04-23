@@ -66,7 +66,8 @@ fn collect_session_search_artifact_includes_visible_hits() {
 
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)
         .expect("session repository");
 
     repo.create_session(mvp::session::repository::NewSessionRecord {
@@ -151,7 +152,8 @@ fn load_session_search_artifact_round_trips_written_json() {
 
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)
         .expect("session repository");
 
     repo.create_session(mvp::session::repository::NewSessionRecord {

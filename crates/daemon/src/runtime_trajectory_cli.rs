@@ -104,13 +104,15 @@ pub fn run_runtime_trajectory_cli(
                 crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
                     &config.memory,
                 );
+            let session_store_config =
+                crate::mvp::session::store::SessionStoreConfig::from(&memory_config);
             let export_options = crate::mvp::session::trajectory::SessionTrajectoryExportOptions {
                 turn_limit,
                 event_page_limit,
             };
             crate::mvp::session::trajectory::export_session_trajectory(
                 session_id,
-                &memory_config,
+                &session_store_config,
                 &export_options,
             )
             .map_err(|error| format!("export session trajectory failed: {error}"))?

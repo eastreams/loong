@@ -292,7 +292,9 @@ fn collect_status_cli_work_unit_read_model(
     {
         let memory_config =
             mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        let repository_result = mvp::work::repository::WorkUnitRepository::new(&memory_config);
+        let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+        let repository_result =
+            mvp::work::repository::WorkUnitRepository::new(&session_store_config);
         let repository = match repository_result {
             Ok(repository) => repository,
             Err(error) => {

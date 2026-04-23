@@ -2700,6 +2700,8 @@ pub async fn run_control_plane_serve_cli(
                 mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
                     &config.memory,
                 );
+            let session_store_config =
+                mvp::session::store::SessionStoreConfig::from(&memory_config);
             let session_id = current_session_id.unwrap_or("default");
             println!(
                 "loong control plane session view rooted at `{session_id}` from {}",
@@ -2708,7 +2710,7 @@ pub async fn run_control_plane_serve_cli(
             (
                 Some(Arc::new(
                     mvp::control_plane::ControlPlaneRepositoryView::new(
-                        memory_config,
+                        session_store_config,
                         config.tools.clone(),
                         session_id,
                     ),
@@ -2728,8 +2730,12 @@ pub async fn run_control_plane_serve_cli(
                 mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
                     &config.memory,
                 );
+            let session_store_config =
+                mvp::session::store::SessionStoreConfig::from(&memory_config);
             Arc::new(
-                mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)?,
+                mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(
+                    session_store_config,
+                )?,
             )
         }
         None => Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new()),
@@ -3175,7 +3181,7 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn isolated_memory_config(test_name: &str) -> mvp::memory::runtime_config::MemoryRuntimeConfig {
+    fn isolated_memory_config(test_name: &str) -> mvp::session::store::SessionStoreConfig {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         static NEXT_ISOLATED_MEMORY_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
@@ -3189,9 +3195,9 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(base.join("memory.sqlite3-wal"));
         let _ = std::fs::remove_file(base.join("memory.sqlite3-shm"));
-        mvp::memory::runtime_config::MemoryRuntimeConfig {
+        mvp::session::store::SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..mvp::memory::runtime_config::MemoryRuntimeConfig::default()
+            runtime_config: None,
         }
     }
 

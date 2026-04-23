@@ -7,11 +7,12 @@ pub(crate) async fn load_session_safe_lane_payload(
 ) -> Value {
     let summary_limit = runtime_truth_summary_limit(memory_config);
     let binding = mvp::conversation::ConversationRuntimeBinding::direct();
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let summary_result = mvp::conversation::load_safe_lane_event_summary(
         session_id,
         summary_limit,
         binding,
-        memory_config,
+        &session_store_config,
     )
     .await;
 
@@ -38,11 +39,12 @@ pub(crate) async fn load_session_turn_checkpoint_payload(
 ) -> Value {
     let summary_limit = runtime_truth_summary_limit(memory_config);
     let binding = mvp::conversation::ConversationRuntimeBinding::direct();
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let summary_result = mvp::conversation::load_turn_checkpoint_event_summary(
         session_id,
         summary_limit,
         binding,
-        memory_config,
+        &session_store_config,
     )
     .await;
 

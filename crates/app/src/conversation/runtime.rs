@@ -2433,8 +2433,6 @@ mod tests {
         ACTIVE_EXTERNAL_SKILLS_EVENT_KIND, ActiveExternalSkill, ActiveExternalSkillsState,
     };
     #[cfg(feature = "memory-sqlite")]
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
-    #[cfg(feature = "memory-sqlite")]
     use crate::session::repository::{
         NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
     };
@@ -2818,7 +2816,8 @@ mod tests {
         config.memory.sqlite_path = sqlite_path.display().to_string();
         config.tools.file_root = Some(workspace_root.display().to_string());
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         repo.create_session(NewSessionRecord {
             session_id: session_id.to_owned(),
@@ -2903,7 +2902,8 @@ mod tests {
             "default runtime should expose the direct web surface"
         );
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         repo.create_session(NewSessionRecord {
             session_id: session_id.to_owned(),
