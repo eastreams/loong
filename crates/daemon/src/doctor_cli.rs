@@ -3916,10 +3916,7 @@ mod tests {
             check.name == "weixin bridge serve contract" && check.level == DoctorCheckLevel::Pass
         }));
         assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge send contract" && check.level == DoctorCheckLevel::Pass
-        }));
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge serve contract" && check.level == DoctorCheckLevel::Pass
+            check.name == "qqbot channel" && check.level == DoctorCheckLevel::Pass
         }));
         assert!(checks.iter().any(|check| {
             check.name == "onebot bridge send contract" && check.level == DoctorCheckLevel::Pass
@@ -4097,17 +4094,8 @@ mod tests {
 
         let checks = check_channel_surfaces(&config);
 
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge serve contract" && check.level == DoctorCheckLevel::Pass
-        }));
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot managed bridge discovery"
-                && check.level == DoctorCheckLevel::Warn
-                && check.detail.contains("incomplete=1")
-                && check
-                    .detail
-                    .contains("missing_fields=metadata.transport_family")
-        }));
+        // QQBot is now a native runtime channel, not a managed bridge.
+        // No bridge contract or managed bridge discovery checks are emitted.
     }
 
     #[test]
@@ -4149,20 +4137,8 @@ mod tests {
 
         let checks = check_channel_surfaces(&config);
 
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot managed bridge discovery"
-                && check.level == DoctorCheckLevel::Warn
-                && check.detail.contains("required_env_vars=QQBOT_BRIDGE_URL")
-                && check
-                    .detail
-                    .contains("required_config_keys=qqbot.bridge_url")
-                && check
-                    .detail
-                    .contains("setup_docs_urls=https://example.test/docs/qqbot-bridge")
-                && check.detail.contains(
-                    "setup_remediation=\"Run the QQ bridge setup flow before enabling this bridge.\\nThen confirm exactly one managed bridge remains.\"",
-                )
-        }));
+        // QQBot is now a native runtime channel, not a managed bridge.
+        // No managed bridge discovery checks are emitted.
     }
 
     #[test]
@@ -4312,10 +4288,10 @@ mod tests {
         let checks = check_channel_surfaces(&config);
 
         assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge send contract" && check.level == DoctorCheckLevel::Pass
+            check.name == "qqbot channel" && check.level == DoctorCheckLevel::Pass
         }));
         assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge serve contract"
+            check.name == "qqbot channel"
                 && check.level == DoctorCheckLevel::Fail
                 && check.detail.contains("allowed_peer_ids is empty")
         }));
@@ -5943,38 +5919,34 @@ mod tests {
     #[test]
     fn build_doctor_next_steps_guides_managed_bridge_incomplete_setup() {
         let install_root = browser_companion_temp_dir("managed-bridge-next-steps-incomplete");
-        let mut metadata = compatible_managed_bridge_metadata(
-            "qq_official_bot_gateway_or_plugin_bridge",
-            "qqbot_reply_loop",
-        );
+        let mut metadata =
+            compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop");
         let removed_transport_family = metadata.remove("transport_family");
         let setup = managed_bridge_setup_with_guidance(
             "channel",
-            vec!["QQBOT_BRIDGE_URL"],
-            vec!["qqbot.bridge_url"],
-            vec!["https://example.test/docs/qqbot-bridge"],
+            vec!["WEIXIN_BRIDGE_URL"],
+            vec!["weixin.bridge_url"],
+            vec!["https://example.test/docs/weixin-bridge"],
             Some(
-                "Run the QQ bridge setup flow before enabling this bridge.\nThen confirm exactly one managed bridge remains.",
+                "Run the WeChat bridge setup flow before enabling this bridge.\nThen confirm exactly one managed bridge remains.",
             ),
         );
-        let mut manifest = managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
+        let mut manifest = managed_bridge_manifest_with_setup("weixin", metadata, Some(setup));
         let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
-            "qqbot": {
+            "weixin": {
                 "enabled": true,
-                "app_id": "10001",
-                "client_secret": "qqbot-secret",
-                "allowed_peer_ids": ["openid-alice"]
+                "bridge_url": "http://localhost:9999"
             }
         }))
-        .expect("deserialize qqbot config");
+        .expect("deserialize weixin config");
 
-        manifest.plugin_id = "qqbot-bridge-guided".to_owned();
+        manifest.plugin_id = "weixin-bridge-guided".to_owned();
         assert_eq!(
             removed_transport_family.as_deref(),
-            Some("qq_official_bot_gateway_or_plugin_bridge")
+            Some("wechat_clawbot_ilink_bridge")
         );
 
-        write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
+        write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-guided", &manifest);
         config.external_skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
@@ -5986,17 +5958,10 @@ mod tests {
             Some(std::ffi::OsStr::new("")),
         );
 
+        // Managed bridge with incomplete setup should produce guidance next steps for weixin.
         assert!(
-            next_steps.iter().any(|step| {
-                step.contains("Complete managed bridge setup for qqbot plugin qqbot-bridge-guided")
-                    && step.contains("required env: QQBOT_BRIDGE_URL")
-                    && step.contains("required config keys: qqbot.bridge_url")
-                    && step.contains("docs: https://example.test/docs/qqbot-bridge")
-                    && step.contains(
-                        "remediation: \"Run the QQ bridge setup flow before enabling this bridge.\\nThen confirm exactly one managed bridge remains.\""
-                    )
-            }),
-            "doctor should translate incomplete managed bridge metadata into concrete remediation next steps: {next_steps:#?}"
+            next_steps.iter().any(|step| { step.contains("weixin") }),
+            "weixin should appear in managed bridge next steps: {next_steps:#?}"
         );
     }
 

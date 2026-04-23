@@ -44,7 +44,6 @@ struct QqbotGatewayResponse {
 
 /// Manages QQBot WebSocket connection lifecycle.
 pub(super) struct QqbotWebsocketManager {
-    resolved: crate::config::ResolvedQqbotChannelConfig,
     token_manager: QqbotTokenManager,
     http_client: Client,
     account_id: String,
@@ -60,7 +59,7 @@ pub(super) struct QqbotWebsocketManager {
 
 impl QqbotWebsocketManager {
     pub(super) fn new(
-        resolved: crate::config::ResolvedQqbotChannelConfig,
+        _resolved: crate::config::ResolvedQqbotChannelConfig,
         token_manager: QqbotTokenManager,
         http_client: Client,
         account_id: String,
@@ -69,7 +68,6 @@ impl QqbotWebsocketManager {
         policy: ChannelOutboundHttpPolicy,
     ) -> Self {
         Self {
-            resolved,
             token_manager,
             http_client,
             account_id,
@@ -179,7 +177,7 @@ impl QqbotWebsocketManager {
                         Message::Ping(_) => {
                             let _ = Self::wss_send(&mut self.wss_tx, Message::Pong(Bytes::new())).await;
                         }
-                        _ => {}
+                        Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
                     }
                 }
             }
@@ -231,7 +229,7 @@ impl QqbotWebsocketManager {
                 self.send_pong().await?;
                 Err("continue".to_owned())
             }
-            _ => Err("continue".to_owned()),
+            Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => Err("continue".to_owned()),
         }
     }
 
@@ -409,7 +407,7 @@ impl QqbotWebsocketManager {
             Some(13) => {
                 tracing::warn!(
                     account_id = %self.account_id,
-                    error = %payload["d"],
+                    error = %payload.get("d").ok_or("missing d in this msg")?,
                     "qqbot ws error event"
                 );
             }
@@ -468,9 +466,9 @@ impl QqbotWebsocketManager {
         )
         .await
         {
-            return Err(format!("qqbot heartbeat send failed: {e}"));
+            Err(format!("qqbot heartbeat send failed: {e}"))
         } else {
-            return Ok(());
+            Ok(())
         }
     }
 

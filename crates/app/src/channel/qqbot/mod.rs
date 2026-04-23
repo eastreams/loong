@@ -185,14 +185,6 @@ fn build_qqbot_command_context(
     })
 }
 
-fn build_qqbot_command_context_from_cli(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
-    let (resolved_path, config) = crate::config::load(config_path)?;
-    build_qqbot_command_context(resolved_path, config, account_id)
-}
-
 fn build_http_client(
     policy: crate::channel::http::ChannelOutboundHttpPolicy,
 ) -> CliResult<reqwest::Client> {

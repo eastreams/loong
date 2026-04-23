@@ -293,7 +293,9 @@ fn grouped_channels_serve_accepts_a_canonical_shape() {
 
 #[test]
 fn grouped_channels_serve_accepts_bridge_backed_shapes() {
-    for channel in ["qqbot", "onebot", "weixin"] {
+    // QQBot is now a native runtime channel (RuntimeBacked), not a managed bridge.
+    // Only weixin and onebot remain as PluginBacked managed bridge channels.
+    for channel in ["onebot", "weixin"] {
         let _cli = parse_first_candidate(&[
             &["loong", "channels", "serve", channel, "--stop"],
             &["loong", "channels", "serve", "--channel", channel, "--stop"],

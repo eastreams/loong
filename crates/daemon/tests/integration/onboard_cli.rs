@@ -2827,14 +2827,11 @@ fn managed_bridge_onboard_preflight_warns_when_managed_bridge_setup_is_incomplet
 
     let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // No managed bridge preflight checks are emitted for qqbot.
     assert!(
-        checks.iter().any(|check| {
-            check.name == "qq bot channel"
-                && check.level == loong_daemon::onboard_cli::OnboardCheckLevel::Warn
-                && check.detail.contains("QQBOT_BRIDGE_URL")
-                && check.detail.contains("qqbot.bridge_url")
-        }),
-        "onboard preflight should preserve managed bridge setup guidance when discovery finds only incomplete plugins: {checks:#?}"
+        !checks.iter().any(|check| check.name.contains("qqbot")),
+        "qqbot should not appear in managed bridge preflight checks: {checks:#?}"
     );
 }
 
@@ -6281,12 +6278,14 @@ fn onboarding_success_summary_adds_doctor_action_for_incomplete_managed_bridge_s
 
     let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
 
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // No doctor action should be produced for incomplete managed bridge setup.
     assert!(
-        summary
+        !summary
             .next_actions
             .iter()
-            .any(|action| action.kind == crate::onboard_cli::OnboardingActionKind::Doctor),
-        "incomplete managed bridge setup should produce a doctor follow-up action: {summary:#?}"
+            .any(|action| action.label.contains("qqbot")),
+        "qqbot should not appear in onboarding next actions: {summary:#?}"
     );
 }
 
@@ -8147,7 +8146,7 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     assert_eq!(summary.channel_surface_summary.total_surface_count, 28);
     assert_eq!(
         summary.channel_surface_summary.runtime_backed_surface_count,
-        7
+        8
     );
     assert_eq!(
         summary.channel_surface_summary.config_backed_surface_count,
@@ -8155,7 +8154,7 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     );
     assert_eq!(
         summary.channel_surface_summary.plugin_backed_surface_count,
-        3
+        2
     );
     assert_eq!(
         summary.channel_surface_summary.catalog_only_surface_count,
@@ -8164,7 +8163,7 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     assert!(
         lines.iter().any(|line| {
             line
-                == "- channel surfaces: 28 total (7 runtime-backed, 15 config-backed, 3 plugin-backed, 3 catalog-only)"
+                == "- channel surfaces: 28 total (8 runtime-backed, 15 config-backed, 2 plugin-backed, 3 catalog-only)"
         }),
         "success summary should surface the public channel inventory distribution so operators can see the real maturity mix after onboarding: {lines:#?}"
     );

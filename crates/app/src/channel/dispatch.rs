@@ -1807,8 +1807,8 @@ pub async fn run_webhook_channel(
 pub async fn run_qqbot_channel(
     config_path: Option<&str>,
     account_id: Option<&str>,
-    bind_override: Option<&str>,
-    path_override: Option<&str>,
+    _bind_override: Option<&str>,
+    _path_override: Option<&str>,
 ) -> CliResult<()> {
     if !cfg!(feature = "channel-qqbot") {
         return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
@@ -2970,16 +2970,14 @@ pub async fn run_background_channel_with_stop(
         "whatsapp" => {
             #[cfg(feature = "channel-whatsapp")]
             {
-                Box::pin(async move {
-                    crate::channel::whatsapp::run_whatsapp_channel_with_stop(
-                        resolved_path,
-                        config,
-                        account_id.as_deref(),
-                        stop,
-                        initialize_runtime_environment,
-                    )
-                    .await
-                })
+                return run_whatsapp_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
             }
             #[cfg(not(feature = "channel-whatsapp"))]
             {
@@ -2995,24 +2993,17 @@ pub async fn run_background_channel_with_stop(
                 );
             }
         }
-        "qqbot" => Box::pin(async move {
-            crate::channel::qqbot::run_qqbot_channel_with_stop(
+        "qqbot" => {
+            return crate::channel::qqbot::run_qqbot_channel_with_stop(
                 resolved_path,
                 config,
-                account_id.as_deref(),
+                account_id,
                 stop,
                 initialize_runtime_environment,
             )
-            .await
-        }),
-        _ => {
-            let unsupported_channel_id = channel_id.to_owned();
-            Box::pin(async move {
-                Err(format!(
-                    "unsupported background channel `{unsupported_channel_id}`"
-                ))
-            })
+            .await;
         }
+        _ => Err(format!("unsupported background channel `{channel_id}`")),
     }
 }
 

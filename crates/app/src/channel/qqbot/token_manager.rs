@@ -93,17 +93,10 @@ impl QqbotTokenManager {
         let acs_token = self.current_token.read().await;
         match &*acs_token {
             Some(token) => {
-                if token.expires_at.saturating_duration_since(Instant::now())
-                    > Duration::from_secs(TOKEN_REFRESH_LEEWAY_S)
-                {
-                    return false;
-                } else {
-                    return true;
-                }
+                token.expires_at.saturating_duration_since(Instant::now())
+                    <= Duration::from_secs(TOKEN_REFRESH_LEEWAY_S)
             }
-            None => {
-                return false;
-            }
+            None => false,
         }
     }
 }

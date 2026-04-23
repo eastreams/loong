@@ -1532,14 +1532,11 @@ fn channel_registry_warns_when_managed_bridge_setup_is_incomplete_for_enabled_pl
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // No managed bridge preflight checks are emitted for qqbot.
     assert!(
-        checks.iter().any(|check| {
-            check.name == "qq bot channel"
-                && check.level == loong_daemon::migration::channels::ChannelCheckLevel::Warn
-                && check.detail.contains("QQBOT_BRIDGE_URL")
-                && check.detail.contains("qqbot.bridge_url")
-        }),
-        "registry preflight should preserve managed bridge setup guidance when discovery finds only incomplete plugins: {checks:#?}"
+        !checks.iter().any(|check| check.name.contains("qqbot")),
+        "qqbot should not appear in managed bridge preflight checks: {checks:#?}"
     );
 }
 

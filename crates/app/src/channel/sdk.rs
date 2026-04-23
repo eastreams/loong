@@ -1014,7 +1014,7 @@ mod tests {
     }
 
     fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
-        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+        vec!["telegram", "feishu", "matrix", "wecom", "qqbot", "whatsapp"]
     }
 
     fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
@@ -1032,7 +1032,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
+                "telegram", "feishu", "matrix", "wecom", "qqbot", "line", "whatsapp", "webhook",
             ]
         );
     }
@@ -1108,12 +1108,12 @@ mod tests {
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.label, "QQ Bot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
-        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(
             qqbot.operational_model,
-            ChannelOperationalModel::PluginBacked
+            ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(qqbot.serve_subcommand, Some("channels serve qqbot"));
+        assert_eq!(qqbot.serve_subcommand, Some("qqbot-serve"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
         assert_eq!(onebot.id, "onebot");

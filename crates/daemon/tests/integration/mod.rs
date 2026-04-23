@@ -1166,10 +1166,7 @@ fn render_channel_surfaces_text_groups_plugin_backed_channels_into_their_own_sec
         plugin_section.contains("Weixin [weixin]"),
         "plugin-backed section should include weixin: {plugin_section}"
     );
-    assert!(
-        plugin_section.contains("QQ Bot [qqbot]"),
-        "plugin-backed section should include qqbot: {plugin_section}"
-    );
+    // QQBot is now a native runtime channel, not plugin-backed.
     assert!(
         plugin_section.contains("OneBot [onebot]"),
         "plugin-backed section should include onebot: {plugin_section}"
@@ -1212,17 +1209,8 @@ fn render_channel_surfaces_text_reports_plugin_backed_stable_targets() {
         ),
         "rendered channel surfaces should expose weixin stable target templates: {rendered}"
     );
-    assert!(
-        rendered.contains(
-            "stable_targets=\"qqbot:<account>:c2c:<openid>[conversation]:direct message openid,qqbot:<account>:group:<openid>[conversation]:group openid,qqbot:<account>:channel:<id>[conversation]:guild channel id\""
-        ),
-        "rendered channel surfaces should expose qqbot stable target templates: {rendered}"
-    );
-    assert!(
-        rendered
-            .contains("account_scope_note=\"openids are scoped to the selected qq bot account\""),
-        "rendered channel surfaces should expose qqbot account scope guidance: {rendered}"
-    );
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // It does not have plugin_bridge_contract stable_targets or account_scope_note.
 }
 
 #[test]
@@ -1763,31 +1751,8 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
             })
     );
 
-    assert!(
-        encoded["channel_surfaces"]
-            .as_array()
-            .expect("channel surfaces array")
-            .iter()
-            .any(|surface| {
-                surface
-                    .get("catalog")
-                    .and_then(|catalog| catalog.get("id"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some("qqbot")
-                    && surface
-                        .get("catalog")
-                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
-                        .and_then(|contract| contract.get("supported_operations"))
-                        .and_then(serde_json::Value::as_array)
-                        .map(|operations| {
-                            operations
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .collect::<Vec<_>>()
-                        })
-                        == Some(vec!["send", "serve"])
-            })
-    );
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // It does not have a plugin_bridge_contract.
 }
 
 #[test]
@@ -1839,32 +1804,8 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_stable_targets() {
             })
     );
 
-    assert!(
-        encoded["channel_surfaces"]
-            .as_array()
-            .expect("channel surfaces array")
-            .iter()
-            .any(|surface| {
-                surface
-                    .get("catalog")
-                    .and_then(|catalog| catalog.get("id"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some("qqbot")
-                    && surface
-                        .get("catalog")
-                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
-                        .and_then(|contract| contract.get("account_scope_note"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some("openids are scoped to the selected qq bot account")
-                    && surface
-                        .get("catalog")
-                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
-                        .and_then(|contract| contract.get("stable_targets"))
-                        .and_then(serde_json::Value::as_array)
-                        .map(|targets| targets.len())
-                        == Some(3)
-            })
-    );
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // It does not have a plugin_bridge_contract or stable_targets.
 }
 
 #[test]

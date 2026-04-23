@@ -587,7 +587,7 @@ const QQBOT_CAPABILITIES: &[ChannelCapability] = &[
 pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
     ChannelCatalogCommandFamilyDescriptor {
         channel_id: "qqbot",
-        default_send_target_kind: ChannelCatalogTargetKind::ReceiveId,
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
         send: QQBOT_SEND_OPERATION,
         serve: QQBOT_SERVE_OPERATION,
     };
@@ -615,33 +615,6 @@ const QQBOT_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
         default_env_var: None,
     };
 
-const QQBOT_CLIENT_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
-    ChannelCatalogOperationRequirement {
-        id: "client_secret",
-        label: "qq bot client secret",
-        config_paths: &[
-            "qqbot.client_secret",
-            "qqbot.accounts.<account>.client_secret",
-        ],
-        env_pointer_paths: &[
-            "qqbot.client_secret_env",
-            "qqbot.accounts.<account>.client_secret_env",
-        ],
-        default_env_var: None,
-    };
-
-const QQBOT_ALLOWED_PEER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
-    ChannelCatalogOperationRequirement {
-        id: "allowed_peer_ids",
-        label: "allowed peer ids",
-        config_paths: &[
-            "qqbot.allowed_peer_ids",
-            "qqbot.accounts.<account>.allowed_peer_ids",
-        ],
-        env_pointer_paths: &[],
-        default_env_var: None,
-    };
-
 const QQBOT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
     &[QQBOT_ENABLED_REQUIREMENT, QQBOT_APP_ID_REQUIREMENT];
 
@@ -652,7 +625,7 @@ const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "gateway send",
     command: "qqbot-send",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: QQBOT_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -663,7 +636,7 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "gateway reply loop",
     command: "qqbot-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: QQBOT_SERVE_REQUIREMENTS,
     default_target_kind: None,
@@ -671,7 +644,7 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 };
 
 const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
-    name: "qqbot bridge send contract",
+    name: "qqbot channel",
     trigger: ChannelDoctorCheckTrigger::OperationHealth,
 }];
 
@@ -681,7 +654,7 @@ const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
         trigger: ChannelDoctorCheckTrigger::OperationHealth,
     },
     ChannelDoctorCheckSpec {
-        name: "qqbot channel runtime",
+        name: "qqbot serve runtime",
         trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
     },
 ];
@@ -698,9 +671,9 @@ const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 
 const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "configure qqbot or lark app credentials, allowed chat ids, and either webhook secrets or mode = \"websocket\" in loongclaw.toml under qqbot or qqbot.accounts.<account>",
-    status_command: "loongclaw doctor",
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure qqbot app_id and client_secret under qqbot or qqbot.accounts.<account> in loong.toml",
+    status_command: "loong doctor",
     repair_command: None,
 };
 
@@ -5839,6 +5812,222 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn build_qqbot_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-qqbot");
+    let default_selection = config.qqbot.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .qqbot
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .qqbot
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_qqbot_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                    runtime_dir,
+                    now_ms,
+                ),
+                Err(error) => build_invalid_qqbot_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_qqbot_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: crate::config::ResolvedQqbotChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.app_id().is_none() {
+        send_issues.push("app_id is missing".to_owned());
+    }
+    if resolved.client_secret().is_none() {
+        send_issues.push("client_secret is missing".to_owned());
+    }
+
+    let mut serve_issues = send_issues.clone();
+    let has_allowed_peer_ids = resolved
+        .allowed_peer_ids
+        .iter()
+        .any(|value: &String| !value.trim().is_empty());
+    if !has_allowed_peer_ids {
+        serve_issues.push("allowed_peer_ids is empty".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SEND_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            QQBOT_SEND_OPERATION,
+            "disabled by qqbot account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(QQBOT_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(QQBOT_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SERVE_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            QQBOT_SERVE_OPERATION,
+            "disabled by qqbot account configuration".to_owned(),
+        )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(QQBOT_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(QQBOT_SERVE_OPERATION)
+    };
+
+    let send_operation = attach_runtime(
+        ChannelPlatform::Qqbot,
+        QQBOT_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Qqbot,
+        QQBOT_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if !resolved.allowed_peer_ids.is_empty() {
+        let allowed_peer_ids = resolved
+            .allowed_peer_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        notes.push(format!("allowed_peer_ids={allowed_peer_ids}"));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: Some("https://api.sgroup.qq.com".to_owned()),
+        notes,
+        reserved_runtime_fields: Vec::new(),
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_qqbot_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SEND_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(QQBOT_SEND_OPERATION, vec![error.clone()])
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SERVE_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(QQBOT_SERVE_OPERATION, vec![error.clone()])
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: true,
+        api_base_url: None,
+        notes,
+        reserved_runtime_fields: Vec::new(),
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 mod tlon_support;
 
 #[cfg(test)]
@@ -5903,7 +6092,7 @@ mod tests {
                 .map(|descriptor| descriptor.id)
                 .collect::<Vec<_>>(),
             vec![
-                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook"
+                "telegram", "feishu", "matrix", "wecom", "qqbot", "line", "whatsapp", "webhook"
             ]
         );
         assert!(
@@ -6154,10 +6343,10 @@ mod tests {
         assert_eq!(weixin.onboarding.repair_command, None);
         assert!(weixin.onboarding.setup_hint.contains("ClawBot"));
 
-        assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
+        assert_eq!(qqbot.onboarding.strategy.as_str(), "manual_config");
         assert_eq!(qqbot.onboarding.status_command, "loong doctor");
         assert_eq!(qqbot.onboarding.repair_command, None);
-        assert!(qqbot.onboarding.setup_hint.contains("QQ Bot"));
+        assert!(qqbot.onboarding.setup_hint.contains("qqbot"));
 
         assert_eq!(onebot.onboarding.strategy.as_str(), "plugin_bridge");
         assert_eq!(onebot.onboarding.status_command, "loong doctor");
@@ -6252,12 +6441,9 @@ mod tests {
         assert_eq!(
             qqbot_serve_checks,
             vec![
+                ("qqbot channel", ChannelDoctorCheckTrigger::OperationHealth,),
                 (
-                    "qqbot bridge serve contract",
-                    ChannelDoctorCheckTrigger::PluginBridgeHealth,
-                ),
-                (
-                    "qqbot bridge serve runtime",
+                    "qqbot serve runtime",
                     ChannelDoctorCheckTrigger::ReadyRuntime,
                 ),
             ]
@@ -7260,8 +7446,8 @@ mod tests {
                 "feishu",
                 "matrix",
                 "wecom",
-                "weixin",
                 "qqbot",
+                "weixin",
                 "onebot",
                 "discord",
                 "slack",
@@ -7302,8 +7488,8 @@ mod tests {
                 "feishu",
                 "matrix",
                 "wecom",
-                "weixin",
                 "qqbot",
+                "weixin",
                 "onebot",
                 "discord",
                 "slack",
@@ -7728,8 +7914,8 @@ mod tests {
                 "feishu",
                 "matrix",
                 "wecom",
-                "weixin",
                 "qqbot",
+                "weixin",
                 "onebot",
                 "discord",
                 "slack",
@@ -7834,7 +8020,7 @@ mod tests {
             .expect("qqbot surface");
         assert_eq!(
             qqbot.catalog.implementation_status,
-            ChannelCatalogImplementationStatus::PluginBacked
+            ChannelCatalogImplementationStatus::RuntimeBacked
         );
         assert_eq!(qqbot.configured_accounts.len(), 1);
         assert_eq!(

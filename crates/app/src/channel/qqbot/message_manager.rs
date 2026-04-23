@@ -30,7 +30,6 @@ const MAX_QUEUE_CAPACITY: usize = 3;
 pub(super) struct QqbotMsgManager {
     config: LoongConfig,
     resolved_path: PathBuf,
-    resolved: ResolvedQqbotChannelConfig,
     kernel_ctx: KernelContext,
     account_id: String,
     outbound_tx: mpsc::Sender<QqbotOutboundMessage>,
@@ -42,7 +41,7 @@ impl QqbotMsgManager {
     pub(super) fn new(
         config: LoongConfig,
         resolved_path: PathBuf,
-        resolved: ResolvedQqbotChannelConfig,
+        _resolved: ResolvedQqbotChannelConfig,
         kernel_ctx: KernelContext,
         account_id: String,
         outbound_tx: mpsc::Sender<QqbotOutboundMessage>,
@@ -50,7 +49,6 @@ impl QqbotMsgManager {
         Self {
             config,
             resolved_path,
-            resolved,
             kernel_ctx,
             account_id,
             outbound_tx,
@@ -92,7 +90,9 @@ impl QqbotMsgManager {
                 self.process_ready_event(session_id);
                 Ok(())
             }
-            _ => Ok(()),
+            QqBotWsEvent::HeartbeatInterval(_) | QqBotWsEvent::Error(_) | QqBotWsEvent::Other => {
+                Ok(())
+            }
         }
     }
 
@@ -189,10 +189,19 @@ fn parse_qqbot_ws_frame(raw: &Value) -> CliResult<QqBotWsEvent> {
 }
 
 fn build_qqbot_inbound_message(data: &Value, account_id: &str) -> CliResult<ChannelInboundMessage> {
-    let openid = data["author"]["user_openid"]
+    let openid = data
+        .get("author")
+        .ok_or("missing author in qqbot message")?
+        .get("user_openid")
+        .ok_or("missing user_openid in qqbot message")?
         .as_str()
-        .ok_or("missing user_openid in qqbot message")?;
-    let content = data["content"].as_str().unwrap_or("").to_string();
+        .ok_or("")?;
+    let content = data
+        .get("content")
+        .ok_or("missing content in qqbot message")?
+        .as_str()
+        .ok_or("")?
+        .to_string();
 
     let session =
         ChannelSession::with_account(ChannelPlatform::Qqbot, account_id, openid.to_string());
