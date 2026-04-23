@@ -309,7 +309,7 @@ fn write_new_file_without_overwrite(path: &Path, content: &str) -> Result<(), St
         let error_kind = error.kind();
         if error_kind == std::io::ErrorKind::AlreadyExists {
             return format!(
-                "policy_denied: file.write requires overwrite=true for existing file {}",
+                "tool_preflight_repairable: file.write requires overwrite=true for existing file {}",
                 path.display()
             );
         }

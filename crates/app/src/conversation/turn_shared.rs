@@ -23,12 +23,15 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::CliResult;
 
-pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue working toward the original user request. If another tool call is needed, make it now. If the request is already complete, answer in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
+const TOOL_FOLLOWUP_REPAIR_PROMPT: &str = "Repair notice:\nThe previous reply described a next step without issuing the required tool call. Do not describe the plan again.";
+const TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT: &str = "The previous tool failure was retryable. Default to [followup_state:continue] and retry or repair the tool call unless the task is already complete or genuinely blocked.";
+const FOLLOWUP_STATE_MARKER_PREFIX: &str = "[followup_state:";
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
@@ -91,9 +94,7 @@ fn think_tag_prefix_len(input: &str, tag: &str) -> Option<usize> {
 }
 
 fn sanitize_reply_text(text: &str) -> String {
-    let stripped_text = strip_think_tags(text);
-    let trimmed_text = stripped_text.trim();
-    trimmed_text.to_owned()
+    parse_tool_driven_continuation_reply(text).reply
 }
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -120,8 +121,49 @@ pub fn tool_loop_circuit_breaker_reply(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenFollowupPayload {
     ToolResult { text: String },
-    ToolFailure { reason: String },
+    ToolFailure { reason: String, retryable: bool },
     DiscoveryRecovery { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDrivenContinuationState {
+    Continue,
+    Done,
+    Blocked,
+}
+
+impl ToolDrivenContinuationState {
+    pub const fn marker(self) -> &'static str {
+        match self {
+            Self::Continue => "[followup_state:continue]",
+            Self::Done => "[followup_state:done]",
+            Self::Blocked => "[followup_state:blocked]",
+        }
+    }
+
+    fn parse_token(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "continue" => Some(Self::Continue),
+            "done" => Some(Self::Done),
+            "blocked" => Some(Self::Blocked),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolDrivenFollowupContractMode {
+    Normal,
+    RetryableFailure,
+    Repair,
+    RepairRetryableFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedToolDrivenContinuationReply {
+    pub state: Option<ToolDrivenContinuationState>,
+    pub reply: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -296,12 +338,79 @@ impl ToolDrivenFollowupPayload {
         let label = self.label();
         match self {
             Self::ToolResult { text } => ToolDrivenFollowupTextRef::new(label, text.as_str()),
-            Self::ToolFailure { reason } => ToolDrivenFollowupTextRef::new(label, reason.as_str()),
+            Self::ToolFailure { reason, .. } => {
+                ToolDrivenFollowupTextRef::new(label, reason.as_str())
+            }
             Self::DiscoveryRecovery { reason } => {
                 ToolDrivenFollowupTextRef::new(label, reason.as_str())
             }
         }
     }
+
+    pub fn retryable_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::ToolFailure {
+                retryable: true,
+                ..
+            }
+        )
+    }
+}
+
+pub fn parse_tool_driven_continuation_reply(text: &str) -> ParsedToolDrivenContinuationReply {
+    let stripped_text = strip_think_tags(text);
+    let trimmed_text = stripped_text.trim();
+    let Some(rest) = trimmed_text.strip_prefix(FOLLOWUP_STATE_MARKER_PREFIX) else {
+        return ParsedToolDrivenContinuationReply {
+            state: None,
+            reply: trimmed_text.to_owned(),
+        };
+    };
+    let Some((state_token, remainder)) = rest.split_once(']') else {
+        return ParsedToolDrivenContinuationReply {
+            state: None,
+            reply: trimmed_text.to_owned(),
+        };
+    };
+    let Some(state) = ToolDrivenContinuationState::parse_token(state_token) else {
+        return ParsedToolDrivenContinuationReply {
+            state: None,
+            reply: trimmed_text.to_owned(),
+        };
+    };
+
+    ParsedToolDrivenContinuationReply {
+        state: Some(state),
+        reply: remainder.trim().to_owned(),
+    }
+}
+
+pub(crate) fn render_tool_followup_continuation_contract(
+    mode: ToolDrivenFollowupContractMode,
+) -> String {
+    let mut sections = Vec::new();
+    if matches!(
+        mode,
+        ToolDrivenFollowupContractMode::Repair
+            | ToolDrivenFollowupContractMode::RepairRetryableFailure
+    ) {
+        sections.push(TOOL_FOLLOWUP_REPAIR_PROMPT.to_owned());
+    }
+    if matches!(
+        mode,
+        ToolDrivenFollowupContractMode::RetryableFailure
+            | ToolDrivenFollowupContractMode::RepairRetryableFailure
+    ) {
+        sections.push(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT.to_owned());
+    }
+    sections.push(format!(
+        "Structured continuation contract:\n- Start your reply with exactly one marker: {}, {}, or {}.\n- If you choose continue, emit the next tool call now. Do not only describe a plan.\n- If you choose done, give the completed final answer now.\n- If you choose blocked, explain the blocker briefly and do not claim the task is running or complete.",
+        ToolDrivenContinuationState::Continue.marker(),
+        ToolDrivenContinuationState::Done.marker(),
+        ToolDrivenContinuationState::Blocked.marker(),
+    ));
+    sections.join("\n\n")
 }
 
 pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
@@ -334,6 +443,7 @@ pub fn tool_driven_followup_payload(
         TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: failure.reason.clone(),
+                retryable: failure.retryable,
             })
         }
         TurnResult::ProviderError(_) => None,
@@ -1366,6 +1476,16 @@ pub fn build_tool_followup_user_prompt_with_context(
     sections.join("\n\n")
 }
 
+fn combine_followup_extra_context(parts: &[Option<&str>]) -> Option<String> {
+    let joined = parts
+        .iter()
+        .flatten()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    (!joined.is_empty()).then(|| joined.join("\n\n"))
+}
+
 pub fn build_discovery_recovery_followup_user_prompt(
     user_input: &str,
     loop_warning_reason: Option<&str>,
@@ -1750,6 +1870,27 @@ pub fn build_tool_result_followup_tail<F>(
     tool_result_text: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_result_followup_tail_with_contract(
+        assistant_preface,
+        tool_result_text,
+        user_input,
+        loop_warning_reason,
+        None,
+        payload_mapper,
+    )
+}
+
+pub(crate) fn build_tool_result_followup_tail_with_contract<F>(
+    assistant_preface: &str,
+    tool_result_text: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    continuation_contract: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1785,12 +1926,12 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt(
+        "content": build_tool_followup_user_prompt_with_context(
             user_input,
             loop_warning_reason,
             Some(tool_result_text),
             Some(bounded_result.as_str()),
-            None,
+            continuation_contract,
         ),
     }));
     messages
@@ -1825,6 +1966,29 @@ pub fn build_tool_failure_followup_tail_with_request_summary<F>(
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_request_summary: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_failure_followup_tail_with_request_summary_and_contract(
+        assistant_preface,
+        tool_failure_reason,
+        user_input,
+        loop_warning_reason,
+        tool_request_summary,
+        None,
+        payload_mapper,
+    )
+}
+
+pub(crate) fn build_tool_failure_followup_tail_with_request_summary_and_contract<F>(
+    assistant_preface: &str,
+    tool_failure_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
+    continuation_contract: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1862,7 +2026,11 @@ where
             loop_warning_reason,
             None,
             None,
-            repair_guidance.as_deref(),
+            combine_followup_extra_context(&[
+                repair_guidance.as_deref(),
+                continuation_contract,
+            ])
+            .as_deref(),
         ),
     }));
     messages
@@ -1934,21 +2102,48 @@ pub fn build_tool_driven_followup_tail_with_request_summary<F>(
 where
     F: FnMut(&str, &str) -> String,
 {
+    build_tool_driven_followup_tail_with_request_summary_and_contract(
+        assistant_preface,
+        payload,
+        user_input,
+        loop_warning_reason,
+        tool_request_summary,
+        None,
+        payload_mapper,
+    )
+}
+
+pub(crate) fn build_tool_driven_followup_tail_with_request_summary_and_contract<F>(
+    assistant_preface: &str,
+    payload: &ToolDrivenFollowupPayload,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
+    continuation_contract: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
     match payload {
-        ToolDrivenFollowupPayload::ToolResult { text } => build_tool_result_followup_tail(
-            assistant_preface,
-            text.as_str(),
-            user_input,
-            loop_warning_reason,
-            payload_mapper,
-        ),
-        ToolDrivenFollowupPayload::ToolFailure { reason } => {
-            build_tool_failure_followup_tail_with_request_summary(
+        ToolDrivenFollowupPayload::ToolResult { text } => {
+            build_tool_result_followup_tail_with_contract(
+                assistant_preface,
+                text.as_str(),
+                user_input,
+                loop_warning_reason,
+                continuation_contract,
+                payload_mapper,
+            )
+        }
+        ToolDrivenFollowupPayload::ToolFailure { reason, .. } => {
+            build_tool_failure_followup_tail_with_request_summary_and_contract(
                 assistant_preface,
                 reason.as_str(),
                 user_input,
                 loop_warning_reason,
                 tool_request_summary,
+                continuation_contract,
                 payload_mapper,
             )
         }
@@ -2122,6 +2317,35 @@ where
     messages
 }
 
+pub async fn request_completion_with_raw_fallback_detailed<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    config: &LoongConfig,
+    messages: &[Value],
+    binding: ConversationRuntimeBinding<'_>,
+    raw_reply: &str,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+) -> ParsedToolDrivenContinuationReply {
+    match runtime
+        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
+        .await
+    {
+        Ok(final_reply) => {
+            let parsed_reply = parse_tool_driven_continuation_reply(final_reply.as_str());
+            if parsed_reply.reply.is_empty() && parsed_reply.state.is_none() {
+                parse_tool_driven_continuation_reply(raw_reply)
+            } else if parsed_reply.reply.is_empty() {
+                ParsedToolDrivenContinuationReply {
+                    state: parsed_reply.state,
+                    reply: sanitize_reply_text(raw_reply),
+                }
+            } else {
+                parsed_reply
+            }
+        }
+        Err(_) => parse_tool_driven_continuation_reply(raw_reply),
+    }
+}
+
 pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     config: &LoongConfig,
@@ -2130,20 +2354,16 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
     raw_reply: &str,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> String {
-    match runtime
-        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
-        .await
-    {
-        Ok(final_reply) => {
-            let sanitized_reply = sanitize_reply_text(final_reply.as_str());
-            if sanitized_reply.is_empty() {
-                sanitize_reply_text(raw_reply)
-            } else {
-                sanitized_reply
-            }
-        }
-        Err(_) => sanitize_reply_text(raw_reply),
-    }
+    request_completion_with_raw_fallback_detailed(
+        runtime,
+        config,
+        messages,
+        binding,
+        raw_reply,
+        retry_progress,
+    )
+    .await
+    .reply
 }
 
 pub fn join_non_empty_lines(parts: &[&str]) -> String {
@@ -2459,6 +2679,7 @@ mod tests {
             kernel.followup_payload(),
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: "temporary failure".to_owned(),
+                retryable: true,
             })
         );
     }
@@ -2511,6 +2732,7 @@ mod tests {
     fn tool_driven_followup_payload_reports_failure_kind_and_context() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool failed".to_owned(),
+            retryable: false,
         };
         let message_context = payload.message_context();
 
@@ -2521,6 +2743,7 @@ mod tests {
         );
         assert_eq!(message_context.label().as_str(), "tool_failure");
         assert_eq!(message_context.text(), "tool failed");
+        assert!(!payload.retryable_failure());
     }
 
     #[test]
@@ -2557,6 +2780,42 @@ mod tests {
                 .expect("serialize kind"),
             Value::String("discovery_recovery".to_owned())
         );
+    }
+
+    #[test]
+    fn parse_tool_driven_continuation_reply_extracts_leading_marker() {
+        let parsed = parse_tool_driven_continuation_reply(
+            "<think>hidden</think>\n[followup_state:continue]\nNow merging the files.",
+        );
+
+        assert_eq!(parsed.state, Some(ToolDrivenContinuationState::Continue));
+        assert_eq!(parsed.reply, "Now merging the files.");
+        assert_eq!(
+            sanitize_reply_text("[followup_state:done]\nFinished."),
+            "Finished."
+        );
+    }
+
+    #[test]
+    fn parse_tool_driven_continuation_reply_leaves_unknown_marker_text_intact() {
+        let parsed =
+            parse_tool_driven_continuation_reply("[followup_state:unknown]\nkeep this literal");
+
+        assert_eq!(parsed.state, None);
+        assert_eq!(parsed.reply, "[followup_state:unknown]\nkeep this literal");
+    }
+
+    #[test]
+    fn render_tool_followup_continuation_contract_includes_repair_and_retryable_context() {
+        let repair = render_tool_followup_continuation_contract(
+            ToolDrivenFollowupContractMode::RepairRetryableFailure,
+        );
+
+        assert!(repair.contains("[followup_state:continue]"));
+        assert!(repair.contains("[followup_state:done]"));
+        assert!(repair.contains("[followup_state:blocked]"));
+        assert!(repair.contains("Do not describe the plan again"));
+        assert!(repair.contains("retryable"));
     }
 
     #[test]
@@ -2665,6 +2924,7 @@ mod tests {
                 raw_reply: "preface\ntemporary failure".to_owned(),
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
+                    retryable: true,
                 },
             }
         );
@@ -2747,6 +3007,7 @@ mod tests {
                 raw_reply: "preface\ntemporary failure".to_owned(),
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
+                    retryable: true,
                 },
             }
         );
@@ -2992,6 +3253,7 @@ mod tests {
     fn tool_driven_followup_tail_dispatches_failure_payload() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+            retryable: false,
         };
         let tail = build_tool_driven_followup_tail(
             "preface",
@@ -3023,6 +3285,7 @@ mod tests {
     fn tool_driven_followup_tail_preserves_request_summary_for_failure_payloads() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "payload.command contains path separators".to_owned(),
+            retryable: false,
         };
         let tool_request_summary =
             r#"{"tool":"exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
@@ -3146,6 +3409,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"ls -la"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3171,6 +3435,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"\"ls -la\" "}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3198,6 +3463,7 @@ mod tests {
             reason:
                 "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
                     .to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"read","request":{}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3227,6 +3493,7 @@ mod tests {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
                 .to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"echo"}}"#;
         let tail = build_tool_driven_followup_tail(

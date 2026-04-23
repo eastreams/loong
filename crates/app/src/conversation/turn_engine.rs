@@ -2719,6 +2719,12 @@ async fn execute_tool_intent_via_kernel(
             {
                 return recovery_failure;
             }
+            if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
+                && let Some(stripped) = RepairableToolPreflight::parse(reason.as_str())
+            {
+                let human_reason = RepairableToolPreflight::render(stripped);
+                return TurnFailure::retryable("tool_preflight_denied", human_reason);
+            }
 
             let reason = render_kernel_error_reason(&error);
             match classify_kernel_error(&error) {
