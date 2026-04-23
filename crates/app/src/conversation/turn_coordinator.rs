@@ -6013,12 +6013,15 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         });
     let malformed_parse_followup_turn =
         provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
+    let runtime_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
+        .is_some_and(|payload| payload.requests_runtime_followup_chain());
     let preface_signals_provider_turn_followup =
         assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
     let supports_provider_turn_followup = followup_chain_active
         || discovery_search_turn
         || recovery_followup_turn
         || malformed_parse_followup_turn
+        || runtime_followup_turn
         || preface_signals_provider_turn_followup;
     ProviderTurnLaneExecution {
         lane,

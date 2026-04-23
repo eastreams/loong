@@ -5283,11 +5283,23 @@ fn wait_payload(
         if wait_status != "completed" {
             let continuation_note =
                 continuation_note_for_wait_status(wait_status, object.get("session"));
+            let session_id = object
+                .get("session")
+                .and_then(|value| value.get("session_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let recommended_payload = json!({
+                "session_id": session_id,
+                "timeout_ms": timeout_ms,
+            });
             object.insert(
                 "continuation".to_owned(),
                 json!({
                     "state": wait_status,
                     "is_terminal": false,
+                    "recommended_tool": "session_wait",
+                    "recommended_payload": recommended_payload,
                     "note": continuation_note,
                 }),
             );
@@ -5394,6 +5406,27 @@ fn task_wait_payload(
     let task_state = task_state_from_payload(&payload);
     if let Some(object) = payload.as_object_mut() {
         object.insert("task_events".to_owned(), Value::Array(task_events));
+        if wait_status != "completed" {
+            let task_id = object
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let recommended_payload = json!({
+                "task_id": task_id,
+                "timeout_ms": timeout_ms,
+            });
+            let continuation_value = object
+                .entry("continuation".to_owned())
+                .or_insert_with(|| json!({}));
+            if let Some(continuation_object) = continuation_value.as_object_mut() {
+                continuation_object.insert(
+                    "recommended_tool".to_owned(),
+                    Value::String("task_wait".to_owned()),
+                );
+                continuation_object.insert("recommended_payload".to_owned(), recommended_payload);
+            }
+        }
     }
     let payload = decorate_task_status_payload(payload, task_state);
     decorate_task_lineage_payload(payload, lineage_records, current_owner_session_id)

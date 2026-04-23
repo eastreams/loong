@@ -430,6 +430,20 @@ impl ToolDrivenFollowupPayload {
             }
         )
     }
+
+    pub fn requests_runtime_followup_chain(&self) -> bool {
+        match self {
+            Self::DiscoveryRecovery { .. } => true,
+            Self::ToolResult { text } => {
+                let tool_result_context = parse_tool_result_followup_context(text.as_str());
+                let continuation = tool_result_context
+                    .as_ref()
+                    .and_then(|context| parse_tool_result_continuation(&context.payload_json));
+                continuation.is_some_and(|continuation| !continuation.is_terminal)
+            }
+            Self::ToolFailure { .. } => false,
+        }
+    }
 }
 
 pub fn parse_tool_driven_continuation_reply(text: &str) -> ParsedToolDrivenContinuationReply {
@@ -4081,6 +4095,63 @@ mod tests {
         assert!(prompt.contains("intermediate state `waiting`"));
         assert!(prompt.contains("approval or external completion gate"));
         assert!(prompt.contains("exact blocker"));
+    }
+
+    #[test]
+    fn tool_result_payload_requests_runtime_followup_chain_for_nonterminal_continuation() {
+        let payload = ToolDrivenFollowupPayload::ToolResult {
+            text: format!(
+                "[ok] {}",
+                json!({
+                    "status": "ok",
+                    "tool": "session_wait",
+                    "tool_call_id": "call-session-wait",
+                    "payload_summary": json!({
+                        "wait_status": "waiting",
+                        "continuation": {
+                            "state": "waiting",
+                            "is_terminal": false,
+                            "recommended_tool": "session_wait",
+                            "recommended_payload": {
+                                "session_id": "child-session",
+                                "timeout_ms": 1000
+                            }
+                        }
+                    })
+                    .to_string(),
+                    "payload_chars": 256,
+                    "payload_truncated": false
+                })
+            ),
+        };
+
+        assert!(payload.requests_runtime_followup_chain());
+    }
+
+    #[test]
+    fn tool_result_payload_does_not_request_runtime_followup_chain_for_terminal_continuation() {
+        let payload = ToolDrivenFollowupPayload::ToolResult {
+            text: format!(
+                "[ok] {}",
+                json!({
+                    "status": "ok",
+                    "tool": "session_wait",
+                    "tool_call_id": "call-session-wait",
+                    "payload_summary": json!({
+                        "wait_status": "completed",
+                        "continuation": {
+                            "state": "completed",
+                            "is_terminal": true
+                        }
+                    })
+                    .to_string(),
+                    "payload_chars": 256,
+                    "payload_truncated": false
+                })
+            ),
+        };
+
+        assert!(!payload.requests_runtime_followup_chain());
     }
 
     #[test]
