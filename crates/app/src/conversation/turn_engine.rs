@@ -2439,6 +2439,20 @@ fn compact_continuation_payload_summary(payload: &serde_json::Value) -> Option<s
     let payload_object = payload.as_object()?;
     let continuation_object = payload_object.get("continuation")?.as_object()?;
 
+    let mut compacted = serde_json::Map::new();
+    for key in [
+        "mode",
+        "profile",
+        "label",
+        "state",
+        "wait_status",
+        "task_id",
+    ] {
+        if let Some(value) = payload_object.get(key) {
+            compacted.insert(key.to_owned(), value.clone());
+        }
+    }
+
     let mut compacted_continuation = serde_json::Map::new();
     for key in [
         "state",
@@ -2450,9 +2464,11 @@ fn compact_continuation_payload_summary(payload: &serde_json::Value) -> Option<s
             compacted_continuation.insert(key.to_owned(), value.clone());
         }
     }
-    Some(json!({
-        "continuation": compacted_continuation,
-    }))
+    compacted.insert(
+        "continuation".to_owned(),
+        Value::Object(compacted_continuation),
+    );
+    Some(Value::Object(compacted))
 }
 
 fn summarize_tool_result_payload(
@@ -6941,10 +6957,10 @@ mod tests {
             "session_wait"
         );
         assert!(
-            payload_summary
-                .as_object()
-                .is_some_and(|object| object.len() == 1),
-            "compacted summary should only retain continuation metadata: {payload_summary:?}"
+            payload_summary.as_object().is_some_and(|object| {
+                object.contains_key("continuation") && !object.contains_key("events")
+            }),
+            "compacted summary should keep only compact continuation-safe fields: {payload_summary:?}"
         );
     }
 
