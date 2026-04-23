@@ -421,10 +421,11 @@ async fn execute_wait_command(
         "after_id": after_id,
         "timeout_ms": bounded_timeout_ms,
     });
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let outcome = mvp::tools::wait_for_session_with_config(
         payload,
         current_session_id,
-        memory_config,
+        &session_store_config,
         tool_config,
     )
     .await?;
@@ -536,10 +537,11 @@ fn execute_app_tool_request(
         tool_name: tool_name.to_owned(),
         payload,
     };
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let outcome = mvp::tools::execute_app_tool_with_config(
         request,
         current_session_id,
-        memory_config,
+        &session_store_config,
         tool_config,
     )?;
     Ok(outcome)

@@ -707,7 +707,8 @@ fn load_work_unit_repository(
         let (_, config) = mvp::config::load(config_path)?;
         let memory_config =
             mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        mvp::work::repository::WorkUnitRepository::new(&memory_config)
+        let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+        mvp::work::repository::WorkUnitRepository::new(&session_store_config)
     }
 }
 

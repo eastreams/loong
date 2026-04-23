@@ -2950,7 +2950,7 @@ mod tests {
             .register_pack(pack)
             .expect("register memory test pack");
 
-        let adapter = crate::memory::MvpMemoryAdapter::with_config(memory_config.clone());
+        let adapter = crate::session::store::session_memory_adapter(memory_config);
         kernel.register_core_memory_adapter(adapter);
 
         kernel

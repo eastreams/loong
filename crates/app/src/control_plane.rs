@@ -2552,6 +2552,7 @@ mod tests {
             AcpSessionState, AcpSessionStore, AcpSqliteSessionStore,
         },
         config::LoongConfig,
+        test_support::ScopedEnv,
     };
 
     use super::*;
@@ -3364,7 +3365,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 
@@ -3378,7 +3379,7 @@ mod tests {
         let _ = fs::create_dir_all(&sqlite_path);
         SessionStoreConfig {
             sqlite_path: Some(sqlite_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 
@@ -3907,6 +3908,28 @@ mod tests {
                 .expect("binding")
                 .route_session_id,
             "child-session"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn acp_view_visibility_ignores_memory_env_overrides() {
+        let mut env = ScopedEnv::new();
+        env.set("LOONG_SQLITE_PATH", "/tmp/env-visibility-memory.sqlite3");
+        env.set("LOONG_MEMORY_PROFILE", "profile_plus_window");
+
+        let view = seeded_acp_view("acp-list-ignore-env");
+        let count = view
+            .visible_session_count()
+            .await
+            .expect("visible ACP session count");
+        assert_eq!(count, 1);
+
+        let sessions = view.list_sessions(50).expect("visible ACP session list");
+        assert_eq!(sessions.matched_count, 1);
+        assert_eq!(
+            sessions.sessions[0].session_key,
+            "agent:codex:child-session"
         );
     }
 

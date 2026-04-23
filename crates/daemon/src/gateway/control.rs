@@ -1426,7 +1426,9 @@ fn gateway_pairing_registry(
             crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
                 &config.memory,
             );
-        mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)
+        let session_store_config =
+            crate::mvp::session::store::SessionStoreConfig::from(&memory_config);
+        mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(session_store_config)
     }
     #[cfg(not(feature = "memory-sqlite"))]
     {

@@ -1837,26 +1837,37 @@ async fn provider_messages_with_kernel_binding(
     session_id: &str,
     kernel_ctx: &KernelContext,
 ) -> Vec<Value> {
-    let memory_config = session_store_config_from_config(config);
-    let workspace_root = config
-        .tools
-        .file_root
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|_| config.tools.resolved_file_root());
-    let hydrated = crate::memory::hydrate_memory_context_with_workspace_root(
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    let workspace_root = tool_runtime_config
+        .effective_workspace_root()
+        .map(std::path::Path::to_path_buf);
+    let request = crate::memory::build_read_stage_envelope_request_for_memory_config(
         session_id,
         workspace_root.as_deref(),
-        &memory_config,
-    )
-    .expect("hydrate memory context");
+        &config.memory,
+    );
+    let caps = BTreeSet::from([Capability::MemoryRead]);
+    let outcome = kernel_ctx
+        .kernel
+        .execute_memory_core(
+            kernel_ctx.pack_id(),
+            &kernel_ctx.token,
+            &caps,
+            None,
+            request,
+        )
+        .await
+        .expect("load staged memory envelope via kernel");
+    let envelope = crate::memory::decode_stage_envelope(&outcome.payload)
+        .expect("decode staged memory envelope");
+    let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
     crate::provider::project_hydrated_memory_context_for_view_with_binding(
         config,
         true,
-        &crate::tools::runtime_tool_view(),
+        &runtime_tool_view,
         crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
-        &hydrated,
+        &envelope.hydrated,
     )
     .await
     .messages
@@ -1910,9 +1921,8 @@ fn test_kernel_context_with_memory(
     kernel
         .register_pack(pack)
         .expect("register memory test pack");
-    kernel.register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(
-        memory_config.clone(),
-    ));
+    kernel
+        .register_core_memory_adapter(crate::session::store::session_memory_adapter(memory_config));
     kernel
         .set_default_core_memory_adapter("mvp-memory")
         .expect("set memory test adapter");
@@ -6632,10 +6642,13 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     let mut config = test_config();
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
     config.memory.sliding_window = 1;
-    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_min_messages = Some(1);
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
+    let runtime_memory_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     let memory_config = session_store_config_from_config(&config);
     let exported_capture = Arc::new(Mutex::new(None::<String>));
     let workspace_root_for_hook = workspace_root.clone();
@@ -6680,20 +6693,34 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     .with_durable_memory_config(memory_config.clone())
     .with_compact_hook(compact_hook);
 
-    append_session_turn_direct(
+    crate::memory::append_turn_direct(
         "session-pre-compaction-flush",
         "user",
         "earlier ask",
-        &memory_config,
+        &runtime_memory_config,
     )
     .expect("seed earlier user turn");
-    append_session_turn_direct(
+    crate::memory::append_turn_direct(
         "session-pre-compaction-flush",
         "assistant",
         "earlier reply",
-        &memory_config,
+        &runtime_memory_config,
     )
     .expect("seed earlier assistant turn");
+    crate::memory::append_turn_direct(
+        "session-pre-compaction-flush",
+        "user",
+        "followup ask",
+        &runtime_memory_config,
+    )
+    .expect("seed followup user turn");
+    crate::memory::append_turn_direct(
+        "session-pre-compaction-flush",
+        "assistant",
+        "followup reply",
+        &runtime_memory_config,
+    )
+    .expect("seed followup assistant turn");
 
     let coordinator = ConversationTurnCoordinator::new();
     let kernel_ctx = test_kernel_context_with_memory("test-pre-compaction-flush", &memory_config);
@@ -17522,6 +17549,7 @@ fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Val
             recent_window,
         },
         retrieval_request: None,
+        retrieval_planner_snapshot: None,
         diagnostics: vec![
             crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Derive),
             crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Retrieve),

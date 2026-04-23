@@ -485,7 +485,7 @@ mod tests {
         let sqlite_path = root.join("memory.sqlite3");
         SessionStoreConfig {
             sqlite_path: Some(sqlite_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 

@@ -37,8 +37,6 @@ use crate::acp::{
     execute_acp_conversation_turn_for_address,
 };
 #[cfg(feature = "memory-sqlite")]
-use crate::memory::runtime_config::MemoryRuntimeConfig;
-#[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed,
 };
@@ -2328,7 +2326,7 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
 
         let memory_config = store::session_store_config_from_memory_config(&config.memory);
         let compact_stage_result =
-            crate::memory::run_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
+            store::run_session_compact_stage(session_id, workspace_root.as_deref(), &memory_config)
                 .await;
         match compact_stage_result {
             Ok(diagnostics)
@@ -3412,7 +3410,7 @@ fn persist_active_external_skills_from_followup_payload_if_needed(
         return;
     }
 
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let Ok(repo) = SessionRepository::new(&memory_config) else {
         return;
     };
@@ -8234,26 +8232,42 @@ mod tests {
             .expect("write workspace root file");
         config.memory.sqlite_path = sqlite_path.display().to_string();
         config.tools.file_root = Some(workspace_root_file.display().to_string());
+        config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
         config.memory.sliding_window = 1;
         config.conversation.compact_min_messages = Some(1);
         config.conversation.compact_trigger_estimated_tokens = Some(1);
         config.conversation.compact_fail_open = true;
 
-        let memory_config = store::session_store_config_from_memory_config(&config.memory);
-        crate::session::store::append_session_turn_direct(
+        let runtime_memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::append_turn_direct(
             "session-durable-flush-fail-open",
             "user",
             "remember the deployment cutoff",
-            &memory_config,
+            &runtime_memory_config,
         )
         .expect("append user turn");
-        crate::session::store::append_session_turn_direct(
+        crate::memory::append_turn_direct(
             "session-durable-flush-fail-open",
             "assistant",
             "deployment cutoff is tonight",
-            &memory_config,
+            &runtime_memory_config,
         )
         .expect("append assistant turn");
+        crate::memory::append_turn_direct(
+            "session-durable-flush-fail-open",
+            "user",
+            "who is on call",
+            &runtime_memory_config,
+        )
+        .expect("append second user turn");
+        crate::memory::append_turn_direct(
+            "session-durable-flush-fail-open",
+            "assistant",
+            "ops is on call",
+            &runtime_memory_config,
+        )
+        .expect("append second assistant turn");
 
         let kernel_ctx = bootstrap_test_kernel_context("turn-coordinator-compaction", 3600)
             .expect("bootstrap kernel context");

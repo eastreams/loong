@@ -621,7 +621,7 @@ mod tests {
         let _ = std::fs::remove_file(&sqlite_path);
         let config = SessionStoreConfig {
             sqlite_path: Some(sqlite_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         };
         let repo = SessionRepository::new(&config).expect("session repository");
         let sqlite_path = config.sqlite_path.expect("sqlite path");
@@ -938,7 +938,7 @@ mod tests {
         finalize_async_delegate_spawn_failure_with_recovery(
             &SessionStoreConfig {
                 sqlite_path: Some(sqlite_path),
-                ..SessionStoreConfig::default()
+                runtime_config: None,
             },
             "child-session",
             "root-session",

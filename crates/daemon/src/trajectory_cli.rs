@@ -95,7 +95,8 @@ pub fn collect_trajectory_export_artifact(
         .to_owned();
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)?;
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)?;
     let session_summary = repo
         .load_session_summary_with_legacy_fallback(&session_id)?
         .ok_or_else(|| format!("session `{session_id}` not found"))?;

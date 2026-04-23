@@ -36,8 +36,9 @@ fn seed_runtime_trajectory_session(config_path: &Path, session_id: &str) {
         mvp::config::load(Some(config_path_text.as_ref())).expect("load config fixture");
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repository =
-        mvp::session::repository::SessionRepository::new(&memory_config).expect("repository");
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    let repository = mvp::session::repository::SessionRepository::new(&session_store_config)
+        .expect("repository");
 
     let session_record = mvp::session::repository::NewSessionRecord {
         session_id: session_id.to_owned(),

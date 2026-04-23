@@ -2314,7 +2314,7 @@ fn browser_companion_app_tool_click_uses_current_session_scope() {
             }),
         },
         "root-session",
-        &crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        &crate::session::store::SessionStoreConfig::default(),
         &tool_config,
     )
     .expect("browser companion click should succeed");
