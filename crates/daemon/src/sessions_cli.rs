@@ -808,11 +808,14 @@ fn maybe_build_turn_checkpoint_heal_action(
     session_id: &str,
     detail: &Value,
 ) -> Option<SessionHealAction> {
-    let requires_recovery = detail
-        .pointer("/turn_checkpoint/summary/requires_recovery")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !requires_recovery {
+    let summary_value = detail.pointer("/turn_checkpoint/summary")?;
+    let summary = parse_turn_checkpoint_summary(summary_value)?;
+    let repair_plan = mvp::conversation::build_turn_checkpoint_repair_plan(&summary);
+    let action = repair_plan.action();
+    if matches!(
+        action,
+        mvp::conversation::TurnCheckpointRecoveryAction::None
+    ) {
         return None;
     }
 
@@ -820,22 +823,73 @@ fn maybe_build_turn_checkpoint_heal_action(
     let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
     let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
     let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
-    let command = format!(
-        "{command_name} sessions heal --config {config_arg} --session {session_arg} {target_arg} --apply"
-    );
-    let description = "Run production turn-checkpoint repair for the selected session.".to_owned();
+    let manual_reason = repair_plan
+        .manual_reason()
+        .map(|reason| reason.as_str().to_owned());
 
-    Some(SessionHealAction {
-        id: "checkpoint:repair".to_owned(),
-        kind: "turn_checkpoint_repair".to_owned(),
-        source: "turn_checkpoint_summary".to_owned(),
-        tool_name: "turn_checkpoint_repair".to_owned(),
-        description,
-        command,
-        can_apply: true,
-        requires_mutation: true,
-        apply_strategy: SessionHealApplyStrategy::TurnCheckpointRepair,
-    })
+    match action {
+        mvp::conversation::TurnCheckpointRecoveryAction::RunAfterTurn
+        | mvp::conversation::TurnCheckpointRecoveryAction::RunCompaction
+        | mvp::conversation::TurnCheckpointRecoveryAction::RunAfterTurnAndCompaction => {
+            let command = format!(
+                "{command_name} sessions heal --config {config_arg} --session {session_arg} {target_arg} --apply"
+            );
+            let action_kind = action.as_str().to_owned();
+            let action_description = format!(
+                "Run production turn-checkpoint repair for `{}`.",
+                action.as_str()
+            );
+
+            Some(SessionHealAction {
+                id: "checkpoint:repair".to_owned(),
+                kind: action_kind,
+                source: "turn_checkpoint_summary".to_owned(),
+                tool_name: "turn_checkpoint_repair".to_owned(),
+                description: action_description,
+                command,
+                can_apply: true,
+                requires_mutation: true,
+                apply_strategy: SessionHealApplyStrategy::TurnCheckpointRepair,
+            })
+        }
+        mvp::conversation::TurnCheckpointRecoveryAction::InspectManually => {
+            let command = format!(
+                "{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}"
+            );
+            let reason_text = manual_reason
+                .unwrap_or_else(|| "checkpoint_state_requires_manual_inspection".to_owned());
+            let description =
+                format!("Inspect turn-checkpoint recovery manually because `{reason_text}`.");
+
+            Some(SessionHealAction {
+                id: "checkpoint:manual".to_owned(),
+                kind: "turn_checkpoint_manual_review".to_owned(),
+                source: "turn_checkpoint_summary".to_owned(),
+                tool_name: "session_status".to_owned(),
+                description,
+                command,
+                can_apply: false,
+                requires_mutation: false,
+                apply_strategy: SessionHealApplyStrategy::ObserveOnly,
+            })
+        }
+        mvp::conversation::TurnCheckpointRecoveryAction::None => None,
+    }
+}
+
+fn parse_turn_checkpoint_summary(
+    summary_value: &Value,
+) -> Option<mvp::conversation::TurnCheckpointEventSummary> {
+    let default_summary = mvp::conversation::TurnCheckpointEventSummary::default();
+    let mut merged_summary_value = serde_json::to_value(default_summary).ok()?;
+    let merged_summary_object = merged_summary_value.as_object_mut()?;
+    let summary_object = summary_value.as_object()?;
+
+    for (key, value) in summary_object {
+        merged_summary_object.insert(key.clone(), value.clone());
+    }
+
+    serde_json::from_value(merged_summary_value).ok()
 }
 
 fn build_session_heal_action_command(
@@ -2045,7 +2099,7 @@ mod tests {
     }
 
     #[test]
-    fn build_session_heal_plan_adds_turn_checkpoint_repair_action_when_needed() {
+    fn build_session_heal_plan_marks_manual_checkpoint_recovery_as_observe_only() {
         let detail = json!({
             "diagnostics": {
                 "attention_hints": ["checkpoint attention"]
@@ -2061,12 +2115,44 @@ mod tests {
             .expect("build heal plan");
 
         assert_eq!(plan.actions.len(), 1);
-        assert_eq!(plan.actions[0].tool_name, "turn_checkpoint_repair");
-        assert!(plan.actions[0].can_apply);
+        assert_eq!(plan.actions[0].tool_name, "session_status");
+        assert!(!plan.actions[0].can_apply);
+        assert_eq!(plan.actions[0].kind, "turn_checkpoint_manual_review");
         assert_eq!(
             plan.attention_hints,
             vec!["checkpoint attention".to_owned()]
         );
+    }
+
+    #[test]
+    fn build_session_heal_plan_adds_turn_checkpoint_repair_action_when_runtime_repair_is_possible()
+    {
+        let detail = json!({
+            "diagnostics": {
+                "attention_hints": ["checkpoint attention"]
+            },
+            "turn_checkpoint": {
+                "summary": {
+                    "requires_recovery": true,
+                    "latest_identity_present": true,
+                    "latest_runs_after_turn": true,
+                    "latest_attempts_context_compaction": true,
+                    "latest_after_turn": "completed",
+                    "latest_compaction": "failed",
+                    "session_state": "finalization_failed",
+                    "checkpoint_durable": true,
+                    "reply_durable": true
+                }
+            }
+        });
+
+        let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+            .expect("build heal plan");
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].tool_name, "turn_checkpoint_repair");
+        assert!(plan.actions[0].can_apply);
+        assert_eq!(plan.actions[0].kind, "run_compaction");
     }
 
     #[test]
