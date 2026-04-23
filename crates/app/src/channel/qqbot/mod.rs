@@ -49,8 +49,7 @@ pub(super) async fn run_qqbot_send(
     Ok(())
 }
 
-/// Long-running serve command: `loong qqbot-serve`.
-pub(super) async fn run_qqbot_channel(
+async fn run_qqbot_channel_inner(
     config: &LoongConfig,
     resolved: &ResolvedQqbotChannelConfig,
     resolved_path: &std::path::Path,
@@ -139,7 +138,7 @@ pub(super) async fn run_qqbot_channel_with_context(
         DEFAULT_TOKEN_TTL_S,
         &context.config,
     )?;
-    run_qqbot_channel(
+    run_qqbot_channel_inner(
         &context.config,
         &context.resolved,
         &context.resolved_path,
@@ -184,6 +183,14 @@ fn build_qqbot_command_context(
         resolved,
         route,
     })
+}
+
+fn build_qqbot_command_context_from_cli(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
+    let (resolved_path, config) = crate::config::load(config_path)?;
+    build_qqbot_command_context(resolved_path, config, account_id)
 }
 
 fn build_http_client(

@@ -1063,10 +1063,6 @@ pub fn run_weixin_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCom
     run_managed_plugin_bridge_serve_cli_impl("weixin", args)
 }
 
-pub fn run_qqbot_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    run_managed_plugin_bridge_serve_cli_impl("qqbot", args)
-}
-
 pub fn run_onebot_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     run_managed_plugin_bridge_serve_cli_impl("onebot", args)
 }

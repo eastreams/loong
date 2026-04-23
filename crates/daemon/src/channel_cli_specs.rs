@@ -5,12 +5,11 @@ use crate::{
     run_imessage_send_cli_impl, run_irc_send_cli_impl, run_line_send_cli_impl,
     run_matrix_send_cli_impl, run_matrix_serve_cli_impl, run_mattermost_send_cli_impl,
     run_nextcloud_talk_send_cli_impl, run_nostr_send_cli_impl, run_onebot_send_cli_impl,
-    run_onebot_serve_cli_impl, run_qqbot_send_cli_impl, run_qqbot_serve_cli_impl,
-    run_signal_send_cli_impl, run_slack_send_cli_impl, run_synology_chat_send_cli_impl,
-    run_teams_send_cli_impl, run_telegram_send_cli_impl, run_telegram_serve_cli_impl,
-    run_twitch_send_cli_impl, run_webhook_send_cli_impl, run_wecom_send_cli_impl,
-    run_wecom_serve_cli_impl, run_weixin_send_cli_impl, run_weixin_serve_cli_impl,
-    run_whatsapp_send_cli_impl,
+    run_onebot_serve_cli_impl, run_qqbot_send_cli_impl, run_signal_send_cli_impl,
+    run_slack_send_cli_impl, run_synology_chat_send_cli_impl, run_teams_send_cli_impl,
+    run_telegram_send_cli_impl, run_telegram_serve_cli_impl, run_twitch_send_cli_impl,
+    run_webhook_send_cli_impl, run_wecom_send_cli_impl, run_wecom_serve_cli_impl,
+    run_weixin_send_cli_impl, run_weixin_serve_cli_impl, run_whatsapp_send_cli_impl,
 };
 
 pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
@@ -151,11 +150,6 @@ pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
 pub const WEIXIN_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_weixin_serve_cli_impl,
-};
-
-pub const QQBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
-    family: mvp::channel::QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    run: run_qqbot_serve_cli_impl,
 };
 
 pub const ONEBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
