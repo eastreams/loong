@@ -262,8 +262,8 @@ pub use dispatch::{
     run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
     run_google_chat_send, run_imessage_send, run_irc_send, run_line_channel, run_line_send,
     run_matrix_channel, run_matrix_send, run_mattermost_send, run_nextcloud_talk_send,
-    run_nostr_send, run_signal_send, run_slack_send, run_synology_chat_send, run_teams_send,
-    run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
+    run_nostr_send, run_qqbot_channel, run_signal_send, run_slack_send, run_synology_chat_send,
+    run_teams_send, run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
     run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
 };
 #[cfg(test)]

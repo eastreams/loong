@@ -136,6 +136,8 @@ use crate::config::ResolvedMattermostChannelConfig;
 use crate::config::ResolvedNextcloudTalkChannelConfig;
 #[cfg(feature = "channel-nostr")]
 use crate::config::ResolvedNostrChannelConfig;
+#[cfg(feature = "channel-qqbot")]
+use crate::config::ResolvedQqbotChannelConfig;
 #[cfg(feature = "channel-slack")]
 use crate::config::ResolvedSlackChannelConfig;
 #[cfg(feature = "channel-synology-chat")]
@@ -235,6 +237,8 @@ use super::mattermost;
 use super::nextcloud_talk;
 #[cfg(feature = "channel-nostr")]
 use super::nostr;
+#[cfg(feature = "channel-qqbot")]
+use super::qqbot;
 use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR,
@@ -663,6 +667,39 @@ pub(super) fn build_whatsapp_command_context(
     if !resolved.enabled {
         return Err(format!(
             "whatsapp account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
+#[cfg(feature = "channel-qqbot")]
+fn load_qqbot_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
+    let (resolved_path, config) = crate::config::load(config_path)?;
+    build_qqbot_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-qqbot")]
+pub(super) fn build_qqbot_command_context(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
+    let resolved = config.qqbot.resolve_account(account_id)?;
+    let route = config
+        .qqbot
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "qqbot account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -1762,6 +1799,35 @@ pub async fn run_webhook_channel(
             ChannelServeStopHandle::new(),
             true,
         )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_qqbot_channel(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-qqbot") {
+        return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-qqbot"))]
+    {
+        let _ = (config_path, account_id, bind_override, path_override);
+        return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-qqbot")]
+    {
+        let context = load_qqbot_command_context(config_path, account_id)?;
+        Box::pin(qqbot::run_qqbot_channel_with_context(
+            context,
+            ChannelServeStopHandle::new(),
+            true,
+        ))
         .await
     }
 }

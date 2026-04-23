@@ -372,6 +372,25 @@ const NOSTR_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegi
     operations: NOSTR_OPERATIONS,
 };
 
+pub(crate) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "qqbot",
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: QQBOT_COMMAND_FAMILY_DESCRIPTOR,
+        }),
+        snapshot_builder: None,
+        selection_order: 36,
+        selection_label: "qq gateway bot",
+        blurb: "Shipped Qqbot custom robot outbound surface with config-backed webhook sends; inbound callback serve support remains planned.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: QQBOT_CAPABILITIES,
+        label: "QQ Bot",
+        aliases: &["qq", "qq-bot", "tencent-qq"],
+        transport: "qq_official_bot_gateway_or_plugin_bridge",
+        onboarding: QQBOT_ONBOARDING_DESCRIPTOR,
+        operations: QQBOT_OPERATIONS,
+    };
+
 pub(super) const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR,
     FEISHU_CHANNEL_REGISTRY_DESCRIPTOR,

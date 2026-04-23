@@ -586,7 +586,7 @@ const QQBOT_CAPABILITIES: &[ChannelCapability] = &[
 ];
 pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
     ChannelCatalogCommandFamilyDescriptor {
-        channel_id: "feishu",
+        channel_id: "qqbot",
         default_send_target_kind: ChannelCatalogTargetKind::ReceiveId,
         send: QQBOT_SEND_OPERATION,
         serve: QQBOT_SERVE_OPERATION,
@@ -672,13 +672,19 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 
 const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
     name: "qqbot bridge send contract",
-    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+    trigger: ChannelDoctorCheckTrigger::OperationHealth,
 }];
 
-const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
-    name: "qqbot bridge serve contract",
-    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
-}];
+const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "qqbot channel",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "qqbot channel runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
 
 const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
@@ -697,25 +703,6 @@ const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardi
     status_command: "loongclaw doctor",
     repair_command: None,
 };
-
-pub(crate) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
-    ChannelRegistryDescriptor {
-        id: "qqbot",
-        runtime: Some(ChannelRuntimeDescriptor {
-            family: QQBOT_COMMAND_FAMILY_DESCRIPTOR,
-        }),
-        snapshot_builder: None,
-        selection_order: 36,
-        selection_label: "qq gateway bot",
-        blurb: "Plugin-backed QQ Bot surface for official gateway bots and compatible bridge plugins.",
-        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
-        capabilities: QQBOT_CAPABILITIES,
-        label: "QQ Bot",
-        aliases: &["qq", "qq-bot", "tencent-qq"],
-        transport: "qq_official_bot_gateway_or_plugin_bridge",
-        onboarding: QQBOT_ONBOARDING_DESCRIPTOR,
-        operations: QQBOT_OPERATIONS,
-    };
 
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
