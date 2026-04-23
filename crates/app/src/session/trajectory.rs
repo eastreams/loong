@@ -9,7 +9,10 @@ use crate::memory::canonical_memory_record_from_persisted_turn;
 use super::repository::ApprovalDecision;
 use super::repository::ApprovalRequestRecord;
 use super::repository::SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE;
+use super::repository::SessionArtifactRecord;
 use super::repository::SessionEventRecord;
+use super::repository::SessionHeadRecord;
+use super::repository::SessionNodeRecord;
 use super::repository::SessionRepository;
 use super::repository::SessionSummaryRecord;
 use super::repository::SessionTerminalOutcomeRecord;
@@ -118,6 +121,39 @@ pub struct SessionTrajectoryApprovalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionTrajectoryNode {
+    pub node_id: String,
+    pub parent_node_id: Option<String>,
+    pub kind: String,
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub session_turn_index: Option<i64>,
+    pub metadata: Value,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTrajectoryHead {
+    pub head_name: String,
+    pub node_id: String,
+    pub mode: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionTrajectoryArtifactRecord {
+    pub artifact_id: String,
+    pub kind: String,
+    pub head_name: Option<String>,
+    pub anchor_node_id: Option<String>,
+    pub source_start_node_id: Option<String>,
+    pub source_end_node_id: Option<String>,
+    pub payload_json: Value,
+    pub summary_text: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTrajectoryArtifact {
     pub schema: SessionTrajectoryArtifactSchema,
     pub exported_at: String,
@@ -128,6 +164,12 @@ pub struct SessionTrajectoryArtifact {
     pub turns: Vec<SessionTrajectoryTurn>,
     pub canonical_record_count: usize,
     pub canonical_records: Vec<SessionTrajectoryCanonicalRecord>,
+    pub node_count: usize,
+    pub nodes: Vec<SessionTrajectoryNode>,
+    pub head_count: usize,
+    pub heads: Vec<SessionTrajectoryHead>,
+    pub session_artifact_count: usize,
+    pub session_artifacts: Vec<SessionTrajectoryArtifactRecord>,
     pub event_count: usize,
     pub event_page_limit: usize,
     pub events: Vec<SessionTrajectoryEvent>,
@@ -155,6 +197,10 @@ pub fn export_session_trajectory(
             SessionRepository::lineage_root_session_id_with_conn(conn, session_id)?;
         let lineage_depth = SessionRepository::session_lineage_depth_with_conn(conn, session_id)?;
         let turns = load_export_turns_with_conn(conn, session_id, turn_limit)?;
+        let session_nodes = SessionRepository::list_session_nodes_with_conn(conn, session_id)?;
+        let session_heads = SessionRepository::list_session_heads_with_conn(conn, session_id)?;
+        let session_artifacts =
+            SessionRepository::list_session_artifacts_with_conn(conn, session_id)?;
         let events = SessionRepository::list_all_events_with_conn(
             conn,
             session_id,
@@ -176,6 +222,9 @@ pub fn export_session_trajectory(
         let first_sequence = resolve_first_sequence(total_turn_count, exported_turn_count);
         let trajectory_turns = build_trajectory_turns(&turns, first_sequence);
         let canonical_records = build_canonical_records(session_id, &turns);
+        let trajectory_nodes = build_trajectory_nodes(&session_nodes);
+        let trajectory_heads = build_trajectory_heads(&session_heads);
+        let trajectory_session_artifacts = build_session_artifacts(&session_artifacts);
         let trajectory_events = build_trajectory_events(&events);
         let trajectory_approval_requests = build_approval_requests(&approval_requests);
         let trajectory_outcome = terminal_outcome
@@ -183,6 +232,9 @@ pub fn export_session_trajectory(
             .map(SessionTrajectoryTerminalOutcome::from_terminal_outcome);
         let exported_turn_count = trajectory_turns.len();
         let canonical_record_count = canonical_records.len();
+        let node_count = trajectory_nodes.len();
+        let head_count = trajectory_heads.len();
+        let session_artifact_count = trajectory_session_artifacts.len();
         let event_count = trajectory_events.len();
         let approval_request_count = trajectory_approval_requests.len();
         let schema = SessionTrajectoryArtifactSchema::default();
@@ -197,6 +249,12 @@ pub fn export_session_trajectory(
             turns: trajectory_turns,
             canonical_record_count,
             canonical_records,
+            node_count,
+            nodes: trajectory_nodes,
+            head_count,
+            heads: trajectory_heads,
+            session_artifact_count,
+            session_artifacts: trajectory_session_artifacts,
             event_count,
             event_page_limit: options.event_page_limit,
             events: trajectory_events,
@@ -310,6 +368,23 @@ fn build_trajectory_events(events: &[SessionEventRecord]) -> Vec<SessionTrajecto
     }
 
     trajectory_events
+}
+
+fn build_trajectory_nodes(nodes: &[SessionNodeRecord]) -> Vec<SessionTrajectoryNode> {
+    nodes.iter().map(SessionTrajectoryNode::from_node).collect()
+}
+
+fn build_trajectory_heads(heads: &[SessionHeadRecord]) -> Vec<SessionTrajectoryHead> {
+    heads.iter().map(SessionTrajectoryHead::from_head).collect()
+}
+
+fn build_session_artifacts(
+    artifacts: &[SessionArtifactRecord],
+) -> Vec<SessionTrajectoryArtifactRecord> {
+    artifacts
+        .iter()
+        .map(SessionTrajectoryArtifactRecord::from_artifact)
+        .collect()
 }
 
 fn build_canonical_records(
@@ -434,6 +509,48 @@ impl SessionTrajectoryCanonicalRecord {
     }
 }
 
+impl SessionTrajectoryNode {
+    fn from_node(node: &SessionNodeRecord) -> Self {
+        Self {
+            node_id: node.node_id.clone(),
+            parent_node_id: node.parent_node_id.clone(),
+            kind: node.kind.as_str().to_owned(),
+            role: node.role.clone(),
+            content: node.content.clone(),
+            session_turn_index: node.session_turn_index,
+            metadata: node.metadata_json.clone(),
+            created_at: node.created_at,
+        }
+    }
+}
+
+impl SessionTrajectoryHead {
+    fn from_head(head: &SessionHeadRecord) -> Self {
+        Self {
+            head_name: head.head_name.clone(),
+            node_id: head.node_id.clone(),
+            mode: head.mode.as_str().to_owned(),
+            updated_at: head.updated_at,
+        }
+    }
+}
+
+impl SessionTrajectoryArtifactRecord {
+    fn from_artifact(artifact: &SessionArtifactRecord) -> Self {
+        Self {
+            artifact_id: artifact.artifact_id.clone(),
+            kind: artifact.kind.as_str().to_owned(),
+            head_name: artifact.head_name.clone(),
+            anchor_node_id: artifact.anchor_node_id.clone(),
+            source_start_node_id: artifact.source_start_node_id.clone(),
+            source_end_node_id: artifact.source_end_node_id.clone(),
+            payload_json: artifact.payload_json.clone(),
+            summary_text: artifact.summary_text.clone(),
+            created_at: artifact.created_at,
+        }
+    }
+}
+
 impl SessionTrajectoryApprovalRequest {
     fn from_record(record: &ApprovalRequestRecord) -> Self {
         let status = record.status.as_str().to_owned();
@@ -469,10 +586,13 @@ mod tests {
     use super::SessionTranscriptTurn;
     use super::export_session_trajectory;
     use super::trim_turns_to_limit;
+    use crate::session::repository::ACTIVE_SESSION_HEAD_NAME;
     use crate::session::repository::FinalizeSessionTerminalRequest;
     use crate::session::repository::NewApprovalRequestRecord;
+    use crate::session::repository::NewSessionArtifactRecord;
     use crate::session::repository::NewSessionEvent;
     use crate::session::repository::NewSessionRecord;
+    use crate::session::repository::SessionArtifactKind;
     use crate::session::repository::SessionKind;
     use crate::session::repository::SessionRecord;
     use crate::session::repository::SessionRepository;
@@ -571,6 +691,26 @@ mod tests {
         repository
             .finalize_session_terminal("root-session", finalize_request)
             .expect("finalize session");
+        repository
+            .create_session_artifact(NewSessionArtifactRecord {
+                artifact_id: "checkpoint-1".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: SessionArtifactKind::Checkpoint,
+                head_name: Some(ACTIVE_SESSION_HEAD_NAME.to_owned()),
+                anchor_node_id: Some("session-turn:root-session:2".to_owned()),
+                source_start_node_id: Some("session-turn:root-session:2".to_owned()),
+                source_end_node_id: Some("session-turn:root-session:2".to_owned()),
+                payload_json: json!({"label": "cp-1"}),
+                summary_text: Some("Checkpoint 1".to_owned()),
+            })
+            .expect("create checkpoint artifact");
+        repository
+            .fork_session_head(
+                "root-session",
+                "session-turn:root-session:1",
+                "thread/alpha",
+            )
+            .expect("fork named head");
 
         let options = SessionTrajectoryExportOptions::default();
         let artifact =
@@ -587,6 +727,14 @@ mod tests {
         assert!(!artifact.turns_truncated);
         assert_eq!(artifact.canonical_record_count, 2);
         assert_eq!(artifact.canonical_records[0].kind, "assistant_turn");
+        assert_eq!(artifact.node_count, 3);
+        assert_eq!(artifact.head_count, 2);
+        assert_eq!(artifact.session_artifact_count, 1);
+        assert_eq!(artifact.heads[0].head_name, "active");
+        assert_eq!(artifact.heads[0].mode, "live");
+        assert_eq!(artifact.heads[1].head_name, "thread/alpha");
+        assert_eq!(artifact.heads[1].mode, "live");
+        assert_eq!(artifact.session_artifacts[0].kind, "checkpoint");
         assert_eq!(artifact.event_count, 2);
         assert_eq!(artifact.events[0].event_kind, "delegate_started");
         assert_eq!(artifact.events[1].event_kind, "delegate_completed");

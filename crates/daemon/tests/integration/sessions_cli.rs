@@ -838,6 +838,192 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
 }
 
 #[tokio::test]
+async fn execute_sessions_tree_commands_surface_head_modes_paths_and_artifacts() {
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-tree");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    append_session_turn(&root, "ops-root", "user", "hello");
+    append_session_turn(&root, "ops-root", "assistant", "world");
+
+    let fork_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::ForkHead {
+                session_id: "ops-root".to_owned(),
+                node_id: "session-turn:ops-root:1".to_owned(),
+                head_name: "thread/alpha".to_owned(),
+            },
+        },
+    )
+    .await
+    .expect("fork head should succeed");
+
+    assert_eq!(fork_execution.payload["command"], "fork-head");
+    assert_eq!(fork_execution.payload["detail"]["head"]["mode"], "live");
+    let rendered_fork = loong_daemon::sessions_cli::render_sessions_cli_text(&fork_execution)
+        .expect("render fork head");
+    assert!(
+        rendered_fork.contains("head: thread/alpha -> session-turn:ops-root:1 mode=live"),
+        "fork render should expose head mode: {rendered_fork}"
+    );
+
+    let pin_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::PinHead {
+                session_id: "ops-root".to_owned(),
+                head_name: "thread/alpha".to_owned(),
+            },
+        },
+    )
+    .await
+    .expect("pin head should succeed");
+
+    assert_eq!(pin_execution.payload["command"], "pin-head");
+    assert_eq!(pin_execution.payload["detail"]["head"]["mode"], "pinned");
+
+    let heads_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::Heads {
+                session_id: "ops-root".to_owned(),
+            },
+        },
+    )
+    .await
+    .expect("heads should succeed");
+
+    assert_eq!(heads_execution.payload["command"], "heads");
+    assert_eq!(
+        heads_execution.payload["detail"]["heads"][0]["head_name"],
+        "active"
+    );
+    assert_eq!(
+        heads_execution.payload["detail"]["heads"][0]["mode"],
+        "live"
+    );
+    assert_eq!(
+        heads_execution.payload["detail"]["heads"][1]["head_name"],
+        "thread/alpha"
+    );
+    assert_eq!(
+        heads_execution.payload["detail"]["heads"][1]["mode"],
+        "pinned"
+    );
+    let rendered_heads = loong_daemon::sessions_cli::render_sessions_cli_text(&heads_execution)
+        .expect("render heads");
+    assert!(
+        rendered_heads.contains("thread/alpha -> session-turn:ops-root:1 mode=pinned"),
+        "heads render should expose pinned mode: {rendered_heads}"
+    );
+
+    let path_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::Path {
+                session_id: "ops-root".to_owned(),
+                head_name: Some("thread/alpha".to_owned()),
+            },
+        },
+    )
+    .await
+    .expect("path should succeed");
+
+    assert_eq!(path_execution.payload["command"], "path");
+    assert_eq!(path_execution.payload["detail"]["node_count"], 2);
+    assert_eq!(
+        path_execution.payload["detail"]["path"][1]["content"],
+        "hello"
+    );
+
+    let checkpoint_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::Checkpoint {
+                session_id: "ops-root".to_owned(),
+                label: "draft-a".to_owned(),
+                node_id: None,
+            },
+        },
+    )
+    .await
+    .expect("checkpoint should succeed");
+
+    assert_eq!(checkpoint_execution.payload["command"], "checkpoint");
+    assert_eq!(
+        checkpoint_execution.payload["detail"]["head"]["head_name"],
+        "checkpoint/draft-a"
+    );
+    assert_eq!(
+        checkpoint_execution.payload["detail"]["head"]["mode"],
+        "pinned"
+    );
+    let rendered_checkpoint =
+        loong_daemon::sessions_cli::render_sessions_cli_text(&checkpoint_execution)
+            .expect("render checkpoint");
+    assert!(
+        rendered_checkpoint.contains("head: checkpoint/draft-a"),
+        "checkpoint render should include checkpoint head: {rendered_checkpoint}"
+    );
+    assert!(
+        rendered_checkpoint.contains("mode=pinned"),
+        "checkpoint render should include pinned mode: {rendered_checkpoint}"
+    );
+
+    let artifacts_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::Artifacts {
+                session_id: "ops-root".to_owned(),
+            },
+        },
+    )
+    .await
+    .expect("artifacts should succeed");
+
+    assert_eq!(artifacts_execution.payload["command"], "artifacts");
+    assert_eq!(
+        artifacts_execution.payload["detail"]["artifacts"][0]["kind"],
+        "checkpoint"
+    );
+    assert_eq!(
+        artifacts_execution.payload["detail"]["artifacts"][0]["summary_text"],
+        "draft-a"
+    );
+
+    let unpin_execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::UnpinHead {
+                session_id: "ops-root".to_owned(),
+                head_name: "thread/alpha".to_owned(),
+            },
+        },
+    )
+    .await
+    .expect("unpin head should succeed");
+
+    assert_eq!(unpin_execution.payload["command"], "unpin-head");
+    assert_eq!(unpin_execution.payload["detail"]["head"]["mode"], "live");
+}
+
+#[tokio::test]
 async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
     let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-cancel");
     let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);

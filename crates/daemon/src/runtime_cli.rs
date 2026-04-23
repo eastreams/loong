@@ -285,6 +285,8 @@ pub struct RuntimeSessionSearchArgs {
     pub session: Option<String>,
     #[arg(long)]
     pub query: String,
+    #[arg(long)]
+    pub search_scope: Option<String>,
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
     #[arg(long)]
@@ -450,6 +452,7 @@ pub async fn run_runtime_cli(command: RuntimeCommands) -> CliResult<()> {
                 args.config.as_deref(),
                 args.session.as_deref(),
                 args.query.as_str(),
+                args.search_scope.as_deref(),
                 args.limit,
                 args.output.as_deref(),
                 args.include_archived,

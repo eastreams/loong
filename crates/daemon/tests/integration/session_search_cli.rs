@@ -121,6 +121,7 @@ fn collect_session_search_artifact_includes_visible_hits() {
         Some(config_path.to_string_lossy().as_ref()),
         Some("root-session"),
         "deploy freeze",
+        None,
         10,
         false,
     )
@@ -180,6 +181,7 @@ fn load_session_search_artifact_round_trips_written_json() {
         Some(config_path_str),
         Some("root-session"),
         "deploy freeze",
+        None,
         5,
         Some(artifact_path_str),
         false,
@@ -193,6 +195,63 @@ fn load_session_search_artifact_round_trips_written_json() {
     assert_eq!(loaded.scope_session_id, "root-session");
     assert_eq!(loaded.returned_count, 1);
     assert_eq!(loaded.results.len(), 1);
+}
+
+#[test]
+fn collect_session_search_artifact_supports_lineage_family_scope() {
+    let _env = isolated_memory_env();
+    let root = unique_temp_dir("loong-session-search-lineage-family");
+    let config_path = write_session_search_config(&root);
+    let (_, config) = mvp::config::load(Some(
+        config_path
+            .to_str()
+            .expect("config path should be valid utf-8"),
+    ))
+    .expect("load config fixture");
+
+    let memory_config =
+        mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+
+    repo.create_session(mvp::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: mvp::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: mvp::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(mvp::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: mvp::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: mvp::session::repository::SessionState::Running,
+    })
+    .expect("create child session");
+
+    mvp::memory::append_turn_direct(
+        "root-session",
+        "assistant",
+        "deploy freeze approval stays on the root branch",
+        &memory_config,
+    )
+    .expect("append root turn");
+
+    let (_resolved_path, artifact) = collect_session_search_artifact(
+        Some(config_path.to_string_lossy().as_ref()),
+        Some("child-session"),
+        "deploy freeze",
+        Some("lineage_family"),
+        10,
+        false,
+    )
+    .expect("collect lineage-family artifact");
+
+    assert_eq!(artifact.search_scope.as_deref(), Some("lineage_family"));
+    assert_eq!(artifact.returned_count, 1);
+    assert_eq!(artifact.results[0].session_id, "root-session");
 }
 
 #[test]

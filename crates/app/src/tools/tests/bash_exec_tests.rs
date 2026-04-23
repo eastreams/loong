@@ -5,6 +5,7 @@ fn execute_tool_core_for_subprocess_test(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let _env = crate::test_support::ScopedEnv::new();
     let _guard = crate::test_support::acquire_subprocess_test_guard();
     execute_tool_core_with_config(request, config)
 }
@@ -13,6 +14,7 @@ fn execute_tool_core_with_trusted_subprocess_test_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let _env = crate::test_support::ScopedEnv::new();
     let _guard = crate::test_support::acquire_subprocess_test_guard();
     execute_tool_core_with_test_context(request, config)
 }

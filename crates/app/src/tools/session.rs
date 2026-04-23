@@ -54,9 +54,10 @@ use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    NewSessionRecord, NewSessionToolPolicyRecord, SessionEventRecord, SessionKind,
-    SessionObservationRecord, SessionRepository, SessionState, SessionSummaryRecord,
-    SessionTerminalOutcomeRecord, SessionToolPolicyRecord,
+    NewSessionArtifactRecord, NewSessionRecord, NewSessionToolPolicyRecord, SessionArtifactKind,
+    SessionArtifactRecord, SessionEventRecord, SessionHeadMode, SessionHeadRecord, SessionKind,
+    SessionNodeRecord, SessionObservationRecord, SessionRepository, SessionState,
+    SessionSummaryRecord, SessionTerminalOutcomeRecord, SessionToolPolicyRecord,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::{
@@ -94,6 +95,7 @@ pub(super) struct SessionInspectionSnapshot {
     pub recent_events: Vec<SessionEventRecord>,
     pub delegate_events: Vec<SessionEventRecord>,
     pub workflow: SessionWorkflowRecord,
+    pub tree: SessionTreeSnapshotRecord,
     pub subagent_contract: Option<ConstrainedSubagentContractView>,
 }
 
@@ -102,6 +104,14 @@ pub(super) struct SessionInspectionSnapshot {
 pub(super) struct SessionObservationSnapshot {
     pub inspection: SessionInspectionSnapshot,
     pub tail_events: Vec<SessionEventRecord>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SessionTreeSnapshotRecord {
+    pub(crate) heads: Vec<SessionHeadRecord>,
+    pub(crate) active_path: Vec<SessionNodeRecord>,
+    pub(crate) artifacts: Vec<SessionArtifactRecord>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -447,10 +457,43 @@ pub fn execute_session_tool_with_policies(
                 config,
                 tool_config,
             ),
+            "session_heads" => {
+                execute_session_heads(payload, current_session_id, config, tool_config)
+            }
+            "session_path" => {
+                execute_session_path(payload, current_session_id, config, tool_config)
+            }
+            "session_children" => {
+                execute_session_children(payload, current_session_id, config, tool_config)
+            }
+            "session_artifacts" => {
+                execute_session_artifacts(payload, current_session_id, config, tool_config)
+            }
             "session_status" => {
                 execute_session_status(payload, current_session_id, config, tool_config)
             }
             "task_status" => execute_task_status(payload, current_session_id, config, tool_config),
+            "session_create_checkpoint" => {
+                execute_session_create_checkpoint(payload, current_session_id, config, tool_config)
+            }
+            "session_create_branch_summary" => execute_session_create_branch_summary(
+                payload,
+                current_session_id,
+                config,
+                tool_config,
+            ),
+            "session_fork_head" => {
+                execute_session_fork_head(payload, current_session_id, config, tool_config)
+            }
+            "session_pin_head" => {
+                execute_session_pin_head(payload, current_session_id, config, tool_config)
+            }
+            "session_set_active_head" => {
+                execute_session_set_active_head(payload, current_session_id, config, tool_config)
+            }
+            "session_unpin_head" => {
+                execute_session_unpin_head(payload, current_session_id, config, tool_config)
+            }
             "session_continue" => Err(
                 "app_tool_not_found: session_continue requires the runtime-aware dispatcher"
                     .to_owned(),
@@ -1795,6 +1838,169 @@ fn execute_session_tool_policy_clear(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn session_node_payload(node: &SessionNodeRecord) -> Value {
+    json!({
+        "session_id": node.session_id,
+        "node_id": node.node_id,
+        "parent_node_id": node.parent_node_id,
+        "kind": node.kind.as_str(),
+        "role": node.role,
+        "content": node.content,
+        "session_turn_index": node.session_turn_index,
+        "metadata": node.metadata_json,
+        "created_at": node.created_at,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_head_payload(head: &SessionHeadRecord) -> Value {
+    json!({
+        "session_id": head.session_id,
+        "head_name": head.head_name,
+        "node_id": head.node_id,
+        "head_mode": head.mode.as_str(),
+        "updated_at": head.updated_at,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_artifact_payload(artifact: &SessionArtifactRecord) -> Value {
+    json!({
+        "artifact_id": artifact.artifact_id,
+        "session_id": artifact.session_id,
+        "kind": artifact.kind.as_str(),
+        "head_name": artifact.head_name,
+        "anchor_node_id": artifact.anchor_node_id,
+        "source_start_node_id": artifact.source_start_node_id,
+        "source_end_node_id": artifact.source_end_node_id,
+        "summary_text": artifact.summary_text,
+        "payload": artifact.payload_json,
+        "created_at": artifact.created_at,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_heads(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let heads = repo.list_session_heads(&target_session_id)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_heads",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "head_count": heads.len(),
+            "heads": heads.iter().map(session_head_payload).collect::<Vec<_>>(),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_path(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let head_name =
+        optional_payload_string(&payload, "head_name").unwrap_or_else(|| "active".to_owned());
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let path = repo.load_session_path_for_head(&target_session_id, &head_name)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_path",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "head_name": head_name,
+            "node_count": path.len(),
+            "path": path.iter().map(session_node_payload).collect::<Vec<_>>(),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_children(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let parent_node_id = required_payload_string(&payload, "node_id", "session tool")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let children = repo.list_session_node_children(&target_session_id, &parent_node_id)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_children",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "node_id": parent_node_id,
+            "child_count": children.len(),
+            "children": children.iter().map(session_node_payload).collect::<Vec<_>>(),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_artifacts(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let artifacts = repo.list_session_artifacts(&target_session_id)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_artifacts",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "artifact_count": artifacts.len(),
+            "artifacts": artifacts.iter().map(session_artifact_payload).collect::<Vec<_>>(),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn execute_session_status(
     payload: Value,
     current_session_id: &str,
@@ -1963,6 +2169,138 @@ fn execute_task_status_batch_result(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn execute_session_fork_head(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let source_node_id = required_payload_string(&payload, "node_id", "session tool")?;
+    let head_name = required_payload_string(&payload, "head_name", "session tool")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let head = repo.fork_session_head(&target_session_id, &source_node_id, &head_name)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_fork_head",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "head": session_head_payload(&head),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_pin_head(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    execute_session_set_head_mode(
+        payload,
+        current_session_id,
+        config,
+        tool_config,
+        SessionHeadMode::Pinned,
+        "session_pin_head",
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_set_active_head(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let head_name = required_payload_string(&payload, "head_name", "session tool")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let head = repo
+        .load_session_head(&target_session_id, &head_name)?
+        .ok_or_else(|| format!("session head `{head_name}` not found"))?;
+    let active_head = repo.set_session_head(
+        &target_session_id,
+        crate::session::repository::ACTIVE_SESSION_HEAD_NAME,
+        &head.node_id,
+    )?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_set_active_head",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "requested_head_name": head_name,
+            "active_head": session_head_payload(&active_head),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_unpin_head(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    execute_session_set_head_mode(
+        payload,
+        current_session_id,
+        config,
+        tool_config,
+        SessionHeadMode::Live,
+        "session_unpin_head",
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_set_head_mode(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+    head_mode: SessionHeadMode,
+    tool_name: &str,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let head_name = required_payload_string(&payload, "head_name", "session tool")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let head = repo.set_session_head_mode(&target_session_id, &head_name, head_mode)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": tool_name,
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "head": session_head_payload(&head),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn execute_session_recover(
     payload: Value,
     current_session_id: &str,
@@ -2027,6 +2365,222 @@ fn execute_session_recover(
             results,
         ),
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_create_checkpoint(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let label = required_payload_string(&payload, "label", "session tool")?;
+    let explicit_node_id = optional_payload_string(&payload, "node_id");
+    let checkpoint_head_name = format!("checkpoint/{label}");
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+
+    let anchor_node_id = if let Some(node_id) = explicit_node_id {
+        let node = repo
+            .load_session_node(&node_id)?
+            .ok_or_else(|| format!("session node `{node_id}` not found"))?;
+        if node.session_id != target_session_id {
+            return Err(format!(
+                "session node `{node_id}` belongs to `{}`, not `{target_session_id}`",
+                node.session_id
+            ));
+        }
+        node.node_id
+    } else {
+        let active_path = repo.load_active_session_path(&target_session_id)?;
+        active_path
+            .last()
+            .map(|node| node.node_id.clone())
+            .ok_or_else(|| format!("session `{target_session_id}` has no active path"))?
+    };
+
+    let checkpoint_ts = current_unix_ts();
+    let artifact_id = format!(
+        "checkpoint:{}:{}:{}",
+        target_session_id,
+        checkpoint_ts,
+        label.replace('/', "_")
+    );
+    let checkpoint_head =
+        repo.set_session_head(&target_session_id, &checkpoint_head_name, &anchor_node_id)?;
+    let head = repo.set_session_head_mode(
+        &target_session_id,
+        &checkpoint_head.head_name,
+        SessionHeadMode::Pinned,
+    )?;
+    let artifact = repo.create_session_artifact(NewSessionArtifactRecord {
+        artifact_id,
+        session_id: target_session_id.clone(),
+        kind: SessionArtifactKind::Checkpoint,
+        head_name: Some(checkpoint_head_name),
+        anchor_node_id: Some(anchor_node_id.clone()),
+        source_start_node_id: Some(anchor_node_id.clone()),
+        source_end_node_id: Some(anchor_node_id),
+        payload_json: json!({ "label": label }),
+        summary_text: Some(label.clone()),
+    })?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_create_checkpoint",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "label": label,
+            "artifact": session_artifact_payload(&artifact),
+            "head": session_head_payload(&head),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_create_branch_summary(
+    payload: Value,
+    current_session_id: &str,
+    config: &SessionStoreConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id = required_payload_string(&payload, "session_id", "session tool")?;
+    let head_name = required_payload_string(&payload, "head_name", "session tool")?;
+    let summary_text = required_payload_string(&payload, "summary_text", "session tool")?;
+    let explicit_anchor_node_id = optional_payload_string(&payload, "anchor_node_id");
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+
+    let target_path = repo.load_session_path_for_head(&target_session_id, &head_name)?;
+    if target_path.is_empty() {
+        return Err(format!("session head `{head_name}` not found"));
+    }
+    let (anchor_node_id, source_start_node_id, source_end_node_id, metadata_json) =
+        resolve_branch_summary_source_range(
+            &repo,
+            &target_session_id,
+            &head_name,
+            &target_path,
+            explicit_anchor_node_id.as_deref(),
+        )?;
+
+    let artifact_id = format!(
+        "branch-summary:{}:{}:{}",
+        target_session_id,
+        current_unix_ts(),
+        head_name.replace('/', "_")
+    );
+    let artifact = repo.create_session_artifact(NewSessionArtifactRecord {
+        artifact_id,
+        session_id: target_session_id.clone(),
+        kind: SessionArtifactKind::BranchSummary,
+        head_name: Some(head_name.clone()),
+        anchor_node_id: Some(anchor_node_id),
+        source_start_node_id: Some(source_start_node_id),
+        source_end_node_id: Some(source_end_node_id),
+        payload_json: metadata_json,
+        summary_text: Some(summary_text.clone()),
+    })?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_create_branch_summary",
+            "current_session_id": current_session_id,
+            "session_id": target_session_id,
+            "head_name": head_name,
+            "summary_text": summary_text,
+            "artifact": session_artifact_payload(&artifact),
+        }),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_branch_summary_source_range(
+    repo: &SessionRepository,
+    session_id: &str,
+    head_name: &str,
+    target_path: &[SessionNodeRecord],
+    explicit_anchor_node_id: Option<&str>,
+) -> Result<(String, String, String, Value), String> {
+    if let Some(anchor_node_id) = explicit_anchor_node_id {
+        let anchor_index = target_path
+            .iter()
+            .position(|node| node.node_id == anchor_node_id)
+            .ok_or_else(|| {
+                format!("session node `{anchor_node_id}` is not on head `{head_name}` path")
+            })?;
+        let source_start = target_path.get(anchor_index + 1).ok_or_else(|| {
+            format!(
+                "branch summary anchor `{anchor_node_id}` does not have a descendant on head `{head_name}`"
+            )
+        })?;
+        let source_end = target_path
+            .last()
+            .ok_or_else(|| format!("session head `{head_name}` has no tip node"))?;
+        return Ok((
+            anchor_node_id.to_owned(),
+            source_start.node_id.clone(),
+            source_end.node_id.clone(),
+            json!({
+                "head_name": head_name,
+                "anchor_mode": "explicit",
+                "exclusive_node_count": target_path.len().saturating_sub(anchor_index + 1),
+                "session_id": session_id,
+            }),
+        ));
+    }
+
+    let active_path = repo.load_active_session_path(session_id)?;
+    let common_prefix_len = target_path
+        .iter()
+        .zip(active_path.iter())
+        .take_while(|(left, right)| left.node_id == right.node_id)
+        .count();
+    if common_prefix_len == 0 {
+        return Err(format!(
+            "head `{head_name}` does not share a common ancestor with the active path"
+        ));
+    }
+    if common_prefix_len >= target_path.len() {
+        return Err(format!(
+            "head `{head_name}` has no exclusive branch segment relative to the active head"
+        ));
+    }
+
+    let anchor_node = target_path
+        .get(common_prefix_len - 1)
+        .ok_or_else(|| format!("head `{head_name}` is missing a branch anchor"))?;
+    let source_start = target_path
+        .get(common_prefix_len)
+        .ok_or_else(|| format!("head `{head_name}` is missing an exclusive branch start"))?;
+    let source_end = target_path
+        .last()
+        .ok_or_else(|| format!("session head `{head_name}` has no tip node"))?;
+
+    Ok((
+        anchor_node.node_id.clone(),
+        source_start.node_id.clone(),
+        source_end.node_id.clone(),
+        json!({
+            "head_name": head_name,
+            "anchor_mode": "implicit_active_path_fork",
+            "exclusive_node_count": target_path.len().saturating_sub(common_prefix_len),
+            "session_id": session_id,
+        }),
+    ))
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2665,20 +3219,33 @@ pub(super) fn observe_visible_session_with_policies(
         &target_session_id,
         tool_config.sessions.visibility,
     )?;
-    let SessionObservationRecord {
-        session,
-        terminal_outcome,
-        recent_events,
-        tail_events,
-    } = repo
-        .load_session_observation(
+    let (observation, delegate_events, tree) = repo.with_read_snapshot(|conn| {
+        let observation = SessionRepository::load_session_observation_with_conn(
+            conn,
             &target_session_id,
             recent_event_limit,
             tail_after_id,
             tail_page_limit,
         )?
         .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
-    let delegate_events = load_delegate_lifecycle_events(&repo, &session)?;
+        let delegate_events = if observation.session.kind == SessionKind::DelegateChild {
+            SessionRepository::list_delegate_lifecycle_events_with_conn(
+                conn,
+                &observation.session.session_id,
+            )?
+        } else {
+            Vec::new()
+        };
+        let tree =
+            load_session_tree_snapshot_record_with_conn(conn, &observation.session.session_id)?;
+        Ok((observation, delegate_events, tree))
+    })?;
+    let SessionObservationRecord {
+        session,
+        terminal_outcome,
+        recent_events,
+        tail_events,
+    } = observation;
     let workflow = load_session_workflow_record(&repo, &session, Some(delegate_events.as_slice()))?;
     let delegate_lifecycle =
         session_delegate_lifecycle_at(&session, delegate_events.as_slice(), current_unix_ts());
@@ -2696,9 +3263,30 @@ pub(super) fn observe_visible_session_with_policies(
             recent_events,
             delegate_events,
             workflow,
+            tree,
             subagent_contract,
         },
         tail_events,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_session_tree_snapshot_record_with_conn(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<SessionTreeSnapshotRecord, String> {
+    let heads = SessionRepository::list_session_heads_with_conn(conn, session_id)?;
+    let active_path = SessionRepository::load_session_path_for_head_with_conn(
+        conn,
+        session_id,
+        crate::session::repository::ACTIVE_SESSION_HEAD_NAME,
+    )?;
+    let artifacts = SessionRepository::list_session_artifacts_with_conn(conn, session_id)?;
+
+    Ok(SessionTreeSnapshotRecord {
+        heads,
+        active_path,
+        artifacts,
     })
 }
 
@@ -3091,6 +3679,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         snapshot.subagent_contract.as_ref(),
         delegate_lifecycle.as_ref(),
     );
+    let tree = session_tree_snapshot_json(&snapshot.tree);
     let mut payload = json!({
         "session": {
             "session_id": snapshot.session.session_id,
@@ -3108,6 +3697,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         },
         "task_progress": snapshot.workflow.task_progress,
         "workflow": session_workflow_json(snapshot.workflow),
+        "tree": tree,
         "terminal_outcome_state": terminal_outcome_state,
         "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
         "diagnostics": diagnostics,
@@ -3133,6 +3723,57 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         subagent_handle.as_ref(),
     );
     payload
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_tree_snapshot_json(snapshot: &SessionTreeSnapshotRecord) -> Value {
+    let active_head_name = snapshot
+        .heads
+        .iter()
+        .find(|head| head.head_name == "active")
+        .map(|head| head.head_name.clone());
+    let checkpoint_count = snapshot
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::Checkpoint)
+        .count();
+    let branch_summary_count = snapshot
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::BranchSummary)
+        .count();
+    let compaction_summary_count = snapshot
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::CompactionSummary)
+        .count();
+    let handoff_count = snapshot
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::Handoff)
+        .count();
+    let note_count = snapshot
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::Note)
+        .count();
+
+    json!({
+        "head_count": snapshot.heads.len(),
+        "active_path_count": snapshot.active_path.len(),
+        "artifact_count": snapshot.artifacts.len(),
+        "active_head_name": active_head_name,
+        "artifact_counts": {
+            "checkpoint": checkpoint_count,
+            "branch_summary": branch_summary_count,
+            "compaction_summary": compaction_summary_count,
+            "handoff": handoff_count,
+            "note": note_count,
+        },
+        "heads": snapshot.heads.iter().map(session_head_payload).collect::<Vec<_>>(),
+        "active_path": snapshot.active_path.iter().map(session_node_payload).collect::<Vec<_>>(),
+        "artifacts": snapshot.artifacts.iter().map(session_artifact_payload).collect::<Vec<_>>(),
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -6671,6 +7312,288 @@ mod tests {
         assert_eq!(turns[0]["content"], "hello");
         assert_eq!(turns[1]["role"], "assistant");
         assert_eq!(turns[1]["content"], "world");
+    }
+
+    #[test]
+    fn session_fork_head_creates_named_head_visible_in_session_heads() {
+        let config = isolated_memory_config("session-fork-head-tool");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        append_session_turn_direct("root-session", "user", "hello", &config)
+            .expect("append user turn");
+        append_session_turn_direct("root-session", "assistant", "world", &config)
+            .expect("append assistant turn");
+
+        let fork_outcome = execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_fork_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "node_id": "session-turn:root-session:1",
+                    "head_name": "thread/alpha"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_fork_head outcome");
+        assert_eq!(fork_outcome.payload["tool"], "session_fork_head");
+        assert_eq!(fork_outcome.payload["head"]["head_name"], "thread/alpha");
+
+        let heads_outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_heads".to_owned(),
+                payload: json!({
+                    "session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_heads outcome");
+
+        assert_eq!(heads_outcome.payload["head_count"], 2);
+        let head_names = heads_outcome.payload["heads"]
+            .as_array()
+            .expect("heads array")
+            .iter()
+            .filter_map(|value| value["head_name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(head_names.contains(&"active"));
+        assert!(head_names.contains(&"thread/alpha"));
+    }
+
+    #[test]
+    fn session_create_checkpoint_creates_artifact_and_checkpoint_head() {
+        let config = isolated_memory_config("session-create-checkpoint-tool");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        append_session_turn_direct("root-session", "user", "hello", &config)
+            .expect("append user turn");
+
+        let outcome = execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_create_checkpoint".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "label": "draft-a"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_create_checkpoint outcome");
+
+        assert_eq!(outcome.payload["tool"], "session_create_checkpoint");
+        assert_eq!(outcome.payload["head"]["head_name"], "checkpoint/draft-a");
+        assert_eq!(outcome.payload["head"]["head_mode"], "pinned");
+        assert_eq!(outcome.payload["artifact"]["kind"], "checkpoint");
+
+        let artifacts_outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_artifacts".to_owned(),
+                payload: json!({
+                    "session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_artifacts outcome");
+
+        assert_eq!(artifacts_outcome.payload["artifact_count"], 1);
+        assert_eq!(
+            artifacts_outcome.payload["artifacts"][0]["summary_text"],
+            "draft-a"
+        );
+    }
+
+    #[test]
+    fn session_pin_and_unpin_head_updates_explicit_mode() {
+        let config = isolated_memory_config("session-pin-unpin-head-tool");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        append_session_turn_direct("root-session", "user", "hello", &config)
+            .expect("append user turn");
+
+        execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_fork_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "node_id": "session-turn:root-session:1",
+                    "head_name": "thread/alpha"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("fork head");
+
+        let pin_outcome = execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_pin_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "head_name": "thread/alpha"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("pin head");
+
+        assert_eq!(pin_outcome.payload["head"]["head_mode"], "pinned");
+
+        let unpin_outcome = execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_unpin_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "head_name": "thread/alpha"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("unpin head");
+
+        assert_eq!(unpin_outcome.payload["head"]["head_mode"], "live");
+    }
+
+    #[test]
+    fn session_create_branch_summary_captures_head_exclusive_range() {
+        let config = isolated_memory_config("session-create-branch-summary-tool");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        append_session_turn_direct("root-session", "user", "hello", &config)
+            .expect("append user turn");
+        append_session_turn_direct("root-session", "assistant", "world", &config)
+            .expect("append assistant turn");
+        execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_fork_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "node_id": "session-turn:root-session:2",
+                    "head_name": "mainline"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("fork mainline head");
+        execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_fork_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "node_id": "session-turn:root-session:1",
+                    "head_name": "thread/alpha"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("fork thread head");
+        execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_set_active_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "head_name": "thread/alpha"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("set branch active");
+        append_session_turn_direct("root-session", "assistant", "branch reply", &config)
+            .expect("append branch turn");
+        execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_fork_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "node_id": "session-turn:root-session:3",
+                    "head_name": "thread/alpha-tip"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("fork branch tip head");
+        execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_set_active_head".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "head_name": "mainline"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("restore mainline active");
+
+        let outcome = execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_create_branch_summary".to_owned(),
+                payload: json!({
+                    "session_id": "root-session",
+                    "head_name": "thread/alpha-tip",
+                    "summary_text": "alpha summary"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_create_branch_summary outcome");
+
+        assert_eq!(outcome.payload["tool"], "session_create_branch_summary");
+        assert_eq!(outcome.payload["artifact"]["kind"], "branch_summary");
+        assert_eq!(outcome.payload["artifact"]["head_name"], "thread/alpha-tip");
+        assert_eq!(
+            outcome.payload["artifact"]["anchor_node_id"],
+            "session-turn:root-session:1"
+        );
+        assert_eq!(
+            outcome.payload["artifact"]["source_start_node_id"],
+            "session-turn:root-session:3"
+        );
+        assert_eq!(
+            outcome.payload["artifact"]["source_end_node_id"],
+            "session-turn:root-session:3"
+        );
+        assert_eq!(outcome.payload["summary_text"], "alpha summary");
     }
 
     #[test]
