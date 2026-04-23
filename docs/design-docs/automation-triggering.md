@@ -109,6 +109,9 @@ journal:
 - manual journal pruning is now policy-aware instead of purely cursor-floor
   driven: operators can dry-run a prune plan, retain the latest sealed
   segments, and keep recently sealed segments above a minimum age threshold
+- the same retention policy shape now applies to both manual prune and the
+  automatic prune path inside `automation serve`, so operator dry-runs and
+  steady-state runtime behavior no longer diverge
 - `internal-events.state.json` is now the richer layout truth for segmented
   journals, with the legacy `internal-events.active` marker retained as a
   compatibility shadow
@@ -118,6 +121,12 @@ journal:
   segment exceeds the configured byte budget
   (`LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES`), with a conservative built-in
   default
+- automation policy defaults can now be carried through the config surface via
+  `[automation]`; when operators run `automation serve` or
+  `automation journal prune` against a Loong config file, whether by explicit
+  `--config <path>` or the default config path, the loaded config supplies the
+  default event path, poll cadence, retention window, and segment rotation
+  threshold
 
 This is still a transition state rather than the final architecture. Some
 surfaces still retain an immediate compatibility bridge so automation can work
@@ -139,6 +148,8 @@ best-effort background loop.
   after roughly 15 seconds without a heartbeat
 - `automation runner inspect` now surfaces lease timeout and lease expiry so
   operators can see whether a slot is live or stale
+- `automation runner inspect` also surfaces the effective automatic retention
+  settings that the live `automation serve` owner is using
 - `automation runner stop` is for graceful shutdown of a live owner
 - `automation runner reclaim` is for explicitly reclaiming a stale owner slot;
   it marks the snapshot as stopped with a `stale_reclaimed` reason before
@@ -237,6 +248,14 @@ set of sources that proves the model:
 - cron expressions can be previewed without creating a trigger, so operators
   can validate UTC cadence and the next bounded fire times before persisting
   automation state
+- when `automation serve` starts against a Loong config file without explicit
+  retention or poll flags, it now falls back to `[automation]` config defaults
+  instead of only hardcoded CLI defaults
+- when `automation journal prune` runs against a Loong config file and omits
+  explicit keep-last or minimum-age flags, it now uses the same `[automation]`
+  defaults that the live runner uses
+- explicit `automation serve` and `automation journal prune` flags still win
+  over loaded `[automation]` defaults
 - event triggers may optionally require a JSON-pointer payload value match
 - app-owned internal events now preserve `_automation.source_surface`
 - internal journal consumption is a runtime substrate concern only; journal rows
@@ -248,6 +267,8 @@ set of sources that proves the model:
   `automation serve` owner
 - manual journal pruning can now be run as a dry-run policy evaluation before
   any segment is deleted
+- automatic journal pruning now follows the same keep-last / minimum-age policy
+  surface instead of a cursor-floor-only rule
 - failed fires keep their trigger record and retry on a bounded later tick
 - webhook ingress requires an explicit token when configured
 
@@ -263,5 +284,5 @@ The intentionally reserved next steps are:
 - richer retention policy and GC beyond the current cursor floor + keep-last +
   minimum-age policy
 - richer operator-facing journal health and repair/reporting surfaces
-- policy/config hardening around automatic rotation thresholds and retention
-  controls
+- broader validation and operator-facing reporting around automatic rotation
+  thresholds and retention controls

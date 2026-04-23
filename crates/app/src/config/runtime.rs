@@ -18,6 +18,7 @@ use loong_contracts::{SecretRef, SecretResolver};
 use super::{
     OnebotChannelConfig, QqbotChannelConfig, WeixinChannelConfig,
     audit::AuditConfig,
+    automation::AutomationConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
         FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
@@ -185,6 +186,8 @@ pub struct LoongConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default, skip_serializing_if = "AutomationConfig::is_default")]
+    pub automation: AutomationConfig,
     #[serde(default, skip_serializing_if = "ControlPlaneConfig::is_default")]
     pub control_plane: ControlPlaneConfig,
     #[serde(default)]
@@ -2122,9 +2125,10 @@ pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
     }
 
     let encoded = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         template_secret_usage_comment(),
         template_web_search_usage_comment(),
+        template_automation_usage_comment(),
         encode_toml_config(&LoongConfig::default())?
     );
     fs::write(&output_path, encoded).map_err(|error| {
@@ -2255,6 +2259,14 @@ fn template_web_search_usage_comment() -> String {
     )
 }
 
+fn template_automation_usage_comment() -> &'static str {
+    "# Automation policy notes:\n\
+# - `[automation].event_path` sets the default webhook route path for `automation serve`.\n\
+# - `[automation].poll_ms`, `retain_last_sealed_segments`, and `retain_min_age_seconds` become the default serve / journal-prune policy when explicit flags are omitted.\n\
+# - `[automation].internal_event_segment_max_bytes` controls automatic internal-event journal rotation.\n\
+\n"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2372,6 +2384,30 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
         assert!(raw.contains("These settings affect only `web { query }` / `web.search`"));
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_template_includes_automation_policy_notes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loong-template-automation-notes-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+
+        write_template(Some(config_path.to_string_lossy().as_ref()), true)
+            .expect("write template should succeed");
+
+        let raw = std::fs::read_to_string(&config_path).expect("read template");
+        assert!(raw.contains("# Automation policy notes:"));
+        assert!(raw.contains("[automation].event_path"));
+        assert!(raw.contains("internal_event_segment_max_bytes"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -3824,6 +3860,22 @@ model = "gpt-5"
         let parsed = toml::from_str::<LoongConfig>(&encoded).expect("parse encoded config");
 
         assert_eq!(parsed.audit, config.audit);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn automation_config_round_trips_policy_defaults() {
+        let mut config = LoongConfig::default();
+        config.automation.event_path = "/automation/from-config".to_owned();
+        config.automation.poll_ms = 250;
+        config.automation.retain_last_sealed_segments = 2;
+        config.automation.retain_min_age_seconds = Some(45);
+        config.automation.internal_event_segment_max_bytes = Some(32_768);
+
+        let encoded = encode_toml_config(&config).expect("encode config");
+        let parsed = toml::from_str::<LoongConfig>(&encoded).expect("parse encoded config");
+
+        assert_eq!(parsed.automation, config.automation);
     }
 
     #[test]

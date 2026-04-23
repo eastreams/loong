@@ -46,6 +46,13 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
         Some(profile_note) => set_env_var("LOONG_MEMORY_PROFILE_NOTE", profile_note),
         None => remove_env_var("LOONG_MEMORY_PROFILE_NOTE"),
     }
+    match config.automation.internal_event_segment_max_bytes {
+        Some(segment_max_bytes) => set_env_var(
+            "LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES",
+            segment_max_bytes.to_string(),
+        ),
+        None => remove_env_var("LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES"),
+    }
 
     set_env_var("LOONG_SHELL_ALLOWLIST", config.tools.shell_allow.join(","));
     set_env_var("LOONG_SHELL_DENY", config.tools.shell_deny.join(","));
@@ -223,6 +230,7 @@ mod tests {
             "LOONG_SLIDING_WINDOW",
             "LOONG_MEMORY_SUMMARY_MAX_CHARS",
             "LOONG_MEMORY_PROFILE_NOTE",
+            "LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES",
             "LOONG_SHELL_ALLOWLIST",
             "LOONG_SHELL_DENY",
             "LOONG_SHELL_DEFAULT_MODE",
@@ -263,6 +271,7 @@ mod tests {
         config.memory.profile = MemoryProfile::WindowPlusSummary;
         config.memory.summary_max_chars = 900;
         config.memory.profile_note = Some("Imported NanoBot preferences".to_owned());
+        config.automation.internal_event_segment_max_bytes = Some(8_192);
         config.tools.file_root = Some("/tmp/loong-runtime-file-root".to_owned());
         config.tools.sessions.allow_mutation = true;
         config.tools.browser.enabled = false;
@@ -302,6 +311,12 @@ mod tests {
         assert_eq!(
             std::env::var("LOONG_MEMORY_PROFILE_NOTE").ok().as_deref(),
             Some("Imported NanoBot preferences")
+        );
+        assert_eq!(
+            std::env::var("LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES")
+                .ok()
+                .as_deref(),
+            Some("8192")
         );
         assert_eq!(
             std::env::var("LOONG_FILE_ROOT").ok().as_deref(),
@@ -413,6 +428,22 @@ mod tests {
                 .ok()
                 .as_deref(),
             Some("1")
+        );
+    }
+
+    #[test]
+    fn initialize_runtime_environment_clears_internal_event_segment_threshold_when_unset() {
+        let mut env = ScopedEnv::new();
+        clear_runtime_environment_exports(&mut env);
+        env.set("LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES", "8192");
+
+        let config = LoongConfig::default();
+
+        initialize_runtime_environment(&config, None);
+
+        assert!(
+            std::env::var("LOONG_INTERNAL_EVENT_SEGMENT_MAX_BYTES").is_err(),
+            "unset automation config should clear stale segment threshold exports"
         );
     }
 

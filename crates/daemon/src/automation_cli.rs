@@ -204,12 +204,12 @@ pub struct AutomationServeCommandOptions {
     pub bind: Option<String>,
     #[arg(long)]
     pub auth_token: Option<String>,
-    #[arg(long, default_value = AUTOMATION_DEFAULT_EVENT_PATH)]
-    pub path: String,
-    #[arg(long, default_value_t = AUTOMATION_DEFAULT_POLL_MS)]
-    pub poll_ms: u64,
-    #[arg(long, default_value_t = 0)]
-    pub retain_last_sealed: usize,
+    #[arg(long)]
+    pub path: Option<String>,
+    #[arg(long)]
+    pub poll_ms: Option<u64>,
+    #[arg(long)]
+    pub retain_last_sealed: Option<usize>,
     #[arg(long)]
     pub retain_min_age_seconds: Option<u64>,
 }
@@ -272,8 +272,8 @@ pub struct AutomationJournalRotateCommandOptions {}
 pub struct AutomationJournalPruneCommandOptions {
     #[arg(long)]
     pub retain_segment_id: Option<String>,
-    #[arg(long, default_value_t = 0)]
-    pub retain_last_sealed: usize,
+    #[arg(long)]
+    pub retain_last_sealed: Option<usize>,
     #[arg(long)]
     pub retain_min_age_seconds: Option<u64>,
     #[arg(long, default_value_t = false)]
@@ -480,6 +480,19 @@ struct AutomationRunnerRetentionPolicy {
     retain_min_age_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+struct LoadedAutomationConfig {
+    resolved_path: PathBuf,
+    config: mvp::config::LoongConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedAutomationServeSettings {
+    event_path: String,
+    poll_ms: u64,
+    retention_policy: AutomationRunnerRetentionPolicy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CronField {
     any: bool,
@@ -636,8 +649,74 @@ fn automation_runner_retention_policy_from_options(
         .retain_min_age_seconds
         .map(|seconds| seconds.saturating_mul(1_000));
     AutomationRunnerRetentionPolicy {
-        retain_last_sealed_segments: options.retain_last_sealed,
+        retain_last_sealed_segments: options.retain_last_sealed.unwrap_or_default(),
         retain_min_age_ms,
+    }
+}
+
+fn load_automation_config(config_path: Option<&str>) -> CliResult<Option<LoadedAutomationConfig>> {
+    if let Some(config_path) = config_path {
+        let (resolved_path, config) = mvp::config::load(Some(config_path))?;
+        return Ok(Some(LoadedAutomationConfig {
+            resolved_path,
+            config,
+        }));
+    }
+
+    let default_config_path = mvp::config::default_config_path();
+    if !default_config_path.is_file() {
+        return Ok(None);
+    }
+
+    let (resolved_path, config) = mvp::config::load(None)?;
+    Ok(Some(LoadedAutomationConfig {
+        resolved_path,
+        config,
+    }))
+}
+
+fn resolved_automation_runner_retention_policy(
+    retain_last_sealed_override: Option<usize>,
+    retain_min_age_seconds_override: Option<u64>,
+    config: Option<&mvp::config::LoongConfig>,
+) -> AutomationRunnerRetentionPolicy {
+    let retain_last_sealed_segments = retain_last_sealed_override.unwrap_or_else(|| {
+        config
+            .map(|config| config.automation.retain_last_sealed_segments)
+            .unwrap_or_default()
+    });
+    let retain_min_age_seconds = retain_min_age_seconds_override
+        .or_else(|| config.and_then(|config| config.automation.retain_min_age_seconds));
+    let retain_min_age_ms = retain_min_age_seconds.map(|seconds| seconds.saturating_mul(1_000));
+    AutomationRunnerRetentionPolicy {
+        retain_last_sealed_segments,
+        retain_min_age_ms,
+    }
+}
+
+fn resolve_automation_serve_settings(
+    options: &AutomationServeCommandOptions,
+    config: Option<&mvp::config::LoongConfig>,
+) -> ResolvedAutomationServeSettings {
+    let event_path = options.path.clone().unwrap_or_else(|| {
+        config
+            .map(|config| config.automation.resolved_event_path())
+            .unwrap_or_else(|| AUTOMATION_DEFAULT_EVENT_PATH.to_owned())
+    });
+    let poll_ms = options.poll_ms.unwrap_or_else(|| {
+        config
+            .map(|config| config.automation.resolved_poll_ms())
+            .unwrap_or(AUTOMATION_DEFAULT_POLL_MS)
+    });
+    let retention_policy = resolved_automation_runner_retention_policy(
+        options.retain_last_sealed,
+        options.retain_min_age_seconds,
+        config,
+    );
+    ResolvedAutomationServeSettings {
+        event_path,
+        poll_ms,
+        retention_policy,
     }
 }
 
@@ -1017,6 +1096,10 @@ impl AutomationRunnerTracker {
         let owner_token = new_automation_runner_owner_token(std::process::id());
         let started_at_ms = u64::try_from(now_ms()).unwrap_or_default();
         let retention_policy = automation_runner_retention_policy_from_options(options);
+        let poll_ms = options
+            .poll_ms
+            .unwrap_or(AUTOMATION_DEFAULT_POLL_MS)
+            .max(250);
         let initial_state = PersistedAutomationRunnerState {
             phase: "starting".to_owned(),
             running: true,
@@ -1024,8 +1107,8 @@ impl AutomationRunnerTracker {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             config_path: config.map(ToOwned::to_owned),
             bind_address: options.bind.clone(),
-            event_path: Some(options.path.clone()),
-            poll_ms: options.poll_ms.max(250),
+            event_path: options.path.clone(),
+            poll_ms,
             retain_last_sealed_segments: retention_policy.retain_last_sealed_segments,
             retain_min_age_ms: retention_policy.retain_min_age_ms,
             started_at_ms,
@@ -1709,7 +1792,9 @@ async fn execute_journal_command(
         AutomationJournalCommands::Inspect(_command) => execute_journal_inspect_command(),
         AutomationJournalCommands::Health(_command) => execute_journal_health_command(),
         AutomationJournalCommands::Rotate(_command) => execute_journal_rotate_command(config).await,
-        AutomationJournalCommands::Prune(command) => execute_journal_prune_command(command),
+        AutomationJournalCommands::Prune(command) => {
+            execute_journal_prune_command(config.as_deref(), command)
+        }
         AutomationJournalCommands::Repair(_command) => execute_journal_repair_command(),
     }
 }
@@ -1826,8 +1911,11 @@ async fn execute_journal_rotate_command(config: Option<String>) -> CliResult<Val
 }
 
 fn execute_journal_prune_command(
+    config_path: Option<&str>,
     options: AutomationJournalPruneCommandOptions,
 ) -> CliResult<Value> {
+    let loaded_config = load_automation_config(config_path)?;
+    let automation_config = loaded_config.as_ref().map(|loaded| &loaded.config);
     let cursor_path = automation_event_cursor_path();
     let cursor = load_internal_event_cursor(cursor_path.as_path())?;
     let retain_floor_segment_id_option = options
@@ -1844,13 +1932,15 @@ fn execute_journal_prune_command(
         segment_id: Some(retain_floor_segment_id.clone()),
         ..mvp::internal_events::InternalEventJournalCursor::default()
     };
-    let retain_min_age_ms = options
-        .retain_min_age_seconds
-        .map(|seconds| seconds.saturating_mul(1_000));
+    let retention_policy = resolved_automation_runner_retention_policy(
+        options.retain_last_sealed,
+        options.retain_min_age_seconds,
+        automation_config,
+    );
     let gc_policy = mvp::internal_events::InternalEventJournalGcPolicy {
         retain_floor_segment_id: Some(retain_floor_segment_id.clone()),
-        retain_last_sealed_segments: options.retain_last_sealed,
-        retain_min_age_ms,
+        retain_last_sealed_segments: retention_policy.retain_last_sealed_segments,
+        retain_min_age_ms: retention_policy.retain_min_age_ms,
     };
     let plan = if options.dry_run {
         mvp::internal_events::plan_internal_event_journal_gc(&gc_policy)?
@@ -1871,8 +1961,8 @@ fn execute_journal_prune_command(
         "cursor": cursor,
         "retain_cursor": retain_cursor,
         "retain_floor_segment_id": retain_floor_segment_id,
-        "retain_last_sealed_segments": options.retain_last_sealed,
-        "retain_min_age_ms": retain_min_age_ms,
+        "retain_last_sealed_segments": retention_policy.retain_last_sealed_segments,
+        "retain_min_age_ms": retention_policy.retain_min_age_ms,
         "pruned_segments": pruned_segments,
         "plan": plan,
         "inspection": inspection,
@@ -2003,16 +2093,36 @@ fn augment_internal_event_payload(
 
 async fn execute_serve_command(
     store_path: &Path,
-    config: Option<String>,
+    config_path: Option<String>,
     options: AutomationServeCommandOptions,
 ) -> CliResult<Value> {
-    let retention_policy = automation_runner_retention_policy_from_options(&options);
-    let runner_tracker = AutomationRunnerTracker::acquire(config.as_deref(), &options)?;
-    let poll_ms = options.poll_ms.max(250);
+    let loaded_config = load_automation_config(config_path.as_deref())?;
+    if let Some(loaded_automation_config) = loaded_config.as_ref() {
+        mvp::runtime_env::initialize_runtime_environment(
+            &loaded_automation_config.config,
+            Some(loaded_automation_config.resolved_path.as_path()),
+        );
+    }
+    let automation_config = loaded_config.as_ref().map(|loaded| &loaded.config);
+    let resolved_settings = resolve_automation_serve_settings(&options, automation_config);
+    let poll_ms = resolved_settings.poll_ms.max(250);
+    let retention_policy = resolved_settings.retention_policy.clone();
+    let retain_min_age_seconds = retention_policy
+        .retain_min_age_ms
+        .map(|retain_min_age_ms| retain_min_age_ms / 1_000);
+    let runner_options = AutomationServeCommandOptions {
+        bind: options.bind.clone(),
+        auth_token: options.auth_token.clone(),
+        path: Some(resolved_settings.event_path.clone()),
+        poll_ms: Some(poll_ms),
+        retain_last_sealed: Some(retention_policy.retain_last_sealed_segments),
+        retain_min_age_seconds,
+    };
+    let runner_tracker = AutomationRunnerTracker::acquire(config_path.as_deref(), &runner_options)?;
     let stop_requested = Arc::new(AtomicBool::new(false));
     let scheduler_stop = stop_requested.clone();
     let scheduler_store_path = store_path.to_path_buf();
-    let scheduler_config = config.clone();
+    let scheduler_config = config_path.clone();
     let scheduler_owner_token = runner_tracker.owner_token().to_owned();
     let finalize_owner_token = scheduler_owner_token.clone();
     let scheduler_runner_tracker = Arc::new(runner_tracker);
@@ -2067,13 +2177,13 @@ async fn execute_serve_command(
     };
 
     if let Some(bind) = options.bind {
-        let normalized_path = normalize_event_path(options.path.as_str())?;
+        let normalized_path = normalize_event_path(resolved_settings.event_path.as_str())?;
         let route_path = format!("{normalized_path}/:event_name");
         let listener = tokio::net::TcpListener::bind(bind.as_str())
             .await
             .map_err(|error| format!("bind automation webhook listener failed: {error}"))?;
         let state = AutomationServeState {
-            config,
+            config: config_path,
             auth_token: options.auth_token,
         };
         let router = Router::new()
@@ -3252,6 +3362,39 @@ mod tests {
     }
 
     #[test]
+    fn resolve_automation_serve_settings_prefers_cli_over_config_defaults() {
+        let mut config = mvp::config::LoongConfig::default();
+        config.automation.event_path = "/automation/from-config".to_owned();
+        config.automation.poll_ms = 900;
+        config.automation.retain_last_sealed_segments = 3;
+        config.automation.retain_min_age_seconds = Some(60);
+
+        let options = AutomationServeCommandOptions {
+            bind: None,
+            auth_token: None,
+            path: Some("/automation/from-cli".to_owned()),
+            poll_ms: Some(250),
+            retain_last_sealed: Some(1),
+            retain_min_age_seconds: Some(5),
+        };
+
+        let resolved_settings = resolve_automation_serve_settings(&options, Some(&config));
+
+        assert_eq!(resolved_settings.event_path, "/automation/from-cli");
+        assert_eq!(resolved_settings.poll_ms, 250);
+        assert_eq!(
+            resolved_settings
+                .retention_policy
+                .retain_last_sealed_segments,
+            1
+        );
+        assert_eq!(
+            resolved_settings.retention_policy.retain_min_age_ms,
+            Some(5_000)
+        );
+    }
+
+    #[test]
     fn automation_runner_status_reports_stale_lease_expiry() {
         let (_env, _temp_home) = isolated_automation_home("loong-automation-runner-status");
         let last_heartbeat_at = 1;
@@ -3317,9 +3460,9 @@ mod tests {
         let options = AutomationServeCommandOptions {
             bind: None,
             auth_token: None,
-            path: AUTOMATION_DEFAULT_EVENT_PATH.to_owned(),
-            poll_ms: 250,
-            retain_last_sealed: 0,
+            path: Some(AUTOMATION_DEFAULT_EVENT_PATH.to_owned()),
+            poll_ms: Some(250),
+            retain_last_sealed: Some(0),
             retain_min_age_seconds: None,
         };
         let tracker = AutomationRunnerTracker::acquire(Some("/tmp/loong.toml"), &options)

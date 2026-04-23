@@ -1,4 +1,5 @@
 mod audit;
+mod automation;
 mod channels;
 mod conversation;
 mod feishu_integration;
@@ -22,6 +23,8 @@ pub use crate::channel::{
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
+#[allow(unused_imports)]
+pub use automation::AutomationConfig;
 #[allow(unused_imports)]
 pub use channels::bridge::{
     OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
