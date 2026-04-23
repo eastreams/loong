@@ -717,6 +717,7 @@ fn build_session_heal_plan(
             current_session_id,
             session_id,
             recommended_action,
+            detail,
         )?;
         if let Some(mapped_action) = mapped_action {
             actions.push(mapped_action);
@@ -744,6 +745,7 @@ fn map_recommended_action_to_session_heal_action(
     current_session_id: &str,
     session_id: &str,
     action: &Value,
+    detail: &Value,
 ) -> CliResult<Option<SessionHealAction>> {
     let tool_name = action
         .get("tool_name")
@@ -773,12 +775,29 @@ fn map_recommended_action_to_session_heal_action(
         .get("requires_mutation")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let target_session_id = action
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(session_id);
+    let target_task_id = action
+        .get("task_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            detail
+                .get("task_progress")
+                .and_then(|task_progress| task_progress.get("task_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        });
     let command = build_session_heal_action_command(
         resolved_config_path,
         current_session_id,
-        session_id,
+        target_session_id,
+        target_task_id,
         &tool_name,
-    );
+    )?;
     let description = build_session_heal_action_description(
         &tool_name,
         &kind,
@@ -896,26 +915,42 @@ fn build_session_heal_action_command(
     resolved_config_path: &str,
     current_session_id: &str,
     session_id: &str,
+    task_id: Option<&str>,
     tool_name: &str,
-) -> String {
+) -> CliResult<String> {
     let command_name = crate::active_cli_command_name();
     let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
     let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
     let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
 
     match tool_name {
-        "session_recover" => format!(
+        "session_recover" => Ok(format!(
             "{command_name} sessions recover --config {config_arg} --session {session_arg} {target_arg}"
-        ),
-        "session_wait" => format!(
+        )),
+        "session_wait" => Ok(format!(
             "{command_name} sessions wait --config {config_arg} --session {session_arg} {target_arg}"
-        ),
-        "session_status" => format!(
+        )),
+        "session_status" => Ok(format!(
             "{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}"
-        ),
-        _ => format!(
+        )),
+        "task_status" | "task_wait" | "task_events" | "task_history" => {
+            let task_id = task_id.ok_or_else(|| {
+                format!("sessions heal missing task_id for recommended tool `{tool_name}`")
+            })?;
+            let task_arg = crate::cli_handoff::shell_quote_argument(task_id);
+            let task_command = match tool_name {
+                "task_status" => "status",
+                "task_wait" => "wait",
+                "task_events" | "task_history" => "events",
+                _ => unreachable!(),
+            };
+            Ok(format!(
+                "{command_name} tasks {task_command} --config {config_arg} --session {session_arg} {task_arg}"
+            ))
+        }
+        _ => Ok(format!(
             "{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}"
-        ),
+        )),
     }
 }
 
@@ -941,6 +976,12 @@ fn build_session_heal_action_description(
         }
         ("session_status", false) => {
             "Re-read the current session status before choosing a mutation.".to_owned()
+        }
+        ("task_status", false) => {
+            "Inspect durable task progress before choosing a session mutation.".to_owned()
+        }
+        ("task_wait", false) => {
+            "Wait for the current background task to reach a newer durable state.".to_owned()
         }
         _ => {
             format!("Follow the recommended `{tool_name}` action for `{kind}`.")
@@ -2153,6 +2194,36 @@ mod tests {
         assert_eq!(plan.actions[0].tool_name, "turn_checkpoint_repair");
         assert!(plan.actions[0].can_apply);
         assert_eq!(plan.actions[0].kind, "run_compaction");
+    }
+
+    #[test]
+    fn build_session_heal_plan_preserves_task_surface_commands_for_resume_recipes() {
+        let detail = json!({
+            "task_progress": {
+                "task_id": "task-123"
+            },
+            "diagnostics": {
+                "recommended_action": {
+                    "tool_name": "task_status",
+                    "kind": "follow_resume_recipe",
+                    "source": "task_progress_resume_recipe",
+                    "session_id": "task-owner",
+                    "requires_mutation": false
+                },
+                "attention_hints": []
+            }
+        });
+
+        let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+            .expect("build heal plan");
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].tool_name, "task_status");
+        assert_eq!(
+            plan.actions[0].command,
+            "loong tasks status --config /tmp/loong.toml --session ops-root task-123"
+        );
+        assert!(!plan.actions[0].can_apply);
     }
 
     #[test]
