@@ -3084,6 +3084,8 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         "missing" => session_terminal_outcome_missing_reason(recovery.as_ref()),
         _ => None,
     };
+    let diagnostics =
+        session_diagnostics_json(&snapshot, terminal_outcome_state, recovery.as_ref());
     let subagent_handle = subagent_handle_for_session(
         &snapshot.session,
         snapshot.subagent_contract.as_ref(),
@@ -3108,6 +3110,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         "workflow": session_workflow_json(snapshot.workflow),
         "terminal_outcome_state": terminal_outcome_state,
         "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
+        "diagnostics": diagnostics,
         "delegate_lifecycle": delegate_lifecycle
             .map(|lifecycle| session_delegate_lifecycle_json(
                 lifecycle,
@@ -3130,6 +3133,230 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         subagent_handle.as_ref(),
     );
     payload
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_diagnostics_json(
+    snapshot: &SessionInspectionSnapshot,
+    terminal_outcome_state: &str,
+    recovery: Option<&SessionRecoveryRecord>,
+) -> Value {
+    let recent_events = snapshot.recent_events.as_slice();
+    let latest_provider_failover = latest_provider_failover_diagnostic(recent_events);
+    let recommended_action = recommended_session_action(snapshot);
+    let attention_hints = build_session_attention_hints(
+        latest_provider_failover.as_ref(),
+        recommended_action.as_ref(),
+        recovery,
+        terminal_outcome_state,
+    );
+
+    json!({
+        "latest_provider_failover": latest_provider_failover,
+        "recommended_action": recommended_action,
+        "attention_hints": attention_hints,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn latest_provider_failover_diagnostic(recent_events: &[SessionEventRecord]) -> Option<Value> {
+    let matching_event = recent_events
+        .iter()
+        .filter(|event| event.event_kind == "trust_provider_failover")
+        .max_by_key(|event| event.ts)?;
+    let payload_object = matching_event.payload_json.as_object()?;
+    let provider_failover = payload_object.get("provider_failover")?.as_object()?;
+
+    let provider_id = payload_object
+        .get("provider_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let binding = payload_object
+        .get("binding")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let reason = provider_failover
+        .get("reason")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let stage = provider_failover
+        .get("stage")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let model = provider_failover
+        .get("model")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let attempt = provider_failover
+        .get("attempt")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let max_attempts = provider_failover
+        .get("max_attempts")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let status_code = provider_failover
+        .get("status_code")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let request_id = provider_failover
+        .get("request_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let cf_ray = provider_failover
+        .get("cf_ray")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let auth_error = provider_failover
+        .get("auth_error")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let auth_error_code = provider_failover
+        .get("auth_error_code")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    Some(json!({
+        "event_id": matching_event.id,
+        "event_kind": matching_event.event_kind,
+        "ts": matching_event.ts,
+        "provider_id": provider_id,
+        "binding": binding,
+        "reason": reason,
+        "stage": stage,
+        "model": model,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "status_code": status_code,
+        "request_id": request_id,
+        "cf_ray": cf_ray,
+        "auth_error": auth_error,
+        "auth_error_code": auth_error_code,
+    }))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn recommended_session_action(snapshot: &SessionInspectionSnapshot) -> Option<Value> {
+    let recover_action = recommended_recover_action(snapshot);
+    if recover_action.is_some() {
+        return recover_action;
+    }
+
+    recommended_resume_action(snapshot)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn recommended_recover_action(snapshot: &SessionInspectionSnapshot) -> Option<Value> {
+    let recover_plan = build_session_recover_plan(snapshot, current_unix_ts()).ok()?;
+    let mut recover_action = session_recovery_action_json(&recover_plan);
+    let action_object = recover_action.as_object_mut()?;
+    action_object.insert(
+        "source".to_owned(),
+        Value::String("session_recover_plan".to_owned()),
+    );
+    action_object.insert(
+        "tool_name".to_owned(),
+        Value::String("session_recover".to_owned()),
+    );
+    action_object.insert("requires_mutation".to_owned(), Value::Bool(true));
+    Some(recover_action)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn recommended_resume_action(snapshot: &SessionInspectionSnapshot) -> Option<Value> {
+    let task_progress = snapshot.workflow.task_progress.as_ref()?;
+    let resume_recipe = task_progress.resume_recipe.as_ref()?;
+    let tool_name = resume_recipe.recommended_tool.clone();
+    let session_id = resume_recipe.session_id.clone();
+    let note = resume_recipe.note.clone();
+    let requires_mutation = session_action_requires_mutation(tool_name.as_str());
+    let task_status = task_progress.status.as_str().to_owned();
+
+    Some(json!({
+        "source": "task_progress_resume_recipe",
+        "kind": "follow_resume_recipe",
+        "tool_name": tool_name,
+        "session_id": session_id,
+        "note": note,
+        "task_status": task_status,
+        "requires_mutation": requires_mutation,
+    }))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_action_requires_mutation(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "session_archive" | "session_cancel" | "session_continue" | "session_recover"
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_session_attention_hints(
+    latest_provider_failover: Option<&Value>,
+    recommended_action: Option<&Value>,
+    recovery: Option<&SessionRecoveryRecord>,
+    terminal_outcome_state: &str,
+) -> Vec<String> {
+    let mut hints = Vec::new();
+
+    if let Some(provider_failover) = latest_provider_failover {
+        let reason = provider_failover
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let model = provider_failover
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let stage = provider_failover
+            .get("stage")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let request_id = provider_failover
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let auth_error_code = provider_failover
+            .get("auth_error_code")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        hints.push(format!(
+            "provider_failover_present reason={reason} model={model} stage={stage} request_id={request_id} auth_error_code={auth_error_code}"
+        ));
+    }
+
+    if let Some(action) = recommended_action {
+        let tool_name = action
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let kind = action
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let source = action
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        hints.push(format!(
+            "recommended_action tool={tool_name} kind={kind} source={source}"
+        ));
+    }
+
+    if terminal_outcome_state == "missing" {
+        let recovery_kind = recovery
+            .map(|record| record.kind.as_str())
+            .unwrap_or("unknown");
+        let recovery_source = recovery
+            .map(|record| record.source.as_str())
+            .unwrap_or("none");
+        hints.push(format!(
+            "terminal_outcome_missing kind={recovery_kind} source={recovery_source}"
+        ));
+    }
+
+    hints
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -8272,6 +8499,219 @@ mod tests {
         assert_eq!(outcome.payload["recovery"]["source"], "none");
         assert!(outcome.payload["recovery"]["recovery_error"].is_null());
         assert!(outcome.payload["recovery"]["event_kind"].is_null());
+    }
+
+    #[test]
+    fn session_status_surfaces_latest_provider_failover_diagnostics() {
+        let config = isolated_memory_config("session-status-provider-failover");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: "trust_provider_failover".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "source": "provider_runtime",
+                "binding": "kernel",
+                "provider_id": "openai",
+                "provider_failover": {
+                    "reason": "rate_limited",
+                    "stage": "status_failure",
+                    "model": "gpt-4o",
+                    "attempt": 2,
+                    "max_attempts": 3,
+                    "status_code": 429,
+                    "request_id": "req-123"
+                }
+            }),
+        })
+        .expect("append provider failover event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(
+            outcome.payload["diagnostics"]["latest_provider_failover"]["provider_id"],
+            "openai"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["latest_provider_failover"]["reason"],
+            "rate_limited"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["latest_provider_failover"]["model"],
+            "gpt-4o"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["latest_provider_failover"]["status_code"],
+            429
+        );
+        let attention_hints = outcome.payload["diagnostics"]["attention_hints"]
+            .as_array()
+            .expect("attention_hints array");
+        assert!(
+            attention_hints.iter().any(|hint| {
+                hint.as_str().is_some_and(|hint| {
+                    hint.contains("provider_failover_present")
+                        && hint.contains("reason=rate_limited")
+                        && hint.contains("request_id=req-123")
+                })
+            }),
+            "expected provider failover attention hint, got: {attention_hints:?}"
+        );
+    }
+
+    #[test]
+    fn session_status_recommends_session_recover_for_overdue_async_child() {
+        let config = isolated_memory_config("session-status-recover-recommendation");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research",
+                "timeout_seconds": 30
+            }),
+        })
+        .expect("append queued event");
+        overwrite_session_event_ts(
+            &config,
+            "child-session",
+            "delegate_queued",
+            super::current_unix_ts() - 90,
+        );
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["tool_name"],
+            "session_recover"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["kind"],
+            "queued_async_overdue_marked_failed"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["source"],
+            "session_recover_plan"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["requires_mutation"],
+            true
+        );
+    }
+
+    #[test]
+    fn session_status_recommends_resume_recipe_when_recover_plan_is_unavailable() {
+        let config = isolated_memory_config("session-status-resume-recipe-recommendation");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: crate::task_progress::TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "root-session".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Waiting,
+                    intent_summary: Some("Wait for the durable task to settle".to_owned()),
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: Some(crate::task_progress::TaskResumeRecipeRecord {
+                        recommended_tool: "session_wait".to_owned(),
+                        session_id: "root-session".to_owned(),
+                        note: Some("Wait for the terminal transition.".to_owned()),
+                    }),
+                    updated_at: 123,
+                },
+            ),
+        })
+        .expect("append task progress event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["tool_name"],
+            "session_wait"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["kind"],
+            "follow_resume_recipe"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["source"],
+            "task_progress_resume_recipe"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["task_status"],
+            "waiting"
+        );
+        assert_eq!(
+            outcome.payload["diagnostics"]["recommended_action"]["requires_mutation"],
+            false
+        );
     }
 
     #[test]

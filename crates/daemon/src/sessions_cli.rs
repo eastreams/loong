@@ -1122,6 +1122,16 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         detail.get("turn_checkpoint"),
     );
     let turn_checkpoint_summary = sanitize_terminal_text(turn_checkpoint_summary.as_str());
+    let diagnostics = detail.get("diagnostics").cloned().unwrap_or(Value::Null);
+    let diagnostics_latest_provider_failover = render_session_latest_provider_failover_summary(
+        diagnostics.get("latest_provider_failover"),
+    );
+    let diagnostics_latest_provider_failover =
+        sanitize_terminal_text(diagnostics_latest_provider_failover.as_str());
+    let diagnostics_recommended_action =
+        render_session_recommended_action_summary(diagnostics.get("recommended_action"));
+    let diagnostics_recommended_action =
+        sanitize_terminal_text(diagnostics_recommended_action.as_str());
     let delegate_mode = detail
         .get("delegate_lifecycle")
         .and_then(|value| value.get("mode"))
@@ -1208,6 +1218,12 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("prompt_frame: {prompt_frame_summary}"));
     lines.push(format!("safe_lane: {safe_lane_summary}"));
     lines.push(format!("turn_checkpoint: {turn_checkpoint_summary}"));
+    lines.push(format!(
+        "latest_provider_failover: {diagnostics_latest_provider_failover}"
+    ));
+    lines.push(format!(
+        "recommended_action: {diagnostics_recommended_action}"
+    ));
     lines.push(format!("turn_count: {turn_count}"));
     lines.push(format!("last_turn_at: {last_turn_at}"));
     lines.push(format!("last_error: {sanitized_last_error}"));
@@ -1219,6 +1235,46 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("recovery_kind: {recovery_kind}"));
     lines.push(format!("recent_events: {recent_events}"));
     Ok(lines)
+}
+
+fn render_session_latest_provider_failover_summary(diagnostic: Option<&Value>) -> String {
+    let Some(diagnostic) = diagnostic else {
+        return "-".to_owned();
+    };
+
+    let reason = diagnostic
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let model = diagnostic
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let stage = diagnostic
+        .get("stage")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let request_id = diagnostic
+        .get("request_id")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+
+    format!("reason={reason} model={model} stage={stage} request_id={request_id}")
+}
+
+fn render_session_recommended_action_summary(action: Option<&Value>) -> String {
+    let Some(action) = action else {
+        return "-".to_owned();
+    };
+
+    let tool_name = action
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let kind = action.get("kind").and_then(Value::as_str).unwrap_or("-");
+    let source = action.get("source").and_then(Value::as_str).unwrap_or("-");
+
+    format!("tool={tool_name} kind={kind} source={source}")
 }
 
 fn render_runtime_self_continuity_summary(runtime_self_continuity: Option<&Value>) -> String {
@@ -1246,4 +1302,60 @@ fn render_runtime_self_continuity_summary(runtime_self_continuity: Option<&Value
         "present resolved_identity={} session_profile_projection={}",
         resolved_identity_present, session_profile_projection_present
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::render_session_inspection_lines;
+
+    #[test]
+    fn render_session_inspection_lines_includes_diagnostics_summaries() {
+        let detail = json!({
+            "session": {
+                "session_id": "session-1",
+                "kind": "root",
+                "state": "running",
+                "parent_session_id": null,
+                "label": "Root",
+                "turn_count": 3,
+                "last_turn_at": 123,
+                "last_error": "rate_limited"
+            },
+            "workflow": {},
+            "terminal_outcome_state": "not_terminal",
+            "terminal_outcome": null,
+            "recovery": null,
+            "recent_events": [],
+            "diagnostics": {
+                "latest_provider_failover": {
+                    "reason": "rate_limited",
+                    "model": "gpt-4o",
+                    "stage": "status_failure",
+                    "request_id": "req-123"
+                },
+                "recommended_action": {
+                    "tool_name": "session_wait",
+                    "kind": "follow_resume_recipe",
+                    "source": "task_progress_resume_recipe"
+                }
+            }
+        });
+
+        let lines = render_session_inspection_lines(&detail).expect("render lines");
+
+        assert!(
+            lines.iter().any(|line| {
+                line == "latest_provider_failover: reason=rate_limited model=gpt-4o stage=status_failure request_id=req-123"
+            }),
+            "expected latest_provider_failover summary, got: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| {
+                line == "recommended_action: tool=session_wait kind=follow_resume_recipe source=task_progress_resume_recipe"
+            }),
+            "expected recommended_action summary, got: {lines:#?}"
+        );
+    }
 }
