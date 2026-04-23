@@ -313,10 +313,7 @@ mod tests {
 
         let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
             .expect("bootstrap with config should succeed");
-        let request = crate::memory::build_read_context_request(
-            "kernel-bootstrap-env-session",
-            &MemoryRuntimeConfig::from_memory_config_without_env_overrides(&config.memory),
-        );
+        let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let outcome = context
             .kernel
