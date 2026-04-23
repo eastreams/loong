@@ -795,6 +795,78 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn read_stage_envelope_operation_ignores_request_level_memory_form_overrides() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = temp_dir
+            .path()
+            .join("read-stage-envelope-request-overrides.sqlite3");
+        let config = sqlite_memory_config_with_profile(db_path, MemoryProfile::WindowOnly, 2);
+
+        super::super::append_turn_direct(
+            "read-stage-envelope-ignore-overrides",
+            "user",
+            "turn 1",
+            &config,
+        )
+        .expect("append turn 1 should succeed");
+        super::super::append_turn_direct(
+            "read-stage-envelope-ignore-overrides",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        super::super::append_turn_direct(
+            "read-stage-envelope-ignore-overrides",
+            "user",
+            "turn 3",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let outcome = super::super::execute_memory_core_with_config(
+            MemoryCoreRequest {
+                operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
+                payload: json!({
+                    "session_id": "read-stage-envelope-ignore-overrides",
+                    "profile": "window_plus_summary",
+                    "system": MemorySystemKind::RecallFirst.as_str(),
+                    "system_id": MemorySystemKind::RecallFirst.as_str(),
+                    "sliding_window": 64,
+                    "summary_max_chars": 4096,
+                    "profile_note": "request level profile note should be ignored",
+                }),
+            },
+            &config,
+        )
+        .expect("read_stage_envelope operation should succeed");
+
+        let envelope = decode_stage_envelope(&outcome.payload).expect("decode staged envelope");
+        assert!(
+            envelope
+                .hydrated
+                .entries
+                .iter()
+                .all(|entry| entry.kind != MemoryContextKind::Summary),
+            "request-level summary overrides should not change the canonical staged memory form"
+        );
+        assert!(
+            envelope
+                .hydrated
+                .entries
+                .iter()
+                .all(|entry| entry.kind != MemoryContextKind::Profile),
+            "request-level profile overrides should not change the canonical staged memory form"
+        );
+        assert_eq!(
+            envelope.hydrated.diagnostics.system_id,
+            super::super::selected_prompt_hydration_system_id(&config),
+            "request-level system overrides should not change the canonical staged memory form"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn read_context_operation_ignores_request_level_memory_form_overrides() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let db_path = temp_dir
