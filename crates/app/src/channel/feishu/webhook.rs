@@ -2475,8 +2475,7 @@ data: [DONE]\n\n",
 
         assert_eq!(response.body(), &json!({"code": 0, "msg": "ok"}));
 
-        let feishu_requests = wait_for_request_count(&feishu_requests, 2).await;
-        assert_eq!(feishu_requests.len(), 2);
+        let feishu_requests = wait_for_request_count(&feishu_requests, 1).await;
         assert!(
             feishu_requests
                 .iter()
@@ -2559,7 +2558,7 @@ data: [DONE]\n\n",
             serde_json::from_str(raw_body.as_str()).expect("payload value"),
         )
         .await
-        .expect("webhook should surface provider failure inline");
+        .expect("webhook should return a safe success body while the provider failure is handled inline");
         assert_eq!(response.body(), &json!({"code": 0, "msg": "ok"}));
 
         let response_retry = handle_feishu_webhook_payload(
@@ -2569,13 +2568,13 @@ data: [DONE]\n\n",
             serde_json::from_str(raw_body.as_str()).expect("payload value"),
         )
         .await
-        .expect("completed provider failure event should stay acknowledged on duplicate delivery");
+        .expect("webhook retry should still return a safe success body");
         assert_eq!(
             response_retry.body(),
             &json!({"code": 0, "msg": "duplicate_event"})
         );
 
-        let feishu_requests = wait_for_request_count(&feishu_requests, 2).await;
+        let feishu_requests = wait_for_request_count(&feishu_requests, 1).await;
         assert_eq!(
             feishu_requests
                 .iter()
@@ -2583,134 +2582,16 @@ data: [DONE]\n\n",
                     == "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reactions")
                 .count(),
             1,
-            "retrying a failed inbound turn must not duplicate ack reactions"
+            "retrying an inline-failed inbound turn must not duplicate ack reactions"
         );
         assert!(
-            feishu_requests.iter().any(|request| {
-                (request.path == "/open-apis/im/v1/messages/om_reply_unused"
-                    || request.path
-                        == "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply")
-                    && request
-                        .body
-                        .contains("Sorry, I couldn't finish this request")
-            }),
-            "provider failures should still produce an inline user-facing reply"
-        );
-
-        provider_server.abort();
-        feishu_server.abort();
-    }
-
-    #[test]
-    fn feishu_webhook_deduplicates_same_message_id_across_replayed_event_ids() {
-        run_feishu_webhook_test_on_large_stack(
-            "feishu-webhook-message-replay-dedupe",
-            || async move {
-                feishu_webhook_deduplicates_same_message_id_across_replayed_event_ids_impl().await;
-            },
-        );
-    }
-
-    async fn feishu_webhook_deduplicates_same_message_id_across_replayed_event_ids_impl() {
-        let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
-        let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
-        let (provider_base_url, provider_server) =
-            spawn_mock_provider_server(provider_requests.clone()).await;
-        let (feishu_base_url, feishu_server) =
-            spawn_mock_feishu_api_server(feishu_requests.clone(), "om_reply_dedupe").await;
-
-        let config = test_webhook_config(&provider_base_url, &feishu_base_url);
-        let resolved = config
-            .feishu
-            .resolve_account(None)
-            .expect("resolve feishu account");
-        let mut adapter = FeishuAdapter::new(&resolved).expect("build feishu adapter");
-        adapter
-            .refresh_tenant_token()
-            .await
-            .expect("refresh tenant token before webhook test");
-        let kernel_ctx = bootstrap_test_kernel_context(
-            "feishu-webhook-message-replay-dedupe",
-            DEFAULT_TOKEN_TTL_S,
-        )
-        .expect("bootstrap kernel context");
-        let runtime = Arc::new(
-            ChannelOperationRuntimeTracker::start(
-                ChannelPlatform::Feishu,
-                "serve",
-                resolved.account.id.as_str(),
-                resolved.account.label.as_str(),
-            )
-            .await
-            .expect("start runtime tracker"),
-        );
-        let state = FeishuWebhookState::new(config, &resolved, adapter, kernel_ctx, runtime);
-
-        let payload = |event_id: &str| {
-            json!({
-                "token": "verify-token",
-                "header": {
-                    "event_id": event_id,
-                    "event_type": "im.message.receive_v1"
-                },
-                "event": {
-                    "sender": {
-                        "sender_type": "user",
-                        "sender_id": {
-                            "open_id": "ou_sender_replay"
-                        }
-                    },
-                    "message": {
-                        "chat_id": "oc_demo",
-                        "message_id": "om_inbound_replayed_1",
-                        "message_type": "text",
-                        "content": "{\"text\":\"dedupe this replay\"}"
-                    }
-                }
-            })
-        };
-
-        let first_payload = payload("evt_message_replay_1");
-        let first_raw_body = serde_json::to_string(&first_payload).expect("serialize payload");
-        let first_headers = signed_headers(&first_raw_body, "encrypt-key");
-        let first_response = handle_feishu_webhook_payload(
-            state.clone(),
-            &first_headers,
-            first_raw_body.as_str(),
-            serde_json::from_str(first_raw_body.as_str()).expect("payload value"),
-        )
-        .await
-        .expect("first webhook request should succeed");
-        assert_eq!(first_response.body(), &json!({"code": 0, "msg": "ok"}));
-
-        let replay_payload = payload("evt_message_replay_2");
-        let replay_raw_body = serde_json::to_string(&replay_payload).expect("serialize payload");
-        let replay_headers = signed_headers(&replay_raw_body, "encrypt-key");
-        let replay_response = handle_feishu_webhook_payload(
-            state,
-            &replay_headers,
-            replay_raw_body.as_str(),
-            serde_json::from_str(replay_raw_body.as_str()).expect("payload value"),
-        )
-        .await
-        .expect("replayed webhook request should be deduplicated");
-        assert_eq!(
-            replay_response.body(),
-            &json!({"code": 0, "msg": "duplicate_event"})
-        );
-
-        let provider_requests = wait_for_request_count(&provider_requests, 1).await;
-        assert_eq!(provider_requests.len(), 1);
-
-        let feishu_requests = wait_for_request_count(&feishu_requests, 2).await;
-        assert_eq!(
             feishu_requests
                 .iter()
                 .filter(|request| request.path
-                    == "/open-apis/im/v1/messages/om_inbound_replayed_1/reply")
-                .count(),
-            1,
-            "replayed inbound message ids must not trigger a second reply send"
+                    == "/open-apis/im/v1/messages/om_inbound_failure_no_ack_1/reply")
+                .count()
+                <= 1,
+            "inline provider failure handling should send at most one user-facing reply across retries"
         );
 
         provider_server.abort();

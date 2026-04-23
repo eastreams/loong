@@ -101,15 +101,15 @@ fn cli_ask_help_mentions_one_shot_assistant_usage() {
 
 #[test]
 fn cli_runtime_restore_help_mentions_dry_run_default() {
-    let help = render_cli_help(["runtime-restore"]);
+    let help = render_cli_help(["runtime", "restore"]);
 
     assert!(
         help.contains("Dry-run by default"),
-        "runtime-restore help should explain the default dry-run behavior: {help}"
+        "runtime restore help should explain the default dry-run behavior: {help}"
     );
     assert!(
         help.contains("--apply"),
-        "runtime-restore help should explain how to perform mutations: {help}"
+        "runtime restore help should explain how to perform mutations: {help}"
     );
 }
 

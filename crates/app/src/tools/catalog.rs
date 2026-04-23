@@ -65,8 +65,8 @@ use session_definition_support::{
     session_status_definition, session_tool_policy_clear_definition,
     session_tool_policy_set_definition, session_tool_policy_status_definition,
     session_wait_definition, sessions_history_definition, sessions_list_definition,
-    sessions_send_definition, task_history_definition, task_status_definition,
-    task_wait_definition, tasks_list_definition, tasks_search_definition,
+    sessions_send_definition, task_events_definition, task_history_definition,
+    task_status_definition, task_wait_definition, tasks_list_definition, tasks_search_definition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -639,6 +639,7 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "task_status"
         | "task_wait"
         | "task_history"
+        | "task_events"
         | "tasks_list"
         | "tasks_search"
         | "sessions_history"
@@ -1256,7 +1257,7 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "task_history",
             provider_name: "task_history",
             aliases: &[],
-            description: "Fetch transcript history for the session currently owning a durable task",
+            description: "Fetch transcript history and task-lineage metadata for a durable task across visible owner sessions",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
@@ -1265,6 +1266,20 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: task_history_definition,
+        },
+        ToolDescriptor {
+            name: "task_events",
+            provider_name: "task_events",
+            aliases: &[],
+            description: "Fetch lineage-aware task events for a durable task across visible owner sessions",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: task_events_definition,
         },
         ToolDescriptor {
             name: "tasks_list",
@@ -2199,13 +2214,11 @@ fn build_delegate_child_tool_view(
             && descriptor.availability == ToolAvailability::Runtime
     }) {
         match descriptor.name {
-            "shell.exec" =>
-            {
-                #[cfg(feature = "tool-shell")]
-                if allow_shell_in_child {
-                    names.push(descriptor.name);
-                }
+            #[cfg(feature = "tool-shell")]
+            "shell.exec" if allow_shell_in_child => {
+                names.push(descriptor.name);
             }
+            "shell.exec" => {}
             name if allowlist.contains(name)
                 && tool_visibility_gate_enabled_for_delegate_child(
                     descriptor.visibility_gate,

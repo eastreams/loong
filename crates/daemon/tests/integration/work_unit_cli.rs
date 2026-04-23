@@ -66,7 +66,7 @@ fn run_work_unit_cli_process(args: Vec<String>, context: &str) {
 
 #[test]
 fn cli_work_unit_help_mentions_durable_runtime_commands() {
-    let help = render_cli_help(["work-unit"]);
+    let help = render_cli_help(["runtime", "work-unit"]);
 
     assert!(
         help.contains("Create one durable work unit record"),
@@ -94,6 +94,7 @@ fn cli_work_unit_help_mentions_durable_runtime_commands() {
 fn cli_work_unit_parse_accepts_full_complete_command_shape() {
     let cli = try_parse_cli([
         "loong",
+        "runtime",
         "work-unit",
         "complete",
         "--config",
@@ -119,7 +120,10 @@ fn cli_work_unit_parse_accepts_full_complete_command_shape() {
     .expect("work-unit complete CLI should parse");
 
     let command = cli.command.expect("CLI should parse a subcommand");
-    let Commands::WorkUnit { command } = command else {
+    let Commands::Runtime {
+        command: loong_daemon::runtime_cli::RuntimeCommands::WorkUnit { command },
+    } = command
+    else {
         panic!("unexpected CLI parse result: {command:?}");
     };
     let work_unit_runtime::WorkUnitCommands::Complete(options) = command else {
@@ -142,6 +146,7 @@ fn cli_work_unit_parse_accepts_full_complete_command_shape() {
 fn cli_work_unit_parse_accepts_update_command_shape() {
     let cli = try_parse_cli([
         "loong",
+        "runtime",
         "work-unit",
         "update",
         "--config",
@@ -169,7 +174,10 @@ fn cli_work_unit_parse_accepts_update_command_shape() {
     .expect("work-unit update CLI should parse");
 
     let command = cli.command.expect("CLI should parse a subcommand");
-    let Commands::WorkUnit { command } = command else {
+    let Commands::Runtime {
+        command: loong_daemon::runtime_cli::RuntimeCommands::WorkUnit { command },
+    } = command
+    else {
         panic!("unexpected CLI parse result: {command:?}");
     };
     let work_unit_runtime::WorkUnitCommands::Update(options) = command else {
@@ -209,6 +217,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
     run_work_unit_cli_process(
         vec![
+            "runtime".to_owned(),
             "work-unit".to_owned(),
             "create".to_owned(),
             "--config".to_owned(),
@@ -254,6 +263,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
     run_work_unit_cli_process(
         vec![
+            "runtime".to_owned(),
             "work-unit".to_owned(),
             "assign".to_owned(),
             "--config".to_owned(),
@@ -273,6 +283,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
     run_work_unit_cli_process(
         vec![
+            "runtime".to_owned(),
             "work-unit".to_owned(),
             "update".to_owned(),
             "--config".to_owned(),
@@ -302,6 +313,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
     run_work_unit_cli_process(
         vec![
+            "runtime".to_owned(),
             "work-unit".to_owned(),
             "note".to_owned(),
             "--config".to_owned(),
@@ -321,6 +333,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
     run_work_unit_cli_process(
         vec![
+            "runtime".to_owned(),
             "work-unit".to_owned(),
             "claim".to_owned(),
             "--config".to_owned(),
@@ -364,6 +377,7 @@ fn work_unit_cli_create_claim_complete_and_archive_round_trip() {
 
     run_work_unit_cli_process(
         vec![
+            "runtime".to_owned(),
             "work-unit".to_owned(),
             "update".to_owned(),
             "--config".to_owned(),
@@ -536,6 +550,7 @@ fn work_unit_cli_update_text_output_uses_snake_case_status_labels() {
     let config_path_string = config_path.display().to_string();
     let output = Command::new(env!("CARGO_BIN_EXE_loong"))
         .args([
+            "runtime",
             "work-unit",
             "update",
             "--config",

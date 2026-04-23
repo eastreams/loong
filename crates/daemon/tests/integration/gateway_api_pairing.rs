@@ -93,7 +93,7 @@ fn gateway_pairing_signature_message(
 #[tokio::test]
 async fn gateway_pairing_requests_reject_missing_auth() {
     let (config, root_dir) = gateway_pairing_test_config("gateway-pairing-auth");
-    let app = loong_daemon::gateway::control::build_gateway_pairing_test_router(
+    let app = loong_daemon::gateway::control::build_gateway_pairing_test_router_without_event_bus(
         "test-token".to_owned(),
         config,
     );
@@ -109,6 +109,89 @@ async fn gateway_pairing_requests_reject_missing_auth() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    std::fs::remove_dir_all(root_dir).ok();
+}
+
+#[tokio::test]
+async fn gateway_pairing_start_resolve_and_complete_reject_missing_auth() {
+    let (config, root_dir) = gateway_pairing_test_config("gateway-pairing-mutate-auth");
+    let app = loong_daemon::gateway::control::build_gateway_pairing_test_router_without_event_bus(
+        "test-token".to_owned(),
+        config,
+    );
+    let resolve_request = ControlPlanePairingResolveRequest {
+        pairing_request_id: "missing-request".to_owned(),
+        approve: true,
+    };
+    let connect_request = ControlPlaneConnectRequest {
+        min_protocol: loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION,
+        max_protocol: loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION,
+        client: ControlPlaneClientIdentity {
+            id: "cli-auth-check".to_owned(),
+            version: "1.0.0".to_owned(),
+            mode: "operator_ui".to_owned(),
+            platform: "macos".to_owned(),
+            display_name: Some("Gateway pairing auth test".to_owned()),
+        },
+        role: ControlPlaneRole::Operator,
+        scopes: BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        caps: BTreeSet::new(),
+        commands: BTreeSet::new(),
+        permissions: std::collections::BTreeMap::new(),
+        auth: Some(ControlPlaneAuthClaims::default()),
+        device: None,
+    };
+
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/start")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(start_response.status(), StatusCode::UNAUTHORIZED);
+    let start_json: serde_json::Value = decode_json(start_response).await;
+    assert_eq!(start_json["error"]["code"], "unauthorized");
+
+    let resolve_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/resolve")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&resolve_request).expect("encode resolve request"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolve_response.status(), StatusCode::UNAUTHORIZED);
+    let resolve_json: serde_json::Value = decode_json(resolve_response).await;
+    assert_eq!(resolve_json["error"]["code"], "unauthorized");
+
+    let complete_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/complete")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&connect_request).expect("encode connect request"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(complete_response.status(), StatusCode::UNAUTHORIZED);
+    let complete_json: serde_json::Value = decode_json(complete_response).await;
+    assert_eq!(complete_json["error"]["code"], "unauthorized");
+
     std::fs::remove_dir_all(root_dir).ok();
 }
 
@@ -363,6 +446,302 @@ async fn gateway_pairing_requests_and_resolve_roundtrip_pending_request() {
         .to_str()
         .expect("content type text");
     assert!(content_type.starts_with("text/event-stream"));
+
+    std::fs::remove_dir_all(root_dir).ok();
+}
+
+#[tokio::test]
+async fn gateway_pairing_complete_rejects_invalid_signature() {
+    let (config, root_dir) = gateway_pairing_test_config("gateway-pairing-invalid-signature");
+    let signing_key = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+    let other_signing_key = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+    let public_key = STANDARD.encode(signing_key.verifying_key().as_bytes());
+    let event_bus = GatewayEventBus::new(2);
+    let app = loong_daemon::gateway::control::build_gateway_pairing_test_router_with_event_bus(
+        "test-token".to_owned(),
+        config,
+        event_bus,
+    );
+
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/start")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(start_response.status(), StatusCode::OK);
+    let start_payload: loong_daemon::gateway::read_models::GatewayPairingStartReadModel =
+        decode_json(start_response).await;
+
+    let challenge = start_payload.challenge;
+    let signed_at_ms = challenge.issued_at_ms;
+    let mut connect_request = ControlPlaneConnectRequest {
+        min_protocol: loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION,
+        max_protocol: loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION,
+        client: ControlPlaneClientIdentity {
+            id: "cli-invalid-signature".to_owned(),
+            version: "1.0.0".to_owned(),
+            mode: "operator_ui".to_owned(),
+            platform: "macos".to_owned(),
+            display_name: Some("Gateway pairing invalid signature test".to_owned()),
+        },
+        role: ControlPlaneRole::Operator,
+        scopes: BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        caps: BTreeSet::new(),
+        commands: BTreeSet::new(),
+        permissions: std::collections::BTreeMap::new(),
+        auth: Some(ControlPlaneAuthClaims::default()),
+        device: None,
+    };
+    let message = gateway_pairing_signature_message(
+        &connect_request,
+        "device-invalid-signature",
+        challenge.nonce.as_str(),
+        signed_at_ms,
+    );
+    let invalid_signature = other_signing_key.sign(&message);
+    connect_request.device = Some(loong_protocol::ControlPlaneDeviceIdentity {
+        device_id: "device-invalid-signature".to_owned(),
+        public_key,
+        signature: STANDARD.encode(invalid_signature.to_bytes()),
+        signed_at_ms,
+        nonce: challenge.nonce,
+    });
+
+    let complete_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/complete")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&connect_request).expect("encode connect request"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(complete_response.status(), StatusCode::UNAUTHORIZED);
+    let error_json: serde_json::Value = decode_json(complete_response).await;
+    assert_eq!(error_json["code"], "device_signature_invalid");
+
+    std::fs::remove_dir_all(root_dir).ok();
+}
+
+#[tokio::test]
+async fn gateway_pairing_session_and_events_reject_invalid_session_token() {
+    let (config, root_dir) = gateway_pairing_test_config("gateway-pairing-invalid-token");
+    let event_bus = GatewayEventBus::new(2);
+    let app = loong_daemon::gateway::control::build_gateway_pairing_test_router_with_event_bus(
+        "test-token".to_owned(),
+        config,
+        event_bus,
+    );
+
+    let session_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairing/session")
+                .header(AUTHORIZATION, "Bearer invalid-session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session_response.status(), StatusCode::UNAUTHORIZED);
+    let session_json: serde_json::Value = decode_json(session_response).await;
+    assert_eq!(session_json["error"]["code"], "invalid_session_token");
+
+    let events_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairing/events?after_seq=0&limit=10")
+                .header(AUTHORIZATION, "Bearer invalid-session-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events_response.status(), StatusCode::UNAUTHORIZED);
+    let events_json: serde_json::Value = decode_json(events_response).await;
+    assert_eq!(events_json["error"]["code"], "invalid_session_token");
+
+    std::fs::remove_dir_all(root_dir).ok();
+}
+
+#[tokio::test]
+async fn gateway_pairing_session_routes_require_session_token_and_surface_missing_event_bus() {
+    let (config, root_dir) = gateway_pairing_test_config("gateway-pairing-missing-event-bus");
+    let signing_key = SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+    let public_key = STANDARD.encode(signing_key.verifying_key().as_bytes());
+    let pairing_request_id = seed_pending_pairing_request(&config, public_key.as_str());
+    let app = loong_daemon::gateway::control::build_gateway_pairing_test_router_without_event_bus(
+        "test-token".to_owned(),
+        config,
+    );
+
+    for path in [
+        "/v1/pairing/session",
+        "/v1/pairing/events?after_seq=0&limit=10",
+        "/v1/pairing/stream?after_seq=0&limit=10",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let body: serde_json::Value = decode_json(response).await;
+        assert_eq!(body["error"]["code"], "missing_session_token", "{path}");
+    }
+
+    let resolve_request = ControlPlanePairingResolveRequest {
+        pairing_request_id,
+        approve: true,
+    };
+    let resolve_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/resolve")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&resolve_request).expect("encode resolve request"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolve_response.status(), StatusCode::OK);
+    let resolved: ControlPlanePairingResolveResponse = decode_json(resolve_response).await;
+    let device_token = resolved.device_token.expect("approved device token");
+
+    let start_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/start")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(start_response.status(), StatusCode::OK);
+    let start_payload: loong_daemon::gateway::read_models::GatewayPairingStartReadModel =
+        decode_json(start_response).await;
+
+    let challenge = start_payload.challenge.clone();
+    let signed_at_ms = challenge.issued_at_ms;
+    let mut connect_request = ControlPlaneConnectRequest {
+        min_protocol: loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION,
+        max_protocol: loong_protocol::CONTROL_PLANE_PROTOCOL_VERSION,
+        client: ControlPlaneClientIdentity {
+            id: "cli-test".to_owned(),
+            version: "1.0.0".to_owned(),
+            mode: "operator_ui".to_owned(),
+            platform: "macos".to_owned(),
+            display_name: Some("Gateway pairing missing event bus test".to_owned()),
+        },
+        role: ControlPlaneRole::Operator,
+        scopes: BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        caps: BTreeSet::new(),
+        commands: BTreeSet::new(),
+        permissions: std::collections::BTreeMap::new(),
+        auth: Some(ControlPlaneAuthClaims {
+            token: None,
+            device_token: Some(device_token),
+            bootstrap_token: None,
+            password: None,
+        }),
+        device: None,
+    };
+    let message = gateway_pairing_signature_message(
+        &connect_request,
+        "device-1",
+        challenge.nonce.as_str(),
+        signed_at_ms,
+    );
+    let signature = signing_key.sign(&message);
+    connect_request.device = Some(loong_protocol::ControlPlaneDeviceIdentity {
+        device_id: "device-1".to_owned(),
+        public_key,
+        signature: STANDARD.encode(signature.to_bytes()),
+        signed_at_ms,
+        nonce: challenge.nonce,
+    });
+
+    let complete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/pairing/complete")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&connect_request).expect("encode connect request"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(complete_response.status(), StatusCode::OK);
+    let complete_payload: loong_daemon::gateway::read_models::GatewayPairingCompleteReadModel =
+        decode_json(complete_response).await;
+    let session_token = complete_payload.lease.connection_token.clone();
+
+    let session_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/pairing/session")
+                .header(AUTHORIZATION, format!("Bearer {session_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session_response.status(), StatusCode::OK);
+    let session_payload: loong_daemon::gateway::read_models::GatewayPairingSessionReadModel =
+        decode_json(session_response).await;
+    assert_eq!(session_payload.status, "active");
+    assert_eq!(session_payload.resume_status, "fresh");
+    assert_eq!(session_payload.replay_window.oldest_retained_seq, None);
+    assert_eq!(session_payload.replay_window.latest_seq, None);
+
+    for path in [
+        "/v1/pairing/events?after_seq=0&limit=10",
+        "/v1/pairing/stream?after_seq=0&limit=10",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(AUTHORIZATION, format!("Bearer {session_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        let body: serde_json::Value = decode_json(response).await;
+        assert_eq!(body["error"]["code"], "event_stream_unavailable", "{path}");
+    }
 
     std::fs::remove_dir_all(root_dir).ok();
 }

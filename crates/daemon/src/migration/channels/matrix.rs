@@ -14,7 +14,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     surface_label: "matrix channel",
     runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
     operational_model: mvp::config::ChannelOperationalModel::GatewaySupervised,
-    serve_subcommand: Some("matrix-serve"),
+    serve_subcommand: Some("channels serve matrix"),
 };
 
 #[derive(Debug, Clone)]

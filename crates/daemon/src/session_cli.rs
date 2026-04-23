@@ -7,6 +7,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{CliResult, mvp, persist_json_artifact};
 
+const RUNTIME_SESSION_SEARCH_COMMAND: &str = "runtime session search";
+
 pub const SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,13 +59,17 @@ pub fn run_session_search_cli(
     as_json: bool,
 ) -> CliResult<()> {
     if limit == 0 {
-        return Err("session-search limit must be >= 1".to_owned());
+        return Err(format!(
+            "{RUNTIME_SESSION_SEARCH_COMMAND} limit must be >= 1"
+        ));
     }
 
     let query = query.trim();
     let query_is_empty = query.is_empty();
     if query_is_empty {
-        return Err("session-search requires a non-empty --query value".to_owned());
+        return Err(format!(
+            "{RUNTIME_SESSION_SEARCH_COMMAND} requires a non-empty --query value"
+        ));
     }
 
     let (resolved_path, artifact) =
@@ -442,4 +448,26 @@ pub fn format_session_search_inspect_text(
     ];
     let rendered = lines.join("\n");
     rendered + "\n"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_search_errors_use_grouped_runtime_namespace() {
+        let zero_limit_error = run_session_search_cli(None, None, "hello", 0, None, false, false)
+            .expect_err("zero limit should fail before config loading");
+        assert_eq!(
+            zero_limit_error,
+            "runtime session search limit must be >= 1"
+        );
+
+        let empty_query_error = run_session_search_cli(None, None, "   ", 1, None, false, false)
+            .expect_err("blank query should fail before config loading");
+        assert_eq!(
+            empty_query_error,
+            "runtime session search requires a non-empty --query value"
+        );
+    }
 }

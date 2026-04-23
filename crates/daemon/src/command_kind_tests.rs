@@ -20,110 +20,56 @@ fn command_kind_for_logging_uses_stable_variant_names() {
         "turn_run"
     );
     assert_eq!(
-        Commands::ListMcpServers {
+        Commands::Channels {
             config: None,
+            resolve: None,
             json: false,
+            command: Some(crate::ChannelsCommands::List(
+                crate::channels_cli::ChannelsListArgs {
+                    config: None,
+                    json: false,
+                },
+            )),
         }
         .command_kind_for_logging(),
-        "list_mcp_servers"
+        "channels"
     );
     assert_eq!(
-        Commands::ShowMcpServer {
-            config: None,
-            name: "test".to_owned(),
-            json: false,
+        Commands::Runtime {
+            command: crate::runtime_cli::RuntimeCommands::Snapshot(
+                crate::runtime_cli::RuntimeSnapshotArgs {
+                    config: None,
+                    json: false,
+                    output: None,
+                    label: None,
+                    experiment_id: None,
+                    parent_snapshot_id: None,
+                },
+            ),
         }
         .command_kind_for_logging(),
-        "show_mcp_server"
+        "runtime"
     );
     assert_eq!(
-        Commands::WhatsappServe {
-            config: None,
-            account: None,
-            bind: None,
-            path: None,
+        Commands::Gateway {
+            command: crate::gateway::service::GatewayCommand::Status { json: false },
         }
         .command_kind_for_logging(),
-        "whatsapp_serve"
+        "gateway"
     );
     assert_eq!(
-        Commands::LineServe {
-            config: None,
-            account: None,
-            bind: Some("127.0.0.1:9998".to_owned()),
-            path: None,
+        Commands::Feishu {
+            command: crate::feishu_cli::FeishuCommand::Serve(crate::feishu_cli::FeishuServeArgs {
+                common: crate::feishu_cli::FeishuCommonArgs {
+                    config: None,
+                    account: None,
+                    json: false,
+                },
+                bind: None,
+                path: None,
+            }),
         }
         .command_kind_for_logging(),
-        "line_serve"
-    );
-    assert_eq!(
-        Commands::WebhookServe {
-            config: None,
-            account: None,
-            bind: Some("127.0.0.1:9999".to_owned()),
-            path: None,
-        }
-        .command_kind_for_logging(),
-        "webhook_serve"
-    );
-    assert_eq!(
-        Commands::WeixinSend {
-            config: None,
-            account: None,
-            target: "weixin:default:contact:wxid_alice".to_owned(),
-            target_kind: crate::mvp::channel::ChannelOutboundTargetKind::Conversation,
-            text: "hello".to_owned(),
-        }
-        .command_kind_for_logging(),
-        "weixin_send"
-    );
-    assert_eq!(
-        Commands::WeixinServe {
-            config: None,
-            once: false,
-            account: None,
-        }
-        .command_kind_for_logging(),
-        "weixin_serve"
-    );
-    assert_eq!(
-        Commands::QqbotSend {
-            config: None,
-            account: None,
-            target: "qqbot:default:group:123".to_owned(),
-            target_kind: crate::mvp::channel::ChannelOutboundTargetKind::Conversation,
-            text: "hello".to_owned(),
-        }
-        .command_kind_for_logging(),
-        "qqbot_send"
-    );
-    assert_eq!(
-        Commands::QqbotServe {
-            config: None,
-            once: false,
-            account: None,
-        }
-        .command_kind_for_logging(),
-        "qqbot_serve"
-    );
-    assert_eq!(
-        Commands::OnebotSend {
-            config: None,
-            account: None,
-            target: "onebot:default:user:10001".to_owned(),
-            target_kind: crate::mvp::channel::ChannelOutboundTargetKind::Conversation,
-            text: "hello".to_owned(),
-        }
-        .command_kind_for_logging(),
-        "onebot_send"
-    );
-    assert_eq!(
-        Commands::OnebotServe {
-            config: None,
-            once: false,
-            account: None,
-        }
-        .command_kind_for_logging(),
-        "onebot_serve"
+        "feishu"
     );
 }

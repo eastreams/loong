@@ -47,7 +47,7 @@
 **Because it already has the core capabilities you need to inspect, operate, and extend:**
 
 - **🚀 Rich configuration out of the box**: 42+ built-in providers, 25+ channels — up and running in a few commands.
-- **👀 Transparent and controllable**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are all exposed as directly usable commands.
+- **👀 Transparent and controllable**: product commands stay short at the root, while `sessions`, `skills`, `channels`, `gateway`, `runtime`, `plugins`, and `feishu` stay grouped under named operator shells instead of one flat command pile.
 - **🛡️ Secure and controllable base**: provider selection, tools, memory, channels, approvals, policy, and audit operate within explicit runtime boundaries.
 
 **Also because whether you are a beginner or a power user, it fits you:**
@@ -151,6 +151,13 @@ loong update                 # Replace this install with the latest stable GitHu
 
 `loong update` always targets the latest stable GitHub release and never installs a pre-release.
 
+### Canonical CLI Shape
+
+Loong keeps `loong` as the only public binary, but the canonical command story is intentionally grouped:
+
+- product path at root: `onboard`, `ask`, `chat`, `doctor`, `status`, `update`
+- operator shells at root: `sessions`, `skills`, `channels`, `gateway`, `runtime`, `plugins`, `feishu`, `completions`
+
 Running `onboard` is enough for the golden path — it writes a working config to `~/.loong/config.toml` without asking you to hand-edit TOML. The snippets below show what that file looks like on `dev` today, when you want to add another provider or wire up a channel.
 
 #### Providers
@@ -198,9 +205,11 @@ Smoke-test before anything else:
 
 ```bash
 loong doctor
-loong feishu-send --receive-id "ou_example_user" --text "hello from loong"
-loong feishu-serve
+loong feishu send --receive-id "ou_example_user" --text "hello from loong"
+loong feishu serve
 ```
+
+Feishu keeps its richer family namespace at `loong feishu ...`. For thinner channel families, the canonical public shape is `loong channels send <surface> ...` and `loong channels serve <surface> ...`.
 
 For the full provider and channel matrices, multi-account setups, and the long-running delivery model, see the [Documentation](#documentation) table below.
 

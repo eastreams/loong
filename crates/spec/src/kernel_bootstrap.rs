@@ -26,14 +26,23 @@ pub(crate) fn default_in_memory_audit_sink() -> Arc<InMemoryAuditSink> {
 /// By default the builder uses `SystemClock` and the spec layer's named
 /// in-memory audit helper. Override either with the corresponding setter before
 /// calling `build()`.
-#[derive(Default)]
 pub struct KernelBuilder {
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
+    register_default_embedded_harness: bool,
 }
 
 impl KernelBuilder {
+    pub fn new() -> Self {
+        Self {
+            clock: None,
+            audit: None,
+            native_tool_executor: None,
+            register_default_embedded_harness: true,
+        }
+    }
+
     /// Set a custom `Clock` implementation.
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
@@ -51,10 +60,26 @@ impl KernelBuilder {
         self
     }
 
+    pub fn without_default_embedded_harness(mut self) -> Self {
+        self.register_default_embedded_harness = false;
+        self
+    }
+
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
     pub fn build(self) -> LoongKernel<StaticPolicyEngine> {
-        configured_builder(self.clock, self.audit, self.native_tool_executor)
+        configured_builder(
+            self.clock,
+            self.audit,
+            self.native_tool_executor,
+            self.register_default_embedded_harness,
+        )
+    }
+}
+
+impl Default for KernelBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -64,14 +89,23 @@ impl KernelBuilder {
 /// The returned runtime handle dereferences to the legacy kernel surface so
 /// helper code typed against `&LoongKernel<_>` can continue to work while
 /// callers migrate toward the explicit `Kernel<P>` name.
-#[derive(Default)]
 pub struct BootstrapBuilder {
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
+    register_default_embedded_harness: bool,
 }
 
 impl BootstrapBuilder {
+    pub fn new() -> Self {
+        Self {
+            clock: None,
+            audit: None,
+            native_tool_executor: None,
+            register_default_embedded_harness: true,
+        }
+    }
+
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
         self
@@ -87,6 +121,11 @@ impl BootstrapBuilder {
         self
     }
 
+    pub fn without_default_embedded_harness(mut self) -> Self {
+        self.register_default_embedded_harness = false;
+        self
+    }
+
     pub fn build(self) -> FrozenKernel<StaticPolicyEngine> {
         self.into_builder().build()
     }
@@ -97,7 +136,18 @@ impl BootstrapBuilder {
     /// the legacy executable API while also supporting `.build()` into
     /// `Kernel<P>`.
     pub fn into_builder(self) -> RuntimeKernelBuilder<StaticPolicyEngine> {
-        configured_builder(self.clock, self.audit, self.native_tool_executor)
+        configured_builder(
+            self.clock,
+            self.audit,
+            self.native_tool_executor,
+            self.register_default_embedded_harness,
+        )
+    }
+}
+
+impl Default for BootstrapBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -105,14 +155,22 @@ fn configured_builder(
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
+    register_default_embedded_harness: bool,
 ) -> RuntimeKernelBuilder<StaticPolicyEngine> {
-    configured_builder_with_default_audit(clock, audit, native_tool_executor).0
+    configured_builder_with_default_audit(
+        clock,
+        audit,
+        native_tool_executor,
+        register_default_embedded_harness,
+    )
+    .0
 }
 
 fn configured_builder_with_default_audit(
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
+    register_default_embedded_harness: bool,
 ) -> (
     RuntimeKernelBuilder<StaticPolicyEngine>,
     Option<Arc<InMemoryAuditSink>>,
@@ -153,7 +211,11 @@ fn configured_builder_with_default_audit(
             )
         }
     };
-    register_builtin_adapters(&mut kernel, native_tool_executor);
+    register_builtin_adapters(
+        &mut kernel,
+        native_tool_executor,
+        register_default_embedded_harness,
+    );
     // The default pack manifest is hardcoded and always valid; ignore the
     // impossible error branch to avoid panicking in production.
     let _ = kernel.register_pack(default_pack_manifest());
@@ -163,10 +225,13 @@ fn configured_builder_with_default_audit(
 fn register_builtin_adapters(
     kernel: &mut RuntimeKernelBuilder<StaticPolicyEngine>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
+    register_default_embedded_harness: bool,
 ) {
-    kernel.register_harness_adapter(EmbeddedPiHarness {
-        seen: Mutex::new(Vec::new()),
-    });
+    if register_default_embedded_harness {
+        kernel.register_harness_adapter(EmbeddedPiHarness {
+            seen: Mutex::new(Vec::new()),
+        });
+    }
     kernel.register_core_connector_adapter(WebhookConnector);
     kernel.register_core_connector_adapter(CrmCoreConnector);
     kernel.register_core_connector_adapter(CrmGrpcCoreConnector);
@@ -245,7 +310,7 @@ mod tests {
 
     #[test]
     fn builder_default_fallback_records_token_audit_events() {
-        let (kernel, audit) = configured_builder_with_default_audit(None, None, None);
+        let (kernel, audit) = configured_builder_with_default_audit(None, None, None, true);
         let audit =
             audit.expect("default builder should surface the fallback in-memory audit sink");
 
@@ -265,7 +330,7 @@ mod tests {
     #[test]
     fn builder_clock_only_fallback_records_token_audit_events() {
         let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let (kernel, audit) = configured_builder_with_default_audit(Some(clock), None, None);
+        let (kernel, audit) = configured_builder_with_default_audit(Some(clock), None, None, true);
         let audit =
             audit.expect("clock-only builder should surface the fallback in-memory audit sink");
 
@@ -320,5 +385,88 @@ mod tests {
         let kernel = BootstrapBuilder::default().build();
         let token = issue_default_pack_token(&kernel);
         assert!(!token.token_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn default_builder_registers_stub_embedded_harness() {
+        let kernel = KernelBuilder::default().build();
+        let token = kernel
+            .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
+            .expect("token issue should succeed");
+
+        let dispatch = kernel
+            .execute_task(
+                DEFAULT_PACK_ID,
+                &token,
+                kernel::TaskIntent {
+                    task_id: "stub-harness-task".to_owned(),
+                    objective: "stub objective".to_owned(),
+                    required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                    payload: serde_json::json!({}),
+                },
+            )
+            .await
+            .expect("default builder should dispatch through stub harness");
+
+        assert_eq!(dispatch.adapter_route.adapter.as_deref(), Some("pi-local"));
+        assert_eq!(dispatch.outcome.output["adapter"], "pi-local");
+        assert_eq!(dispatch.outcome.output["task"], "stub-harness-task");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_builder_can_skip_default_embedded_harness_and_register_explicit_one() {
+        struct MarkerHarness;
+
+        #[async_trait::async_trait]
+        impl kernel::HarnessAdapter for MarkerHarness {
+            fn name(&self) -> &str {
+                "pi-local"
+            }
+
+            fn kind(&self) -> HarnessKind {
+                HarnessKind::EmbeddedPi
+            }
+
+            async fn execute(
+                &self,
+                request: kernel::HarnessRequest,
+            ) -> Result<kernel::HarnessOutcome, kernel::HarnessError> {
+                Ok(kernel::HarnessOutcome {
+                    status: "ok".to_owned(),
+                    output: serde_json::json!({
+                        "adapter": "explicit-marker",
+                        "task": request.task_id,
+                        "objective": request.objective,
+                    }),
+                })
+            }
+        }
+
+        let mut builder = BootstrapBuilder::default()
+            .without_default_embedded_harness()
+            .into_builder();
+        builder.register_harness_adapter(MarkerHarness);
+        let kernel = builder.build();
+        let token = kernel
+            .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
+            .expect("token issue should succeed");
+
+        let dispatch = kernel
+            .execute_task(
+                DEFAULT_PACK_ID,
+                &token,
+                kernel::TaskIntent {
+                    task_id: "marker-harness-task".to_owned(),
+                    objective: "marker objective".to_owned(),
+                    required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+                    payload: serde_json::json!({}),
+                },
+            )
+            .await
+            .expect("explicit marker harness should dispatch");
+
+        assert_eq!(dispatch.adapter_route.adapter.as_deref(), Some("pi-local"));
+        assert_eq!(dispatch.outcome.output["adapter"], "explicit-marker");
+        assert_eq!(dispatch.outcome.output["task"], "marker-harness-task");
     }
 }

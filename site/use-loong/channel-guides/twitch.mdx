@@ -29,14 +29,14 @@ access_token_env = "TWITCH_ACCESS_TOKEN"
 ## Smoke Test
 
 ```bash
-loong twitch-send --target "example_channel" --text "hello from loong"
+loong channels send twitch --target "example_channel" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| chat send | `twitch-send` | Usage: loong twitch-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| chat send | `channels send twitch` | Usage: loong channels send twitch [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | chat listener | `twitch-serve` | twitch EventSub or chat-listener serve support is not implemented yet |
 
 ## Required Fields For Send
@@ -48,7 +48,7 @@ loong twitch-send --target "example_channel" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

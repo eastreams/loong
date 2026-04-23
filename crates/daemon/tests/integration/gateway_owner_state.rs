@@ -60,6 +60,7 @@ fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
     let mut config = mvp::config::LoongConfig::default();
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
@@ -72,6 +73,7 @@ fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
     config.telegram.enabled = true;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
         config,
@@ -82,6 +84,7 @@ fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedS
     let mut config = super::mixed_account_weixin_plugin_bridge_config();
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
@@ -471,20 +474,31 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     let base_url = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::new();
 
-    let unauthorized_status_response = client
-        .get(format!("{base_url}/api/gateway/status"))
-        .send()
-        .await
-        .expect("send unauthorized gateway status request");
-    assert_eq!(
-        unauthorized_status_response.status(),
-        reqwest::StatusCode::UNAUTHORIZED
-    );
-    let unauthorized_status_json: Value = unauthorized_status_response
-        .json()
-        .await
-        .expect("decode unauthorized gateway status response");
-    assert_eq!(unauthorized_status_json["error"]["code"], "unauthorized");
+    for path in [
+        "/api/gateway/status",
+        "/api/gateway/channels",
+        "/api/gateway/runtime-snapshot",
+        "/api/gateway/operator-summary",
+        "/api/gateway/acp/sessions",
+        "/api/gateway/acp/observability",
+        "/api/gateway/acp/status?session=missing-session",
+    ] {
+        let response = client
+            .get(format!("{base_url}{path}"))
+            .send()
+            .await
+            .unwrap_or_else(|_| panic!("send unauthorized gateway request for {path}"));
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+        let response_json: Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| panic!("decode unauthorized gateway response for {path}"));
+        assert_eq!(response_json["error"]["code"], "unauthorized", "{path}");
+    }
 
     let authorized_status_response = client
         .get(format!("{base_url}/api/gateway/status"))
@@ -544,16 +558,6 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
         runtime_snapshot_json["tools"]["visible_tool_count"]
             .as_u64()
             .is_some()
-    );
-
-    let unauthorized_acp_sessions_response = client
-        .get(format!("{base_url}/api/gateway/acp/sessions"))
-        .send()
-        .await
-        .expect("send unauthorized gateway ACP sessions request");
-    assert_eq!(
-        unauthorized_acp_sessions_response.status(),
-        reqwest::StatusCode::UNAUTHORIZED
     );
 
     let authorized_acp_sessions_response = client
@@ -670,6 +674,21 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
         conflicting_selector_json["error"]["code"],
         "invalid_selector"
     );
+
+    let unauthorized_stop_response = client
+        .post(format!("{base_url}/api/gateway/stop"))
+        .send()
+        .await
+        .expect("send unauthorized gateway stop request");
+    assert_eq!(
+        unauthorized_stop_response.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let unauthorized_stop_json: Value = unauthorized_stop_response
+        .json()
+        .await
+        .expect("decode unauthorized gateway stop response");
+    assert_eq!(unauthorized_stop_json["error"]["code"], "unauthorized");
 
     let stop_response = client
         .post(format!("{base_url}/api/gateway/stop"))
@@ -919,6 +938,7 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         .operator_summary()
         .await
         .expect("read gateway operator summary");
+    let nodes = client.nodes().await.expect("read gateway nodes");
     let channel_surfaces = channels["channel_surfaces"]
         .as_array()
         .expect("channel surfaces array");
@@ -959,6 +979,27 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         weixin_operator_surface
             .plugin_bridge_account_summary
             .as_deref(),
+        Some(expected_summary)
+    );
+    assert_eq!(
+        operator_summary.nodes.paired_device_count,
+        nodes.summary.paired_device_count
+    );
+    assert_eq!(
+        operator_summary.nodes.managed_bridge_count,
+        nodes.summary.managed_bridge_count
+    );
+    assert_eq!(
+        operator_summary.nodes.total_count,
+        nodes.summary.total_count
+    );
+    let weixin_managed_bridge = nodes
+        .managed_bridges
+        .iter()
+        .find(|node| node.channel_id == "weixin")
+        .expect("weixin managed bridge node");
+    assert_eq!(
+        weixin_managed_bridge.account_summary.as_deref(),
         Some(expected_summary)
     );
 

@@ -2948,7 +2948,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     }
 
     let runtime_snapshot_json_command = format!(
-        "{} runtime-snapshot --json --config {}",
+        "{} runtime snapshot --json --config {}",
         mvp::config::CLI_COMMAND_NAME,
         crate::cli_handoff::shell_quote_argument(&config_path_display),
     );
@@ -3867,7 +3867,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "event listener",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Disabled,
                 detail: "disabled by telegram account configuration".to_owned(),
                 issues: Vec::new(),
@@ -4341,7 +4341,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "send",
                 label: "bridge send",
-                command: "weixin-send",
+                command: "channels send weixin",
                 health: ChannelOperationHealth::Unsupported,
                 detail: "weixin bridge surface is unavailable in this build".to_owned(),
                 issues: vec!["weixin bridge surface is unavailable in this build".to_owned()],
@@ -5176,7 +5176,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5238,7 +5238,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5301,7 +5301,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5363,7 +5363,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "managed bridge reply loop",
-                command: "weixin-serve",
+                command: "channels serve weixin",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5434,7 +5434,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5513,7 +5513,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5565,7 +5565,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5611,7 +5611,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5675,7 +5675,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5699,7 +5699,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5908,7 +5908,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Restart the stale Weixin runtime or external bridge owner: loong weixin-serve --config '/tmp/loong.toml' --stop --account 'default'"
+                step == "Restart the stale Weixin runtime or external bridge owner: loong channels serve weixin --config '/tmp/loong.toml' --stop --account 'default'"
             }),
             "stale runtime should produce a restart-oriented recovery step: {next_steps:#?}"
         );
@@ -5934,7 +5934,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong weixin-serve --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
+                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong channels serve weixin --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
             }),
             "duplicate runtime attention should produce a cleanup-oriented recovery step: {next_steps:#?}"
         );
@@ -6381,6 +6381,32 @@ mod tests {
                     && step.contains("weixin-bridge-a,weixin-bridge-b")
             }),
             "doctor next steps should stay anchored to the same discovery snapshot as the checks even if the managed install root changes afterward: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_use_grouped_runtime_snapshot_command() {
+        let checks = vec![DoctorCheck {
+            name: "runtime plugins inventory".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "missing manifest".to_owned(),
+        }];
+        let config = mvp::config::LoongConfig::default();
+
+        let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+            &checks,
+            Path::new("/tmp/loong.toml"),
+            &config,
+            &[],
+            false,
+            None,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Inspect runtime plugin inventory: loong runtime snapshot --json --config '/tmp/loong.toml'"
+            }),
+            "doctor next steps should point to the grouped runtime snapshot surface: {next_steps:#?}"
         );
     }
 

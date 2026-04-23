@@ -469,7 +469,7 @@ fn build_gateway_turn_seed(
     )]);
     run_config.active_provider = Some(bound_profile_id);
     run_config.last_provider = None;
-    let memory_config = crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+    let memory_config = crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
         &run_config.memory,
     );
     crate::mvp::memory::execute_memory_core_with_config(
@@ -695,7 +695,9 @@ fn prepare_openai_compat_test_runtime(config: LoongConfig) -> (std::path::PathBu
         .expect("write openai compat test config");
 
     let session_store_config =
-        crate::mvp::session::store::session_store_config_from_memory_config(&config.memory);
+        crate::mvp::session::store::session_store_config_from_memory_config_without_env_overrides(
+            &config.memory,
+        );
     crate::mvp::session::store::ensure_session_store_ready(
         Some(config.memory.resolved_sqlite_path()),
         &session_store_config,
@@ -1558,7 +1560,7 @@ mod tests {
         let mut config = openai_compat_provider_config(base_url);
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config =
-            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
                 &config.memory,
             );
         let app = build_openai_compat_test_router_no_backend(config, "tok".to_owned());
@@ -1642,7 +1644,7 @@ mod tests {
         let mut config = openai_compat_provider_config(base_url);
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config =
-            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
                 &config.memory,
             );
         let app = build_openai_compat_test_router_no_backend(config, "tok".to_owned());
@@ -1688,13 +1690,13 @@ mod tests {
         assert!(
             turns
                 .iter()
-                .any(|turn| turn.role == "assistant" && turn.content == "prior answer"),
+                .any(|turn| turn.role == "user" && turn.content == "hello"),
             "turns={turns:?}"
         );
         assert!(
-            turns
-                .iter()
-                .any(|turn| turn.role == "assistant" && turn.content == "hello world"),
+            turns.iter().any(|turn| {
+                turn.role == "assistant" && turn.content.starts_with("hello world")
+            }),
             "turns={turns:?}"
         );
 

@@ -141,8 +141,8 @@ allowed_chat_ids = ["oc_ops_room"]
 Smoke-test it:
 
 ```bash
-loong feishu-send --receive-id "ou_example_user" --text "hello from loong"
-loong feishu-serve
+loong feishu send --receive-id "ou_example_user" --text "hello from loong"
+loong feishu serve
 ```
 
 Use this when:
@@ -179,8 +179,8 @@ allowed_chat_ids = [123456789]
 Smoke-test it:
 
 ```bash
-loong telegram-send --target "123456789" --text "hello from loong"
-loong telegram-serve
+loong channels send telegram --target "123456789" --text "hello from loong"
+loong channels serve telegram
 ```
 
 Use this when:
@@ -211,8 +211,8 @@ allowed_room_ids = ["!ops:example.org"]
 Smoke-test it:
 
 ```bash
-loong matrix-send --target "!ops:example.org" --text "hello matrix"
-loong matrix-serve --once
+loong channels send matrix --target "!ops:example.org" --text "hello matrix"
+loong channels serve matrix --once
 ```
 
 Use this when:
@@ -244,8 +244,8 @@ allowed_conversation_ids = ["group_demo"]
 Smoke-test it:
 
 ```bash
-loong wecom-send --target "group_demo" --text "hello wecom"
-loong wecom-serve
+loong channels send wecom --target "group_demo" --text "hello wecom"
+loong channels serve wecom
 ```
 
 Use this when:
@@ -338,8 +338,8 @@ channel_secret_env = "LINE_CHANNEL_SECRET"
 ```
 
 ```bash
-loong line-send --target "U4af4980629..." --text "hello from loong"
-loong line-serve --bind 127.0.0.1:6401
+loong channels send line --target "U4af4980629..." --text "hello from loong"
+loong channels serve line --bind 127.0.0.1:6401
 ```
 
 Webhook example:
@@ -354,9 +354,9 @@ payload_text_field = "text"
 ```
 
 ```bash
-loong webhook-send --text "deployment finished"
-loong webhook-send --target "https://example.test/override" --text "one-off delivery"
-loong webhook-serve --bind 127.0.0.1:7401
+loong channels send webhook --text "deployment finished"
+loong channels send webhook --target "https://example.test/override" --text "one-off delivery"
+loong channels serve webhook --bind 127.0.0.1:7401
 ```
 
 Email example:
@@ -371,7 +371,7 @@ from_address = "loong@example.com"
 ```
 
 ```bash
-loong email-send --target "ops@example.com" --text $'Release complete\nEverything is green.'
+loong channels send email --target "ops@example.com" --text $'Release complete\nEverything is green.'
 ```
 
 DingTalk variant:
@@ -384,7 +384,7 @@ secret = { env = "DINGTALK_SECRET" }
 ```
 
 ```bash
-loong dingtalk-send --text "robot delivery is healthy"
+loong channels send dingtalk --text "robot delivery is healthy"
 ```
 
 Use these when:
@@ -440,7 +440,7 @@ Only do this after each service channel works on its own.
 Foreground compatibility wrapper:
 
 ```bash
-loong multi-channel-serve \
+loong gateway run \
   --session cli-supervisor \
   --channel-account lark=work \
   --channel-account wecom=alerts \
@@ -479,7 +479,7 @@ Important boundary:
 1. Get `loong ask` or `loong chat` healthy first.
 2. Add one gateway-supervised service channel, one standalone native-serve surface, or one outbound-only surface.
 3. Verify with `loong doctor` and `loong channels`.
-4. Only then graduate to `gateway run` or `multi-channel-serve`.
+4. Only then graduate to `gateway run` or `gateway run`.
 
 ## Continue Reading
 

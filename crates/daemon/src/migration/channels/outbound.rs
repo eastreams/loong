@@ -361,7 +361,7 @@ mod tests {
         mvp::channel::ChannelOperationStatus {
             id: mvp::channel::CHANNEL_OPERATION_SEND_ID,
             label: "direct send",
-            command: "discord-send",
+            command: "channels send discord",
             health,
             detail: "ready".to_owned(),
             issues: Vec::new(),

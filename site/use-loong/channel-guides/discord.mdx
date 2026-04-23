@@ -53,14 +53,14 @@ api_base_url = "https://discord.com/api/v10"
 ## Smoke Test
 
 ```bash
-loong discord-send --target "123456789012345678" --text "hello from loong"
+loong channels send discord --target "123456789012345678" --text "hello from loong"
 loong channels
 loong doctor
 ```
 
 What success looks like:
 
-- `discord-send` returns success for a valid channel id target
+- `channels send discord` returns success for a valid channel id target
 - `loong channels` lists Discord under the config-backed section
 - `loong doctor` surfaces any token or endpoint problems without pretending a serve runtime exists
 - multi-account configs show which configured account is ready and which one still needs review
@@ -70,7 +70,7 @@ What success looks like:
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| direct send | `discord-send` | Usage: loong discord-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| direct send | `channels send discord` | Usage: loong channels send discord [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | gateway reply loop | `discord-serve` | discord serve runtime is not implemented yet |
 
 ## Required Fields For Send
@@ -91,7 +91,7 @@ These fields already exist in the channel contract because they belong to the ev
 
 ## Target Rules
 
-- `discord-send` expects a Discord channel/conversation id as the target.
+- `channels send discord` expects a Discord channel/conversation id as the target.
 - Keep targets explicit and numeric.
 - If the target is empty, Loong fails fast instead of attempting an accidental send.
 
@@ -106,7 +106,7 @@ These fields already exist in the channel contract because they belong to the ev
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Related Docs
 

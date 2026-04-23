@@ -669,6 +669,8 @@ pub(crate) fn hidden_facade_tool_name_for_hidden_tool(tool_name: &str) -> Option
         || matches_surface_name(tool_name, "approval_request_resolve")
         || tool_name.starts_with("session_")
         || tool_name.starts_with("sessions_")
+        || tool_name.starts_with("task_")
+        || tool_name.starts_with("tasks_")
         || matches_surface_name(tool_name, "delegate")
         || matches_surface_name(tool_name, "delegate_async")
         || matches_surface_name(tool_name, "provider.switch")

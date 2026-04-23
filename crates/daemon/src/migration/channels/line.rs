@@ -14,7 +14,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     surface_label: "line channel",
     runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
     operational_model: mvp::config::ChannelOperationalModel::StandaloneRuntime,
-    serve_subcommand: Some("line-serve"),
+    serve_subcommand: Some("channels serve line"),
 };
 
 pub(super) fn collect_preview(

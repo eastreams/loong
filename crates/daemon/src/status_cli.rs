@@ -3,9 +3,11 @@ use loong_spec::CliResult;
 use serde::Serialize;
 use std::path::Path;
 
+use crate::gateway::client::GatewayLocalClient;
 use crate::gateway::read_models::{
     GatewayAcpObservabilityReadModel, GatewayOperatorChannelsSummaryReadModel,
     GatewayOperatorSummaryReadModel, build_acp_observability_read_model,
+    build_node_inventory_read_model, build_operator_nodes_summary_read_model,
     build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
 use crate::gateway::service::default_gateway_owner_status;
@@ -95,22 +97,14 @@ pub async fn collect_status_cli_read_model(
         crate::build_channels_cli_json_payload(config_path_text, &snapshot.channels);
     let runtime_snapshot = build_runtime_snapshot_read_model(&snapshot);
     let runtime_dir = default_gateway_runtime_state_dir();
-    let owner_status_option = load_gateway_owner_status(runtime_dir.as_path());
-    let owner_status = select_gateway_owner_status_for_config(
+    let gateway = build_status_cli_local_gateway_summary(
         runtime_dir.as_path(),
         config_path_text,
-        owner_status_option,
-    );
-    let gateway = build_operator_summary_read_model(
-        &owner_status,
         &channel_inventory,
         &runtime_snapshot,
-        crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
-            pending_request_count: 0,
-            approved_device_count: 0,
-            last_activity_ms: None,
-        },
     );
+    let gateway =
+        collect_status_cli_gateway_summary(config_path_text, runtime_dir.as_path(), gateway).await;
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
     let mut next_actions = collect_status_runtime_attention_actions(config_path_text, &gateway);
@@ -141,6 +135,66 @@ pub async fn collect_status_cli_read_model(
         next_actions,
         recipes,
     })
+}
+
+fn build_status_cli_local_gateway_summary(
+    runtime_dir: &Path,
+    config_path: &str,
+    channel_inventory: &crate::gateway::read_models::GatewayChannelInventoryReadModel,
+    runtime_snapshot: &crate::gateway::read_models::GatewayRuntimeSnapshotReadModel,
+) -> GatewayOperatorSummaryReadModel {
+    let owner_status_option = load_gateway_owner_status(runtime_dir);
+    let owner_status =
+        select_gateway_owner_status_for_config(runtime_dir, config_path, owner_status_option);
+    let node_inventory = build_node_inventory_read_model(config_path, channel_inventory, &[]);
+    let node_summary = build_operator_nodes_summary_read_model(&node_inventory);
+
+    build_operator_summary_read_model(
+        &owner_status,
+        channel_inventory,
+        runtime_snapshot,
+        crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
+            pending_request_count: 0,
+            approved_device_count: 0,
+            last_activity_ms: None,
+        },
+        node_summary,
+    )
+}
+
+async fn collect_status_cli_gateway_summary(
+    config_path: &str,
+    runtime_dir: &Path,
+    local_gateway: GatewayOperatorSummaryReadModel,
+) -> GatewayOperatorSummaryReadModel {
+    let client = match GatewayLocalClient::discover(runtime_dir) {
+        Ok(client) => client,
+        Err(_) => return local_gateway,
+    };
+
+    if !gateway_owner_status_matches_config(client.discovery().owner_status(), config_path) {
+        return local_gateway;
+    }
+
+    let live_gateway = match client.operator_summary().await {
+        Ok(gateway) => gateway,
+        Err(_) => return local_gateway,
+    };
+
+    if !gateway_owner_status_matches_config(&live_gateway.owner, config_path) {
+        return local_gateway;
+    }
+
+    live_gateway
+}
+
+fn gateway_owner_status_matches_config(
+    owner_status: &crate::gateway::state::GatewayOwnerStatus,
+    config_path: &str,
+) -> bool {
+    let owner_config_path = Path::new(owner_status.config_path.as_str());
+    let requested_config_path = Path::new(config_path);
+    owner_config_path == requested_config_path
 }
 
 fn select_gateway_owner_status_for_config(
@@ -298,10 +352,11 @@ fn build_status_cli_recipes(config_path: &str) -> Vec<String> {
     let gateway_recipe = format!("{command_name} gateway status");
     let channels_recipe = format!("{command_name} channels --config {config_arg} --json");
     let acp_observability_recipe =
-        format!("{command_name} acp-observability --config {config_arg} --json");
+        format!("{command_name} runtime acp observability --config {config_arg} --json");
     let acp_sessions_recipe =
-        format!("{command_name} list-acp-sessions --config {config_arg} --json");
-    let work_units_recipe = format!("{command_name} work-unit health --config {config_arg} --json");
+        format!("{command_name} runtime acp sessions --config {config_arg} --json");
+    let work_units_recipe =
+        format!("{command_name} runtime work-unit health --config {config_arg} --json");
 
     vec![
         gateway_recipe,
@@ -475,6 +530,18 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "control base url".to_owned(),
                 value: base_url.to_owned(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "paired devices".to_owned(),
+                value: gateway.nodes.paired_device_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "managed bridges".to_owned(),
+                value: gateway.nodes.managed_bridge_count.to_string(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "known nodes".to_owned(),
+                value: gateway.nodes.total_count.to_string(),
             },
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "visible tools".to_owned(),
@@ -979,6 +1046,22 @@ mod tests {
     use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
 
     #[test]
+    fn build_status_cli_recipes_use_grouped_runtime_commands() {
+        let recipes = build_status_cli_recipes("/tmp/config.toml");
+
+        assert_eq!(
+            recipes,
+            vec![
+                "loong gateway status".to_owned(),
+                "loong channels --config '/tmp/config.toml' --json".to_owned(),
+                "loong runtime acp observability --config '/tmp/config.toml' --json".to_owned(),
+                "loong runtime acp sessions --config '/tmp/config.toml' --json".to_owned(),
+                "loong runtime work-unit health --config '/tmp/config.toml' --json".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn query_search_checklist_status_treats_disabled_mode_as_non_degraded() {
         let disabled = crate::gateway::read_models::GatewayWebAccessReadModel {
             ordinary_network_access_enabled: true,
@@ -1093,6 +1176,11 @@ mod tests {
                 approved_device_count: 0,
                 last_activity_ms: None,
             },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 2,
+                managed_bridge_count: 1,
+                total_count: 3,
+            },
         };
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
@@ -1153,6 +1241,9 @@ mod tests {
         assert!(rendered.contains("runtime attention ids"));
         assert!(rendered.contains("saved runtime"));
         assert!(rendered.contains("gateway summary"));
+        assert!(rendered.contains("paired devices: 2"));
+        assert!(rendered.contains("managed bridges: 1"));
+        assert!(rendered.contains("known nodes: 3"));
         assert!(rendered.contains("visible tools: 4"));
         assert!(rendered.contains("direct tools: read,exec"));
         assert!(rendered.contains("hidden surfaces: agent,web"));
@@ -1290,6 +1381,11 @@ mod tests {
                 pending_request_count: 0,
                 approved_device_count: 0,
                 last_activity_ms: None,
+            },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
             },
         };
 
@@ -1434,6 +1530,11 @@ mod tests {
                 approved_device_count: 0,
                 last_activity_ms: None,
             },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
+            },
         };
 
         let actions = collect_status_runtime_attention_actions("/tmp/config.toml", &gateway);
@@ -1564,6 +1665,11 @@ mod tests {
                 pending_request_count: 0,
                 approved_device_count: 0,
                 last_activity_ms: None,
+            },
+            nodes: crate::gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+                paired_device_count: 0,
+                managed_bridge_count: 0,
+                total_count: 0,
             },
         };
         let status = StatusCliReadModel {

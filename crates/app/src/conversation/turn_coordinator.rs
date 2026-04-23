@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(feature = "memory-sqlite")]
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
@@ -31,8 +32,8 @@ use crate::CliResult;
 #[cfg(test)]
 use crate::KernelContext;
 use crate::acp::{
-    AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
-    AcpConversationTurnOptions, AcpTurnEventSink, evaluate_acp_conversation_turn_entry_for_address,
+    AcpConversationTurnEntryDecision, AcpConversationTurnOptions,
+    consume_finalized_acp_conversation_turn, evaluate_acp_conversation_turn_entry_for_address,
     execute_acp_conversation_turn_for_address,
 };
 #[cfg(feature = "memory-sqlite")]
@@ -46,7 +47,8 @@ use crate::session::store::{self, SessionStoreConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::task_progress::{
     TASK_PROGRESS_EVENT_KIND, TaskActiveHandleRecord, TaskProgressRecord, TaskProgressStatus,
-    TaskResumeRecipeRecord, TaskVerificationState, task_progress_event_payload, unix_ts_now,
+    TaskResumeRecipeRecord, TaskVerificationState, resolve_canonical_task_id_for_session,
+    task_progress_event_payload, unix_ts_now,
 };
 
 use self::pending_approval::*;
@@ -68,7 +70,7 @@ use super::analytics::{
 use super::announce::DelegateAnnounceSettings;
 #[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
-use super::context_engine::AssembledConversationContext;
+use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
     enqueue_delegate_result_announce_with_memory_config,
@@ -97,8 +99,7 @@ use super::plan_verifier::{
     PlanVerificationReport, verify_output,
 };
 use super::runtime::{
-    AsyncDelegateSpawnRequest, BoxedDefaultConversationRuntime, ConversationRuntime,
-    SessionContext, load_default_conversation_runtime,
+    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
 };
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
@@ -112,8 +113,7 @@ use super::session_history::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentOwnerKind,
-    ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
 use super::trust_projection::{
@@ -123,6 +123,8 @@ use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
+
+type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
 use super::turn_checkpoint::{
     ContextCompactionOutcome, TurnCheckpointDiagnostics, TurnCheckpointFailure,
     TurnCheckpointFailureStep, TurnCheckpointFinalizationProgress, TurnCheckpointIdentity,
@@ -1052,25 +1054,15 @@ impl ConversationTurnCoordinator {
         Self
     }
 
-    pub(crate) async fn compact_session(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<ContextCompactionReport> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.compact_session_with_runtime(config, session_id, &runtime, binding)
-            .await
-    }
-
     pub async fn compact_production_session(
         &self,
         config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
 
         self.compact_session_with_runtime(config, session_id, &runtime, production_binding)
             .await
@@ -1138,140 +1130,21 @@ impl ConversationTurnCoordinator {
         Ok(report)
     }
 
-    pub(crate) async fn handle_turn(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_acp_options(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_ingress(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        let address = ConversationSessionAddress::from_session_id(session_id);
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            &address,
-            user_input,
-            error_mode,
-            &runtime,
-            &acp_options,
-            binding,
-            ingress,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_acp_options(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let address = ConversationSessionAddress::from_session_id(session_id);
-        self.handle_turn_with_address_and_acp_options(
-            config,
-            &address,
-            user_input,
-            error_mode,
-            acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn repair_turn_checkpoint_tail(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.repair_turn_checkpoint_tail_with_runtime(config, session_id, &runtime, binding)
-            .await
-    }
-
     pub async fn repair_production_turn_checkpoint_tail(
         &self,
         config: &LoongConfig,
         session_id: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointTailRepairOutcome> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
 
         self.repair_turn_checkpoint_tail_with_runtime(
             config,
             session_id,
             &runtime,
             production_binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn load_turn_checkpoint_diagnostics(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            &runtime,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn load_production_turn_checkpoint_diagnostics(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointDiagnostics> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-
-        self.load_turn_checkpoint_diagnostics(config, session_id, production_binding)
-            .await
-    }
-
-    pub(crate) async fn load_turn_checkpoint_diagnostics_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<TurnCheckpointDiagnostics> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
-            config, session_id, limit, &runtime, binding,
         )
         .await
     }
@@ -1283,78 +1156,10 @@ impl ConversationTurnCoordinator {
         limit: usize,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<TurnCheckpointDiagnostics> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-
-        self.load_turn_checkpoint_diagnostics_with_limit(
-            config,
-            session_id,
-            limit,
-            production_binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            &runtime,
-            binding,
-        )
-        .await
-    }
-
-    pub async fn probe_production_turn_checkpoint_tail_runtime_gate(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            &runtime,
-            production_binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config, session_id, limit, &runtime, binding,
-        )
-        .await
-    }
-
-    pub async fn probe_production_turn_checkpoint_tail_runtime_gate_with_limit(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        limit: usize,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        let production_binding = require_production_kernel_binding(binding, None)?;
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
+        let prepared = Self::build_default_runtime_with_production_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let production_binding = prepared.1;
+        self.load_turn_checkpoint_diagnostics_with_runtime_and_limit(
             config,
             session_id,
             limit,
@@ -1364,110 +1169,31 @@ impl ConversationTurnCoordinator {
         .await
     }
 
-    pub(crate) async fn handle_turn_with_acp_event_sink(
+    async fn handle_turn_with_session_and_acp_options_and_ingress(
         &self,
         config: &LoongConfig,
         session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_acp_options(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_address_and_acp_options(
-            config,
-            address,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address_and_acp_event_sink(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_address_and_acp_options(
-            config,
-            address,
-            user_input,
-            error_mode,
-            &acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
         user_input: &str,
         error_mode: ProviderErrorMode,
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+        let address = ConversationSessionAddress::from_session_id(session_id);
+        let prepared = Self::build_default_runtime_with_binding(config, binding, None)?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
-            address,
+            &address,
             user_input,
             error_mode,
             &runtime,
             acp_options,
-            binding,
+            effective_binding,
             ingress,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_address_and_acp_options(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, None)?;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            address,
-            user_input,
-            error_mode,
-            &runtime,
-            acp_options,
-            binding,
+            None,
+            None,
             None,
         )
         .await
@@ -1484,18 +1210,50 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        let runtime = Self::build_default_runtime_or_observe_failure(config, observer.as_ref())?;
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
+        &self,
+        config: &LoongConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
+        let prepared =
+            Self::build_default_runtime_with_binding(config, binding, observer.as_ref())?;
+        let runtime = prepared.0;
+        let effective_binding = prepared.1;
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
             error_mode,
             &runtime,
             acp_options,
-            binding,
+            effective_binding,
             ingress,
             observer,
-            None,
+            retry_progress,
+            acp_manager,
         )
         .await
     }
@@ -1533,17 +1291,43 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        let observer_ref = observer.as_ref();
-        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
-
-        self.handle_turn_with_address_and_acp_options_and_observer(
+        self.handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
             config,
             address,
             user_input,
             error_mode,
             acp_options,
-            production_binding,
+            binding,
             observer,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
+        &self,
+        config: &LoongConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
+        self.handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            acp_options,
+            require_production_kernel_binding(binding, observer.as_ref())?,
+            None,
+            observer,
+            retry_progress,
+            acp_manager,
         )
         .await
     }
@@ -1551,11 +1335,11 @@ impl ConversationTurnCoordinator {
     fn build_default_runtime_or_observe_failure(
         config: &LoongConfig,
         observer: Option<&ConversationTurnObserverHandle>,
-    ) -> CliResult<BoxedDefaultConversationRuntime> {
+    ) -> CliResult<DefaultTurnRuntime> {
         // Keep runtime-construction failures visible to the turn observer so
         // operator surfaces receive the same failed phase signal as execution
         // errors later in the turn pipeline.
-        let runtime_result = load_default_conversation_runtime(config);
+        let runtime_result = DefaultConversationRuntime::from_config_or_env(config);
         let runtime = match runtime_result {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -1565,6 +1349,28 @@ impl ConversationTurnCoordinator {
             }
         };
         Ok(runtime)
+    }
+
+    fn build_default_runtime_with_binding<'a>(
+        config: &LoongConfig,
+        binding: ConversationRuntimeBinding<'a>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<(DefaultTurnRuntime, ConversationRuntimeBinding<'a>)> {
+        let runtime = Self::build_default_runtime_or_observe_failure(config, observer)?;
+        let effective_binding = binding;
+
+        Ok((runtime, effective_binding))
+    }
+
+    fn build_default_runtime_with_production_binding<'a>(
+        config: &LoongConfig,
+        binding: ConversationRuntimeBinding<'a>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<(DefaultTurnRuntime, ConversationRuntimeBinding<'a>)> {
+        let production_binding = require_production_kernel_binding(binding, observer)?;
+        let runtime = Self::build_default_runtime_or_observe_failure(config, observer)?;
+
+        Ok((runtime, production_binding))
     }
 
     pub(crate) async fn handle_turn_with_runtime<R: ConversationRuntime + ?Sized>(
@@ -1577,7 +1383,7 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
         let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_runtime_and_acp_options(
+        self.handle_turn_with_runtime_and_session_and_acp_options_and_ingress(
             config,
             session_id,
             user_input,
@@ -1585,31 +1391,7 @@ impl ConversationTurnCoordinator {
             runtime,
             &acp_options,
             binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_ingress<R: ConversationRuntime + ?Sized>(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        let address = ConversationSessionAddress::from_session_id(session_id);
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            &address,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
-            ingress,
+            None,
         )
         .await
     }
@@ -1699,25 +1481,6 @@ impl ConversationTurnCoordinator {
         }
     }
 
-    pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<Option<TurnCheckpointTailRepairRuntimeProbe>> {
-        self.probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit(
-            config,
-            session_id,
-            config.memory.sliding_window,
-            runtime,
-            binding,
-        )
-        .await
-    }
-
     pub(crate) async fn probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit<
         R: ConversationRuntime + ?Sized,
     >(
@@ -1746,7 +1509,7 @@ impl ConversationTurnCoordinator {
         }
     }
 
-    pub(crate) async fn handle_turn_with_runtime_and_acp_options<
+    async fn handle_turn_with_runtime_and_session_and_acp_options_and_ingress<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -1757,9 +1520,10 @@ impl ConversationTurnCoordinator {
         runtime: &R,
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
     ) -> CliResult<String> {
         let address = ConversationSessionAddress::from_session_id(session_id);
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             &address,
             user_input,
@@ -1767,54 +1531,9 @@ impl ConversationTurnCoordinator {
             runtime,
             acp_options,
             binding,
+            ingress,
             None,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_acp_event_sink<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        session_id: &str,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_runtime_and_acp_options(
-            config,
-            session_id,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_address<R: ConversationRuntime + ?Sized>(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::automatic();
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
+            None,
             None,
         )
         .await
@@ -1832,7 +1551,7 @@ impl ConversationTurnCoordinator {
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
@@ -1841,32 +1560,7 @@ impl ConversationTurnCoordinator {
             acp_options,
             binding,
             None,
-        )
-        .await
-    }
-
-    async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_options: &AcpConversationTurnOptions<'_>,
-        binding: ConversationRuntimeBinding<'_>,
-        ingress: Option<&ConversationIngressContext>,
-    ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            acp_options,
-            binding,
-            ingress,
+            None,
             None,
             None,
         )
@@ -1888,6 +1582,38 @@ impl ConversationTurnCoordinator {
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
     ) -> CliResult<String> {
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+            retry_progress,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
         self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
             config,
             address,
@@ -1899,6 +1625,7 @@ impl ConversationTurnCoordinator {
             ingress,
             observer,
             retry_progress,
+            acp_manager,
         )
         .await
         .map(|outcome| outcome.reply)
@@ -1918,6 +1645,7 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<ConversationTurnOutcome> {
         let turn_result: CliResult<(ConversationTurnOutcome, bool)> = async {
             let session_id = address.session_id.as_str();
@@ -1955,7 +1683,7 @@ impl ConversationTurnCoordinator {
                 config,
                 session_id,
                 "turn_started",
-                active_task_progress_record(session_id, user_input),
+                active_task_progress_record(config, session_id, user_input),
             );
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
@@ -1986,7 +1714,7 @@ impl ConversationTurnCoordinator {
                 }
                 AcpConversationTurnEntryDecision::RouteViaAcp => {
                     let reply = self
-                        .handle_turn_via_acp(
+                        .handle_turn_via_acp_with_manager(
                             config,
                             address,
                             user_input,
@@ -1994,6 +1722,7 @@ impl ConversationTurnCoordinator {
                             runtime,
                             acp_options,
                             binding,
+                            acp_manager.clone(),
                         )
                         .await?;
                     return Ok((ConversationTurnOutcome { reply, usage: None }, true));
@@ -2089,18 +1818,11 @@ impl ConversationTurnCoordinator {
         .await;
 
         match turn_result {
-            Ok((reply, true)) => {
-                #[cfg(feature = "memory-sqlite")]
-                persist_task_progress_event_best_effort(
-                    config,
-                    address.session_id.as_str(),
-                    "turn_completed",
-                    completed_task_progress_record(address.session_id.as_str(), user_input),
-                );
+            Ok((outcome, true)) => {
                 observe_non_provider_turn_terminal_success_phases(observer.as_ref());
-                Ok(reply)
+                Ok(outcome)
             }
-            Ok((reply, false)) => Ok(reply),
+            Ok((outcome, false)) => Ok(outcome),
             Err(error) => {
                 let failed_event = ConversationTurnPhaseEvent::failed();
                 observe_turn_phase(observer.as_ref(), failed_event);
@@ -2109,7 +1831,7 @@ impl ConversationTurnCoordinator {
                     config,
                     address.session_id.as_str(),
                     "turn_failed",
-                    failed_task_progress_record(address.session_id.as_str(), user_input),
+                    failed_task_progress_record(config, address.session_id.as_str(), user_input),
                 );
                 Err(error)
             }
@@ -2409,10 +2131,41 @@ impl ConversationTurnCoordinator {
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
     ) -> CliResult<String> {
-        let observer_ref = observer.as_ref();
-        let production_binding = require_production_kernel_binding(binding, observer_ref)?;
+        self.handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            binding,
+            ingress,
+            observer,
+            None,
+            None,
+        )
+        .await
+    }
 
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+    pub async fn handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager<
+        R: ConversationRuntime + ?Sized,
+    >(
+        &self,
+        config: &LoongConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        ingress: Option<&ConversationIngressContext>,
+        observer: Option<ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
+        let production_binding = require_production_kernel_binding(binding, observer.as_ref())?;
+
+        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             address,
             user_input,
@@ -2422,33 +2175,8 @@ impl ConversationTurnCoordinator {
             production_binding,
             ingress,
             observer,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_event_sink<
-        R: ConversationRuntime + ?Sized,
-    >(
-        &self,
-        config: &LoongConfig,
-        address: &ConversationSessionAddress,
-        user_input: &str,
-        error_mode: ProviderErrorMode,
-        runtime: &R,
-        acp_event_sink: Option<&dyn AcpTurnEventSink>,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> CliResult<String> {
-        let acp_options = AcpConversationTurnOptions::from_event_sink(acp_event_sink);
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress(
-            config,
-            address,
-            user_input,
-            error_mode,
-            runtime,
-            &acp_options,
-            binding,
-            None,
+            retry_progress,
+            acp_manager,
         )
         .await
     }
@@ -2463,15 +2191,45 @@ impl ConversationTurnCoordinator {
         acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let session_id = address.session_id.as_str();
-        let executed =
-            execute_acp_conversation_turn_for_address(config, address, user_input, acp_options)
-                .await?;
-        let persistence_context = &executed.persistence_context;
+        self.handle_turn_via_acp_with_manager(
+            config,
+            address,
+            user_input,
+            error_mode,
+            runtime,
+            acp_options,
+            binding,
+            None,
+        )
+        .await
+    }
 
-        match executed.outcome {
-            AcpConversationTurnExecutionOutcome::Succeeded(success) => {
+    async fn handle_turn_via_acp_with_manager<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<String> {
+        let session_id = address.session_id.as_str();
+        let executed = execute_acp_conversation_turn_for_address(
+            config,
+            address,
+            user_input,
+            acp_options,
+            acp_manager,
+        )
+        .await?;
+
+        consume_finalized_acp_conversation_turn(
+            executed,
+            |success| async move {
                 let reply = success.result.output_text.clone();
+
                 persist_reply_turns_raw_with_mode(
                     runtime,
                     session_id,
@@ -2481,37 +2239,51 @@ impl ConversationTurnCoordinator {
                     binding,
                 )
                 .await?;
+
                 if config.acp.emit_runtime_events {
+                    let runtime_events = &success.runtime_events;
+                    let persistence_context = &success.persistence_context;
+                    let result = &success.result;
+
                     let _ = persist_acp_runtime_events(
                         runtime,
                         session_id,
                         persistence_context,
-                        &success.runtime_events,
-                        Some(&success.result),
+                        runtime_events,
+                        Some(result),
                         None,
                         binding,
                     )
                     .await;
                 }
+
                 Ok(reply)
-            }
-            AcpConversationTurnExecutionOutcome::Failed(failure) => {
+            },
+            |failure| async move {
+                let error = failure.error;
+
                 if config.acp.emit_runtime_events {
+                    let error_text = error.as_str();
+                    let runtime_events = &failure.runtime_events;
+                    let persistence_context = &failure.persistence_context;
+
                     let _ = persist_acp_runtime_events(
                         runtime,
                         session_id,
                         persistence_context,
-                        &failure.runtime_events,
+                        runtime_events,
                         None,
-                        Some(failure.error.as_str()),
+                        Some(error_text),
                         binding,
                     )
                     .await;
                 }
+
                 match error_mode {
-                    ProviderErrorMode::Propagate => Err(failure.error),
+                    ProviderErrorMode::Propagate => Err(error),
                     ProviderErrorMode::InlineMessage => {
-                        let synthetic = format_provider_error_reply(&failure.error);
+                        let synthetic = format_provider_error_reply(&error);
+
                         persist_reply_turns_raw_with_mode(
                             runtime,
                             session_id,
@@ -2521,11 +2293,13 @@ impl ConversationTurnCoordinator {
                             binding,
                         )
                         .await?;
+
                         Ok(synthetic)
                     }
                 }
-            }
-        }
+            },
+        )
+        .await
     }
 }
 
@@ -4677,7 +4451,7 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             config,
             session_id,
             "turn_verifying",
-            verifying_task_progress_record(session_id, user_input),
+            verifying_task_progress_record(config, session_id, user_input),
         );
     }
 
@@ -4780,9 +4554,9 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             "turn_completed"
         },
         if checkpoint_waits_for_external_resolution(checkpoint) {
-            waiting_task_progress_record(session_id, user_input)
+            waiting_task_progress_record(config, session_id, user_input)
         } else {
-            completed_task_progress_record(session_id, user_input)
+            completed_task_progress_record(config, session_id, user_input)
         },
     );
 
@@ -4812,10 +4586,26 @@ fn persist_task_progress_event_best_effort(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn resolve_canonical_task_id(config: &LoongConfig, session_id: &str) -> String {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return session_id.to_owned();
+    };
+
+    resolve_canonical_task_id_for_session(&repo, session_id)
+        .unwrap_or_else(|| session_id.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn active_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id,
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Active,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4828,10 +4618,10 @@ fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgre
             stop_condition: "terminal_reply_or_error".to_owned(),
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "session_status".to_owned(),
+            recommended_tool: "task_status".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Inspect session_status, session_wait, or sessions_history for durable task progress."
+                "Inspect task_status, task_wait, or task_history for durable task progress."
                     .to_owned(),
             ),
         }),
@@ -4840,10 +4630,15 @@ fn active_task_progress_record(session_id: &str, user_input: &str) -> TaskProgre
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn verifying_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id,
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Verifying,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4856,10 +4651,10 @@ fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskPro
             stop_condition: "after_turn_and_compaction_complete".to_owned(),
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "session_status".to_owned(),
+            recommended_tool: "task_status".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Check session_status to see whether finalization verification has completed."
+                "Check task_status to see whether finalization verification has completed."
                     .to_owned(),
             ),
         }),
@@ -4868,10 +4663,15 @@ fn verifying_task_progress_record(session_id: &str, user_input: &str) -> TaskPro
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn waiting_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id,
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Waiting,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4884,10 +4684,10 @@ fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgr
             stop_condition: "approval_decision".to_owned(),
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "session_status".to_owned(),
+            recommended_tool: "task_status".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Use session_status or the approval control path to resolve the waiting task."
+                "Use task_status or the approval control path to resolve the waiting task."
                     .to_owned(),
             ),
         }),
@@ -4896,9 +4696,13 @@ fn waiting_task_progress_record(session_id: &str, user_input: &str) -> TaskProgr
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn completed_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn completed_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id: resolve_canonical_task_id(config, session_id),
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Completed,
         intent_summary: summarize_task_progress_intent(user_input),
@@ -4910,19 +4714,23 @@ fn completed_task_progress_record(session_id: &str, user_input: &str) -> TaskPro
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn failed_task_progress_record(session_id: &str, user_input: &str) -> TaskProgressRecord {
+fn failed_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
     TaskProgressRecord {
-        task_id: session_id.to_owned(),
+        task_id: resolve_canonical_task_id(config, session_id),
         owner_kind: "conversation_turn".to_owned(),
         status: TaskProgressStatus::Failed,
         intent_summary: summarize_task_progress_intent(user_input),
         verification_state: Some(TaskVerificationState::Failed),
         active_handles: Vec::new(),
         resume_recipe: Some(TaskResumeRecipeRecord {
-            recommended_tool: "sessions_history".to_owned(),
+            recommended_tool: "task_history".to_owned(),
             session_id: session_id.to_owned(),
             note: Some(
-                "Inspect recent session history and session_status to diagnose the failed task."
+                "Inspect recent task_history and task_status to diagnose the failed task."
                     .to_owned(),
             ),
         }),
@@ -5052,6 +4860,10 @@ impl<R> AppToolDispatcher for CoordinatorAppToolDispatcher<'_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
+    fn memory_config(&self) -> Option<&SessionStoreConfig> {
+        self.fallback.memory_config()
+    }
+
     async fn preflight_tool_intent_with_binding(
         &self,
         session_context: &SessionContext,
@@ -5298,6 +5110,8 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let repo = SessionRepository::new(&store::session_store_config_from_memory_config(
         &config.memory,
     ))?;
+    let parent_task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
+        .unwrap_or_else(|| session_context.session_id.clone());
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -5337,6 +5151,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                         &child_session_id,
                         child_label.clone(),
                         &delegate_request.task,
+                        Some(parent_task_id.as_str()),
                         runtime_self_continuity.as_ref(),
                         subagent_identity.clone(),
                         execution_policy,
@@ -5400,8 +5215,8 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
-        ConstrainedSubagentOwnerKind::AsyncDelegateSpawner,
         binding,
+        Some(crate::conversation::ConstrainedSubagentOwnerKind::AsyncDelegateSpawner),
     )
     .await?;
     let detached_config = std::sync::Arc::new(config.clone());
@@ -5441,8 +5256,8 @@ async fn enqueue_background_task_with_runtime<R: ConversationRuntime + ?Sized>(
         runtime,
         session_context,
         delegate_request,
-        ConstrainedSubagentOwnerKind::BackgroundTaskHost,
         binding,
+        Some(crate::conversation::ConstrainedSubagentOwnerKind::BackgroundTaskHost),
     )
     .await?;
     let spawn_result = spawner.spawn(delegate_request.request.clone()).await;
@@ -5500,8 +5315,8 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     session_context: &SessionContext,
     delegate_request: crate::tools::delegate::DelegateRequest,
-    owner_kind: ConstrainedSubagentOwnerKind,
     binding: ConversationRuntimeBinding<'_>,
+    owner_kind: Option<crate::conversation::ConstrainedSubagentOwnerKind>,
 ) -> Result<PreparedAsyncDelegateEnqueue, String> {
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
@@ -5511,6 +5326,8 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
     let memory_config = store::session_store_config_from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
+    let parent_task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id)
+        .unwrap_or_else(|| session_context.session_id.clone());
 
     ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
 
@@ -5527,7 +5344,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                 let execution_policy = DelegateChildExecutionPolicy {
                     isolation: delegate_policy.isolation,
                     profile: delegate_policy.profile,
-                    owner_kind: Some(owner_kind),
+                    owner_kind,
                     timeout_seconds: delegate_policy.timeout_seconds,
                     allow_shell_in_child: delegate_policy.allow_shell_in_child,
                     child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
@@ -5544,6 +5361,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
                     &child_session_id,
                     child_label.clone(),
                     &delegate_request.task,
+                    Some(parent_task_id.as_str()),
                     runtime_self_continuity.as_ref(),
                     subagent_identity.clone(),
                     execution_policy,
@@ -5576,6 +5394,7 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
         child_session_id: child_session_id.clone(),
         parent_session_id: session_context.session_id.clone(),
         task: delegate_request.task,
+        canonical_task_id: Some(parent_task_id),
         label: child_label,
         profile: delegate_policy.profile,
         execution: queued_execution,
@@ -7742,8 +7561,7 @@ mod tests {
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id("observer-session");
-        let reply = ConversationTurnCoordinator::new()
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        let reply = ConversationTurnCoordinator::new().handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7753,6 +7571,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
                 None,
             )
             .await
@@ -7792,7 +7611,6 @@ mod tests {
         assert_eq!(token_events.len(), 1);
         assert_eq!(token_events[0].event_type, "text_delta");
         assert_eq!(token_events[0].delta.text.as_deref(), Some("draft"));
-        assert!(token_events[0].elapsed_ms.is_some());
     }
 
     #[tokio::test]
@@ -7806,8 +7624,7 @@ mod tests {
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id("observer-session");
-        let reply = ConversationTurnCoordinator::new()
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        let reply = ConversationTurnCoordinator::new().handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7817,6 +7634,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
                 None,
             )
             .await
@@ -7873,8 +7691,7 @@ mod tests {
         let observer_handle: ConversationTurnObserverHandle = observer.clone();
         let acp_options = AcpConversationTurnOptions::explicit();
         let address = ConversationSessionAddress::from_session_id("observer-session");
-        let reply = ConversationTurnCoordinator::new()
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        let reply = ConversationTurnCoordinator::new().handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7884,6 +7701,7 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
                 None,
             )
             .await
@@ -7941,7 +7759,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("observer-session");
 
         let result = coordinator
-            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -7950,6 +7768,8 @@ mod tests {
                 ConversationRuntimeBinding::direct(),
                 None,
                 Some(observer_handle),
+                None,
+                None,
             )
             .await;
         let _error = result.expect_err("missing runtime bootstrap should fail");
@@ -7977,14 +7797,17 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("observer-session");
 
         let result = coordinator
-            .handle_turn_with_address_and_acp_options_and_observer(
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
                 ProviderErrorMode::Propagate,
                 &acp_options,
                 ConversationRuntimeBinding::direct(),
+                None,
                 Some(observer_handle),
+                None,
+                None,
             )
             .await;
         let _error = result.expect_err("missing runtime bootstrap should fail");
@@ -8013,7 +7836,7 @@ mod tests {
         let address = ConversationSessionAddress::from_session_id("observer-session");
 
         let result = coordinator
-            .handle_production_turn_with_address_and_acp_options_and_observer(
+            .handle_production_turn_with_address_and_acp_options_and_observer_with_manager(
                 &config,
                 &address,
                 "say hello",
@@ -8021,6 +7844,8 @@ mod tests {
                 &acp_options,
                 ConversationRuntimeBinding::direct(),
                 Some(observer_handle),
+                None,
+                None,
             )
             .await;
         let error = result.expect_err("direct production binding should fail");
@@ -8143,32 +7968,12 @@ mod tests {
         config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
 
         let coordinator = ConversationTurnCoordinator::new();
+        let limit = config.memory.sliding_window;
         let result = coordinator
-            .load_production_turn_checkpoint_diagnostics(
+            .load_production_turn_checkpoint_diagnostics_with_limit(
                 &config,
                 "maintenance-session",
-                ConversationRuntimeBinding::direct(),
-            )
-            .await;
-        let error = result.expect_err("direct production maintenance binding should fail");
-
-        assert_eq!(
-            error,
-            PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING
-        );
-    }
-
-    #[tokio::test]
-    async fn probe_production_turn_checkpoint_tail_runtime_gate_rejects_direct_binding_before_runtime_bootstrap()
-     {
-        let mut config = LoongConfig::default();
-        config.conversation.context_engine = Some("missing-maintenance-runtime".to_owned());
-
-        let coordinator = ConversationTurnCoordinator::new();
-        let result = coordinator
-            .probe_production_turn_checkpoint_tail_runtime_gate(
-                &config,
-                "maintenance-session",
+                limit,
                 ConversationRuntimeBinding::direct(),
             )
             .await;
@@ -8184,12 +7989,9 @@ mod tests {
     fn generic_direct_capable_coordinator_entrypoints_are_not_public_api() {
         let source = include_str!("turn_coordinator.rs");
         let function_names = [
-            "compact_session",
             "compact_session_with_runtime",
-            "handle_turn",
             "handle_turn_with_ingress",
             "handle_turn_with_acp_options",
-            "repair_turn_checkpoint_tail",
             "probe_turn_checkpoint_tail_runtime_gate",
             "probe_turn_checkpoint_tail_runtime_gate_with_limit",
             "handle_turn_with_acp_event_sink",
@@ -8202,7 +8004,6 @@ mod tests {
             "handle_turn_with_runtime",
             "handle_turn_with_runtime_and_ingress",
             "repair_turn_checkpoint_tail_with_runtime",
-            "probe_turn_checkpoint_tail_runtime_gate_with_runtime",
             "probe_turn_checkpoint_tail_runtime_gate_with_runtime_and_limit",
             "handle_turn_with_runtime_and_acp_options",
             "handle_turn_with_runtime_and_acp_event_sink",
@@ -9541,7 +9342,7 @@ mod tests {
                 .expect("kernel context");
 
         let reply = coordinator
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "esc",
@@ -9551,6 +9352,7 @@ mod tests {
                 ConversationRuntimeBinding::kernel(&kernel_ctx),
                 None,
                 Some(observer_handle),
+                None,
                 None,
             )
             .await
@@ -9636,7 +9438,7 @@ mod tests {
         let acp_options = AcpConversationTurnOptions::automatic();
         let address = ConversationSessionAddress::from_session_id("root-session");
         let result = coordinator
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &config,
                 &address,
                 "auto",
@@ -9644,6 +9446,7 @@ mod tests {
                 &runtime,
                 &acp_options,
                 ConversationRuntimeBinding::direct(),
+                None,
                 None,
                 None,
                 None,
@@ -11437,7 +11240,11 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn waiting_task_progress_record_uses_waiting_status_and_approval_gate_handle() {
-        let record = waiting_task_progress_record("session-approval", "await approval");
+        let record = waiting_task_progress_record(
+            &LoongConfig::default(),
+            "session-approval",
+            "await approval",
+        );
 
         assert_eq!(record.status, TaskProgressStatus::Waiting);
         assert_eq!(
@@ -11451,14 +11258,15 @@ mod tests {
                 .resume_recipe
                 .as_ref()
                 .map(|value| value.recommended_tool.as_str()),
-            Some("session_status")
+            Some("task_status")
         );
     }
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn verifying_task_progress_record_uses_verifying_status_and_finalization_handle() {
-        let record = verifying_task_progress_record("session-verify", "finalize");
+        let record =
+            verifying_task_progress_record(&LoongConfig::default(), "session-verify", "finalize");
 
         assert_eq!(record.status, TaskProgressStatus::Verifying);
         assert_eq!(
@@ -11472,7 +11280,7 @@ mod tests {
                 .resume_recipe
                 .as_ref()
                 .map(|value| value.recommended_tool.as_str()),
-            Some("session_status")
+            Some("task_status")
         );
     }
 

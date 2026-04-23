@@ -7863,8 +7863,9 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
     );
     assert!(
         rendered.contains("- chat: loong chat --config '/tmp/loong-config.toml'")
-            && rendered
-                .contains("- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"),
+            && rendered.contains(
+                "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
+            ),
         "narrow renderer should keep secondary chat and channel actions visible after the primary ask example: {lines:#?}"
     );
 }
@@ -8398,16 +8399,15 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
         "wide success summary should still surface interactive chat as a secondary follow-up: {lines:#?}"
     );
     assert!(
-        lines.iter().any(
-            |line| line == "- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"
-        ),
+        lines.iter().any(|line| line
+            == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"),
         "wide success summary should list telegram as a secondary action: {lines:#?}"
     );
     assert!(
         lines
             .iter()
             .any(|line| line
-                == "- Feishu/Lark: loong feishu-serve --config '/tmp/loong-config.toml'"),
+                == "- Feishu/Lark: loong feishu serve --config '/tmp/loong-config.toml'"),
         "wide success summary should list feishu as a secondary action: {lines:#?}"
     );
 }
@@ -8429,10 +8429,9 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
         "structured actions should promote the first enabled channel when cli is disabled: {summary:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "start here")
-            && lines.iter().any(|line| {
-                line == "- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"
-            }),
+        lines.iter().any(|line| line == "start here") && lines.iter().any(|line| {
+            line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
+        }),
         "success summary should guide users into the first enabled channel when cli is disabled: {lines:#?}"
     );
     assert!(
@@ -8611,7 +8610,7 @@ fn onboarding_success_summary_keeps_mixed_runtime_and_outbound_followups_after_d
     assert_eq!(summary.next_actions[1].label, "Telegram");
     assert_eq!(
         summary.next_actions[1].command,
-        "loong telegram-serve --config '/tmp/loong-config.toml'"
+        "loong channels serve telegram --config '/tmp/loong-config.toml'"
     );
     assert_eq!(
         summary.next_actions[2].kind,
@@ -8624,7 +8623,7 @@ fn onboarding_success_summary_keeps_mixed_runtime_and_outbound_followups_after_d
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- Telegram: loong telegram-serve --config '/tmp/loong-config.toml'"
+            line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
         }),
         "mixed runtime-backed plus outbound setups should keep the runtime-backed handoff visible: {lines:#?}"
     );

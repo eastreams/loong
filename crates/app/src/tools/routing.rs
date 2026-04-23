@@ -559,6 +559,7 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
             "session-status" => Ok("session_status"),
             "session-wait" => Ok("session_wait"),
             "task-history" => Ok("task_history"),
+            "task-events" => Ok("task_events"),
             "tasks-list" => Ok("tasks_list"),
             "tasks-search" => Ok("tasks_search"),
             "task-status" => Ok("task_status"),
@@ -661,6 +662,9 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
     if has_task_id || has_task_ids {
         if has_timeout_ms {
             return Ok("task_wait");
+        }
+        if has_after_id {
+            return Ok("task_events");
         }
         if has_limit {
             return Ok("task_history");
@@ -863,6 +867,7 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
             "session_status" => Some("session-status".to_owned()),
             "session_wait" => Some("session-wait".to_owned()),
             "task_history" => Some("task-history".to_owned()),
+            "task_events" => Some("task-events".to_owned()),
             "tasks_list" => Some("tasks-list".to_owned()),
             "tasks_search" => Some("tasks-search".to_owned()),
             "task_status" => Some("task-status".to_owned()),
@@ -1013,5 +1018,23 @@ mod tests {
         );
 
         assert_eq!(logged_tool_name, "browser");
+    }
+
+    #[test]
+    fn hidden_agent_routes_task_events_when_task_cursor_is_present() {
+        let routed = route_hidden_agent_tool_name(&json!({
+            "task_id": "task-root",
+            "after_id": 10
+        }))
+        .expect("task events payload should route");
+
+        assert_eq!(routed, "task_events");
+    }
+
+    #[test]
+    fn hidden_operation_for_task_events_uses_task_events_alias() {
+        let operation = hidden_operation_for_tool_name("task_events").expect("task events alias");
+
+        assert_eq!(operation, "task-events");
     }
 }

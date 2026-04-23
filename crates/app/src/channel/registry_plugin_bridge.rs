@@ -863,15 +863,17 @@ fn managed_bridge_runtime_is_ready(
     let runtime_contract = channel_bridge.runtime_contract.as_deref();
     let runtime_contract = runtime_contract.map(str::trim);
     let runtime_contract = runtime_contract.filter(|value| !value.is_empty());
-    let runtime_contract_is_ready = runtime_contract.is_some();
-    if !runtime_contract_is_ready {
-        return false;
-    }
-
-    channel_bridge
+    let has_runtime_contract = runtime_contract.is_some();
+    let has_runtime_operations = channel_bridge
         .runtime_operations
         .iter()
-        .any(|operation| !operation.trim().is_empty())
+        .any(|operation| !operation.trim().is_empty());
+
+    if !has_runtime_contract && !has_runtime_operations {
+        return true;
+    }
+
+    has_runtime_contract && has_runtime_operations
 }
 
 fn plugin_ir_channel_bridge(

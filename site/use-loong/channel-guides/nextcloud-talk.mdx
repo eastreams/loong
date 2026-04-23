@@ -30,14 +30,14 @@ shared_secret_env = "NEXTCLOUD_TALK_SHARED_SECRET"
 ## Smoke Test
 
 ```bash
-loong nextcloud-talk-send --target "room-token" --text "hello from loong"
+loong channels send nextcloud-talk --target "room-token" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| room send | `nextcloud-talk-send` | Usage: loong nextcloud-talk-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| room send | `channels send nextcloud-talk` | Usage: loong channels send nextcloud-talk [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | talk room service | `nextcloud-talk-serve` | nextcloud talk bot callback serve is not implemented yet |
 
 ## Required Fields For Send
@@ -50,7 +50,7 @@ loong nextcloud-talk-send --target "room-token" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Related Docs
 

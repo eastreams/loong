@@ -267,7 +267,7 @@ pub(crate) struct ChannelRegistryDescriptor {
 const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "telegram-send",
+    command: "channels send telegram",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TELEGRAM_SEND_REQUIREMENTS,
@@ -278,7 +278,7 @@ const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
 const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "reply loop",
-    command: "telegram-serve",
+    command: "channels serve telegram",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: TELEGRAM_SERVE_REQUIREMENTS,
@@ -402,7 +402,7 @@ const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboa
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "feishu-send",
+    command: "feishu send",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: FEISHU_SEND_REQUIREMENTS,
@@ -416,7 +416,7 @@ const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "inbound reply service",
-    command: "feishu-serve",
+    command: "feishu serve",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: FEISHU_SERVE_REQUIREMENTS,
@@ -580,7 +580,7 @@ const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "matrix-send",
+    command: "channels send matrix",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: MATRIX_SEND_REQUIREMENTS,
@@ -591,7 +591,7 @@ const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const MATRIX_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "sync reply loop",
-    command: "matrix-serve",
+    command: "channels serve matrix",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: MATRIX_SERVE_REQUIREMENTS,
@@ -616,7 +616,7 @@ pub const MATRIX_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
 const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "proactive send",
-    command: "wecom-send",
+    command: "channels send wecom",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WECOM_SEND_REQUIREMENTS,
@@ -627,7 +627,7 @@ const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "long connection reply loop",
-    command: "wecom-serve",
+    command: "channels serve wecom",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WECOM_SERVE_REQUIREMENTS,
@@ -852,7 +852,7 @@ const DISCORD_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "discord-send",
+    command: "channels send discord",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DISCORD_SEND_REQUIREMENTS,
@@ -1055,7 +1055,7 @@ const LINE_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const LINE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "push send",
-    command: "line-send",
+    command: "channels send line",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: LINE_SEND_REQUIREMENTS,
@@ -1065,7 +1065,7 @@ const LINE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "webhook reply loop",
-    command: "line-serve",
+    command: "channels serve line",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: LINE_SERVE_REQUIREMENTS,
@@ -1287,7 +1287,7 @@ const DINGTALK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const DINGTALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "custom robot send",
-    command: "dingtalk-send",
+    command: "channels send dingtalk",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DINGTALK_SEND_REQUIREMENTS,
@@ -1407,7 +1407,7 @@ const WHATSAPP_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "business send",
-    command: "whatsapp-send",
+    command: "channels send whatsapp",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WHATSAPP_SEND_REQUIREMENTS,
@@ -1417,7 +1417,7 @@ const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
 const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "cloud webhook service",
-    command: "whatsapp-serve",
+    command: "channels serve whatsapp",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
@@ -1578,7 +1578,7 @@ const EMAIL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const EMAIL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "smtp send",
-    command: "email-send",
+    command: "channels send email",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: EMAIL_SEND_REQUIREMENTS,
@@ -1666,7 +1666,7 @@ const WEBHOOK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "http post send",
-    command: "webhook-send",
+    command: "channels send webhook",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WEBHOOK_SEND_REQUIREMENTS,
@@ -1676,7 +1676,7 @@ const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
 const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "inbound webhook service",
-    command: "webhook-serve",
+    command: "channels serve webhook",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WEBHOOK_SERVE_REQUIREMENTS,
@@ -1769,7 +1769,7 @@ const GOOGLE_CHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const GOOGLE_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "incoming webhook send",
-    command: "google-chat-send",
+    command: "channels send google-chat",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: GOOGLE_CHAT_SEND_REQUIREMENTS,
@@ -1869,7 +1869,7 @@ const SIGNAL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const SIGNAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct message send",
-    command: "signal-send",
+    command: "channels send signal",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SIGNAL_SEND_REQUIREMENTS,
@@ -1985,7 +1985,7 @@ const TEAMS_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const TEAMS_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "incoming webhook send",
-    command: "teams-send",
+    command: "channels send teams",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TEAMS_SEND_REQUIREMENTS,
@@ -2090,7 +2090,7 @@ const MATTERMOST_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const MATTERMOST_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "channel send",
-    command: "mattermost-send",
+    command: "channels send mattermost",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: MATTERMOST_SEND_REQUIREMENTS,
@@ -2183,7 +2183,7 @@ const NEXTCLOUD_TALK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
 const NEXTCLOUD_TALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "room send",
-    command: "nextcloud-talk-send",
+    command: "channels send nextcloud-talk",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: NEXTCLOUD_TALK_SEND_REQUIREMENTS,
@@ -2288,7 +2288,7 @@ const SYNOLOGY_CHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = 
 const SYNOLOGY_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "chat send",
-    command: "synology-chat-send",
+    command: "channels send synology-chat",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SYNOLOGY_CHAT_SEND_REQUIREMENTS,
@@ -2376,7 +2376,7 @@ const IRC_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const IRC_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "message send",
-    command: "irc-send",
+    command: "channels send irc",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IRC_SEND_REQUIREMENTS,
@@ -2478,7 +2478,7 @@ const IMESSAGE_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const IMESSAGE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "chat send",
-    command: "imessage-send",
+    command: "channels send imessage",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IMESSAGE_SEND_REQUIREMENTS,
@@ -5836,9 +5836,9 @@ mod tests {
 
         assert_eq!(matrix.channel_id, "matrix");
         assert_eq!(matrix.send.id, CHANNEL_OPERATION_SEND_ID);
-        assert_eq!(matrix.send.command, "matrix-send");
+        assert_eq!(matrix.send.command, "channels send matrix");
         assert_eq!(matrix.serve.id, CHANNEL_OPERATION_SERVE_ID);
-        assert_eq!(matrix.serve.command, "matrix-serve");
+        assert_eq!(matrix.serve.command, "channels serve matrix");
         assert_eq!(
             matrix.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
@@ -5852,9 +5852,9 @@ mod tests {
 
         assert_eq!(wecom.channel_id, "wecom");
         assert_eq!(wecom.send.id, CHANNEL_OPERATION_SEND_ID);
-        assert_eq!(wecom.send.command, "wecom-send");
+        assert_eq!(wecom.send.command, "channels send wecom");
         assert_eq!(wecom.serve.id, CHANNEL_OPERATION_SERVE_ID);
-        assert_eq!(wecom.serve.command, "wecom-serve");
+        assert_eq!(wecom.serve.command, "channels serve wecom");
         assert_eq!(
             wecom.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
@@ -5884,9 +5884,9 @@ mod tests {
         assert_eq!(telegram.runtime.platform, ChannelPlatform::Telegram);
         assert_eq!(telegram.catalog, telegram_catalog);
         assert_eq!(telegram.catalog.send.id, CHANNEL_OPERATION_SEND_ID);
-        assert_eq!(telegram.catalog.send.command, "telegram-send");
+        assert_eq!(telegram.catalog.send.command, "channels send telegram");
         assert_eq!(telegram.catalog.serve.id, CHANNEL_OPERATION_SERVE_ID);
-        assert_eq!(telegram.catalog.serve.command, "telegram-serve");
+        assert_eq!(telegram.catalog.serve.command, "channels serve telegram");
         assert_eq!(
             telegram.catalog.send.default_target_kind(),
             Some(telegram.catalog.default_send_target_kind)
@@ -5895,8 +5895,8 @@ mod tests {
         assert_eq!(lark.runtime.channel_id, "feishu");
         assert_eq!(lark.runtime.platform, ChannelPlatform::Feishu);
         assert_eq!(lark.catalog, lark_catalog);
-        assert_eq!(lark.catalog.send.command, "feishu-send");
-        assert_eq!(lark.catalog.serve.command, "feishu-serve");
+        assert_eq!(lark.catalog.send.command, "feishu send");
+        assert_eq!(lark.catalog.serve.command, "feishu serve");
         assert_eq!(
             lark.catalog.send.default_target_kind(),
             Some(lark.catalog.default_send_target_kind)
@@ -5913,7 +5913,7 @@ mod tests {
     fn resolve_channel_operation_descriptor_combines_catalog_and_doctor_metadata() {
         let lark_serve = resolve_channel_operation_descriptor("lark", CHANNEL_OPERATION_SERVE_ID)
             .expect("lark serve descriptor");
-        assert_eq!(lark_serve.operation.command, "feishu-serve");
+        assert_eq!(lark_serve.operation.command, "feishu serve");
         assert_eq!(
             lark_serve
                 .doctor
@@ -5928,7 +5928,7 @@ mod tests {
         let discord_send =
             resolve_channel_operation_descriptor("discord-bot", CHANNEL_OPERATION_SEND_ID)
                 .expect("discord send descriptor");
-        assert_eq!(discord_send.operation.command, "discord-send");
+        assert_eq!(discord_send.operation.command, "channels send discord");
         assert_eq!(discord_send.doctor, None);
 
         assert_eq!(
@@ -5951,7 +5951,7 @@ mod tests {
             ChannelCatalogImplementationStatus::ConfigBacked
         );
         assert_eq!(discord.transport, "discord_http_api");
-        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[0].command, "channels send discord");
         assert_eq!(discord.operations[1].command, "discord-serve");
         assert_eq!(
             encoded
@@ -6173,8 +6173,8 @@ mod tests {
         );
         assert_eq!(feishu.aliases, vec!["lark"]);
         assert_eq!(feishu.operations.len(), 2);
-        assert_eq!(feishu.operations[0].command, "feishu-send");
-        assert_eq!(feishu.operations[1].command, "feishu-serve");
+        assert_eq!(feishu.operations[0].command, "feishu send");
+        assert_eq!(feishu.operations[1].command, "feishu serve");
         assert_eq!(
             encoded
                 .get("operations")
@@ -6214,8 +6214,8 @@ mod tests {
         let slack_json = serde_json::to_value(slack).expect("serialize slack entry");
 
         assert_eq!(telegram.operations.len(), 2);
-        assert_eq!(telegram.operations[0].command, "telegram-send");
-        assert_eq!(telegram.operations[1].command, "telegram-serve");
+        assert_eq!(telegram.operations[0].command, "channels send telegram");
+        assert_eq!(telegram.operations[1].command, "channels serve telegram");
         assert_eq!(
             matrix.implementation_status,
             ChannelCatalogImplementationStatus::RuntimeBacked
@@ -6223,8 +6223,8 @@ mod tests {
         assert_eq!(matrix.transport, "matrix_client_server_sync");
         assert!(matrix.aliases.is_empty());
         assert_eq!(matrix.operations.len(), 2);
-        assert_eq!(matrix.operations[0].command, "matrix-send");
-        assert_eq!(matrix.operations[1].command, "matrix-serve");
+        assert_eq!(matrix.operations[0].command, "channels send matrix");
+        assert_eq!(matrix.operations[1].command, "channels serve matrix");
         assert_eq!(
             discord.implementation_status,
             ChannelCatalogImplementationStatus::ConfigBacked
@@ -6234,7 +6234,7 @@ mod tests {
         assert_eq!(discord.selection_order, 40);
         assert_eq!(discord.selection_label, "community server bot");
         assert_eq!(discord.operations.len(), 2);
-        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[0].command, "channels send discord");
         assert_eq!(discord.operations[1].command, "discord-serve");
 
         assert_eq!(
@@ -7060,7 +7060,7 @@ mod tests {
         assert_eq!(irc.selection_order, 170);
         assert_eq!(irc.transport, "irc_socket");
         assert_eq!(irc.aliases, Vec::<&str>::new());
-        assert_eq!(irc.operations[0].command, "irc-send");
+        assert_eq!(irc.operations[0].command, "channels send irc");
         assert_eq!(irc.operations[1].command, "irc-serve");
         assert_eq!(
             irc.operations[0]
@@ -7226,7 +7226,7 @@ mod tests {
             dingtalk.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Endpoint]
         );
-        assert_eq!(dingtalk.operations[0].command, "dingtalk-send");
+        assert_eq!(dingtalk.operations[0].command, "channels send dingtalk");
         assert_eq!(dingtalk.operations[1].command, "dingtalk-serve");
         assert_eq!(
             dingtalk.operations[0].availability,
@@ -7248,7 +7248,10 @@ mod tests {
             google_chat.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Endpoint]
         );
-        assert_eq!(google_chat.operations[0].command, "google-chat-send");
+        assert_eq!(
+            google_chat.operations[0].command,
+            "channels send google-chat"
+        );
         assert_eq!(google_chat.operations[1].command, "google-chat-serve");
         assert_eq!(
             google_chat.operations[0].availability,
@@ -7279,7 +7282,7 @@ mod tests {
             email.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Address]
         );
-        assert_eq!(email.operations[0].command, "email-send");
+        assert_eq!(email.operations[0].command, "channels send email");
         assert_eq!(email.operations[1].command, "email-serve");
         assert_eq!(
             email.operations[0].availability,
@@ -7314,7 +7317,10 @@ mod tests {
             nextcloud_talk.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Conversation]
         );
-        assert_eq!(nextcloud_talk.operations[0].command, "nextcloud-talk-send");
+        assert_eq!(
+            nextcloud_talk.operations[0].command,
+            "channels send nextcloud-talk"
+        );
         assert_eq!(nextcloud_talk.operations[1].command, "nextcloud-talk-serve");
         assert_eq!(
             nextcloud_talk.operations[0].availability,
@@ -7339,7 +7345,10 @@ mod tests {
             synology_chat.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Address]
         );
-        assert_eq!(synology_chat.operations[0].command, "synology-chat-send");
+        assert_eq!(
+            synology_chat.operations[0].command,
+            "channels send synology-chat"
+        );
         assert_eq!(synology_chat.operations[1].command, "synology-chat-serve");
         assert_eq!(
             synology_chat.operations[0].availability,
@@ -7865,7 +7874,7 @@ mod tests {
                     ChannelCatalogOperation {
                         id: "send",
                         label: "direct send",
-                        command: "telegram-send",
+                        command: "channels send telegram",
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: false,
                         requirements: &[],
@@ -7875,7 +7884,7 @@ mod tests {
                     ChannelCatalogOperation {
                         id: "serve",
                         label: "reply loop",
-                        command: "telegram-serve",
+                        command: "channels serve telegram",
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: true,
                         requirements: &[],
@@ -7901,7 +7910,7 @@ mod tests {
                     ChannelCatalogOperation {
                         id: "send",
                         label: "direct send",
-                        command: "discord-send",
+                        command: "channels send discord",
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: false,
                         requirements: &[],
@@ -7938,7 +7947,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Disabled,
                 detail: "disabled".to_owned(),
                 issues: vec![],
@@ -7954,7 +7963,10 @@ mod tests {
             catalog_only[0].implementation_status,
             ChannelCatalogImplementationStatus::ConfigBacked
         );
-        assert_eq!(catalog_only[0].operations[0].command, "discord-send");
+        assert_eq!(
+            catalog_only[0].operations[0].command,
+            "channels send discord"
+        );
     }
 
     #[test]

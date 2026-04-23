@@ -771,7 +771,7 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
     assert!(
         lines.iter().any(|line| {
             line
-                == "also available: Telegram · loong telegram-serve --config '/tmp/loong-config.toml'"
+                == "also available: Telegram · loong channels serve telegram --config '/tmp/loong-config.toml'"
         }),
         "apply summary should continue surfacing registry-driven channel handoff commands after ask/chat: {lines:#?}"
     );
@@ -804,7 +804,7 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
     );
     assert!(
         rendered.contains(
-            "also available: Telegram · loong telegram-serve --config '/tmp/loong'\"'\"'s config.toml'"
+            "also available: Telegram · loong channels serve telegram --config '/tmp/loong'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in channel handoff commands: {lines:#?}"
     );
@@ -825,7 +825,7 @@ fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
 
     assert!(
         lines.iter().any(|line| {
-            line == "next step: loong telegram-serve --config '/tmp/loong-config.toml'"
+            line == "next step: loong channels serve telegram --config '/tmp/loong-config.toml'"
         }),
         "apply summary should not hand users to CLI chat when the imported config has cli disabled: {lines:#?}"
     );
