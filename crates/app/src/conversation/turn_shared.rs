@@ -23,7 +23,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::CliResult;
 
-pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue working toward the original user request. If another tool call is needed, make it now. If the request is already complete, answer in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue satisfying the original user request. Prefer the next bounded tool call or completion step over narrating intermediate status. Only stop to answer in natural language when the request is actually complete, blocked on a real approval or input gate, or the available evidence is already sufficient. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
@@ -1541,6 +1541,11 @@ pub fn build_tool_followup_user_prompt_with_context(
     if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
         sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
     }
+    if let Some(continuation_guidance) =
+        proactive_followup_continuation_context(tool_result_text, rendered_tool_result_text)
+    {
+        sections.push(continuation_guidance);
+    }
     if let Some(extra_context) = extra_context {
         sections.push(extra_context.to_owned());
     }
@@ -1556,6 +1561,120 @@ fn combine_followup_extra_context(parts: &[Option<&str>]) -> Option<String> {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
     (!joined.is_empty()).then(|| joined.join("\n\n"))
+}
+
+fn proactive_followup_continuation_context(
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> Option<String> {
+    let primary_context = tool_result_text.and_then(parse_tool_result_followup_context);
+    let fallback_context = rendered_tool_result_text.and_then(parse_tool_result_followup_context);
+    let tool_result_context = primary_context.or(fallback_context)?;
+    let continuation = parse_tool_result_continuation(&tool_result_context.payload_json)?;
+    Some(render_tool_result_continuation_guidance(&continuation))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolResultFollowupContext {
+    payload_json: Value,
+}
+
+fn parse_tool_result_followup_context(tool_result_text: &str) -> Option<ToolResultFollowupContext> {
+    tool_result_text.lines().find_map(|line| {
+        let trimmed_line = line.trim();
+        let tool_result_line = ToolResultLine::parse(trimmed_line)?;
+        let payload_json = tool_result_line.payload_summary_json()?;
+        Some(ToolResultFollowupContext { payload_json })
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolResultContinuation {
+    state: String,
+    is_terminal: bool,
+    recommended_tool: Option<String>,
+    recommended_payload: Option<Value>,
+    note: Option<String>,
+}
+
+fn parse_tool_result_continuation(payload_json: &Value) -> Option<ToolResultContinuation> {
+    let continuation_value = payload_json.get("continuation")?;
+    let continuation_object = continuation_value.as_object()?;
+    let state = continuation_object
+        .get("state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let is_terminal = continuation_object
+        .get("is_terminal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let recommended_tool = continuation_object
+        .get("recommended_tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let recommended_payload = continuation_object.get("recommended_payload").cloned();
+    let note = continuation_object
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Some(ToolResultContinuation {
+        state,
+        is_terminal,
+        recommended_tool,
+        recommended_payload,
+        note,
+    })
+}
+
+fn render_tool_result_continuation_guidance(continuation: &ToolResultContinuation) -> String {
+    let mut lines = vec!["Continuation guidance:".to_owned()];
+    let state_line = if continuation.is_terminal {
+        format!(
+            "The tool reported terminal state `{}`. Finish the request only if the user-facing work is actually complete.",
+            continuation.state
+        )
+    } else {
+        format!(
+            "The tool reported intermediate state `{}`. Do not present this as final completion.",
+            continuation.state
+        )
+    };
+    lines.push(state_line);
+
+    if let Some(note) = continuation.note.as_deref() {
+        lines.push(note.to_owned());
+    }
+
+    if let Some(recommended_tool) = continuation.recommended_tool.as_deref() {
+        let mut recommendation = format!(
+            "If the original request still depends on this work, continue with `{recommended_tool}`"
+        );
+        if let Some(recommended_payload) = continuation.recommended_payload.as_ref() {
+            let payload_text =
+                serde_json::to_string(recommended_payload).unwrap_or_else(|_| "{}".to_owned());
+            recommendation.push_str(" using payload:");
+            recommendation.push('\n');
+            recommendation.push_str(payload_text.as_str());
+            recommendation.push('\n');
+            recommendation.push_str("before answering.");
+        } else {
+            recommendation.push_str(" before answering.");
+        }
+        lines.push(recommendation);
+    } else if !continuation.is_terminal {
+        lines.push(
+            "Keep advancing if you can resolve the gate from available tools; otherwise report the exact blocker instead of a vague progress update."
+                .to_owned(),
+        );
+    }
+
+    lines.join("\n")
 }
 
 pub fn build_discovery_recovery_followup_user_prompt(
@@ -3880,6 +3999,88 @@ mod tests {
 
         assert!(prompt.contains(DISCOVERY_RESULT_FOLLOWUP_PROMPT));
         assert!(prompt.contains("Original request:\nfind the latest ai news and summarize it"));
+    }
+
+    #[test]
+    fn followup_prompt_uses_generic_continuation_metadata_for_delegate_queue() {
+        let payload_summary = json!({
+            "child_session_id": "delegate:child-1",
+            "mode": "async",
+            "state": "queued",
+            "continuation": {
+                "state": "queued",
+                "is_terminal": false,
+                "recommended_tool": "session_wait",
+                "recommended_payload": {
+                    "session_id": "delegate:child-1",
+                    "timeout_ms": 30000
+                },
+                "note": "The delegated child is still running in the background."
+            }
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "delegate_async",
+                "tool_call_id": "call-delegate-1",
+                "payload_summary": payload_summary,
+                "payload_chars": 256,
+                "payload_truncated": false
+            })
+        );
+
+        let prompt = build_tool_followup_user_prompt(
+            "finish the delegated research and summarize the result",
+            None,
+            Some(tool_result.as_str()),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Continuation guidance:"));
+        assert!(prompt.contains("intermediate state `queued`"));
+        assert!(prompt.contains("still running in the background"));
+        assert!(prompt.contains("`session_wait`"));
+        assert!(prompt.contains("{\"session_id\":\"delegate:child-1\",\"timeout_ms\":30000}"));
+    }
+
+    #[test]
+    fn followup_prompt_uses_generic_continuation_metadata_for_waiting_task() {
+        let payload_summary = json!({
+            "wait_status": "waiting",
+            "continuation": {
+                "state": "waiting",
+                "is_terminal": false,
+                "note": "The runtime is still waiting on an approval or external completion gate."
+            }
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "task_wait",
+                "tool_call_id": "call-task-wait-1",
+                "payload_summary": payload_summary,
+                "payload_chars": 256,
+                "payload_truncated": false
+            })
+        );
+
+        let prompt = build_tool_followup_user_prompt(
+            "wait until the task is complete and then summarize it",
+            None,
+            Some(tool_result.as_str()),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Continuation guidance:"));
+        assert!(prompt.contains("intermediate state `waiting`"));
+        assert!(prompt.contains("approval or external completion gate"));
+        assert!(prompt.contains("exact blocker"));
     }
 
     #[test]
