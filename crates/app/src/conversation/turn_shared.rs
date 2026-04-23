@@ -347,6 +347,8 @@ impl ToolDrivenFollowupPayload {
         }
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn retryable_failure(&self) -> bool {
         matches!(
             self,
@@ -1430,6 +1432,8 @@ fn parse_tool_result_envelope(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(candidate).ok()
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_followup_user_prompt(
     user_input: &str,
     loop_warning_reason: Option<&str>,
@@ -1865,6 +1869,8 @@ pub fn build_external_skill_followup_user_prompt(
     sections.join("\n\n")
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_result_followup_tail<F>(
     assistant_preface: &str,
     tool_result_text: &str,
@@ -1960,6 +1966,8 @@ where
     )
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_failure_followup_tail_with_request_summary<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
