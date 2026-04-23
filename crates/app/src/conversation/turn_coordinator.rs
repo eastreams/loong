@@ -147,22 +147,25 @@ use super::turn_observer::{
     ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
     ConversationTurnToolEvent, build_observer_streaming_token_callback,
 };
+#[cfg(test)]
+use super::turn_shared::ReplyResolutionMode;
 #[cfg(feature = "memory-sqlite")]
 use super::turn_shared::{ApprovalPromptActionId, parse_approval_prompt_action_input};
 use super::turn_shared::{
-    ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
-    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
-    build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
+    ParsedToolDrivenContinuationReply, ProviderTurnRequestAction, ReplyPersistenceMode,
+    ToolDrivenContinuationState, ToolDrivenFollowupContractMode, ToolDrivenFollowupKind,
+    ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
+    build_tool_driven_followup_tail_with_request_summary_and_contract,
+    build_tool_followup_user_prompt_with_context, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
     effective_followup_visible_tool_name, format_approval_required_reply,
-    next_conversation_turn_id, reduce_followup_payload_for_model,
-    request_completion_with_raw_fallback, summarize_provider_lane_tool_request,
-    summarize_single_tool_followup_request, tool_driven_followup_payload,
-    tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
-    user_requested_raw_tool_output,
+    next_conversation_turn_id, parse_tool_driven_continuation_reply,
+    reduce_followup_payload_for_model, render_tool_followup_continuation_contract,
+    request_completion_with_raw_fallback, request_completion_with_raw_fallback_detailed,
+    summarize_provider_lane_tool_request, summarize_single_tool_followup_request,
+    tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
+    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
-#[cfg(test)]
-use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::workspace_isolation::{
     DelegateWorkspaceCleanupResult, cleanup_delegate_workspace_root,
@@ -642,13 +645,31 @@ impl ProviderTurnContinuePhase {
         user_input: &str,
         reply: &str,
     ) -> TurnCheckpointSnapshot {
+        self.checkpoint_with_continuation_state(preparation, user_input, reply, None)
+    }
+
+    fn checkpoint_with_continuation_state(
+        &self,
+        preparation: &ProviderTurnPreparation,
+        user_input: &str,
+        reply: &str,
+        continuation_state: Option<ToolDrivenContinuationState>,
+    ) -> TurnCheckpointSnapshot {
+        let reply_checkpoint = if continuation_state.is_some() {
+            TurnReplyCheckpoint::from_phase_with_continuation_state(
+                &self.reply_phase,
+                continuation_state,
+            )
+        } else {
+            TurnReplyCheckpoint::from_phase(&self.reply_phase)
+        };
         build_resolved_provider_checkpoint(
             preparation,
             user_input,
             Some(reply),
             self.request.clone(),
             Some(self.lane_execution.checkpoint()),
-            Some(TurnReplyCheckpoint::from_phase(&self.reply_phase)),
+            Some(reply_checkpoint),
             TurnFinalizationCheckpoint::persist_reply(ReplyPersistenceMode::Success),
         )
     }
@@ -2960,6 +2981,870 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingToolContinuationExpectation {
+    ToolResult,
+    ToolResultAfterFallback,
+    ToolRetryableFailure,
+    ToolRetryableFailureAfterRepair,
+}
+
+impl MissingToolContinuationExpectation {
+    fn from_tool_failure(payload: &ToolDrivenFollowupPayload) -> Option<Self> {
+        match payload {
+            ToolDrivenFollowupPayload::ToolFailure { retryable, .. } if *retryable => {
+                Some(Self::ToolRetryableFailure)
+            }
+            _ => None,
+        }
+    }
+
+    fn from_tool_result(payload: &ToolDrivenFollowupPayload) -> Option<Self> {
+        match payload {
+            ToolDrivenFollowupPayload::ToolResult { .. } => Some(Self::ToolResult),
+            _ => None,
+        }
+    }
+
+    fn contract_mode(self) -> ToolDrivenFollowupContractMode {
+        match self {
+            Self::ToolResult => ToolDrivenFollowupContractMode::Normal,
+            Self::ToolRetryableFailure => ToolDrivenFollowupContractMode::RetryableFailure,
+            Self::ToolResultAfterFallback => ToolDrivenFollowupContractMode::Repair,
+            Self::ToolRetryableFailureAfterRepair => {
+                ToolDrivenFollowupContractMode::RepairRetryableFailure
+            }
+        }
+    }
+
+    fn after_attempt(self) -> Self {
+        match self {
+            Self::ToolResult => Self::ToolResultAfterFallback,
+            Self::ToolRetryableFailure => Self::ToolRetryableFailureAfterRepair,
+            Self::ToolResultAfterFallback => Self::ToolResultAfterFallback,
+            Self::ToolRetryableFailureAfterRepair => Self::ToolRetryableFailureAfterRepair,
+        }
+    }
+
+    fn after_attempted(self) -> bool {
+        matches!(
+            self,
+            Self::ToolResultAfterFallback | Self::ToolRetryableFailureAfterRepair
+        )
+    }
+
+    fn payload_kind(self) -> ToolDrivenFollowupKind {
+        match self {
+            Self::ToolResult | Self::ToolResultAfterFallback => ToolDrivenFollowupKind::ToolResult,
+            Self::ToolRetryableFailure | Self::ToolRetryableFailureAfterRepair => {
+                ToolDrivenFollowupKind::ToolFailure
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingToolContinuationDecision {
+    Finish {
+        continuation_state: Option<ToolDrivenContinuationState>,
+    },
+    RequestRepair,
+    ForceBlockedReply,
+}
+
+fn evaluate_missing_tool_continuation(
+    expectation: MissingToolContinuationExpectation,
+    parsed_reply: &ParsedToolDrivenContinuationReply,
+) -> MissingToolContinuationDecision {
+    match parsed_reply.state {
+        Some(ToolDrivenContinuationState::Continue) => {
+            if expectation.after_attempted() {
+                MissingToolContinuationDecision::ForceBlockedReply
+            } else {
+                MissingToolContinuationDecision::RequestRepair
+            }
+        }
+        Some(ToolDrivenContinuationState::Done) => {
+            if parsed_reply.reply.is_empty() {
+                if expectation.after_attempted() {
+                    MissingToolContinuationDecision::ForceBlockedReply
+                } else {
+                    MissingToolContinuationDecision::RequestRepair
+                }
+            } else {
+                MissingToolContinuationDecision::Finish {
+                    continuation_state: Some(ToolDrivenContinuationState::Done),
+                }
+            }
+        }
+        Some(ToolDrivenContinuationState::Blocked) => {
+            if parsed_reply.reply.is_empty() {
+                MissingToolContinuationDecision::ForceBlockedReply
+            } else {
+                MissingToolContinuationDecision::Finish {
+                    continuation_state: Some(ToolDrivenContinuationState::Blocked),
+                }
+            }
+        }
+        None => {
+            if expectation.after_attempted() {
+                MissingToolContinuationDecision::ForceBlockedReply
+            } else {
+                MissingToolContinuationDecision::RequestRepair
+            }
+        }
+    }
+}
+
+fn missing_tool_continuation_blocked_reply(
+    expectation: MissingToolContinuationExpectation,
+) -> String {
+    match expectation.payload_kind() {
+        ToolDrivenFollowupKind::ToolFailure => "I couldn't continue because the required retry tool call was never issued. The turn stopped here instead of pretending the retry happened.".to_owned(),
+        ToolDrivenFollowupKind::ToolResult => "I couldn't continue because the required follow-up tool call was never issued. The turn stopped here instead of pretending the work completed.".to_owned(),
+        ToolDrivenFollowupKind::DiscoveryRecovery => "I couldn't continue because the required follow-up tool call was never issued.".to_owned(),
+    }
+}
+
+fn build_missing_tool_continuation_repair_messages(
+    base_messages: &[Value],
+    assistant_reply: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    expectation: MissingToolContinuationExpectation,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    let assistant_reply = assistant_reply.trim();
+    if !assistant_reply.is_empty() {
+        messages.push(json!({
+            "role": "assistant",
+            "content": assistant_reply,
+        }));
+    }
+    let continuation_contract =
+        render_tool_followup_continuation_contract(expectation.contract_mode());
+    messages.push(json!({
+        "role": "user",
+        "content": build_tool_followup_user_prompt_with_context(
+            user_input,
+            loop_warning_reason,
+            None,
+            None,
+            Some(continuation_contract.as_str()),
+        ),
+    }));
+    messages
+}
+
+#[derive(Debug, Clone)]
+struct ProviderReplyLoopState {
+    current_preparation: ProviderTurnPreparation,
+    current_continue_phase: ProviderTurnContinuePhase,
+    remaining_provider_rounds: usize,
+    provider_round_index: usize,
+    pending_missing_tool_continuation: Option<MissingToolContinuationExpectation>,
+}
+
+impl ProviderReplyLoopState {
+    fn new(
+        preparation: &ProviderTurnPreparation,
+        continue_phase: &ProviderTurnContinuePhase,
+        remaining_provider_rounds: usize,
+    ) -> Self {
+        Self {
+            current_preparation: preparation.clone(),
+            current_continue_phase: continue_phase.clone(),
+            remaining_provider_rounds: remaining_provider_rounds.max(1),
+            provider_round_index: 0,
+            pending_missing_tool_continuation: None,
+        }
+    }
+
+    fn current_provider_round(&self) -> usize {
+        self.provider_round_index.saturating_add(1)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ReplyLoopDecision {
+    FinalizeDirect {
+        reply: String,
+        latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+        continuation_state: Option<ToolDrivenContinuationState>,
+    },
+    Followup {
+        raw_reply: String,
+        payload: ToolDrivenFollowupPayload,
+        requires_completion_pass: bool,
+        loop_warning_reason: Option<String>,
+    },
+    RepairFollowup {
+        raw_reply: String,
+        expectation: MissingToolContinuationExpectation,
+        loop_warning_reason: Option<String>,
+    },
+    GuardFollowup {
+        raw_reply: String,
+        reason: String,
+        latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+    },
+}
+
+fn build_reply_loop_decision(state: &mut ProviderReplyLoopState) -> ReplyLoopDecision {
+    match state.current_continue_phase.reply_phase.decision() {
+        ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
+            let latest_tool_payload = tool_driven_followup_payload(
+                state.current_continue_phase.lane_execution.had_tool_intents,
+                &state.current_continue_phase.lane_execution.turn_result,
+            );
+            if let Some(reason) = state.current_continue_phase.hard_stop_reason() {
+                ReplyLoopDecision::GuardFollowup {
+                    raw_reply: reply.clone(),
+                    reason: reason.to_owned(),
+                    latest_tool_payload,
+                }
+            } else if let Some(expectation) = state.pending_missing_tool_continuation.take() {
+                let parsed_reply = parse_tool_driven_continuation_reply(
+                    state
+                        .current_continue_phase
+                        .lane_execution
+                        .assistant_preface
+                        .as_str(),
+                );
+                match evaluate_missing_tool_continuation(expectation, &parsed_reply) {
+                    MissingToolContinuationDecision::Finish { continuation_state } => {
+                        ReplyLoopDecision::FinalizeDirect {
+                            reply: reply.clone(),
+                            latest_tool_payload,
+                            continuation_state,
+                        }
+                    }
+                    MissingToolContinuationDecision::RequestRepair => {
+                        ReplyLoopDecision::RepairFollowup {
+                            raw_reply: reply.clone(),
+                            expectation,
+                            loop_warning_reason: state
+                                .current_continue_phase
+                                .loop_warning_reason()
+                                .map(ToOwned::to_owned),
+                        }
+                    }
+                    MissingToolContinuationDecision::ForceBlockedReply => {
+                        ReplyLoopDecision::FinalizeDirect {
+                            reply: missing_tool_continuation_blocked_reply(expectation),
+                            latest_tool_payload,
+                            continuation_state: Some(ToolDrivenContinuationState::Blocked),
+                        }
+                    }
+                }
+            } else if state
+                .current_continue_phase
+                .lane_execution
+                .supports_provider_turn_followup
+                && (!state
+                    .current_continue_phase
+                    .lane_execution
+                    .raw_tool_output_requested
+                    || state
+                        .current_continue_phase
+                        .lane_execution
+                        .discovery_search_turn
+                    || assistant_preface_signals_provider_turn_followup(
+                        state
+                            .current_continue_phase
+                            .lane_execution
+                            .assistant_preface
+                            .as_str(),
+                    ))
+                && let Some(payload) = latest_tool_payload
+            {
+                ReplyLoopDecision::Followup {
+                    raw_reply: reply.clone(),
+                    payload,
+                    requires_completion_pass: false,
+                    loop_warning_reason: state
+                        .current_continue_phase
+                        .loop_warning_reason()
+                        .map(ToOwned::to_owned),
+                }
+            } else {
+                ReplyLoopDecision::FinalizeDirect {
+                    reply: reply.clone(),
+                    latest_tool_payload,
+                    continuation_state: None,
+                }
+            }
+        }
+        ToolDrivenReplyBaseDecision::RequireFollowup {
+            raw_reply,
+            payload: followup,
+        } => {
+            if let Some(reason) = state.current_continue_phase.hard_stop_reason() {
+                ReplyLoopDecision::GuardFollowup {
+                    raw_reply: raw_reply.clone(),
+                    reason: reason.to_owned(),
+                    latest_tool_payload: Some(followup.clone()),
+                }
+            } else {
+                ReplyLoopDecision::Followup {
+                    raw_reply: raw_reply.clone(),
+                    payload: followup.clone(),
+                    requires_completion_pass: true,
+                    loop_warning_reason: state
+                        .current_continue_phase
+                        .loop_warning_reason()
+                        .map(ToOwned::to_owned),
+                }
+            }
+        }
+    }
+}
+
+fn finalize_provider_reply(
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    continue_phase: &ProviderTurnContinuePhase,
+    session_id: &str,
+    reply: String,
+    latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+    continuation_state: Option<ToolDrivenContinuationState>,
+) -> ResolvedProviderTurn {
+    #[cfg(feature = "memory-sqlite")]
+    if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
+        persist_active_external_skills_from_followup_payload_if_needed(
+            &continue_phase.followup_config,
+            session_id,
+            latest_tool_payload,
+        );
+    }
+
+    let checkpoint = continue_phase.checkpoint_with_continuation_state(
+        preparation,
+        user_input,
+        &reply,
+        continuation_state,
+    );
+    ResolvedProviderTurn::persist_reply(
+        reply,
+        continue_phase.lane_execution.provider_usage.clone(),
+        checkpoint,
+    )
+}
+
+async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    binding: ConversationRuntimeBinding<'_>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    state: &ProviderReplyLoopState,
+    raw_reply: String,
+    reason: String,
+    latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+) -> ResolvedProviderTurn {
+    #[cfg(feature = "memory-sqlite")]
+    if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
+        persist_active_external_skills_from_followup_payload_if_needed(
+            &state.current_continue_phase.followup_config,
+            session_id,
+            latest_tool_payload,
+        );
+    }
+
+    let guard_messages = build_turn_reply_guard_messages(
+        &state.current_preparation.session.messages,
+        state
+            .current_continue_phase
+            .lane_execution
+            .assistant_preface
+            .as_str(),
+        reason.as_str(),
+        latest_tool_payload.as_ref(),
+        user_input,
+    );
+    let reply = request_completion_with_raw_fallback(
+        runtime,
+        &state.current_continue_phase.followup_config,
+        &guard_messages,
+        binding,
+        raw_reply.as_str(),
+        retry_progress,
+    )
+    .await;
+    let checkpoint =
+        state
+            .current_continue_phase
+            .checkpoint(preparation, user_input, reply.as_str());
+    ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
+}
+
+async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    config: &LoongConfig,
+    session_id: &str,
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    turn_loop_policy: &ProviderTurnLoopPolicy,
+    turn_loop_state: &mut ProviderTurnLoopState,
+    binding: ConversationRuntimeBinding<'_>,
+    ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    current_provider_round: usize,
+    current_preparation: &mut ProviderTurnPreparation,
+    current_continue_phase: &mut ProviderTurnContinuePhase,
+    remaining_provider_rounds: &mut usize,
+    provider_round_index: &mut usize,
+    pending_missing_tool_continuation: &mut Option<MissingToolContinuationExpectation>,
+    raw_reply: String,
+    followup: ToolDrivenFollowupPayload,
+    requires_completion_pass: bool,
+    loop_warning_reason: Option<String>,
+) -> Option<ResolvedProviderTurn> {
+    let continuation_expectation = MissingToolContinuationExpectation::from_tool_failure(&followup)
+        .or_else(|| MissingToolContinuationExpectation::from_tool_result(&followup));
+    let provider_continuation_enabled = continuation_expectation.is_some()
+        || current_continue_phase
+            .lane_execution
+            .supports_provider_turn_followup;
+    #[cfg(feature = "memory-sqlite")]
+    persist_active_external_skills_from_followup_payload_if_needed(
+        &current_continue_phase.followup_config,
+        session_id,
+        &followup,
+    );
+    let follow_up_messages = build_turn_reply_followup_messages_with_contract(
+        &current_preparation.session.messages,
+        current_continue_phase
+            .lane_execution
+            .assistant_preface
+            .as_str(),
+        followup.clone(),
+        current_continue_phase
+            .lane_execution
+            .tool_request_summary
+            .as_deref(),
+        user_input,
+        loop_warning_reason.as_deref(),
+        continuation_expectation.map(MissingToolContinuationExpectation::contract_mode),
+    );
+
+    if provider_continuation_enabled && *remaining_provider_rounds > 1 {
+        let next_provider_round = current_provider_round.saturating_add(1);
+        *remaining_provider_rounds -= 1;
+        let initial_estimated_tokens = estimate_tokens_for_messages(
+            current_preparation.session.estimated_tokens,
+            &current_preparation.session.messages,
+        );
+        let followup_request_estimated_tokens = estimate_tokens(&follow_up_messages);
+        let followup_added_estimated_tokens = initial_estimated_tokens
+            .zip(followup_request_estimated_tokens)
+            .map(|(initial, followup)| followup.saturating_sub(initial));
+        let followup_preparation = current_preparation.for_followup_messages(follow_up_messages);
+        let followup_tool_view =
+            match runtime.tool_view(&current_continue_phase.followup_config, session_id, binding) {
+                Ok(tool_view) => tool_view,
+                Err(_error) => {
+                    let checkpoint = current_continue_phase.checkpoint(
+                        preparation,
+                        user_input,
+                        raw_reply.as_str(),
+                    );
+                    return Some(ResolvedProviderTurn::persist_reply(
+                        raw_reply,
+                        current_continue_phase.lane_execution.provider_usage.clone(),
+                        checkpoint,
+                    ));
+                }
+            };
+        let followup_message_count = followup_preparation.session.messages.len();
+        let followup_context_estimated_tokens = followup_preparation.session.estimated_tokens;
+        let followup_request_event = ConversationTurnPhaseEvent::requesting_followup_provider(
+            next_provider_round,
+            current_continue_phase.lane_execution.lane,
+            current_continue_phase.tool_intent_count(),
+            followup_message_count,
+            followup_context_estimated_tokens,
+        );
+        observe_turn_phase(observer, followup_request_event);
+        emit_prompt_frame_event(
+            runtime,
+            session_id,
+            next_provider_round,
+            "followup",
+            followup_preparation.session.prompt_frame_summary(),
+            binding,
+        )
+        .await;
+        if current_continue_phase.lane_execution.discovery_search_turn {
+            emit_discovery_first_event(
+                runtime,
+                session_id,
+                "discovery_first_followup_requested",
+                json!({
+                    "provider_round": provider_round_index.saturating_add(1),
+                    "raw_tool_output_requested": current_continue_phase
+                        .lane_execution
+                        .raw_tool_output_requested,
+                    "initial_estimated_tokens": initial_estimated_tokens,
+                    "followup_estimated_tokens": followup_request_estimated_tokens,
+                    "followup_added_estimated_tokens": followup_added_estimated_tokens,
+                }),
+                binding,
+            )
+            .await;
+        }
+        match decide_provider_turn_request_action(
+            request_provider_turn_with_observer(
+                &current_continue_phase.followup_config,
+                runtime,
+                session_id,
+                followup_preparation.turn_id.as_str(),
+                &followup_preparation.session.messages,
+                &followup_tool_view,
+                binding,
+                observer,
+                retry_progress.clone(),
+            )
+            .await,
+            ProviderErrorMode::Propagate,
+        ) {
+            ProviderTurnRequestAction::Continue { turn } => {
+                let turn = scope_provider_turn_tool_intents(
+                    turn,
+                    session_id,
+                    followup_preparation.turn_id.as_str(),
+                );
+                let returned_tool_intent_count = turn.tool_intents.len();
+                let followup_result = summarize_discovery_first_followup_turn(&turn);
+                if current_continue_phase.lane_execution.discovery_search_turn {
+                    emit_discovery_first_event(
+                        runtime,
+                        session_id,
+                        "discovery_first_followup_result",
+                        json!({
+                            "provider_round": provider_round_index.saturating_add(1),
+                            "outcome": followup_result.outcome,
+                            "followup_tool_name": followup_result.followup_tool_name,
+                            "followup_target_tool_id": followup_result.followup_target_tool_id,
+                            "resolved_to_tool_invoke": followup_result.resolved_to_tool_invoke,
+                            "raw_tool_output_requested": current_continue_phase
+                                .lane_execution
+                                .raw_tool_output_requested,
+                        }),
+                        binding,
+                    )
+                    .await;
+                }
+                if let Some(reply) = turn_loop_state
+                    .circuit_breaker_reply(turn_loop_policy, returned_tool_intent_count)
+                {
+                    return Some(build_turn_loop_circuit_breaker_resolved_turn(
+                        preparation,
+                        user_input,
+                        returned_tool_intent_count,
+                        reply,
+                    ));
+                }
+                *current_continue_phase = prepare_provider_turn_continue_phase(
+                    &current_continue_phase.followup_config,
+                    runtime,
+                    session_id,
+                    &followup_preparation,
+                    turn,
+                    turn_loop_policy,
+                    turn_loop_state,
+                    binding,
+                    ingress,
+                    observer,
+                    next_provider_round,
+                    current_continue_phase
+                        .lane_execution
+                        .supports_provider_turn_followup
+                        || provider_continuation_enabled,
+                )
+                .await;
+                *current_preparation = followup_preparation;
+                *provider_round_index = provider_round_index.saturating_add(1);
+                *pending_missing_tool_continuation = if returned_tool_intent_count == 0 {
+                    continuation_expectation
+                } else {
+                    None
+                };
+                return None;
+            }
+            ProviderTurnRequestAction::FinalizeInlineProviderError {
+                reply: provider_error_text,
+            }
+            | ProviderTurnRequestAction::ReturnError {
+                error: provider_error_text,
+            } => {
+                if current_continue_phase.lane_execution.discovery_search_turn {
+                    emit_discovery_first_event(
+                        runtime,
+                        session_id,
+                        "discovery_first_followup_result",
+                        json!({
+                            "provider_round": provider_round_index.saturating_add(1),
+                            "outcome": "provider_error",
+                            "followup_tool_name": Value::Null,
+                            "followup_target_tool_id": Value::Null,
+                            "resolved_to_tool_invoke": false,
+                            "raw_tool_output_requested": current_continue_phase
+                                .lane_execution
+                                .raw_tool_output_requested,
+                        }),
+                        binding,
+                    )
+                    .await;
+                }
+                emit_provider_failover_trust_event_if_needed(
+                    config,
+                    runtime,
+                    session_id,
+                    provider_error_text.as_str(),
+                    binding,
+                )
+                .await;
+                let checkpoint =
+                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
+                return Some(ResolvedProviderTurn::persist_reply(
+                    raw_reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                ));
+            }
+        }
+    }
+
+    if requires_completion_pass {
+        let completion_reply = request_completion_with_raw_fallback_detailed(
+            runtime,
+            &current_continue_phase.followup_config,
+            &follow_up_messages,
+            binding,
+            raw_reply.as_str(),
+            retry_progress.clone(),
+        )
+        .await;
+        let (reply, continuation_state) = if let Some(expectation) = continuation_expectation {
+            match evaluate_missing_tool_continuation(expectation, &completion_reply) {
+                MissingToolContinuationDecision::Finish { continuation_state } => {
+                    (completion_reply.reply, continuation_state)
+                }
+                MissingToolContinuationDecision::RequestRepair => {
+                    let repair_expectation = expectation.after_attempt();
+                    let repair_messages = build_missing_tool_continuation_repair_messages(
+                        &current_preparation.session.messages,
+                        completion_reply.reply.as_str(),
+                        user_input,
+                        loop_warning_reason.as_deref(),
+                        repair_expectation,
+                    );
+                    let repaired_completion_reply = request_completion_with_raw_fallback_detailed(
+                        runtime,
+                        &current_continue_phase.followup_config,
+                        &repair_messages,
+                        binding,
+                        raw_reply.as_str(),
+                        retry_progress.clone(),
+                    )
+                    .await;
+                    match evaluate_missing_tool_continuation(
+                        repair_expectation,
+                        &repaired_completion_reply,
+                    ) {
+                        MissingToolContinuationDecision::Finish { continuation_state } => {
+                            (repaired_completion_reply.reply, continuation_state)
+                        }
+                        MissingToolContinuationDecision::RequestRepair
+                        | MissingToolContinuationDecision::ForceBlockedReply => (
+                            missing_tool_continuation_blocked_reply(repair_expectation),
+                            Some(ToolDrivenContinuationState::Blocked),
+                        ),
+                    }
+                }
+                MissingToolContinuationDecision::ForceBlockedReply => (
+                    missing_tool_continuation_blocked_reply(expectation),
+                    Some(ToolDrivenContinuationState::Blocked),
+                ),
+            }
+        } else {
+            (completion_reply.reply, completion_reply.state)
+        };
+        let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
+            preparation,
+            user_input,
+            reply.as_str(),
+            continuation_state,
+        );
+        return Some(ResolvedProviderTurn::persist_reply(reply, None, checkpoint));
+    }
+
+    let checkpoint = current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
+    Some(ResolvedProviderTurn::persist_reply(
+        raw_reply,
+        current_continue_phase.lane_execution.provider_usage.clone(),
+        checkpoint,
+    ))
+}
+
+async fn handle_repair_followup_reply<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    turn_loop_policy: &ProviderTurnLoopPolicy,
+    turn_loop_state: &mut ProviderTurnLoopState,
+    binding: ConversationRuntimeBinding<'_>,
+    ingress: Option<&ConversationIngressContext>,
+    observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    current_provider_round: usize,
+    current_preparation: &mut ProviderTurnPreparation,
+    current_continue_phase: &mut ProviderTurnContinuePhase,
+    remaining_provider_rounds: &mut usize,
+    provider_round_index: &mut usize,
+    pending_missing_tool_continuation: &mut Option<MissingToolContinuationExpectation>,
+    raw_reply: String,
+    expectation: MissingToolContinuationExpectation,
+    loop_warning_reason: Option<String>,
+) -> Option<ResolvedProviderTurn> {
+    if *remaining_provider_rounds <= 1 {
+        let reply = missing_tool_continuation_blocked_reply(expectation);
+        let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
+            preparation,
+            user_input,
+            reply.as_str(),
+            Some(ToolDrivenContinuationState::Blocked),
+        );
+        return Some(ResolvedProviderTurn::persist_reply(
+            reply,
+            current_continue_phase.lane_execution.provider_usage.clone(),
+            checkpoint,
+        ));
+    }
+
+    let repair_messages = build_missing_tool_continuation_repair_messages(
+        &current_preparation.session.messages,
+        raw_reply.as_str(),
+        user_input,
+        loop_warning_reason.as_deref(),
+        expectation.after_attempt(),
+    );
+    let next_provider_round = current_provider_round.saturating_add(1);
+    *remaining_provider_rounds -= 1;
+    let repair_preparation = current_preparation.for_followup_messages(repair_messages);
+    let repair_tool_view =
+        match runtime.tool_view(&current_continue_phase.followup_config, session_id, binding) {
+            Ok(tool_view) => tool_view,
+            Err(_error) => {
+                let reply = missing_tool_continuation_blocked_reply(expectation);
+                let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
+                    preparation,
+                    user_input,
+                    reply.as_str(),
+                    Some(ToolDrivenContinuationState::Blocked),
+                );
+                return Some(ResolvedProviderTurn::persist_reply(
+                    reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                ));
+            }
+        };
+    let repair_request_event = ConversationTurnPhaseEvent::requesting_followup_provider(
+        next_provider_round,
+        current_continue_phase.lane_execution.lane,
+        current_continue_phase.tool_intent_count(),
+        repair_preparation.session.messages.len(),
+        repair_preparation.session.estimated_tokens,
+    );
+    observe_turn_phase(observer, repair_request_event);
+    emit_prompt_frame_event(
+        runtime,
+        session_id,
+        next_provider_round,
+        "followup_repair",
+        repair_preparation.session.prompt_frame_summary(),
+        binding,
+    )
+    .await;
+    match decide_provider_turn_request_action(
+        request_provider_turn_with_observer(
+            &current_continue_phase.followup_config,
+            runtime,
+            session_id,
+            repair_preparation.turn_id.as_str(),
+            &repair_preparation.session.messages,
+            &repair_tool_view,
+            binding,
+            observer,
+            retry_progress,
+        )
+        .await,
+        ProviderErrorMode::Propagate,
+    ) {
+        ProviderTurnRequestAction::Continue { turn } => {
+            let turn = scope_provider_turn_tool_intents(
+                turn,
+                session_id,
+                repair_preparation.turn_id.as_str(),
+            );
+            let repair_tool_intent_count = turn.tool_intents.len();
+            if let Some(reply) =
+                turn_loop_state.circuit_breaker_reply(turn_loop_policy, repair_tool_intent_count)
+            {
+                return Some(build_turn_loop_circuit_breaker_resolved_turn(
+                    preparation,
+                    user_input,
+                    repair_tool_intent_count,
+                    reply,
+                ));
+            }
+            *current_continue_phase = prepare_provider_turn_continue_phase(
+                &current_continue_phase.followup_config,
+                runtime,
+                session_id,
+                &repair_preparation,
+                turn,
+                turn_loop_policy,
+                turn_loop_state,
+                binding,
+                ingress,
+                observer,
+                next_provider_round,
+                true,
+            )
+            .await;
+            *current_preparation = repair_preparation;
+            *provider_round_index = provider_round_index.saturating_add(1);
+            *pending_missing_tool_continuation = if repair_tool_intent_count == 0 {
+                Some(expectation.after_attempt())
+            } else {
+                None
+            };
+            None
+        }
+        ProviderTurnRequestAction::FinalizeInlineProviderError { .. }
+        | ProviderTurnRequestAction::ReturnError { .. } => {
+            let reply = missing_tool_continuation_blocked_reply(expectation);
+            let checkpoint = current_continue_phase.checkpoint_with_continuation_state(
+                preparation,
+                user_input,
+                reply.as_str(),
+                Some(ToolDrivenContinuationState::Blocked),
+            );
+            Some(ResolvedProviderTurn::persist_reply(
+                reply,
+                current_continue_phase.lane_execution.provider_usage.clone(),
+                checkpoint,
+            ))
+        }
+    }
+}
+
 async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     config: &LoongConfig,
@@ -2975,47 +3860,31 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     observer: Option<&ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ResolvedProviderTurn {
-    enum ReplyLoopDecision {
-        FinalizeDirect {
-            reply: String,
-            latest_tool_payload: Option<ToolDrivenFollowupPayload>,
-        },
-        Followup {
-            raw_reply: String,
-            payload: ToolDrivenFollowupPayload,
-            requires_completion_pass: bool,
-            loop_warning_reason: Option<String>,
-        },
-        GuardFollowup {
-            raw_reply: String,
-            reason: String,
-            latest_tool_payload: Option<ToolDrivenFollowupPayload>,
-        },
-    }
-
-    let mut current_preparation = preparation.clone();
-    let mut current_continue_phase = continue_phase.clone();
-    let mut remaining_provider_rounds = remaining_provider_rounds.max(1);
-    let mut provider_round_index = 0usize;
+    let mut state =
+        ProviderReplyLoopState::new(preparation, continue_phase, remaining_provider_rounds);
 
     loop {
-        let current_provider_round = provider_round_index.saturating_add(1);
-        if current_continue_phase.lane_execution.discovery_search_turn {
+        let current_provider_round = state.current_provider_round();
+        if state
+            .current_continue_phase
+            .lane_execution
+            .discovery_search_turn
+        {
             emit_discovery_first_event(
                 runtime,
                 session_id,
                 "discovery_first_search_round",
                 json!({
                     "provider_round": current_provider_round,
-                    "search_tool_calls": current_continue_phase
+                    "search_tool_calls": state.current_continue_phase
                         .lane_execution
                         .search_tool_intents,
-                    "raw_tool_output_requested": current_continue_phase
+                    "raw_tool_output_requested": state.current_continue_phase
                         .lane_execution
                         .raw_tool_output_requested,
                     "initial_estimated_tokens": estimate_tokens_for_messages(
-                        current_preparation.session.estimated_tokens,
-                        &current_preparation.session.messages,
+                        state.current_preparation.session.estimated_tokens,
+                        &state.current_preparation.session.messages,
                     ),
                 }),
                 binding,
@@ -3023,89 +3892,21 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             .await;
         }
 
-        let reply_decision = match current_continue_phase.reply_phase.decision() {
-            ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
-                let latest_tool_payload = tool_driven_followup_payload(
-                    current_continue_phase.lane_execution.had_tool_intents,
-                    &current_continue_phase.lane_execution.turn_result,
-                );
-                if let Some(reason) = current_continue_phase.hard_stop_reason() {
-                    ReplyLoopDecision::GuardFollowup {
-                        raw_reply: reply.clone(),
-                        reason: reason.to_owned(),
-                        latest_tool_payload,
-                    }
-                } else if current_continue_phase
-                    .lane_execution
-                    .supports_provider_turn_followup
-                    && (!current_continue_phase
-                        .lane_execution
-                        .raw_tool_output_requested
-                        || current_continue_phase.lane_execution.discovery_search_turn
-                        || assistant_preface_signals_provider_turn_followup(
-                            current_continue_phase
-                                .lane_execution
-                                .assistant_preface
-                                .as_str(),
-                        ))
-                    && let Some(payload) = latest_tool_payload
-                {
-                    ReplyLoopDecision::Followup {
-                        raw_reply: reply.clone(),
-                        payload,
-                        requires_completion_pass: false,
-                        loop_warning_reason: current_continue_phase
-                            .loop_warning_reason()
-                            .map(ToOwned::to_owned),
-                    }
-                } else {
-                    ReplyLoopDecision::FinalizeDirect {
-                        reply: reply.clone(),
-                        latest_tool_payload,
-                    }
-                }
-            }
-            ToolDrivenReplyBaseDecision::RequireFollowup {
-                raw_reply,
-                payload: followup,
-            } => {
-                if let Some(reason) = current_continue_phase.hard_stop_reason() {
-                    ReplyLoopDecision::GuardFollowup {
-                        raw_reply: raw_reply.clone(),
-                        reason: reason.to_owned(),
-                        latest_tool_payload: Some(followup.clone()),
-                    }
-                } else {
-                    ReplyLoopDecision::Followup {
-                        raw_reply: raw_reply.clone(),
-                        payload: followup.clone(),
-                        requires_completion_pass: true,
-                        loop_warning_reason: current_continue_phase
-                            .loop_warning_reason()
-                            .map(ToOwned::to_owned),
-                    }
-                }
-            }
-        };
-
+        let reply_decision = build_reply_loop_decision(&mut state);
         match reply_decision {
             ReplyLoopDecision::FinalizeDirect {
                 reply,
                 latest_tool_payload,
+                continuation_state,
             } => {
-                #[cfg(feature = "memory-sqlite")]
-                if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
-                    persist_active_external_skills_from_followup_payload_if_needed(
-                        &current_continue_phase.followup_config,
-                        session_id,
-                        latest_tool_payload,
-                    );
-                }
-                let checkpoint = current_continue_phase.checkpoint(preparation, user_input, &reply);
-                return ResolvedProviderTurn::persist_reply(
+                return finalize_provider_reply(
+                    preparation,
+                    user_input,
+                    &state.current_continue_phase,
+                    session_id,
                     reply,
-                    current_continue_phase.lane_execution.provider_usage.clone(),
-                    checkpoint,
+                    latest_tool_payload,
+                    continuation_state,
                 );
             }
             ReplyLoopDecision::Followup {
@@ -3114,278 +3915,85 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 requires_completion_pass,
                 loop_warning_reason,
             } => {
-                #[cfg(feature = "memory-sqlite")]
-                persist_active_external_skills_from_followup_payload_if_needed(
-                    &current_continue_phase.followup_config,
+                if let Some(resolved) = handle_followup_reply_decision(
+                    runtime,
+                    config,
                     session_id,
-                    &followup,
-                );
-                let follow_up_messages = build_turn_reply_followup_messages_with_warning(
-                    &current_preparation.session.messages,
-                    current_continue_phase
-                        .lane_execution
-                        .assistant_preface
-                        .as_str(),
-                    followup.clone(),
-                    current_continue_phase
-                        .lane_execution
-                        .tool_request_summary
-                        .as_deref(),
+                    preparation,
                     user_input,
-                    loop_warning_reason.as_deref(),
-                );
-                if current_continue_phase
-                    .lane_execution
-                    .supports_provider_turn_followup
-                    && remaining_provider_rounds > 1
-                {
-                    let next_provider_round = current_provider_round.saturating_add(1);
-                    remaining_provider_rounds -= 1;
-                    let initial_estimated_tokens = estimate_tokens_for_messages(
-                        current_preparation.session.estimated_tokens,
-                        &current_preparation.session.messages,
-                    );
-                    let followup_request_estimated_tokens = estimate_tokens(&follow_up_messages);
-                    let followup_added_estimated_tokens = initial_estimated_tokens
-                        .zip(followup_request_estimated_tokens)
-                        .map(|(initial, followup)| followup.saturating_sub(initial));
-                    let followup_preparation =
-                        current_preparation.for_followup_messages(follow_up_messages);
-                    let followup_tool_view = match runtime.tool_view(
-                        &current_continue_phase.followup_config,
-                        session_id,
-                        binding,
-                    ) {
-                        Ok(tool_view) => tool_view,
-                        Err(_error) => {
-                            let checkpoint = current_continue_phase.checkpoint(
-                                preparation,
-                                user_input,
-                                raw_reply.as_str(),
-                            );
-                            return ResolvedProviderTurn::persist_reply(
-                                raw_reply,
-                                current_continue_phase.lane_execution.provider_usage.clone(),
-                                checkpoint,
-                            );
-                        }
-                    };
-                    let followup_message_count = followup_preparation.session.messages.len();
-                    let followup_context_estimated_tokens =
-                        followup_preparation.session.estimated_tokens;
-                    let followup_request_event =
-                        ConversationTurnPhaseEvent::requesting_followup_provider(
-                            next_provider_round,
-                            current_continue_phase.lane_execution.lane,
-                            current_continue_phase.tool_intent_count(),
-                            followup_message_count,
-                            followup_context_estimated_tokens,
-                        );
-                    observe_turn_phase(observer, followup_request_event);
-                    emit_prompt_frame_event(
-                        runtime,
-                        session_id,
-                        next_provider_round,
-                        "followup",
-                        followup_preparation.session.prompt_frame_summary(),
-                        binding,
-                    )
-                    .await;
-                    if current_continue_phase.lane_execution.discovery_search_turn {
-                        emit_discovery_first_event(
-                            runtime,
-                            session_id,
-                            "discovery_first_followup_requested",
-                            json!({
-                                "provider_round": provider_round_index.saturating_add(1),
-                                "raw_tool_output_requested": current_continue_phase
-                                    .lane_execution
-                                    .raw_tool_output_requested,
-                                "initial_estimated_tokens": initial_estimated_tokens,
-                                "followup_estimated_tokens": followup_request_estimated_tokens,
-                                "followup_added_estimated_tokens": followup_added_estimated_tokens,
-                            }),
-                            binding,
-                        )
-                        .await;
-                    }
-                    match decide_provider_turn_request_action(
-                        request_provider_turn_with_observer(
-                            &current_continue_phase.followup_config,
-                            runtime,
-                            session_id,
-                            followup_preparation.turn_id.as_str(),
-                            &followup_preparation.session.messages,
-                            &followup_tool_view,
-                            binding,
-                            observer,
-                            retry_progress.clone(),
-                        )
-                        .await,
-                        ProviderErrorMode::Propagate,
-                    ) {
-                        ProviderTurnRequestAction::Continue { turn } => {
-                            let turn = scope_provider_turn_tool_intents(
-                                turn,
-                                session_id,
-                                followup_preparation.turn_id.as_str(),
-                            );
-                            let followup_result = summarize_discovery_first_followup_turn(&turn);
-                            if current_continue_phase.lane_execution.discovery_search_turn {
-                                emit_discovery_first_event(
-                                    runtime,
-                                    session_id,
-                                    "discovery_first_followup_result",
-                                    json!({
-                                        "provider_round": provider_round_index.saturating_add(1),
-                                        "outcome": followup_result.outcome,
-                                        "followup_tool_name": followup_result.followup_tool_name,
-                                        "followup_target_tool_id": followup_result.followup_target_tool_id,
-                                        "resolved_to_tool_invoke": followup_result
-                                            .resolved_to_tool_invoke,
-                                        "raw_tool_output_requested": current_continue_phase
-                                            .lane_execution
-                                            .raw_tool_output_requested,
-                                    }),
-                                    binding,
-                                )
-                                .await;
-                            }
-                            if let Some(reply) = turn_loop_state
-                                .circuit_breaker_reply(turn_loop_policy, turn.tool_intents.len())
-                            {
-                                return build_turn_loop_circuit_breaker_resolved_turn(
-                                    preparation,
-                                    user_input,
-                                    turn.tool_intents.len(),
-                                    reply,
-                                );
-                            }
-                            current_continue_phase = prepare_provider_turn_continue_phase(
-                                &current_continue_phase.followup_config,
-                                runtime,
-                                session_id,
-                                &followup_preparation,
-                                turn,
-                                turn_loop_policy,
-                                turn_loop_state,
-                                binding,
-                                ingress,
-                                observer,
-                                next_provider_round,
-                                current_continue_phase
-                                    .lane_execution
-                                    .supports_provider_turn_followup,
-                            )
-                            .await;
-                            current_preparation = followup_preparation;
-                            provider_round_index = provider_round_index.saturating_add(1);
-                            continue;
-                        }
-                        ProviderTurnRequestAction::FinalizeInlineProviderError {
-                            reply: provider_error_text,
-                        }
-                        | ProviderTurnRequestAction::ReturnError {
-                            error: provider_error_text,
-                        } => {
-                            if current_continue_phase.lane_execution.discovery_search_turn {
-                                emit_discovery_first_event(
-                                    runtime,
-                                    session_id,
-                                    "discovery_first_followup_result",
-                                    json!({
-                                        "provider_round": provider_round_index.saturating_add(1),
-                                        "outcome": "provider_error",
-                                        "followup_tool_name": Value::Null,
-                                        "followup_target_tool_id": Value::Null,
-                                        "resolved_to_tool_invoke": false,
-                                        "raw_tool_output_requested": current_continue_phase
-                                            .lane_execution
-                                            .raw_tool_output_requested,
-                                    }),
-                                    binding,
-                                )
-                                .await;
-                            }
-                            emit_provider_failover_trust_event_if_needed(
-                                config,
-                                runtime,
-                                session_id,
-                                provider_error_text.as_str(),
-                                binding,
-                            )
-                            .await;
-                            let checkpoint = current_continue_phase.checkpoint(
-                                preparation,
-                                user_input,
-                                raw_reply.as_str(),
-                            );
-                            return ResolvedProviderTurn::persist_reply(
-                                raw_reply,
-                                current_continue_phase.lane_execution.provider_usage.clone(),
-                                checkpoint,
-                            );
-                        }
-                    }
-                }
-                if requires_completion_pass {
-                    let reply = request_completion_with_raw_fallback(
-                        runtime,
-                        &current_continue_phase.followup_config,
-                        &follow_up_messages,
-                        binding,
-                        raw_reply.as_str(),
-                        retry_progress.clone(),
-                    )
-                    .await;
-                    let checkpoint =
-                        current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                    return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
-                }
-
-                let checkpoint =
-                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
-                return ResolvedProviderTurn::persist_reply(
+                    turn_loop_policy,
+                    turn_loop_state,
+                    binding,
+                    ingress,
+                    observer,
+                    retry_progress.clone(),
+                    current_provider_round,
+                    &mut state.current_preparation,
+                    &mut state.current_continue_phase,
+                    &mut state.remaining_provider_rounds,
+                    &mut state.provider_round_index,
+                    &mut state.pending_missing_tool_continuation,
                     raw_reply,
-                    current_continue_phase.lane_execution.provider_usage.clone(),
-                    checkpoint,
-                );
+                    followup,
+                    requires_completion_pass,
+                    loop_warning_reason,
+                )
+                .await
+                {
+                    return resolved;
+                }
+                continue;
+            }
+            ReplyLoopDecision::RepairFollowup {
+                raw_reply,
+                expectation,
+                loop_warning_reason,
+            } => {
+                if let Some(resolved) = handle_repair_followup_reply(
+                    runtime,
+                    session_id,
+                    preparation,
+                    user_input,
+                    turn_loop_policy,
+                    turn_loop_state,
+                    binding,
+                    ingress,
+                    observer,
+                    retry_progress.clone(),
+                    current_provider_round,
+                    &mut state.current_preparation,
+                    &mut state.current_continue_phase,
+                    &mut state.remaining_provider_rounds,
+                    &mut state.provider_round_index,
+                    &mut state.pending_missing_tool_continuation,
+                    raw_reply,
+                    expectation,
+                    loop_warning_reason,
+                )
+                .await
+                {
+                    return resolved;
+                }
+                continue;
             }
             ReplyLoopDecision::GuardFollowup {
                 raw_reply,
                 reason,
                 latest_tool_payload,
             } => {
-                #[cfg(feature = "memory-sqlite")]
-                if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
-                    persist_active_external_skills_from_followup_payload_if_needed(
-                        &current_continue_phase.followup_config,
-                        session_id,
-                        latest_tool_payload,
-                    );
-                }
-                let guard_messages = build_turn_reply_guard_messages(
-                    &current_preparation.session.messages,
-                    current_continue_phase
-                        .lane_execution
-                        .assistant_preface
-                        .as_str(),
-                    reason.as_str(),
-                    latest_tool_payload.as_ref(),
-                    user_input,
-                );
-                let reply = request_completion_with_raw_fallback(
+                return handle_guard_followup_reply(
                     runtime,
-                    &current_continue_phase.followup_config,
-                    &guard_messages,
+                    session_id,
+                    preparation,
+                    user_input,
                     binding,
-                    raw_reply.as_str(),
                     retry_progress.clone(),
+                    &state,
+                    raw_reply,
+                    reason,
+                    latest_tool_payload,
                 )
                 .await;
-                let checkpoint =
-                    current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
             }
         }
     }
@@ -3466,15 +4074,40 @@ fn build_turn_reply_followup_messages_with_warning(
     user_input: &str,
     loop_warning_reason: Option<&str>,
 ) -> Vec<Value> {
-    let mut messages = base_messages.to_vec();
-    messages.extend(build_tool_driven_followup_tail_with_request_summary(
+    build_turn_reply_followup_messages_with_contract(
+        base_messages,
         assistant_preface,
-        &followup,
+        followup,
+        tool_request_summary,
         user_input,
         loop_warning_reason,
-        tool_request_summary,
-        |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
-    ));
+        None,
+    )
+}
+
+fn build_turn_reply_followup_messages_with_contract(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    followup: ToolDrivenFollowupPayload,
+    tool_request_summary: Option<&str>,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    continuation_contract: Option<ToolDrivenFollowupContractMode>,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    let continuation_contract =
+        continuation_contract.map(render_tool_followup_continuation_contract);
+    messages.extend(
+        build_tool_driven_followup_tail_with_request_summary_and_contract(
+            assistant_preface,
+            &followup,
+            user_input,
+            loop_warning_reason,
+            tool_request_summary,
+            continuation_contract.as_deref(),
+            |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
+        ),
+    );
     messages
 }
 
@@ -7897,6 +8530,7 @@ mod tests {
             "preface",
             ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+                retryable: false,
             },
             "summarize note.md",
         );
@@ -9449,6 +10083,369 @@ mod tests {
         assert!(!fast_plan.should_use_safe_lane_plan_path(&config, &tool_turn));
     }
 
+    #[derive(Default)]
+    struct MissingToolContinuationRuntime {
+        queued_turns: StdMutex<Vec<ProviderTurn>>,
+        request_turn_messages: StdMutex<Vec<Vec<Value>>>,
+    }
+
+    #[async_trait]
+    impl ConversationRuntime for MissingToolContinuationRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "continuation test"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            panic!("request_completion should not run in missing-tool continuation tests")
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            self.request_turn_messages
+                .lock()
+                .expect("request-turn messages lock should not be poisoned")
+                .push(messages.to_vec());
+            let mut queued_turns = self
+                .queued_turns
+                .lock()
+                .expect("queued turns lock should not be poisoned");
+            if queued_turns.is_empty() {
+                panic!("request_turn called without a queued ProviderTurn");
+            }
+            Ok(queued_turns.remove(0))
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn_streaming should not run in missing-tool continuation tests")
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
+
+    fn provider_continuation_test_preparation(
+        config: &LoongConfig,
+        user_input: &str,
+    ) -> ProviderTurnPreparation {
+        ProviderTurnPreparation::from_assembled_context(
+            config,
+            AssembledConversationContext::from_messages(vec![json!({
+                "role": "system",
+                "content": "sys"
+            })]),
+            user_input,
+            None,
+        )
+    }
+
+    fn provider_continuation_test_continue_phase(
+        config: &LoongConfig,
+        turn_result: TurnResult,
+    ) -> ProviderTurnContinuePhase {
+        ProviderTurnContinuePhase::new(
+            2,
+            ProviderTurnLaneExecution {
+                lane: ExecutionLane::Fast,
+                assistant_preface: String::new(),
+                provider_usage: None,
+                had_tool_intents: true,
+                tool_request_summary: None,
+                discovery_search_turn: false,
+                search_tool_intents: 0,
+                supports_provider_turn_followup: false,
+                raw_tool_output_requested: false,
+                turn_result,
+                safe_lane_terminal_route: None,
+                tool_events: Vec::new(),
+            },
+            None,
+            config.clone(),
+            None,
+        )
+    }
+
+    fn provider_continuation_test_intent(
+        session_id: &str,
+        turn_id: &str,
+        tool_call_id: &str,
+        tool_id: &str,
+        arguments: Value,
+    ) -> ToolIntent {
+        ToolIntent {
+            tool_name: tool_id.to_owned(),
+            args_json: arguments,
+            source: "provider_tool_call".to_owned(),
+            session_id: session_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+            tool_call_id: tool_call_id.to_owned(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_continuation_missing_tool_repair_retries_multi_step_tool_result() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some(temp_dir.path().display().to_string());
+
+        let user_input =
+            "Merge the contents of aa.log and aaaa.log, then write the result to bb.log";
+        let preparation = provider_continuation_test_preparation(&config, user_input);
+        let continue_phase = provider_continuation_test_continue_phase(
+            &config,
+            TurnResult::FinalText(
+                "[ok] {\"tool\":\"file.read\"}\n[ok] {\"tool\":\"file.read\"}".to_owned(),
+            ),
+        );
+        let runtime = MissingToolContinuationRuntime {
+            queued_turns: StdMutex::new(vec![
+                ProviderTurn {
+                    assistant_text: "[followup_state:continue]\nI have read both files.\nNow I will merge them and write the result to bb.log:"
+                        .to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                },
+                ProviderTurn {
+                    assistant_text: String::new(),
+                    tool_intents: vec![provider_continuation_test_intent(
+                        "session-continuation",
+                        "turn-write",
+                        "call-write",
+                        "write",
+                        json!({
+                            "path": "bb.log",
+                            "content": "merged content",
+                            "overwrite": true
+                        }),
+                    )],
+                    raw_meta: Value::Null,
+                },
+                ProviderTurn {
+                    assistant_text: "[followup_state:done]\nFinished writing bb.log.".to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                },
+            ]),
+            request_turn_messages: StdMutex::new(Vec::new()),
+        };
+        let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+        let mut turn_loop_state = ProviderTurnLoopState::default();
+
+        let resolved = resolve_provider_turn_reply(
+            &runtime,
+            &config,
+            "session-continuation",
+            &preparation,
+            &continue_phase,
+            user_input,
+            &turn_loop_policy,
+            &mut turn_loop_state,
+            4,
+            ConversationRuntimeBinding::advisory_only(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(resolved.reply_text(), Some("Finished writing bb.log."));
+
+        let request_turn_messages = runtime
+            .request_turn_messages
+            .lock()
+            .expect("request-turn messages lock should not be poisoned");
+        assert_eq!(request_turn_messages.len(), 3);
+        let first_prompt = request_turn_messages[0]
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("first followup prompt");
+        assert!(first_prompt.contains("[followup_state:continue]"));
+        assert!(first_prompt.contains("[followup_state:done]"));
+        let second_prompt = request_turn_messages[1]
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("repair followup prompt");
+        assert!(second_prompt.contains("Repair notice:"));
+        assert!(second_prompt.contains("[followup_state:continue]"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_continuation_missing_tool_repair_allows_explicit_blocked_reply() {
+        let config = LoongConfig::default();
+        let user_input = "Retry writing the result to bb.log";
+        let preparation = provider_continuation_test_preparation(&config, user_input);
+        let continue_phase = provider_continuation_test_continue_phase(
+            &config,
+            TurnResult::ToolError(TurnFailure::retryable(
+                "tool_preflight_denied",
+                "tool_preflight_denied: tool input needs repair: file.write payload.overwrite must be true for existing file bb.log",
+            )),
+        );
+        let runtime = MissingToolContinuationRuntime {
+            queued_turns: StdMutex::new(vec![
+                ProviderTurn {
+                    assistant_text: "[followup_state:continue]\nI am retrying now.".to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                },
+                ProviderTurn {
+                    assistant_text:
+                        "[followup_state:blocked]\nThe target directory is not writable right now."
+                            .to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                },
+            ]),
+            request_turn_messages: StdMutex::new(Vec::new()),
+        };
+        let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+        let mut turn_loop_state = ProviderTurnLoopState::default();
+
+        let resolved = resolve_provider_turn_reply(
+            &runtime,
+            &config,
+            "session-retryable",
+            &preparation,
+            &continue_phase,
+            user_input,
+            &turn_loop_policy,
+            &mut turn_loop_state,
+            3,
+            ConversationRuntimeBinding::advisory_only(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            resolved.reply_text(),
+            Some("The target directory is not writable right now.")
+        );
+        assert_eq!(
+            resolved
+                .checkpoint()
+                .reply
+                .as_ref()
+                .and_then(|reply| reply.continuation_state),
+            Some(ToolDrivenContinuationState::Blocked)
+        );
+        let request_turn_messages = runtime
+            .request_turn_messages
+            .lock()
+            .expect("request-turn messages lock should not be poisoned");
+        assert_eq!(request_turn_messages.len(), 2);
+        let first_prompt = request_turn_messages[0]
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("retryable failure prompt");
+        assert!(first_prompt.contains("retryable"));
+        let second_prompt = request_turn_messages[1]
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("repair prompt");
+        assert!(second_prompt.contains("Repair notice:"));
+        assert!(second_prompt.contains("retryable"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_continuation_missing_tool_repair_blocks_when_budget_is_exhausted() {
+        let config = LoongConfig::default();
+        let user_input = "Retry writing the result to bb.log";
+        let preparation = provider_continuation_test_preparation(&config, user_input);
+        let continue_phase = provider_continuation_test_continue_phase(
+            &config,
+            TurnResult::ToolError(TurnFailure::retryable(
+                "tool_preflight_denied",
+                "tool_preflight_denied: tool input needs repair: file.write payload.overwrite must be true for existing file bb.log",
+            )),
+        );
+        let runtime = MissingToolContinuationRuntime {
+            queued_turns: StdMutex::new(vec![ProviderTurn {
+                assistant_text: "[followup_state:continue]\nI am retrying now.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }]),
+            request_turn_messages: StdMutex::new(Vec::new()),
+        };
+        let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+        let mut turn_loop_state = ProviderTurnLoopState::default();
+
+        let resolved = resolve_provider_turn_reply(
+            &runtime,
+            &config,
+            "session-budget",
+            &preparation,
+            &continue_phase,
+            user_input,
+            &turn_loop_policy,
+            &mut turn_loop_state,
+            2,
+            ConversationRuntimeBinding::advisory_only(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let reply = resolved.reply_text().expect("blocked reply should exist");
+        assert!(reply.contains("required retry tool call was never issued"));
+        assert_eq!(
+            resolved
+                .checkpoint()
+                .reply
+                .as_ref()
+                .and_then(|reply| reply.continuation_state),
+            Some(ToolDrivenContinuationState::Blocked)
+        );
+        let request_turn_messages = runtime
+            .request_turn_messages
+            .lock()
+            .expect("request-turn messages lock should not be poisoned");
+        assert_eq!(request_turn_messages.len(), 1);
+    }
+
     #[test]
     fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape() {
         let mut config = LoongConfig::default();
@@ -9784,6 +10781,7 @@ mod tests {
                 reply: Some(TurnReplyCheckpoint {
                     decision: ReplyResolutionMode::CompletionPass,
                     followup_kind: Some(ToolDrivenFollowupKind::ToolFailure),
+                    continuation_state: None,
                 }),
                 finalization: TurnFinalizationCheckpoint::PersistReply {
                     persistence_mode: ReplyPersistenceMode::Success,
@@ -9984,6 +10982,7 @@ mod tests {
                 reply: Some(TurnReplyCheckpoint {
                     decision: ReplyResolutionMode::Direct,
                     followup_kind: None,
+                    continuation_state: None,
                 }),
                 finalization: TurnFinalizationCheckpoint::persist_reply(
                     ReplyPersistenceMode::Success,
