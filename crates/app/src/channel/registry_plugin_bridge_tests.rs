@@ -271,10 +271,8 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         ]
     );
 
-    let qqbot_contract = qqbot
-        .plugin_bridge_contract
-        .as_ref()
-        .expect("qqbot plugin bridge contract");
+    // QQBot is now a native runtime channel, not a managed bridge.
+    assert_eq!(qqbot.plugin_bridge_contract, None);
     assert_eq!(
         qqbot
             .operations
@@ -282,11 +280,10 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
             .map(|operation| operation.availability)
             .collect::<Vec<_>>(),
         vec![
-            ChannelCatalogOperationAvailability::ManagedBridge,
-            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::Implemented,
+            ChannelCatalogOperationAvailability::Implemented,
         ]
     );
-    assert_eq!(qqbot_contract.manifest_channel_id, "qqbot");
 
     let onebot_contract = onebot
         .plugin_bridge_contract
@@ -316,10 +313,8 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         .plugin_bridge_contract
         .as_ref()
         .expect("weixin plugin bridge contract");
-    let qqbot_contract = qqbot
-        .plugin_bridge_contract
-        .as_ref()
-        .expect("qqbot plugin bridge contract");
+    // QQBot is now a native runtime channel, not a managed bridge.
+    assert_eq!(qqbot.plugin_bridge_contract, None);
     let onebot_contract = onebot
         .plugin_bridge_contract
         .as_ref()
@@ -346,34 +341,8 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
     );
     assert_eq!(weixin_contract.account_scope_note, None);
 
-    assert_eq!(
-        qqbot_contract
-            .stable_targets
-            .iter()
-            .map(|target| { (target.template, target.target_kind, target.description,) })
-            .collect::<Vec<_>>(),
-        vec![
-            (
-                "qqbot:<account>:c2c:<openid>",
-                ChannelCatalogTargetKind::Conversation,
-                "direct message openid",
-            ),
-            (
-                "qqbot:<account>:group:<openid>",
-                ChannelCatalogTargetKind::Conversation,
-                "group openid",
-            ),
-            (
-                "qqbot:<account>:channel:<id>",
-                ChannelCatalogTargetKind::Conversation,
-                "guild channel id",
-            ),
-        ]
-    );
-    assert_eq!(
-        qqbot_contract.account_scope_note,
-        Some("openids are scoped to the selected qq bot account")
-    );
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // No plugin bridge contract stable_targets or account_scope_note.
 
     assert_eq!(
         onebot_contract
@@ -442,13 +411,14 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
         ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
     );
 
-    let missing_surface_manifest = sample_channel_bridge_manifest(Some("qqbot"), None);
-    let missing_surface_validation =
-        validate_plugin_channel_bridge_manifest(&missing_surface_manifest)
-            .expect("missing setup surface validation");
+    // QQBot is now a native runtime channel (RuntimeBacked), not PluginBacked.
+    // A plugin bridge manifest targeting qqbot should be rejected as unsupported surface.
+    let qqbot_manifest = sample_channel_bridge_manifest(Some("qqbot"), None);
+    let qqbot_validation = validate_plugin_channel_bridge_manifest(&qqbot_manifest)
+        .expect("qqbot runtime-backed channel validation");
     assert_eq!(
-        missing_surface_validation.status,
-        ChannelPluginBridgeManifestStatus::MissingSetupSurface
+        qqbot_validation.status,
+        ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
     );
 }
 
@@ -539,10 +509,9 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         .plugin_bridge_discovery
         .as_ref()
         .expect("weixin managed discovery");
-    let qqbot_discovery = qqbot
-        .plugin_bridge_discovery
-        .as_ref()
-        .expect("qqbot managed discovery");
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // It does not have plugin_bridge_discovery.
+    assert!(qqbot.plugin_bridge_discovery.is_none());
     let onebot_discovery = onebot
         .plugin_bridge_discovery
         .as_ref()
@@ -561,22 +530,8 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         ChannelDiscoveredPluginBridgeStatus::CompatibleReady
     );
 
-    assert_eq!(
-        qqbot_discovery.status,
-        ChannelPluginBridgeDiscoveryStatus::MatchesFound
-    );
-    assert_eq!(qqbot_discovery.compatible_plugins, 0);
-    assert_eq!(qqbot_discovery.incomplete_plugins, 1);
-    assert_eq!(qqbot_discovery.incompatible_plugins, 0);
-    assert_eq!(qqbot_discovery.plugins.len(), 1);
-    assert_eq!(
-        qqbot_discovery.plugins[0].status,
-        ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract
-    );
-    assert_eq!(
-        qqbot_discovery.plugins[0].missing_fields,
-        vec!["metadata.transport_family".to_owned()]
-    );
+    // QQBot is now a native runtime channel, not a managed bridge.
+    // No plugin bridge discovery checks apply.
 
     assert_eq!(
         onebot_discovery.status,
