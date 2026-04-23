@@ -2420,6 +2420,10 @@ fn compact_tool_result_payload_value(
     tool_name: &str,
     payload: &serde_json::Value,
 ) -> serde_json::Value {
+    if let Some(compacted_payload) = compact_continuation_payload_summary(payload) {
+        return compacted_payload;
+    }
+
     if tool_name == "tool.search" {
         let compacted_payload = compact_tool_search_payload_summary(payload);
 
@@ -2429,6 +2433,26 @@ fn compact_tool_result_payload_value(
     }
 
     payload.clone()
+}
+
+fn compact_continuation_payload_summary(payload: &serde_json::Value) -> Option<serde_json::Value> {
+    let payload_object = payload.as_object()?;
+    let continuation_object = payload_object.get("continuation")?.as_object()?;
+
+    let mut compacted_continuation = serde_json::Map::new();
+    for key in [
+        "state",
+        "is_terminal",
+        "recommended_tool",
+        "recommended_payload",
+    ] {
+        if let Some(value) = continuation_object.get(key) {
+            compacted_continuation.insert(key.to_owned(), value.clone());
+        }
+    }
+    Some(json!({
+        "continuation": compacted_continuation,
+    }))
 }
 
 fn summarize_tool_result_payload(
@@ -6864,6 +6888,63 @@ mod tests {
             payload_chars > TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS as u64,
             "expected original payload char count, got {:?}",
             record.outcome.payload
+        );
+    }
+
+    #[test]
+    fn continuation_payload_summary_is_compacted_before_low_limit_truncation() {
+        let intent = provider_app_tool_intent(
+            "session_wait",
+            json!({"session_id": "child-session"}),
+            "session-continuation-payload",
+            "turn-continuation-payload",
+            "call-continuation-payload",
+        );
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "session": {
+                    "session_id": "child-session",
+                    "state": "running",
+                    "label": "Child",
+                    "kind": "delegate_child",
+                    "details": "x".repeat(512),
+                },
+                "wait_status": "waiting",
+                "events": [
+                    {
+                        "event_kind": "delegate_result",
+                        "payload": "x".repeat(512),
+                    }
+                ],
+                "continuation": {
+                    "state": "waiting",
+                    "is_terminal": false,
+                    "recommended_tool": "session_wait",
+                    "recommended_payload": {
+                        "session_id": "child-session",
+                        "timeout_ms": 1000,
+                    },
+                    "note": "Keep waiting before presenting final completion.",
+                }
+            }),
+        };
+
+        let envelope = build_tool_result_envelope(&intent, &outcome, 256);
+        let payload_summary =
+            serde_json::from_str::<Value>(envelope.payload_summary.as_str()).expect("payload json");
+
+        assert!(!envelope.payload_truncated, "envelope: {envelope:?}");
+        assert_eq!(payload_summary["continuation"]["state"], "waiting");
+        assert_eq!(
+            payload_summary["continuation"]["recommended_tool"],
+            "session_wait"
+        );
+        assert!(
+            payload_summary
+                .as_object()
+                .is_some_and(|object| object.len() == 1),
+            "compacted summary should only retain continuation metadata: {payload_summary:?}"
         );
     }
 
