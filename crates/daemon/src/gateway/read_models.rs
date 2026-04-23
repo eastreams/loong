@@ -1890,7 +1890,7 @@ fn collect_channel_surface_recent_runtime_incidents(
         .flatten()
         .collect::<Vec<_>>();
 
-    incidents.sort_by(|left, right| right.at_ms.cmp(&left.at_ms));
+    incidents.sort_by_key(|incident| std::cmp::Reverse(incident.at_ms));
     incidents.truncate(5);
     incidents
 }

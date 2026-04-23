@@ -1796,7 +1796,7 @@ fn managed_bridge_runtime_attention_surfaces<'a>(
             continue;
         }
 
-        recent_incidents.sort_by(|left, right| right.at_ms.cmp(&left.at_ms));
+        recent_incidents.sort_by_key(|incident| std::cmp::Reverse(incident.at_ms));
         recent_incidents.truncate(5);
         surfaces.push(ManagedBridgeRuntimeAttention {
             channel_id: surface.catalog.id,
