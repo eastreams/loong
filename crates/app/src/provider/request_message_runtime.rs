@@ -387,6 +387,8 @@ fn render_execution_discipline_section() -> String {
             .to_owned(),
         "- If one retrieval path returns partial or empty results, retry with a different bounded strategy before asking the user."
             .to_owned(),
+        "- Prefer continuing through bounded intermediate steps over narrating every step to the user."
+            .to_owned(),
         "</tool_persistence>".to_owned(),
         "<mandatory_tool_use>".to_owned(),
         "- Do not answer live system, file-content, git-state, or current-fact questions from memory when runtime retrieval is available."
@@ -399,6 +401,8 @@ fn render_execution_discipline_section() -> String {
             .to_owned(),
         "- Ask only when the missing detail changes the required tool, target, or side effect."
             .to_owned(),
+        "- Do not emit incremental progress chatter after each tool result; keep going until you can deliver a completed result, a concrete blocker, or a real approval request."
+            .to_owned(),
         "</act_dont_ask>".to_owned(),
         "<prerequisite_checks>".to_owned(),
         "- Before a mutating step or a high-confidence claim, check whether discovery, inspection, or preflight lookup is still needed."
@@ -410,6 +414,8 @@ fn render_execution_discipline_section() -> String {
         "- Before finalizing, check correctness, grounding, output shape, and whether a real stop condition has been reached."
             .to_owned(),
         "- A reply is not by itself proof that a long-running task is complete."
+            .to_owned(),
+        "- Queued async work, waiting task handles, blocked task states, and pending approvals are intermediate runtime states, not final completion."
             .to_owned(),
         "</verification>".to_owned(),
         "<missing_context>".to_owned(),
@@ -1096,6 +1102,14 @@ mod tests {
     fn build_system_message_returns_none_when_disabled() {
         let config = LoongConfig::default();
         assert_eq!(build_system_message(&config, false), None);
+    }
+
+    #[test]
+    fn execution_discipline_section_emphasizes_continued_execution_over_progress_chatter() {
+        let section = render_execution_discipline_section();
+        assert!(section.contains("Prefer continuing through bounded intermediate steps"));
+        assert!(section.contains("Do not emit incremental progress chatter"));
+        assert!(section.contains("intermediate runtime states, not final completion"));
     }
 
     #[cfg(feature = "memory-sqlite")]

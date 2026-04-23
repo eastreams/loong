@@ -5280,6 +5280,18 @@ fn wait_payload(
             "wait_status".to_owned(),
             Value::String(wait_status.to_owned()),
         );
+        if wait_status != "completed" {
+            let continuation_note =
+                continuation_note_for_wait_status(wait_status, object.get("session"));
+            object.insert(
+                "continuation".to_owned(),
+                json!({
+                    "state": wait_status,
+                    "is_terminal": false,
+                    "note": continuation_note,
+                }),
+            );
+        }
         object.insert("timeout_ms".to_owned(), Value::from(timeout_ms));
         object.insert(
             "after_id".to_owned(),
@@ -5297,6 +5309,25 @@ fn wait_payload(
         );
     }
     payload
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn continuation_note_for_wait_status(wait_status: &str, session_payload: Option<&Value>) -> String {
+    let session_state = session_payload
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match wait_status {
+        "waiting" => format!(
+            "The runtime is still waiting on session state `{session_state}`. Treat this as intermediate progress, not final completion."
+        ),
+        "blocked" => format!(
+            "The runtime is blocked while the session state is `{session_state}`. Report the exact blocker or resolve it before presenting final completion."
+        ),
+        other => format!(
+            "The runtime is still in non-terminal wait state `{other}` with session state `{session_state}`."
+        ),
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -10496,10 +10527,42 @@ mod tests {
         );
         assert_eq!(outcome.payload["task_state"], "waiting");
         assert_eq!(outcome.payload["task_is_stable"], true);
+        assert_eq!(outcome.payload["continuation"]["state"], "waiting");
+        assert_eq!(outcome.payload["continuation"]["is_terminal"], false);
         assert!(
             started_at.elapsed() < immediate_resolution_budget,
             "waiting task state should resolve without waiting for terminal session state"
         );
+    }
+
+    #[tokio::test]
+    async fn session_wait_waiting_state_exposes_generic_continuation_metadata() {
+        let config = isolated_memory_config("session-wait-continuation");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+
+        let outcome = crate::tools::wait_for_session_with_config(
+            json!({
+                "session_id": "child-session",
+                "timeout_ms": 100
+            }),
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .await
+        .expect("session_wait outcome");
+
+        assert_eq!(outcome.payload["wait_status"], "timeout");
+        assert_eq!(outcome.payload["continuation"]["state"], "timeout");
+        assert_eq!(outcome.payload["continuation"]["is_terminal"], false);
     }
 
     #[tokio::test]
