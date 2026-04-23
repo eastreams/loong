@@ -7410,6 +7410,119 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
 }
 
 #[cfg(feature = "memory-sqlite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_nonterminal_continuation_requests_followup_provider_turn() {
+    let _home =
+        crate::test_support::ScopedLoongHome::new("conversation-continuation-followup-home");
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-continuation-followup", "session-wait")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = session_store_config_from_config(&config);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Running,
+    })
+    .expect("create child session");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I will keep checking the delegated work.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "session_wait",
+                    json!({
+                        "session_id": "child-session",
+                        "timeout_ms": 1
+                    }),
+                    "root-session",
+                    "turn-continuation-1",
+                    "call-session-wait-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text:
+                    "The delegated work is still running, so I should not report completion yet."
+                        .to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "wait for the delegated session to finish and then summarize it",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("continuation followup turn should succeed");
+
+    assert_eq!(
+        reply,
+        "The delegated work is still running, so I should not report completion yet."
+    );
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 2);
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            role == Some("user")
+                && content.is_some_and(|content| content.contains("Continuation guidance:"))
+        }),
+        "second provider turn should receive continuation followup guidance: {requested_turn_messages:?}"
+    );
+    assert!(
+        requested_turn_messages[1].iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            role == Some("user")
+                && content.is_some_and(|content| content.contains("`session_wait`"))
+        }),
+        "second provider turn should receive the recommended wait tool guidance: {requested_turn_messages:?}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn default_runtime_build_context_includes_tool_discovery_delta_from_persisted_state() {
     let mut config = test_config();
