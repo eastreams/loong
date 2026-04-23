@@ -208,6 +208,10 @@ pub struct AutomationServeCommandOptions {
     pub path: String,
     #[arg(long, default_value_t = AUTOMATION_DEFAULT_POLL_MS)]
     pub poll_ms: u64,
+    #[arg(long, default_value_t = 0)]
+    pub retain_last_sealed: usize,
+    #[arg(long)]
+    pub retain_min_age_seconds: Option<u64>,
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -408,6 +412,8 @@ struct AutomationRunnerStatus {
     bind_address: Option<String>,
     event_path: Option<String>,
     poll_ms: u64,
+    retain_last_sealed_segments: usize,
+    retain_min_age_ms: Option<u64>,
     lease_timeout_ms: u64,
     lease_expires_at_ms: u64,
     started_at_ms: u64,
@@ -427,6 +433,10 @@ struct PersistedAutomationRunnerState {
     bind_address: Option<String>,
     event_path: Option<String>,
     poll_ms: u64,
+    #[serde(default)]
+    retain_last_sealed_segments: usize,
+    #[serde(default)]
+    retain_min_age_ms: Option<u64>,
     started_at_ms: u64,
     last_heartbeat_at: u64,
     stopped_at_ms: Option<u64>,
@@ -462,6 +472,12 @@ struct AutomationRunnerTracker {
     stop_request_path: PathBuf,
     owner_token: String,
     state: std::sync::Mutex<PersistedAutomationRunnerState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutomationRunnerRetentionPolicy {
+    retain_last_sealed_segments: usize,
+    retain_min_age_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -611,6 +627,18 @@ fn automation_runner_state_is_stale(
     let lease_expires_at_ms =
         automation_runner_lease_expires_at_ms(persisted_state.last_heartbeat_at);
     now_ms > lease_expires_at_ms
+}
+
+fn automation_runner_retention_policy_from_options(
+    options: &AutomationServeCommandOptions,
+) -> AutomationRunnerRetentionPolicy {
+    let retain_min_age_ms = options
+        .retain_min_age_seconds
+        .map(|seconds| seconds.saturating_mul(1_000));
+    AutomationRunnerRetentionPolicy {
+        retain_last_sealed_segments: options.retain_last_sealed,
+        retain_min_age_ms,
+    }
 }
 
 fn now_ms() -> i64 {
@@ -988,6 +1016,7 @@ impl AutomationRunnerTracker {
 
         let owner_token = new_automation_runner_owner_token(std::process::id());
         let started_at_ms = u64::try_from(now_ms()).unwrap_or_default();
+        let retention_policy = automation_runner_retention_policy_from_options(options);
         let initial_state = PersistedAutomationRunnerState {
             phase: "starting".to_owned(),
             running: true,
@@ -997,6 +1026,8 @@ impl AutomationRunnerTracker {
             bind_address: options.bind.clone(),
             event_path: Some(options.path.clone()),
             poll_ms: options.poll_ms.max(250),
+            retain_last_sealed_segments: retention_policy.retain_last_sealed_segments,
+            retain_min_age_ms: retention_policy.retain_min_age_ms,
             started_at_ms,
             last_heartbeat_at: started_at_ms,
             stopped_at_ms: None,
@@ -1124,6 +1155,8 @@ fn load_automation_runner_status() -> Option<AutomationRunnerStatus> {
         bind_address: persisted_state.bind_address,
         event_path: persisted_state.event_path,
         poll_ms: persisted_state.poll_ms,
+        retain_last_sealed_segments: persisted_state.retain_last_sealed_segments,
+        retain_min_age_ms: persisted_state.retain_min_age_ms,
         lease_timeout_ms: AUTOMATION_RUNTIME_STALE_MS,
         lease_expires_at_ms,
         started_at_ms: persisted_state.started_at_ms,
@@ -1973,6 +2006,7 @@ async fn execute_serve_command(
     config: Option<String>,
     options: AutomationServeCommandOptions,
 ) -> CliResult<Value> {
+    let retention_policy = automation_runner_retention_policy_from_options(&options);
     let runner_tracker = AutomationRunnerTracker::acquire(config.as_deref(), &options)?;
     let poll_ms = options.poll_ms.max(250);
     let stop_requested = Arc::new(AtomicBool::new(false));
@@ -1983,6 +2017,7 @@ async fn execute_serve_command(
     let finalize_owner_token = scheduler_owner_token.clone();
     let scheduler_runner_tracker = Arc::new(runner_tracker);
     let scheduler_runner_tracker_for_loop = scheduler_runner_tracker.clone();
+    let scheduler_retention_policy = retention_policy.clone();
     let scheduler_task = tokio::spawn(async move {
         while !scheduler_stop.load(Ordering::SeqCst) {
             if automation_runner_stop_requested(scheduler_owner_token.as_str()) {
@@ -1998,7 +2033,12 @@ async fn execute_serve_command(
             {
                 eprintln!("automation scheduler error: {error}");
             }
-            if let Err(error) = process_internal_journal_events(scheduler_config.as_ref()).await {
+            if let Err(error) = process_internal_journal_events_with_policy(
+                scheduler_config.as_ref(),
+                &scheduler_retention_policy,
+            )
+            .await
+            {
                 eprintln!("automation internal event journal error: {error}");
             }
             tokio::time::sleep(Duration::from_millis(
@@ -2064,7 +2104,10 @@ async fn execute_serve_command(
     }))
 }
 
-async fn process_internal_journal_events(config: Option<&String>) -> CliResult<()> {
+async fn process_internal_journal_events_with_policy(
+    config: Option<&String>,
+    retention_policy: &AutomationRunnerRetentionPolicy,
+) -> CliResult<()> {
     let cursor_path = automation_event_cursor_path();
     let current_cursor = load_internal_event_cursor(cursor_path.as_path())?;
     let (events, next_cursor) =
@@ -2095,7 +2138,12 @@ async fn process_internal_journal_events(config: Option<&String>) -> CliResult<(
     }
     store_internal_event_cursor(cursor_path.as_path(), next_cursor.clone())?;
     if next_cursor.segment_id != current_cursor.segment_id {
-        let _ = mvp::internal_events::prune_internal_event_journal_segments(&next_cursor)?;
+        let gc_policy = mvp::internal_events::InternalEventJournalGcPolicy {
+            retain_floor_segment_id: next_cursor.segment_id.clone(),
+            retain_last_sealed_segments: retention_policy.retain_last_sealed_segments,
+            retain_min_age_ms: retention_policy.retain_min_age_ms,
+        };
+        let _ = mvp::internal_events::gc_internal_event_journal_segments(&gc_policy)?;
     }
     Ok(())
 }
@@ -2629,6 +2677,15 @@ fn render_runner_inspect(payload: &Value) -> CliResult<String> {
     if let Some(event_path) = json_pointer_str(status, "/event_path") {
         lines.push(format!("event_path: {event_path}"));
     }
+    let retain_last_sealed_segments =
+        json_pointer_u64(status, "/retain_last_sealed_segments").unwrap_or_default();
+    let retain_min_age_ms = json_pointer_value(status, "/retain_min_age_ms")
+        .cloned()
+        .unwrap_or(Value::Null);
+    lines.push(format!(
+        "retain_last_sealed_segments: {retain_last_sealed_segments}"
+    ));
+    lines.push(format!("retain_min_age_ms: {retain_min_age_ms}"));
     if let Some(shutdown_reason) = json_pointer_str(status, "/shutdown_reason") {
         lines.push(format!("shutdown_reason: {shutdown_reason}"));
     }
@@ -2941,6 +2998,8 @@ mod tests {
             bind_address: None,
             event_path: Some("/automation/events".to_owned()),
             poll_ms: 250,
+            retain_last_sealed_segments: 0,
+            retain_min_age_ms: None,
             started_at_ms: last_heartbeat_at.saturating_sub(500),
             last_heartbeat_at,
             stopped_at_ms: None,
@@ -3260,6 +3319,8 @@ mod tests {
             auth_token: None,
             path: AUTOMATION_DEFAULT_EVENT_PATH.to_owned(),
             poll_ms: 250,
+            retain_last_sealed: 0,
+            retain_min_age_seconds: None,
         };
         let tracker = AutomationRunnerTracker::acquire(Some("/tmp/loong.toml"), &options)
             .expect("acquire tracker");

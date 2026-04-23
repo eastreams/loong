@@ -2987,6 +2987,193 @@ async fn automation_serve_processes_segment_rollover_once_without_skipping_or_re
 }
 
 #[tokio::test]
+async fn automation_serve_auto_prune_respects_retain_last_sealed_policy() {
+    let guard = lock_automation_integration().await;
+    let root = TempDirGuard::new("loong-automation-segment-retention-policy");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(loong_app::internal_events::internal_event_segments_dir())
+        .expect("create internal event segments dir");
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000001\n",
+    )
+    .expect("seed active segment id");
+
+    let create_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::CreateEvent(
+                loong_daemon::automation_cli::AutomationCreateEventCommandOptions {
+                    name: "Segment Retention Policy".to_owned(),
+                    event: "session.cancelled".to_owned(),
+                    json_pointer: Some("/session_id".to_owned()),
+                    equals_json: None,
+                    equals_text: None,
+                    contains_text: Some("segment-retention".to_owned()),
+                    session: "ops-root".to_owned(),
+                    task: "follow up on retained segment event".to_owned(),
+                    label: Some("Segment Retention Policy".to_owned()),
+                    timeout_seconds: Some(30),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("create segment retention trigger");
+    let trigger_id = create_payload["trigger"]["trigger_id"]
+        .as_str()
+        .expect("trigger id")
+        .to_owned();
+
+    let mut serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+            "--retain-last-sealed",
+            "1",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automation serve");
+
+    wait_for_serve_lock(
+        &mut serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    append_internal_event_to_journal(
+        "session.cancelled",
+        &serde_json::json!({
+            "session_id": "delegate:segment-retention-1"
+        }),
+    )
+    .expect("append first segment row");
+    let first_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 1).await;
+    assert!(first_show["trigger"]["last_error"].is_null());
+
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000002\n",
+    )
+    .expect("promote second segment to active");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000002"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"delegate:segment-retention-2\"},\"recorded_at_ms\":9}\n",
+    )
+    .expect("write second segment");
+    let second_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 2).await;
+    assert!(second_show["trigger"]["last_error"].is_null());
+
+    fs::write(
+        loong_app::internal_events::internal_event_active_segment_id_path(),
+        "segment-000003\n",
+    )
+    .expect("promote third segment to active");
+    fs::write(
+        loong_app::internal_events::internal_event_segment_path("segment-000003"),
+        "{\"event_name\":\"session.cancelled\",\"payload\":{\"session_id\":\"delegate:segment-retention-3\"},\"recorded_at_ms\":10}\n",
+    )
+    .expect("write third segment");
+    let third_show = wait_for_trigger_fire_count(&config_path, &trigger_id, 3).await;
+    assert!(third_show["trigger"]["last_error"].is_null());
+
+    assert!(
+        !loong_app::internal_events::internal_event_segment_path("segment-000001").exists(),
+        "oldest sealed segment should be pruned once the cursor reaches segment-000003"
+    );
+    assert!(
+        loong_app::internal_events::internal_event_segment_path("segment-000002").exists(),
+        "newest sealed segment should be retained by the keep-last policy"
+    );
+    assert!(
+        loong_app::internal_events::internal_event_segment_path("segment-000003").exists(),
+        "active segment should remain"
+    );
+
+    let runner_payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Runner(
+                loong_daemon::automation_cli::AutomationRunnerCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationRunnerCommands::Inspect(
+                        loong_daemon::automation_cli::AutomationRunnerInspectCommandOptions::default(),
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inspect automation runner retention policy");
+    assert_eq!(runner_payload["status"]["retain_last_sealed_segments"], 1);
+    assert!(runner_payload["status"]["retain_min_age_ms"].is_null());
+
+    serve.kill().expect("stop automation serve");
+    let _ = serve.wait();
+
+    let mut restarted_serve = Command::new(env!("CARGO_BIN_EXE_loong"))
+        .env("LOONG_HOME", loong_home_text.as_str())
+        .env("CARGO_BIN_EXE_loong", detached_binary.as_str())
+        .args([
+            "automation",
+            "serve",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+            "--poll-ms",
+            "250",
+            "--retain-last-sealed",
+            "1",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("restart automation serve");
+
+    wait_for_serve_lock(
+        &mut restarted_serve,
+        automation_serve_lock_path(&loong_home).as_path(),
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let restart_show = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Show(
+                loong_daemon::automation_cli::AutomationShowCommandOptions { id: trigger_id },
+            ),
+        },
+    )
+    .await
+    .expect("show trigger after restart");
+    assert_eq!(restart_show["trigger"]["fire_count"], 3);
+
+    restarted_serve
+        .kill()
+        .expect("stop restarted automation serve");
+    let _ = restarted_serve.wait();
+    drop(guard);
+}
+
+#[tokio::test]
 async fn automation_serve_missing_segment_cursor_skips_older_surviving_segment() {
     let guard = lock_automation_integration().await;
     let root = TempDirGuard::new("loong-automation-missing-segment-cursor");
