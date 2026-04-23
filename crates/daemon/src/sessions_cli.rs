@@ -942,7 +942,11 @@ fn build_session_heal_action_command(
                 "task_status" => "status",
                 "task_wait" => "wait",
                 "task_events" | "task_history" => "events",
-                _ => unreachable!(),
+                other => {
+                    return Err(format!(
+                        "sessions heal does not support task command rendering for `{other}`"
+                    ));
+                }
             };
             Ok(format!(
                 "{command_name} tasks {task_command} --config {config_arg} --session {session_arg} {task_arg}"
@@ -2221,7 +2225,7 @@ mod tests {
         assert_eq!(plan.actions[0].tool_name, "task_status");
         assert_eq!(
             plan.actions[0].command,
-            "loong tasks status --config /tmp/loong.toml --session ops-root task-123"
+            "loong tasks status --config '/tmp/loong.toml' --session 'ops-root' 'task-123'"
         );
         assert!(!plan.actions[0].can_apply);
     }
