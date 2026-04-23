@@ -63,6 +63,27 @@ Webhook ingress is intentionally modeled as a transport that emits named events
 instead of as a separate trigger type. That keeps external webhooks and future
 internal hooks on the same surface.
 
+### Operator And Agent Guidance
+
+The intended decision order is:
+
+- choose `schedule` when the real intent is one future run or a fixed
+  every-N-seconds cadence
+- choose `cron` when the real intent is wall-clock recurrence such as weekdays
+  at 09:00 UTC
+- choose `event` when a webhook, runtime mutation, or named internal event
+  already exists and time is not the real source of truth
+
+To keep the CLI usable for agents instead of only humans reading docs:
+
+- `automation guide` is the decision entrypoint for picking a trigger type and
+  finding the shortest correct command recipe
+- `automation cron preview` is the review step before persisting a cron trigger
+- trigger detail and preview output now carry “when to use” and “next step”
+  guidance instead of only raw fields
+- `automation serve` remains the live runner for durable cron delivery, webhook
+  ingress, and journal-backed internal-event consumption
+
 ### Actions
 
 The first action type is `background_task`, which queues the existing detached

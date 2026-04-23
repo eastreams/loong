@@ -803,7 +803,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: tasks_cli::TasksCommands,
     },
-    /// Manage schedule and event-driven automation triggers
+    #[command(
+        about = "Manage schedule and event-driven automation triggers",
+        long_about = "Manage schedule and event-driven automation triggers.\n\nUse `loong automation guide` when you need a decision entrypoint instead of remembering every automation subcommand.\n- choose `create-schedule` for one future run or a fixed every-N-seconds cadence\n- choose `cron preview` plus `create-cron` for wall-clock recurrence\n- choose `create-event` when a webhook or runtime event already exists\n- run `automation serve` for durable cron delivery, webhook ingress, and journal-backed internal-event consumption"
+    )]
     Automation {
         #[arg(long, global = true)]
         config: Option<String>,

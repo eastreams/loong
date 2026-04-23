@@ -31,6 +31,8 @@ static AUTOMATION_TRIGGER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum AutomationCommands {
+    /// Explain when to use schedule, cron, or event triggers
+    Guide(AutomationGuideCommandOptions),
     /// Create one schedule-based automation trigger
     CreateSchedule(AutomationCreateScheduleCommandOptions),
     /// Create one cron-style automation trigger
@@ -67,6 +69,9 @@ pub struct AutomationCommandOptions {
     pub json: bool,
     pub command: AutomationCommands,
 }
+
+#[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
+pub struct AutomationGuideCommandOptions {}
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 pub struct AutomationCreateScheduleCommandOptions {
@@ -532,6 +537,7 @@ pub async fn run_automation_cli(options: AutomationCommandOptions) -> CliResult<
 pub async fn execute_automation_command(options: AutomationCommandOptions) -> CliResult<Value> {
     let store_path = automation_store_path();
     match options.command {
+        AutomationCommands::Guide(command) => execute_guide_command(command),
         AutomationCommands::CreateSchedule(command) => {
             execute_create_schedule_command(store_path.as_path(), command).await
         }
@@ -1032,6 +1038,119 @@ fn execute_cron_command(options: AutomationCronCommandOptions) -> CliResult<Valu
     match options.command {
         AutomationCronCommands::Preview(command) => execute_cron_preview_command(command),
     }
+}
+
+fn execute_guide_command(_options: AutomationGuideCommandOptions) -> CliResult<Value> {
+    let command_name = crate::active_cli_command_name();
+    let preview_cron_command =
+        format!("{command_name} automation cron preview --cron '0 9 * * 1-5'");
+    let create_schedule_command = format!(
+        "{command_name} automation create-schedule --name <name> --session <session> --task '<task>' --run-at <rfc3339>"
+    );
+    let create_interval_command = format!(
+        "{command_name} automation create-schedule --name <name> --session <session> --task '<task>' --every-seconds <seconds>"
+    );
+    let create_cron_command = format!(
+        "{command_name} automation create-cron --name <name> --cron '<expr>' --session <session> --task '<task>'"
+    );
+    let create_event_command = format!(
+        "{command_name} automation create-event --name <name> --event <event_name> --session <session> --task '<task>'"
+    );
+    let emit_test_command =
+        format!("{command_name} automation emit --event <event_name> --payload-json '{{}}'");
+    let serve_command = format!("{command_name} automation serve --config <path>");
+    let list_command = format!("{command_name} automation list");
+    let runner_inspect_command = format!("{command_name} automation runner inspect");
+
+    let trigger_sources = vec![
+        json!({
+            "type": "schedule",
+            "use_when": "Use schedule for one known future run or a fixed every-N-seconds cadence.",
+            "avoid_when": "Avoid schedule when you need calendar-style wall-clock recurrence such as weekdays at 09:00 UTC.",
+            "create_commands": [
+                create_schedule_command,
+                create_interval_command,
+            ],
+        }),
+        json!({
+            "type": "cron",
+            "use_when": "Use cron for wall-clock recurrence such as weekdays at 09:00 UTC.",
+            "avoid_when": "Avoid cron when a one-shot schedule or a fixed every-N-seconds interval is enough.",
+            "preview_command": preview_cron_command,
+            "create_command": create_cron_command,
+        }),
+        json!({
+            "type": "event",
+            "use_when": "Use event triggers when a webhook, runtime mutation, or named internal event already exists.",
+            "avoid_when": "Avoid event triggers when there is no truthful event producer and you are really trying to express time.",
+            "create_command": create_event_command,
+            "test_command": emit_test_command,
+        }),
+    ];
+
+    let operational_notes = vec![
+        "All automation triggers queue background tasks; they do not create a second worker runtime.",
+        "Run `automation serve` for durable cron delivery, webhook ingress, and journal-backed internal-event consumption.",
+        "Use `automation emit` to dry-test an event trigger before wiring a real producer.",
+        "Use `automation cron preview` before `create-cron` so the wall-clock cadence is reviewed before it is persisted.",
+    ];
+
+    let recipes = vec![
+        json!({
+            "name": "preview_cron",
+            "command": preview_cron_command,
+            "purpose": "Review future UTC fire times before creating a cron trigger.",
+        }),
+        json!({
+            "name": "create_schedule_once",
+            "command": create_schedule_command,
+            "purpose": "Queue one background task at a specific future time.",
+        }),
+        json!({
+            "name": "create_schedule_interval",
+            "command": create_interval_command,
+            "purpose": "Queue recurring work on a fixed interval measured in seconds.",
+        }),
+        json!({
+            "name": "create_cron",
+            "command": create_cron_command,
+            "purpose": "Queue recurring work on a wall-clock cadence.",
+        }),
+        json!({
+            "name": "create_event",
+            "command": create_event_command,
+            "purpose": "Queue work from a named webhook or runtime event.",
+        }),
+        json!({
+            "name": "test_event",
+            "command": emit_test_command,
+            "purpose": "Dry-test event matching before a real producer is live.",
+        }),
+        json!({
+            "name": "start_runner",
+            "command": serve_command,
+            "purpose": "Run the live automation scheduler and webhook/journal consumer.",
+        }),
+        json!({
+            "name": "inspect_runner",
+            "command": runner_inspect_command,
+            "purpose": "Confirm the live runner cadence, lease state, and retention policy.",
+        }),
+        json!({
+            "name": "list_triggers",
+            "command": list_command,
+            "purpose": "Review the currently persisted automation triggers.",
+        }),
+    ];
+
+    Ok(json!({
+        "command": "guide",
+        "entrypoint": "automation",
+        "summary": "Pick schedule for one future time or fixed intervals, cron for wall-clock recurrence, and event when a truthful producer already exists.",
+        "trigger_sources": trigger_sources,
+        "operational_notes": operational_notes,
+        "recipes": recipes,
+    }))
 }
 
 fn execute_cron_preview_command(options: AutomationCronPreviewCommandOptions) -> CliResult<Value> {
@@ -2599,6 +2718,7 @@ fn render_automation_text(payload: &Value) -> CliResult<String> {
         .and_then(Value::as_str)
         .ok_or_else(|| "automation payload missing command".to_owned())?;
     match command {
+        "guide" => render_guide(payload),
         "cron_preview" => render_cron_preview(payload),
         "create_schedule" | "create_cron" | "create_event" | "show" | "status_update" => {
             let trigger = payload
@@ -2691,6 +2811,10 @@ fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
             } else {
                 lines.push("interval_ms: none".to_owned());
             }
+            lines.push(
+                "guidance: use schedule for one future run or a fixed every-N-seconds cadence."
+                    .to_owned(),
+            );
         }
         "event" => {
             let event_name =
@@ -2710,6 +2834,10 @@ fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
             if let Some(contains_text) = contains_text {
                 lines.push(format!("contains_text: {contains_text}"));
             }
+            lines.push(
+                "guidance: use event triggers when a webhook or runtime surface can already emit a truthful named event."
+                    .to_owned(),
+            );
         }
         "cron" => {
             let expression =
@@ -2718,6 +2846,10 @@ fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
             let next_fire_at_ms =
                 json_pointer_i64(trigger, "/source/cron/next_fire_at_ms").unwrap_or_default();
             lines.push(format!("next_fire_at_ms: {next_fire_at_ms}"));
+            lines.push(
+                "guidance: use cron for wall-clock recurrence and prefer `automation cron preview` before editing the expression."
+                    .to_owned(),
+            );
         }
         _ => {}
     }
@@ -2746,6 +2878,107 @@ fn render_trigger_detail(trigger: &Value) -> CliResult<String> {
     if let Some(run_history) = trigger["run_history"].as_array() {
         lines.push(format!("run_history_count: {}", run_history.len()));
     }
+    lines.push(
+        "delivery: all automation triggers queue background tasks instead of creating a second worker runtime."
+            .to_owned(),
+    );
+    Ok(lines.join("\n"))
+}
+
+fn render_guide(payload: &Value) -> CliResult<String> {
+    let summary = payload
+        .get("summary")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "automation guide payload missing summary".to_owned())?;
+    let trigger_sources = payload
+        .get("trigger_sources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "automation guide payload missing trigger_sources".to_owned())?;
+    let operational_notes = payload
+        .get("operational_notes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "automation guide payload missing operational_notes".to_owned())?;
+    let recipes = payload
+        .get("recipes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "automation guide payload missing recipes".to_owned())?;
+
+    let mut lines = vec![
+        "Automation guide".to_owned(),
+        String::new(),
+        summary.to_owned(),
+        String::new(),
+        "pick a trigger:".to_owned(),
+    ];
+
+    for trigger_source in trigger_sources {
+        let kind = trigger_source
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "automation guide trigger source missing type".to_owned())?;
+        let use_when = trigger_source
+            .get("use_when")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "automation guide trigger source missing use_when".to_owned())?;
+        let avoid_when = trigger_source
+            .get("avoid_when")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "automation guide trigger source missing avoid_when".to_owned())?;
+        lines.push(format!("- {kind}: {use_when}"));
+        lines.push(format!("  avoid: {avoid_when}"));
+        if let Some(preview_command) = trigger_source
+            .get("preview_command")
+            .and_then(Value::as_str)
+        {
+            lines.push(format!("  preview: {preview_command}"));
+        }
+        if let Some(create_command) = trigger_source.get("create_command").and_then(Value::as_str) {
+            lines.push(format!("  create: {create_command}"));
+        }
+        if let Some(create_commands) = trigger_source
+            .get("create_commands")
+            .and_then(Value::as_array)
+        {
+            for create_command in create_commands {
+                let create_command = create_command.as_str().ok_or_else(|| {
+                    "automation guide create_commands entry must be a string".to_owned()
+                })?;
+                lines.push(format!("  create: {create_command}"));
+            }
+        }
+        if let Some(test_command) = trigger_source.get("test_command").and_then(Value::as_str) {
+            lines.push(format!("  test: {test_command}"));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("operational notes:".to_owned());
+    for note in operational_notes {
+        let note = note
+            .as_str()
+            .ok_or_else(|| "automation guide operational note must be a string".to_owned())?;
+        lines.push(format!("- {note}"));
+    }
+
+    lines.push(String::new());
+    lines.push("recipes:".to_owned());
+    for recipe in recipes {
+        let name = recipe
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "automation guide recipe missing name".to_owned())?;
+        let command = recipe
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "automation guide recipe missing command".to_owned())?;
+        let purpose = recipe
+            .get("purpose")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "automation guide recipe missing purpose".to_owned())?;
+        lines.push(format!("- {name}: {purpose}"));
+        lines.push(format!("  {command}"));
+    }
+
     Ok(lines.join("\n"))
 }
 
@@ -2835,12 +3068,19 @@ fn render_cron_preview(payload: &Value) -> CliResult<String> {
         .get("preview")
         .and_then(Value::as_array)
         .ok_or_else(|| "automation cron preview payload missing preview".to_owned())?;
+    let command_name = crate::active_cli_command_name();
+    let next_step = format!(
+        "{command_name} automation create-cron --name <name> --cron '{expression}' --session <session> --task '<task>'"
+    );
 
     let mut lines = vec![
         "Automation cron preview".to_owned(),
         String::new(),
         format!("expression: {expression}"),
         format!("timezone: {timezone}"),
+        "use when: wall-clock recurrence such as weekdays at 09:00 UTC.".to_owned(),
+        "prefer schedule when a one-shot run or a fixed every-N-seconds cadence is enough."
+            .to_owned(),
         String::new(),
         "next fires:".to_owned(),
     ];
@@ -2860,6 +3100,9 @@ fn render_cron_preview(payload: &Value) -> CliResult<String> {
             .unwrap_or("unknown");
         lines.push(format!("- #{ordinal}: {fire_at_rfc3339} ({fire_at_ms})"));
     }
+
+    lines.push(String::new());
+    lines.push(format!("next step: {next_step}"));
 
     Ok(lines.join("\n"))
 }
@@ -3224,6 +3467,58 @@ mod tests {
             .as_i64()
             .expect("first preview fire_at_ms");
         assert!(first_fire_at_ms > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn render_cron_preview_surfaces_guidance_and_next_step() {
+        let payload = execute_cron_preview_command(AutomationCronPreviewCommandOptions {
+            cron: "0 9 * * 1-5".to_owned(),
+            after: None,
+            after_ms: Some(1_700_000_000_000),
+            count: 2,
+        })
+        .expect("preview cron expression");
+
+        let rendered = render_automation_text(&payload).expect("render cron preview");
+
+        assert!(rendered.contains("use when: wall-clock recurrence"));
+        assert!(rendered.contains("prefer schedule when"));
+        assert!(rendered.contains("next step:"));
+        assert!(rendered.contains("automation create-cron"));
+    }
+
+    #[test]
+    fn execute_guide_command_reports_trigger_selection_and_recipes() {
+        let payload =
+            execute_guide_command(AutomationGuideCommandOptions::default()).expect("guide payload");
+
+        assert_eq!(payload["command"], "guide");
+        assert_eq!(payload["trigger_sources"].as_array().map(Vec::len), Some(3));
+        assert!(
+            payload["operational_notes"]
+                .as_array()
+                .is_some_and(|notes| !notes.is_empty())
+        );
+        assert!(
+            payload["recipes"]
+                .as_array()
+                .is_some_and(|recipes| !recipes.is_empty())
+        );
+    }
+
+    #[test]
+    fn render_guide_surfaces_trigger_choice_and_runner_guidance() {
+        let payload =
+            execute_guide_command(AutomationGuideCommandOptions::default()).expect("guide payload");
+
+        let rendered = render_automation_text(&payload).expect("render guide");
+
+        assert!(rendered.contains("Automation guide"));
+        assert!(rendered.contains("- schedule:"));
+        assert!(rendered.contains("- cron:"));
+        assert!(rendered.contains("- event:"));
+        assert!(rendered.contains("automation serve"));
+        assert!(rendered.contains("automation emit"));
     }
 
     #[test]

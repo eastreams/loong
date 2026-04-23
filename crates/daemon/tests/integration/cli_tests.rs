@@ -29,6 +29,46 @@ fn root_help_uses_onboarding_language() {
 }
 
 #[test]
+fn automation_help_mentions_guide_and_trigger_selection() {
+    let help = render_cli_help(["automation"]);
+
+    assert!(
+        help.contains("automation guide"),
+        "automation help should point operators at the guidance entrypoint: {help}"
+    );
+    assert!(
+        help.contains("create-schedule"),
+        "automation help should mention schedule guidance: {help}"
+    );
+    assert!(
+        help.contains("create-cron") && help.contains("cron preview"),
+        "automation help should mention the cron preview and create flow: {help}"
+    );
+    assert!(
+        help.contains("create-event"),
+        "automation help should mention event guidance: {help}"
+    );
+    assert!(
+        help.contains("automation serve"),
+        "automation help should mention the live runner requirement: {help}"
+    );
+}
+
+#[test]
+fn automation_guide_cli_parses() {
+    let cli = try_parse_cli(["loong", "automation", "guide"])
+        .expect("`loong automation guide` should parse");
+
+    match cli.command {
+        Some(Commands::Automation {
+            command: loong_daemon::automation_cli::AutomationCommands::Guide(_),
+            ..
+        }) => {}
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn welcome_subcommand_help_advertises_first_run_shortcuts() {
     let help = render_cli_help(["welcome"]);
 
