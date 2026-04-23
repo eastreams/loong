@@ -205,17 +205,26 @@ pub fn build_read_context_request(session_id: &str) -> MemoryCoreRequest {
     build_read_context_request_with_workspace_root(session_id, None)
 }
 
+fn build_session_memory_request_payload(session_id: &str, workspace_root: Option<&Path>) -> Value {
+    let mut payload = serde_json::Map::from_iter([("session_id".to_owned(), json!(session_id))]);
+
+    if let Some(workspace_root) = workspace_root {
+        payload.insert(
+            "workspace_root".to_owned(),
+            json!(workspace_root.to_string_lossy().to_string()),
+        );
+    }
+
+    Value::Object(payload)
+}
+
 pub fn build_read_context_request_with_workspace_root(
     session_id: &str,
     workspace_root: Option<&Path>,
 ) -> MemoryCoreRequest {
-    let workspace_root_value = workspace_root.map(|path| path.display().to_string());
     MemoryCoreRequest {
         operation: MEMORY_OP_READ_CONTEXT.to_owned(),
-        payload: json!({
-            "session_id": session_id,
-            "workspace_root": workspace_root_value,
-        }),
+        payload: build_session_memory_request_payload(session_id, workspace_root),
     }
 }
 
@@ -243,30 +252,16 @@ pub fn build_replace_turns_request_with_expectation(
 }
 
 pub fn build_read_stage_envelope_request(session_id: &str) -> MemoryCoreRequest {
-    MemoryCoreRequest {
-        operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
-        payload: json!({
-            "session_id": session_id,
-        }),
-    }
+    build_read_stage_envelope_request_with_workspace_root(session_id, None)
 }
 
 pub fn build_read_stage_envelope_request_with_workspace_root(
     session_id: &str,
     workspace_root: Option<&Path>,
 ) -> MemoryCoreRequest {
-    let mut payload = serde_json::Map::from_iter([("session_id".to_owned(), json!(session_id))]);
-
-    if let Some(workspace_root) = workspace_root {
-        payload.insert(
-            "workspace_root".to_owned(),
-            json!(workspace_root.to_string_lossy().to_string()),
-        );
-    }
-
     MemoryCoreRequest {
         operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
-        payload: Value::Object(payload),
+        payload: build_session_memory_request_payload(session_id, workspace_root),
     }
 }
 
@@ -683,7 +678,20 @@ mod tests {
     }
 
     #[test]
-    fn build_read_context_request_with_workspace_root_serializes_workspace_root() {
+    fn build_read_context_request_without_workspace_root_uses_canonical_payload_shape() {
+        let request = build_read_context_request("session-123");
+
+        assert_eq!(request.operation, MEMORY_OP_READ_CONTEXT);
+        assert_eq!(request.payload["session_id"], "session-123");
+        assert!(
+            request.payload.get("workspace_root").is_none(),
+            "canonical session request payload should omit workspace_root when absent"
+        );
+        assert_eq!(request.payload.as_object().map(|map| map.len()), Some(1));
+    }
+
+    #[test]
+    fn build_read_context_request_with_workspace_root_uses_canonical_payload_shape() {
         let workspace_root = Path::new("/tmp/workspace");
 
         let request =
@@ -693,6 +701,19 @@ mod tests {
         assert_eq!(request.payload["session_id"], "session-123");
         assert_eq!(request.payload["workspace_root"], "/tmp/workspace");
         assert_eq!(request.payload.as_object().map(|map| map.len()), Some(2));
+    }
+
+    #[test]
+    fn build_read_stage_envelope_request_without_workspace_root_uses_canonical_payload_shape() {
+        let request = build_read_stage_envelope_request("session-123");
+
+        assert_eq!(request.operation, MEMORY_OP_READ_STAGE_ENVELOPE);
+        assert_eq!(request.payload["session_id"], "session-123");
+        assert!(
+            request.payload.get("workspace_root").is_none(),
+            "canonical session request payload should omit workspace_root when absent"
+        );
+        assert_eq!(request.payload.as_object().map(|map| map.len()), Some(1));
     }
 
     #[test]
@@ -708,6 +729,22 @@ mod tests {
         assert_eq!(request.payload["session_id"], "session-123");
         assert_eq!(request.payload["workspace_root"], "/tmp/workspace");
         assert_eq!(request.payload.as_object().map(|map| map.len()), Some(2));
+    }
+
+    #[test]
+    fn session_memory_request_builders_share_one_payload_shape() {
+        let workspace_root = Path::new("/tmp/workspace");
+        let read_context =
+            build_read_context_request_with_workspace_root("session-123", Some(workspace_root));
+        let staged =
+            build_read_stage_envelope_request_with_workspace_root("session-123", Some(workspace_root));
+
+        assert_eq!(read_context.payload, staged.payload);
+
+        let read_context = build_read_context_request("session-123");
+        let staged = build_read_stage_envelope_request("session-123");
+
+        assert_eq!(read_context.payload, staged.payload);
     }
 
     #[test]

@@ -40,7 +40,7 @@ Loong keeps the top-level operator config explicit:
 - `tools.browser`, `tools.web`, and `tools.browser_companion` keep browser
   session limits, trust boundaries, and companion policy explicit instead of
   hiding them in helper scripts
-- `memory.profile` stays operator-visible instead of hiding behind prompt logic
+- `memory.profile` stays operator-visible as the continuity choice instead of exposing multiple public memory forms or hiding behind prompt logic
 - top-level runtime toggles such as `outbound_http` stay explicit
 
 Example:
@@ -66,7 +66,7 @@ app_secret = { env = "LARK_APP_SECRET" }
 allowed_chat_ids = ["oc_ops_room"]
 ```
 
-This is the public pattern: one provider lane, one explicit memory profile, and
+This is the public pattern: one provider lane, one session-memory model, one explicit continuity profile, and
 one channel family that stays visible in config instead of being hidden behind a
 launcher.
 
