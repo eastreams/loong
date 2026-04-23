@@ -42,6 +42,33 @@ fn append_session_conversation_event(
     append_session_turn(root, session_id, "assistant", &serialized_payload);
 }
 
+fn overwrite_session_event_ts(
+    root: &super::tasks_cli::TempDirGuard,
+    session_id: &str,
+    event_kind: &str,
+    ts: i64,
+) {
+    let sqlite_path = root.path().join("memory.sqlite3");
+    let connection = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
+    let updated = connection
+        .execute(
+            "UPDATE session_events
+             SET ts = ?3
+             WHERE session_id = ?1 AND event_kind = ?2",
+            rusqlite::params![session_id, event_kind, ts],
+        )
+        .expect("update session event timestamp");
+    assert!(updated > 0, "expected at least one updated event row");
+}
+
+fn current_unix_ts() -> i64 {
+    let now = std::time::SystemTime::now();
+    let duration = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("current unix timestamp");
+    duration.as_secs() as i64
+}
+
 #[test]
 fn sessions_list_cli_parses_global_flags_after_subcommand() {
     let cli = try_parse_cli([
@@ -114,6 +141,10 @@ fn cli_sessions_help_mentions_operator_facing_session_shell() {
     assert!(
         help.contains("recover"),
         "sessions help should surface recovery actions: {help}"
+    );
+    assert!(
+        help.contains("heal"),
+        "sessions help should surface self-heal actions: {help}"
     );
 }
 
@@ -535,6 +566,141 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     assert!(
         rendered.contains("compaction=completed"),
         "status render should surface turn-checkpoint compaction detail: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_sessions_command_heal_plans_overdue_session_recovery() {
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-heal-plan");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    create_delegate_session(
+        &repo,
+        "ops-root",
+        "delegate:session-1",
+        "Recovery Child",
+        mvp::session::repository::SessionState::Ready,
+    );
+    repo.append_event(mvp::session::repository::NewSessionEvent {
+        session_id: "delegate:session-1".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("ops-root".to_owned()),
+        payload_json: json!({
+            "task": "recover the child",
+            "timeout_seconds": 30
+        }),
+    })
+    .expect("append queued event");
+    overwrite_session_event_ts(
+        &root,
+        "delegate:session-1",
+        "delegate_queued",
+        current_unix_ts() - 90,
+    );
+
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::Heal {
+                session_id: "delegate:session-1".to_owned(),
+                apply: false,
+            },
+        },
+    )
+    .await
+    .expect("sessions heal plan should succeed");
+
+    assert_eq!(execution.payload["command"], "heal");
+    assert_eq!(execution.payload["apply"], false);
+    assert_eq!(execution.payload["plan"]["action_count"], 1);
+    assert_eq!(
+        execution.payload["plan"]["actions"][0]["tool_name"],
+        "session_recover"
+    );
+    assert_eq!(execution.payload["plan"]["actions"][0]["can_apply"], true);
+
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions heal plan");
+    assert!(
+        rendered.contains("recommended_action: tool=session_recover"),
+        "heal render should surface recommended action: {rendered}"
+    );
+    assert!(
+        rendered.contains("self-heal plan"),
+        "heal render should surface self-heal section: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_sessions_command_heal_apply_runs_session_recover() {
+    let root = super::tasks_cli::TempDirGuard::new("loong-sessions-cli-heal-apply");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    create_delegate_session(
+        &repo,
+        "ops-root",
+        "delegate:session-1",
+        "Recovery Child",
+        mvp::session::repository::SessionState::Ready,
+    );
+    repo.append_event(mvp::session::repository::NewSessionEvent {
+        session_id: "delegate:session-1".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("ops-root".to_owned()),
+        payload_json: json!({
+            "task": "recover the child",
+            "timeout_seconds": 30
+        }),
+    })
+    .expect("append queued event");
+    overwrite_session_event_ts(
+        &root,
+        "delegate:session-1",
+        "delegate_queued",
+        current_unix_ts() - 90,
+    );
+
+    let execution = loong_daemon::sessions_cli::execute_sessions_command(
+        loong_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loong_daemon::sessions_cli::SessionsCommands::Heal {
+                session_id: "delegate:session-1".to_owned(),
+                apply: true,
+            },
+        },
+    )
+    .await
+    .expect("sessions heal apply should succeed");
+
+    assert_eq!(execution.payload["command"], "heal");
+    assert_eq!(execution.payload["apply"], true);
+    assert_eq!(
+        execution.payload["applied_actions"][0]["tool_name"],
+        "session_recover"
+    );
+    assert_eq!(execution.payload["detail"]["session"]["state"], "failed");
+    assert_eq!(
+        execution.payload["detail"]["terminal_outcome_state"],
+        "present"
+    );
+
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions heal apply");
+    assert!(
+        rendered.contains("applied actions"),
+        "heal apply render should surface applied actions: {rendered}"
+    );
+    assert!(
+        rendered.contains("status=applied"),
+        "heal apply render should surface applied action status: {rendered}"
     );
 }
 
