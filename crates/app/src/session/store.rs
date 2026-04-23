@@ -37,6 +37,15 @@ pub struct SessionStoreConfig {
 
 #[cfg(feature = "memory-sqlite")]
 impl SessionStoreConfig {
+    pub fn for_sqlite_path(sqlite_path: impl Into<PathBuf>) -> Self {
+        let sqlite_path = sqlite_path.into();
+        let runtime_config = MemoryRuntimeConfig::for_sqlite_path(sqlite_path.clone());
+        Self {
+            sqlite_path: Some(sqlite_path),
+            runtime_config: Some(runtime_config),
+        }
+    }
+
     pub fn from_memory_config(config: &MemoryConfig) -> Self {
         Self {
             sqlite_path: Some(config.resolved_sqlite_path()),
