@@ -159,12 +159,13 @@ use super::turn_shared::{
     build_tool_followup_user_prompt_with_context, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
     effective_followup_visible_tool_name, format_approval_required_reply,
-    next_conversation_turn_id, parse_tool_driven_continuation_reply,
-    reduce_followup_payload_for_model, render_tool_followup_continuation_contract,
-    request_completion_with_raw_fallback, request_completion_with_raw_fallback_detailed,
-    summarize_provider_lane_tool_request, summarize_single_tool_followup_request,
-    tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
-    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
+    missing_tool_call_followup_payload, next_conversation_turn_id,
+    parse_tool_driven_continuation_reply, reduce_followup_payload_for_model,
+    render_tool_followup_continuation_contract, request_completion_with_raw_fallback,
+    request_completion_with_raw_fallback_detailed, summarize_provider_lane_tool_request,
+    summarize_single_tool_followup_request, tool_driven_followup_payload,
+    tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
+    user_requested_raw_tool_output,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::workspace_isolation::{
@@ -491,6 +492,7 @@ struct ProviderTurnLaneExecution {
     tool_request_summary: Option<String>,
     discovery_search_turn: bool,
     search_tool_intents: usize,
+    malformed_parse_followup_turn: bool,
     supports_provider_turn_followup: bool,
     raw_tool_output_requested: bool,
     turn_result: TurnResult,
@@ -3237,6 +3239,19 @@ fn build_reply_loop_decision(state: &mut ProviderReplyLoopState) -> ReplyLoopDec
                         }
                     }
                 }
+            } else if let Some(payload) = provider_turn_missing_tool_followup_payload(
+                &state.current_continue_phase.lane_execution,
+                reply.as_str(),
+            ) {
+                ReplyLoopDecision::Followup {
+                    raw_reply: reply.clone(),
+                    payload,
+                    requires_completion_pass: true,
+                    loop_warning_reason: state
+                        .current_continue_phase
+                        .loop_warning_reason()
+                        .map(ToOwned::to_owned),
+                }
             } else if state
                 .current_continue_phase
                 .lane_execution
@@ -3377,6 +3392,24 @@ async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
             .current_continue_phase
             .checkpoint(preparation, user_input, reply.as_str());
     ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
+}
+
+fn provider_turn_missing_tool_followup_payload(
+    lane_execution: &ProviderTurnLaneExecution,
+    reply_text: &str,
+) -> Option<ToolDrivenFollowupPayload> {
+    if !lane_execution.supports_provider_turn_followup || lane_execution.had_tool_intents {
+        return None;
+    }
+
+    missing_tool_call_followup_payload(reply_text).or_else(|| {
+        lane_execution
+            .malformed_parse_followup_turn
+            .then(|| ToolDrivenFollowupPayload::ToolFailure {
+                reason: "missing_tool_call_followup: previous provider reply contained malformed tool-call markup instead of a valid tool call. If another tool is required, emit the exact next tool call now instead of malformed tool text.".to_owned(),
+                retryable: true,
+            })
+    })
 }
 
 async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
@@ -5836,7 +5869,10 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .filter(|intent| effective_followup_tool_name(intent) == "tool.search")
         .count();
     let discovery_search_turn = search_tool_intents > 0;
-    let supports_provider_turn_followup = followup_chain_active || discovery_search_turn;
+    let malformed_parse_followup_turn =
+        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
+    let supports_provider_turn_followup =
+        followup_chain_active || discovery_search_turn || malformed_parse_followup_turn;
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
     let session_context = match runtime.session_context(config, session_id, binding) {
@@ -5854,6 +5890,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 tool_request_summary,
                 discovery_search_turn,
                 search_tool_intents,
+                malformed_parse_followup_turn,
                 supports_provider_turn_followup,
                 raw_tool_output_requested: preparation.raw_tool_output_requested,
                 turn_result,
@@ -5989,11 +6026,14 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .is_some_and(|payload| {
             matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
         });
+    let malformed_parse_followup_turn =
+        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
     let preface_signals_provider_turn_followup =
         assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
     let supports_provider_turn_followup = followup_chain_active
         || discovery_search_turn
         || recovery_followup_turn
+        || malformed_parse_followup_turn
         || preface_signals_provider_turn_followup;
     ProviderTurnLaneExecution {
         lane,
@@ -6003,12 +6043,27 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         tool_request_summary,
         discovery_search_turn,
         search_tool_intents,
+        malformed_parse_followup_turn,
         supports_provider_turn_followup,
         raw_tool_output_requested: preparation.raw_tool_output_requested,
         turn_result,
         safe_lane_terminal_route,
         tool_events,
     }
+}
+
+fn provider_turn_has_malformed_parse_followup_signal(raw_meta: &Value) -> bool {
+    let Some(parse_meta) = raw_meta.get("loong_provider_parse") else {
+        return false;
+    };
+    let Some(parse_meta_object) = parse_meta.as_object() else {
+        return false;
+    };
+
+    parse_meta_object.values().any(|entry| {
+        let status = entry.get("status").and_then(Value::as_str);
+        status == Some("malformed")
+    })
 }
 
 fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> bool {
@@ -10180,17 +10235,36 @@ mod tests {
         config: &LoongConfig,
         turn_result: TurnResult,
     ) -> ProviderTurnContinuePhase {
+        provider_continuation_test_continue_phase_with_lane(
+            config,
+            String::new(),
+            true,
+            false,
+            false,
+            turn_result,
+        )
+    }
+
+    fn provider_continuation_test_continue_phase_with_lane(
+        config: &LoongConfig,
+        assistant_preface: String,
+        had_tool_intents: bool,
+        supports_provider_turn_followup: bool,
+        malformed_parse_followup_turn: bool,
+        turn_result: TurnResult,
+    ) -> ProviderTurnContinuePhase {
         ProviderTurnContinuePhase::new(
             2,
             ProviderTurnLaneExecution {
                 lane: ExecutionLane::Fast,
-                assistant_preface: String::new(),
+                assistant_preface,
                 provider_usage: None,
-                had_tool_intents: true,
+                had_tool_intents,
                 tool_request_summary: None,
                 discovery_search_turn: false,
                 search_tool_intents: 0,
-                supports_provider_turn_followup: false,
+                malformed_parse_followup_turn,
+                supports_provider_turn_followup,
                 raw_tool_output_requested: false,
                 turn_result,
                 safe_lane_terminal_route: None,
@@ -10446,6 +10520,148 @@ mod tests {
         assert_eq!(request_turn_messages.len(), 1);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_continuation_recovers_pseudo_tool_command_without_real_tool_call() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some(temp_dir.path().display().to_string());
+
+        let user_input = "Write the report to report.txt";
+        let preparation = provider_continuation_test_preparation(&config, user_input);
+        let continue_phase = provider_continuation_test_continue_phase_with_lane(
+            &config,
+            "/tool.search: report writer".to_owned(),
+            false,
+            true,
+            false,
+            TurnResult::FinalText(String::new()),
+        );
+        let runtime = MissingToolContinuationRuntime {
+            queued_turns: StdMutex::new(vec![
+                ProviderTurn {
+                    assistant_text: String::new(),
+                    tool_intents: vec![provider_continuation_test_intent(
+                        "session-pseudo-tool",
+                        "turn-write",
+                        "call-write",
+                        "write",
+                        json!({
+                            "path": "report.txt",
+                            "content": "report body"
+                        }),
+                    )],
+                    raw_meta: Value::Null,
+                },
+                ProviderTurn {
+                    assistant_text: "[followup_state:done]\nFinished writing report.txt."
+                        .to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                },
+            ]),
+            request_turn_messages: StdMutex::new(Vec::new()),
+        };
+        let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+        let mut turn_loop_state = ProviderTurnLoopState::default();
+
+        let resolved = resolve_provider_turn_reply(
+            &runtime,
+            &config,
+            "session-pseudo-tool",
+            &preparation,
+            &continue_phase,
+            user_input,
+            &turn_loop_policy,
+            &mut turn_loop_state,
+            3,
+            ConversationRuntimeBinding::advisory_only(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(resolved.reply_text(), Some("Finished writing report.txt."));
+        let request_turn_messages = runtime
+            .request_turn_messages
+            .lock()
+            .expect("request-turn messages lock should not be poisoned");
+        assert_eq!(request_turn_messages.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_continuation_recovers_malformed_parse_followup_without_real_tool_call() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some(temp_dir.path().display().to_string());
+
+        let user_input = "Write the repaired response to recovered.txt";
+        let preparation = provider_continuation_test_preparation(&config, user_input);
+        let continue_phase = provider_continuation_test_continue_phase_with_lane(
+            &config,
+            "let me retry.\n<function=shell.exec><parameter=command>ls /root</parameter>"
+                .to_owned(),
+            false,
+            true,
+            true,
+            TurnResult::FinalText(String::new()),
+        );
+        let runtime = MissingToolContinuationRuntime {
+            queued_turns: StdMutex::new(vec![
+                ProviderTurn {
+                    assistant_text: String::new(),
+                    tool_intents: vec![provider_continuation_test_intent(
+                        "session-malformed",
+                        "turn-write",
+                        "call-write",
+                        "write",
+                        json!({
+                            "path": "recovered.txt",
+                            "content": "recovered body"
+                        }),
+                    )],
+                    raw_meta: Value::Null,
+                },
+                ProviderTurn {
+                    assistant_text: "[followup_state:done]\nFinished writing recovered.txt."
+                        .to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                },
+            ]),
+            request_turn_messages: StdMutex::new(Vec::new()),
+        };
+        let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+        let mut turn_loop_state = ProviderTurnLoopState::default();
+
+        let resolved = resolve_provider_turn_reply(
+            &runtime,
+            &config,
+            "session-malformed",
+            &preparation,
+            &continue_phase,
+            user_input,
+            &turn_loop_policy,
+            &mut turn_loop_state,
+            3,
+            ConversationRuntimeBinding::advisory_only(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            resolved.reply_text(),
+            Some("Finished writing recovered.txt.")
+        );
+        let request_turn_messages = runtime
+            .request_turn_messages
+            .lock()
+            .expect("request-turn messages lock should not be poisoned");
+        assert_eq!(request_turn_messages.len(), 2);
+    }
+
     #[test]
     fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape() {
         let mut config = LoongConfig::default();
@@ -10469,6 +10685,7 @@ mod tests {
                 tool_request_summary: None,
                 discovery_search_turn: false,
                 search_tool_intents: 0,
+                malformed_parse_followup_turn: false,
                 supports_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::ToolError(TurnFailure::retryable(
@@ -10692,6 +10909,7 @@ mod tests {
                 tool_request_summary: None,
                 discovery_search_turn: false,
                 search_tool_intents: 0,
+                malformed_parse_followup_turn: false,
                 supports_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::FinalText("hello there".to_owned()),
