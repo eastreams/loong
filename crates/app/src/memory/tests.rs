@@ -728,6 +728,7 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
             let envelope = StageEnvelope {
                 hydrated,
                 retrieval_request: None,
+                retrieval_planner_snapshot: None,
                 diagnostics: vec![StageDiagnostics::succeeded(MemoryStageFamily::Retrieve)],
             };
 

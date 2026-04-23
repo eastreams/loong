@@ -8,9 +8,10 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::{
     DerivedMemoryKind, HydratedMemoryContext, MemoryContextProvenance, MemoryDiagnostics,
-    MemoryRecallMode, MemoryRetrievalRequest, MemoryScope, MemoryStageFamily, StageDiagnostics,
-    StageEnvelope, StageOutcome,
+    MemoryRecallMode, MemoryRetrievalRequest, MemoryRetrievalStrategy, MemoryScope,
+    MemoryStageFamily, StageDiagnostics, StageEnvelope, StageOutcome,
 };
+use crate::memory::stage::PlannerDiagnosticsSnapshot;
 
 pub const MEMORY_OP_APPEND_TURN: &str = "append_turn";
 pub const MEMORY_OP_WINDOW: &str = "window";
@@ -139,6 +140,10 @@ struct MemoryRetrievalRequestPayload {
     #[serde(default)]
     memory_system_id: Option<String>,
     #[serde(default)]
+    strategy: Option<String>,
+    #[serde(default)]
+    planning_notes: Vec<String>,
+    #[serde(default)]
     query: Option<String>,
     #[serde(default)]
     recall_mode: Option<MemoryRecallMode>,
@@ -162,6 +167,8 @@ struct StageDiagnosticsPayload {
     fallback_activated: bool,
     #[serde(default)]
     message: Option<String>,
+    #[serde(default)]
+    planner_snapshot: Option<PlannerDiagnosticsSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +176,8 @@ struct StageEnvelopePayload {
     hydrated: Option<HydratedMemoryContextPayload>,
     #[serde(default)]
     retrieval_request: Option<MemoryRetrievalRequestPayload>,
+    #[serde(default)]
+    retrieval_planner_snapshot: Option<PlannerDiagnosticsSnapshot>,
     #[serde(default)]
     diagnostics: Vec<StageDiagnosticsPayload>,
 }
@@ -198,6 +207,15 @@ pub fn build_read_context_request(
     session_id: &str,
     config: &MemoryRuntimeConfig,
 ) -> MemoryCoreRequest {
+    build_read_context_request_with_workspace_root(session_id, None, config)
+}
+
+pub fn build_read_context_request_with_workspace_root(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> MemoryCoreRequest {
+    let workspace_root_value = workspace_root.map(|path| path.display().to_string());
     MemoryCoreRequest {
         operation: MEMORY_OP_READ_CONTEXT.to_owned(),
         payload: json!({
@@ -208,6 +226,7 @@ pub fn build_read_context_request(
             "sliding_window": config.sliding_window,
             "summary_max_chars": config.summary_max_chars,
             "profile_note": config.profile_note,
+            "workspace_root": workspace_root_value,
         }),
     }
 }
@@ -320,16 +339,31 @@ pub fn encode_stage_envelope_payload(envelope: &StageEnvelope) -> Value {
 
 pub fn decode_stage_envelope(payload: &Value) -> Option<StageEnvelope> {
     let payload = serde_json::from_value::<StageEnvelopePayload>(payload.clone()).ok()?;
+    let hydrated = decode_hydrated_memory_context_payload(payload.hydrated?)?;
+    let retrieval_request = payload
+        .retrieval_request
+        .and_then(decode_memory_retrieval_request_payload);
+    let fallback_planner_system_id = retrieval_request
+        .as_ref()
+        .map(|request| request.memory_system_id.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let hydrated_system_id = hydrated.diagnostics.system_id.trim().to_owned();
+            (!hydrated_system_id.is_empty()).then_some(hydrated_system_id)
+        });
 
     Some(StageEnvelope {
-        hydrated: decode_hydrated_memory_context_payload(payload.hydrated?)?,
-        retrieval_request: payload
-            .retrieval_request
-            .and_then(decode_memory_retrieval_request_payload),
+        hydrated,
+        retrieval_request,
+        retrieval_planner_snapshot: payload.retrieval_planner_snapshot.map(|snapshot| {
+            normalize_planner_snapshot(snapshot, fallback_planner_system_id.as_deref())
+        }),
         diagnostics: payload
             .diagnostics
             .into_iter()
-            .filter_map(decode_stage_diagnostics_payload)
+            .filter_map(|payload| {
+                decode_stage_diagnostics_payload(payload, fallback_planner_system_id.as_deref())
+            })
             .collect(),
     })
 }
@@ -380,6 +414,8 @@ impl From<&MemoryRetrievalRequest> for MemoryRetrievalRequestPayload {
         Self {
             session_id: value.session_id.clone(),
             memory_system_id: Some(value.memory_system_id.clone()),
+            strategy: Some(value.strategy.as_str().to_owned()),
+            planning_notes: value.planning_notes.clone(),
             query: value.query.clone(),
             recall_mode: Some(value.recall_mode),
             scopes: value
@@ -410,6 +446,7 @@ impl From<&StageDiagnostics> for StageDiagnosticsPayload {
             elapsed_ms: value.elapsed_ms,
             fallback_activated: value.fallback_activated,
             message: value.message.clone(),
+            planner_snapshot: value.planner_snapshot.clone(),
         }
     }
 }
@@ -422,6 +459,7 @@ impl From<&StageEnvelope> for StageEnvelopePayload {
                 .retrieval_request
                 .as_ref()
                 .map(MemoryRetrievalRequestPayload::from),
+            retrieval_planner_snapshot: value.retrieval_planner_snapshot.clone(),
             diagnostics: value
                 .diagnostics
                 .iter()
@@ -482,6 +520,12 @@ fn decode_memory_retrieval_request_payload(
         memory_system_id: payload
             .memory_system_id
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned()),
+        strategy: payload
+            .strategy
+            .as_deref()
+            .and_then(MemoryRetrievalStrategy::parse_id)
+            .unwrap_or_default(),
+        planning_notes: payload.planning_notes,
         query: payload.query,
         recall_mode: payload.recall_mode.unwrap_or_default(),
         scopes: payload
@@ -498,7 +542,10 @@ fn decode_memory_retrieval_request_payload(
     })
 }
 
-fn decode_stage_diagnostics_payload(payload: StageDiagnosticsPayload) -> Option<StageDiagnostics> {
+fn decode_stage_diagnostics_payload(
+    payload: StageDiagnosticsPayload,
+    fallback_planner_system_id: Option<&str>,
+) -> Option<StageDiagnostics> {
     Some(StageDiagnostics {
         family: MemoryStageFamily::parse_id(payload.family.as_str())?,
         outcome: StageOutcome::parse_id(payload.outcome.as_str())?,
@@ -506,7 +553,22 @@ fn decode_stage_diagnostics_payload(payload: StageDiagnosticsPayload) -> Option<
         elapsed_ms: payload.elapsed_ms,
         fallback_activated: payload.fallback_activated,
         message: payload.message,
+        planner_snapshot: payload
+            .planner_snapshot
+            .map(|snapshot| normalize_planner_snapshot(snapshot, fallback_planner_system_id)),
     })
+}
+
+fn normalize_planner_snapshot(
+    mut snapshot: PlannerDiagnosticsSnapshot,
+    fallback_planner_system_id: Option<&str>,
+) -> PlannerDiagnosticsSnapshot {
+    let needs_fallback = snapshot.memory_system_id.trim().is_empty();
+    if needs_fallback {
+        snapshot.memory_system_id = fallback_planner_system_id.unwrap_or_default().to_owned();
+    }
+
+    snapshot
 }
 
 #[cfg(test)]
@@ -593,6 +655,11 @@ mod tests {
             .expect("retrieval request should decode");
         assert_eq!(retrieval_request.session_id, "session-123");
         assert_eq!(retrieval_request.memory_system_id, "builtin");
+        assert_eq!(
+            retrieval_request.strategy,
+            MemoryRetrievalStrategy::Unspecified
+        );
+        assert!(retrieval_request.planning_notes.is_empty());
         assert_eq!(retrieval_request.query, None);
         assert_eq!(
             retrieval_request.recall_mode,
@@ -639,5 +706,242 @@ mod tests {
 
         assert_eq!(operation, MemoryCoreOperation::ReadStageEnvelope);
         assert_eq!(rendered, "read_stage_envelope");
+    }
+
+    #[test]
+    fn build_read_context_request_with_workspace_root_serializes_workspace_root() {
+        let config = MemoryRuntimeConfig::for_sqlite_path("/tmp/protocol-memory.sqlite3");
+        let workspace_root = Path::new("/tmp/workspace");
+
+        let request = build_read_context_request_with_workspace_root(
+            "session-123",
+            Some(workspace_root),
+            &config,
+        );
+
+        assert_eq!(request.operation, MEMORY_OP_READ_CONTEXT);
+        assert_eq!(request.payload["session_id"], "session-123");
+        assert_eq!(request.payload["workspace_root"], "/tmp/workspace");
+    }
+
+    #[test]
+    fn decode_stage_envelope_preserves_retrieval_planning_notes() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin"
+                }
+            },
+            "retrieval_request": {
+                "session_id": "session-123",
+                "strategy": "workflow_task_query_with_workspace",
+                "planning_notes": [
+                    "workflow task seed",
+                    "workflow task budget=2"
+                ]
+            },
+            "diagnostics": []
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("retrieval request should decode");
+
+        assert_eq!(
+            retrieval_request.strategy,
+            MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        assert_eq!(
+            retrieval_request.planning_notes,
+            vec![
+                "workflow task seed".to_owned(),
+                "workflow task budget=2".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_stage_envelope_preserves_retrieval_diagnostics_message() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin"
+                }
+            },
+            "diagnostics": [
+                {
+                    "family": "retrieve",
+                    "outcome": "succeeded",
+                    "message": "planner system=builtin strategy=workflow_task_query_with_workspace budget=2 query=present notes=workflow task seed"
+                }
+            ]
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+
+        assert_eq!(envelope.diagnostics.len(), 1);
+        assert_eq!(envelope.diagnostics[0].family, MemoryStageFamily::Retrieve);
+        assert_eq!(
+            envelope.diagnostics[0].message.as_deref(),
+            Some(
+                "planner system=builtin strategy=workflow_task_query_with_workspace budget=2 query=present notes=workflow task seed"
+            )
+        );
+    }
+
+    #[test]
+    fn decode_stage_envelope_preserves_planner_snapshot() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin"
+                }
+            },
+            "retrieval_planner_snapshot": {
+                "memory_system_id": "builtin",
+                "strategy": "workflow_task_query_with_workspace",
+                "budget_items": 2,
+                "query_present": true,
+                "planning_notes": [
+                    "workflow task seed",
+                    "workflow task budget=2"
+                ]
+            },
+            "diagnostics": [
+                {
+                    "family": "retrieve",
+                    "outcome": "succeeded",
+                    "planner_snapshot": {
+                        "memory_system_id": "builtin",
+                        "strategy": "workflow_task_query_with_workspace",
+                        "budget_items": 2,
+                        "query_present": true,
+                        "planning_notes": [
+                            "workflow task seed",
+                            "workflow task budget=2"
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let envelope_snapshot = envelope
+            .retrieval_planner_snapshot
+            .as_ref()
+            .expect("envelope planner snapshot");
+        assert_eq!(
+            envelope_snapshot.strategy,
+            MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        assert_eq!(envelope_snapshot.memory_system_id, "builtin");
+        let snapshot = envelope.diagnostics[0]
+            .planner_snapshot
+            .as_ref()
+            .expect("planner snapshot");
+
+        assert_eq!(
+            snapshot.strategy,
+            MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        assert_eq!(snapshot.budget_items, 2);
+        assert!(snapshot.query_present);
+        assert_eq!(snapshot.memory_system_id, "builtin");
+        assert_eq!(
+            snapshot.planning_notes,
+            vec![
+                "workflow task seed".to_owned(),
+                "workflow task budget=2".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_stage_envelope_tolerates_omitted_planner_snapshot_system_id() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin"
+                }
+            },
+            "retrieval_planner_snapshot": {
+                "strategy": "workspace_reference_only",
+                "budget_items": 1,
+                "query_present": false,
+                "planning_notes": [
+                    "workspace recall system"
+                ]
+            }
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let snapshot = envelope
+            .retrieval_planner_snapshot
+            .as_ref()
+            .expect("planner snapshot");
+
+        assert_eq!(snapshot.memory_system_id, "builtin");
+        assert_eq!(
+            snapshot.strategy,
+            MemoryRetrievalStrategy::WorkspaceReferenceOnly
+        );
+        assert_eq!(snapshot.budget_items, 1);
+        assert!(!snapshot.query_present);
+    }
+
+    #[test]
+    fn decode_stage_envelope_backfills_planner_snapshot_system_id_from_retrieval_request() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin"
+                }
+            },
+            "retrieval_request": {
+                "session_id": "session-123",
+                "memory_system_id": "recall_first",
+                "strategy": "workspace_reference_only",
+                "recall_mode": "prompt_assembly",
+                "scopes": ["workspace"],
+                "budget_items": 1,
+                "allowed_kinds": ["reference"]
+            },
+            "retrieval_planner_snapshot": {
+                "strategy": "workspace_reference_only",
+                "budget_items": 1,
+                "query_present": false,
+                "planning_notes": [
+                    "workspace recall system"
+                ]
+            },
+            "diagnostics": [
+                {
+                    "family": "retrieve",
+                    "outcome": "succeeded",
+                    "planner_snapshot": {
+                        "strategy": "workspace_reference_only",
+                        "budget_items": 1,
+                        "query_present": false,
+                        "planning_notes": [
+                            "workspace recall system"
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let envelope_snapshot = envelope
+            .retrieval_planner_snapshot
+            .as_ref()
+            .expect("envelope planner snapshot");
+        let diagnostic_snapshot = envelope.diagnostics[0]
+            .planner_snapshot
+            .as_ref()
+            .expect("diagnostic planner snapshot");
+
+        assert_eq!(envelope_snapshot.memory_system_id, "recall_first");
+        assert_eq!(diagnostic_snapshot.memory_system_id, "recall_first");
     }
 }

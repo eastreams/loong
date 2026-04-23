@@ -30,7 +30,13 @@ pub(crate) fn read_context(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.read_context requires payload.session_id".to_owned())?;
     let runtime_config = read_context_runtime_config(payload, config)?;
-    let entries = load_prompt_context(session_id, &runtime_config)?;
+    let workspace_root = read_context_workspace_root(payload, MEMORY_OP_READ_CONTEXT)?;
+    let envelope = hydrate_stage_envelope_with_workspace_root(
+        session_id,
+        workspace_root.as_deref(),
+        &runtime_config,
+    )?;
+    let entries = envelope.hydrated.entries;
 
     Ok(MemoryCoreOutcome {
         status: "ok".to_owned(),
@@ -143,6 +149,30 @@ fn read_context_runtime_config(
     Ok(runtime_config)
 }
 
+fn read_context_workspace_root(
+    payload: &serde_json::Map<String, Value>,
+    operation: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    payload
+        .get("workspace_root")
+        .map(|value| match value {
+            Value::Null => Ok(None),
+            Value::String(raw_path) => {
+                let trimmed_path = raw_path.trim();
+                if trimmed_path.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(std::path::PathBuf::from(trimmed_path)))
+                }
+            }
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => Err(format!(
+                "{operation} payload.workspace_root must be a string or null"
+            )),
+        })
+        .transpose()
+        .map(Option::flatten)
+}
+
 pub(crate) fn read_stage_envelope(
     request: MemoryCoreRequest,
     config: &MemoryRuntimeConfig,
@@ -158,25 +188,7 @@ pub(crate) fn read_stage_envelope(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "memory.read_stage_envelope requires payload.session_id".to_owned())?;
     let runtime_config = read_context_runtime_config(payload, config)?;
-    let workspace_root = payload
-        .get("workspace_root")
-        .map(|value| match value {
-            Value::Null => Ok(None),
-            Value::String(raw_path) => {
-                let trimmed_path = raw_path.trim();
-                if trimmed_path.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(std::path::PathBuf::from(trimmed_path)))
-                }
-            }
-            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => Err(
-                "memory.read_stage_envelope payload.workspace_root must be a string or null"
-                    .to_owned(),
-            ),
-        })
-        .transpose()?
-        .flatten();
+    let workspace_root = read_context_workspace_root(payload, MEMORY_OP_READ_STAGE_ENVELOPE)?;
     let envelope = hydrate_stage_envelope_with_workspace_root(
         session_id,
         workspace_root.as_deref(),
@@ -308,7 +320,7 @@ mod tests {
     use crate::config::MemoryProfile;
     use crate::memory::{
         build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
-        decode_stage_envelope,
+        decode_memory_context_entries, decode_stage_envelope,
     };
 
     #[cfg(feature = "memory-sqlite")]
@@ -785,6 +797,78 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn read_context_operation_projects_entries_from_stage_envelope() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let curated_memory_path = workspace_root.join("MEMORY.md");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nRemember the deploy freeze window.\n",
+        )
+        .expect("write durable recall");
+
+        let db_path = workspace_root.join("read-context-stage-envelope.sqlite3");
+        let config =
+            sqlite_memory_config_with_profile(db_path, MemoryProfile::WindowPlusSummary, 2);
+
+        super::super::append_turn_direct(
+            "read-context-envelope-session",
+            "user",
+            "turn 1",
+            &config,
+        )
+        .expect("append turn 1 should succeed");
+        super::super::append_turn_direct(
+            "read-context-envelope-session",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        super::super::append_turn_direct(
+            "read-context-envelope-session",
+            "user",
+            "deploy freeze timing",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let read_context_request = MemoryCoreRequest {
+            operation: MEMORY_OP_READ_CONTEXT.to_owned(),
+            payload: json!({
+                "session_id": "read-context-envelope-session",
+                "profile": config.profile.as_str(),
+                "system": config.system.as_str(),
+                "system_id": config.resolved_system_id.as_deref(),
+                "sliding_window": config.sliding_window,
+                "summary_max_chars": config.summary_max_chars,
+                "profile_note": config.profile_note,
+                "workspace_root": workspace_root,
+            }),
+        };
+        let read_context_outcome =
+            super::super::execute_memory_core_with_config(read_context_request, &config)
+                .expect("read_context should succeed");
+        let context_entries = decode_memory_context_entries(&read_context_outcome.payload);
+
+        let staged_outcome = super::super::execute_memory_core_with_config(
+            build_read_stage_envelope_request_with_workspace_root(
+                "read-context-envelope-session",
+                Some(workspace_root),
+                &config,
+            ),
+            &config,
+        )
+        .expect("read_stage_envelope should succeed");
+        let staged_envelope =
+            decode_stage_envelope(&staged_outcome.payload).expect("decode staged envelope");
+
+        assert_eq!(context_entries, staged_envelope.hydrated.entries);
     }
 
     #[cfg(feature = "memory-sqlite")]
