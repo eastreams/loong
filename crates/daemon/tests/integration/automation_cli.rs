@@ -690,6 +690,9 @@ async fn automation_journal_prune_uses_current_cursor_segment_as_floor() {
                     command: loong_daemon::automation_cli::AutomationJournalCommands::Prune(
                         loong_daemon::automation_cli::AutomationJournalPruneCommandOptions {
                             retain_segment_id: None,
+                            retain_last_sealed: 0,
+                            retain_min_age_seconds: None,
+                            dry_run: false,
                         },
                     ),
                 },
@@ -704,6 +707,106 @@ async fn automation_journal_prune_uses_current_cursor_segment_as_floor() {
     assert!(!loong_app::internal_events::internal_event_segment_path("segment-000001").exists());
     assert!(loong_app::internal_events::internal_event_segment_path("segment-000002").exists());
     assert!(loong_app::internal_events::internal_event_segment_path("segment-000003").exists());
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_journal_prune_dry_run_reports_policy_without_deleting_segments() {
+    let guard = lock_automation_integration().await;
+    let root = TempDirGuard::new("loong-automation-journal-prune-dry-run");
+    let config_path = write_automation_config(root.path());
+    let loong_home = root.path().join("loong-home");
+    fs::create_dir_all(&loong_home).expect("create loong home");
+
+    let loong_home_text = loong_home.display().to_string();
+    let detached_binary = env!("CARGO_BIN_EXE_loong").to_owned();
+    let _env = MigrationEnvironmentGuard::set(&[
+        ("LOONG_HOME", Some(loong_home_text.as_str())),
+        ("CARGO_BIN_EXE_loong", Some(detached_binary.as_str())),
+    ]);
+
+    fs::create_dir_all(
+        loong_app::internal_events::internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        loong_app::internal_events::internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000004\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":20},\n",
+            "    {\"segment_id\":\"segment-000002\",\"status\":\"sealed\",\"created_at_ms\":20,\"sealed_at_ms\":30},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"sealed\",\"created_at_ms\":30,\"sealed_at_ms\":40},\n",
+            "    {\"segment_id\":\"segment-000004\",\"status\":\"active\",\"created_at_ms\":50}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write journal state");
+    for segment_id in [
+        "segment-000001",
+        "segment-000002",
+        "segment-000003",
+        "segment-000004",
+    ] {
+        fs::write(
+            loong_app::internal_events::internal_event_segment_path(segment_id),
+            format!(
+                "{{\"event_name\":\"session.cancelled\",\"payload\":{{\"segment_id\":\"{segment_id}\"}},\"recorded_at_ms\":1}}\n"
+            ),
+        )
+        .expect("write segment");
+    }
+    fs::write(
+        automation_cursor_path(&loong_home),
+        concat!(
+            "{\n",
+            "  \"segment_id\": \"segment-000004\",\n",
+            "  \"line_cursor\": 1,\n",
+            "  \"byte_offset\": 10,\n",
+            "  \"journal_fingerprint\": \"abc\"\n",
+            "}\n"
+        ),
+    )
+    .expect("write cursor payload");
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Journal(
+                loong_daemon::automation_cli::AutomationJournalCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationJournalCommands::Prune(
+                        loong_daemon::automation_cli::AutomationJournalPruneCommandOptions {
+                            retain_segment_id: None,
+                            retain_last_sealed: 1,
+                            retain_min_age_seconds: None,
+                            dry_run: true,
+                        },
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("dry-run journal prune");
+
+    assert_eq!(payload["command"], "journal_prune");
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["retain_floor_segment_id"], "segment-000004");
+    assert_eq!(payload["retain_last_sealed_segments"], 1);
+    assert_eq!(
+        payload["pruned_segments"],
+        json!(["segment-000001", "segment-000002"])
+    );
+    assert!(loong_app::internal_events::internal_event_segment_path("segment-000001").exists());
+    assert!(loong_app::internal_events::internal_event_segment_path("segment-000002").exists());
+    assert!(loong_app::internal_events::internal_event_segment_path("segment-000003").exists());
+    assert!(loong_app::internal_events::internal_event_segment_path("segment-000004").exists());
     drop(guard);
 }
 
@@ -1520,6 +1623,50 @@ async fn automation_cli_create_cron_persists_next_fire_cursor() {
         next_fire_at_ms
     );
     assert_eq!(show_payload["trigger"]["fire_count"], 0);
+    drop(guard);
+}
+
+#[tokio::test]
+async fn automation_cron_preview_surfaces_future_fire_times_in_utc() {
+    let guard = lock_automation_integration().await;
+    let root = TempDirGuard::new("loong-automation-cron-preview");
+    let config_path = write_automation_config(root.path());
+
+    let payload = loong_daemon::automation_cli::execute_automation_command(
+        loong_daemon::automation_cli::AutomationCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::automation_cli::AutomationCommands::Cron(
+                loong_daemon::automation_cli::AutomationCronCommandOptions {
+                    command: loong_daemon::automation_cli::AutomationCronCommands::Preview(
+                        loong_daemon::automation_cli::AutomationCronPreviewCommandOptions {
+                            cron: "0 0 * * *".to_owned(),
+                            after: None,
+                            after_ms: Some(1_700_000_000_000),
+                            count: 3,
+                        },
+                    ),
+                },
+            ),
+        },
+    )
+    .await
+    .expect("preview cron");
+
+    assert_eq!(payload["command"], "cron_preview");
+    assert_eq!(payload["expression"], "0 0 * * *");
+    assert_eq!(payload["timezone"], "UTC");
+    assert_eq!(payload["preview"].as_array().map(Vec::len), Some(3));
+    let first_fire_at_ms = payload["preview"][0]["fire_at_ms"]
+        .as_i64()
+        .expect("first preview fire_at_ms");
+    assert!(first_fire_at_ms > 1_700_000_000_000);
+    assert!(
+        payload["preview"][0]["fire_at_rfc3339"]
+            .as_str()
+            .expect("first preview fire_at_rfc3339")
+            .contains('T')
+    );
     drop(guard);
 }
 

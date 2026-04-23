@@ -35,6 +35,8 @@ pub enum AutomationCommands {
     CreateSchedule(AutomationCreateScheduleCommandOptions),
     /// Create one cron-style automation trigger
     CreateCron(AutomationCreateCronCommandOptions),
+    /// Inspect or preview cron expressions without creating a trigger
+    Cron(AutomationCronCommandOptions),
     /// Create one event-triggered automation rule
     CreateEvent(AutomationCreateEventCommandOptions),
     /// List durable automation triggers
@@ -124,6 +126,30 @@ pub struct AutomationCreateCronCommandOptions {
     pub label: Option<String>,
     #[arg(long)]
     pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AutomationCronCommandOptions {
+    #[command(subcommand)]
+    pub command: AutomationCronCommands,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum AutomationCronCommands {
+    /// Preview the next fire times for one cron expression
+    Preview(AutomationCronPreviewCommandOptions),
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct AutomationCronPreviewCommandOptions {
+    #[arg(long)]
+    pub cron: String,
+    #[arg(long)]
+    pub after: Option<String>,
+    #[arg(long)]
+    pub after_ms: Option<i64>,
+    #[arg(long, default_value_t = 5)]
+    pub count: usize,
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -242,6 +268,12 @@ pub struct AutomationJournalRotateCommandOptions {}
 pub struct AutomationJournalPruneCommandOptions {
     #[arg(long)]
     pub retain_segment_id: Option<String>,
+    #[arg(long, default_value_t = 0)]
+    pub retain_last_sealed: usize,
+    #[arg(long)]
+    pub retain_min_age_seconds: Option<u64>,
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -447,6 +479,13 @@ struct CronExpression {
     day_of_week: CronField,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct AutomationCronPreviewEntry {
+    ordinal: usize,
+    fire_at_ms: i64,
+    fire_at_rfc3339: String,
+}
+
 pub async fn run_automation_cli(options: AutomationCommandOptions) -> CliResult<()> {
     let payload = execute_automation_command(options.clone()).await?;
     if options.json {
@@ -470,6 +509,7 @@ pub async fn execute_automation_command(options: AutomationCommandOptions) -> Cl
         AutomationCommands::CreateCron(command) => {
             execute_create_cron_command(store_path.as_path(), command).await
         }
+        AutomationCommands::Cron(command) => execute_cron_command(command),
         AutomationCommands::CreateEvent(command) => {
             execute_create_event_command(store_path.as_path(), command).await
         }
@@ -618,6 +658,25 @@ fn parse_run_at_ms(raw_text: Option<String>, raw_ms: Option<i64>) -> CliResult<i
             let millis = parsed.unix_timestamp_nanos() / 1_000_000;
             let millis = i64::try_from(millis).map_err(|error| {
                 format!("automation --run-at overflowed i64 milliseconds: {error}")
+            })?;
+            Ok(millis)
+        }
+    }
+}
+
+fn parse_cron_preview_after_ms(raw_text: Option<String>, raw_ms: Option<i64>) -> CliResult<i64> {
+    match (raw_text, raw_ms) {
+        (Some(_), Some(_)) => {
+            Err("automation cron preview accepts either --after or --after-ms, not both".to_owned())
+        }
+        (None, None) => Ok(now_ms()),
+        (None, Some(after_ms)) => Ok(after_ms),
+        (Some(text), None) => {
+            let parsed = OffsetDateTime::parse(text.trim(), &Rfc3339)
+                .map_err(|error| format!("parse automation cron --after failed: {error}"))?;
+            let millis = parsed.unix_timestamp_nanos() / 1_000_000;
+            let millis = i64::try_from(millis).map_err(|error| {
+                format!("automation cron --after overflowed i64 milliseconds: {error}")
             })?;
             Ok(millis)
         }
@@ -851,6 +910,52 @@ fn next_cron_fire_at_ms(expression: &str, after_ms: i64) -> CliResult<i64> {
     Err(format!(
         "automation cron expression `{expression}` did not match within the next 366 days"
     ))
+}
+
+fn format_automation_fire_at_rfc3339(fire_at_ms: i64) -> CliResult<String> {
+    let fire_at_ns = i128::from(fire_at_ms).saturating_mul(1_000_000);
+    let fire_at = OffsetDateTime::from_unix_timestamp_nanos(fire_at_ns)
+        .map_err(|error| format!("format automation fire-at timestamp failed: {error}"))?;
+    fire_at
+        .format(&Rfc3339)
+        .map_err(|error| format!("format automation fire-at RFC3339 failed: {error}"))
+}
+
+fn execute_cron_command(options: AutomationCronCommandOptions) -> CliResult<Value> {
+    match options.command {
+        AutomationCronCommands::Preview(command) => execute_cron_preview_command(command),
+    }
+}
+
+fn execute_cron_preview_command(options: AutomationCronPreviewCommandOptions) -> CliResult<Value> {
+    if options.count == 0 {
+        return Err("automation cron preview --count must be greater than zero".to_owned());
+    }
+    if options.count > 20 {
+        return Err("automation cron preview --count must be <= 20".to_owned());
+    }
+
+    let after_ms = parse_cron_preview_after_ms(options.after, options.after_ms)?;
+    let mut preview = Vec::new();
+    let mut anchor_ms = after_ms;
+    for ordinal in 1..=options.count {
+        let fire_at_ms = next_cron_fire_at_ms(options.cron.as_str(), anchor_ms)?;
+        let fire_at_rfc3339 = format_automation_fire_at_rfc3339(fire_at_ms)?;
+        preview.push(AutomationCronPreviewEntry {
+            ordinal,
+            fire_at_ms,
+            fire_at_rfc3339,
+        });
+        anchor_ms = fire_at_ms;
+    }
+
+    Ok(json!({
+        "command": "cron_preview",
+        "expression": options.cron,
+        "timezone": "UTC",
+        "after_ms": after_ms,
+        "preview": preview,
+    }))
 }
 
 impl AutomationRunnerTracker {
@@ -1692,23 +1797,51 @@ fn execute_journal_prune_command(
 ) -> CliResult<Value> {
     let cursor_path = automation_event_cursor_path();
     let cursor = load_internal_event_cursor(cursor_path.as_path())?;
-    let retain_cursor = if let Some(retain_segment_id) = options.retain_segment_id {
-        mvp::internal_events::InternalEventJournalCursor {
-            segment_id: Some(retain_segment_id),
-            ..mvp::internal_events::InternalEventJournalCursor::default()
-        }
-    } else {
-        cursor.clone()
+    let retain_floor_segment_id_option = options
+        .retain_segment_id
+        .clone()
+        .or_else(|| cursor.segment_id.clone());
+    let Some(retain_floor_segment_id) = retain_floor_segment_id_option else {
+        return Err(
+            "automation journal prune requires a retained segment id; use --retain-segment-id when no persisted cursor is available"
+                .to_owned(),
+        );
     };
-    let pruned_segments =
-        mvp::internal_events::prune_internal_event_journal_segments(&retain_cursor)?;
+    let retain_cursor = mvp::internal_events::InternalEventJournalCursor {
+        segment_id: Some(retain_floor_segment_id.clone()),
+        ..mvp::internal_events::InternalEventJournalCursor::default()
+    };
+    let retain_min_age_ms = options
+        .retain_min_age_seconds
+        .map(|seconds| seconds.saturating_mul(1_000));
+    let gc_policy = mvp::internal_events::InternalEventJournalGcPolicy {
+        retain_floor_segment_id: Some(retain_floor_segment_id.clone()),
+        retain_last_sealed_segments: options.retain_last_sealed,
+        retain_min_age_ms,
+    };
+    let plan = if options.dry_run {
+        mvp::internal_events::plan_internal_event_journal_gc(&gc_policy)?
+    } else {
+        mvp::internal_events::gc_internal_event_journal_segments(&gc_policy)?
+    };
+    let pruned_segments = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.action == "prune")
+        .map(|decision| Value::String(decision.segment_id.clone()))
+        .collect::<Vec<_>>();
     let inspection = execute_journal_inspect_command()?;
     Ok(json!({
         "command": "journal_prune",
+        "dry_run": options.dry_run,
         "cursor_path": cursor_path.display().to_string(),
         "cursor": cursor,
         "retain_cursor": retain_cursor,
+        "retain_floor_segment_id": retain_floor_segment_id,
+        "retain_last_sealed_segments": options.retain_last_sealed,
+        "retain_min_age_ms": retain_min_age_ms,
         "pruned_segments": pruned_segments,
+        "plan": plan,
         "inspection": inspection,
     }))
 }
@@ -2308,6 +2441,7 @@ fn render_automation_text(payload: &Value) -> CliResult<String> {
         .and_then(Value::as_str)
         .ok_or_else(|| "automation payload missing command".to_owned())?;
     match command {
+        "cron_preview" => render_cron_preview(payload),
         "create_schedule" | "create_cron" | "create_event" | "show" | "status_update" => {
             let trigger = payload
                 .get("trigger")
@@ -2521,6 +2655,48 @@ fn render_runner_reclaim(payload: &Value) -> CliResult<String> {
     Ok(format!("Automation runner reclaim outcome: {outcome}."))
 }
 
+fn render_cron_preview(payload: &Value) -> CliResult<String> {
+    let expression = payload
+        .get("expression")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "automation cron preview payload missing expression".to_owned())?;
+    let timezone = payload
+        .get("timezone")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "automation cron preview payload missing timezone".to_owned())?;
+    let preview = payload
+        .get("preview")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "automation cron preview payload missing preview".to_owned())?;
+
+    let mut lines = vec![
+        "Automation cron preview".to_owned(),
+        String::new(),
+        format!("expression: {expression}"),
+        format!("timezone: {timezone}"),
+        String::new(),
+        "next fires:".to_owned(),
+    ];
+
+    for entry in preview {
+        let ordinal = entry
+            .get("ordinal")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let fire_at_ms = entry
+            .get("fire_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let fire_at_rfc3339 = entry
+            .get("fire_at_rfc3339")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        lines.push(format!("- #{ordinal}: {fire_at_rfc3339} ({fire_at_ms})"));
+    }
+
+    Ok(lines.join("\n"))
+}
+
 fn render_fire_result(result: &Value) -> CliResult<String> {
     let id = result["trigger_id"]
         .as_str()
@@ -2638,27 +2814,55 @@ fn render_journal_rotate(payload: &Value) -> CliResult<String> {
 }
 
 fn render_journal_prune(payload: &Value) -> CliResult<String> {
+    let dry_run = payload
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let pruned_segments = payload["pruned_segments"]
         .as_array()
         .ok_or_else(|| "automation journal prune payload missing pruned_segments".to_owned())?;
+    let retain_floor_segment_id = payload
+        .get("retain_floor_segment_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let retain_last_sealed_segments = payload
+        .get("retain_last_sealed_segments")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let retain_min_age_ms = payload
+        .get("retain_min_age_ms")
+        .cloned()
+        .unwrap_or(Value::Null);
     let inspection = payload
         .get("inspection")
         .ok_or_else(|| "automation journal prune payload missing inspection".to_owned())?;
+    let mut header_lines = vec![
+        format!("retain_floor_segment_id: {retain_floor_segment_id}"),
+        format!("retain_last_sealed_segments: {retain_last_sealed_segments}"),
+        format!("retain_min_age_ms: {retain_min_age_ms}"),
+        String::new(),
+    ];
     if pruned_segments.is_empty() {
-        return Ok(format!(
-            "No sealed automation journal segments were pruned.\n\n{}",
-            render_journal_inspect(inspection)?
-        ));
+        let prefix = if dry_run {
+            "Automation journal prune dry-run would not remove any sealed segments.".to_owned()
+        } else {
+            "No sealed automation journal segments were pruned.".to_owned()
+        };
+        header_lines.push(render_journal_inspect(inspection)?);
+        return Ok(format!("{prefix}\n\n{}", header_lines.join("\n")));
     }
     let pruned_list = pruned_segments
         .iter()
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(format!(
-        "Pruned automation journal segments: {pruned_list}\n\n{}",
-        render_journal_inspect(inspection)?
-    ))
+    let prefix = if dry_run {
+        format!("Automation journal prune dry-run would remove: {pruned_list}")
+    } else {
+        format!("Pruned automation journal segments: {pruned_list}")
+    };
+    header_lines.push(render_journal_inspect(inspection)?);
+    Ok(format!("{prefix}\n\n{}", header_lines.join("\n")))
 }
 
 fn render_journal_repair(payload: &Value) -> CliResult<String> {
@@ -2831,6 +3035,26 @@ mod tests {
         let next = next_cron_fire_at_ms("0 0 1 1 *", 1_700_000_000_000);
         assert!(next.is_ok());
         assert!(next.unwrap_or_default() > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn execute_cron_preview_command_returns_bounded_future_fire_times() {
+        let payload = execute_cron_preview_command(AutomationCronPreviewCommandOptions {
+            cron: "0 0 * * *".to_owned(),
+            after: None,
+            after_ms: Some(1_700_000_000_000),
+            count: 3,
+        })
+        .expect("preview cron expression");
+
+        assert_eq!(payload["command"], "cron_preview");
+        assert_eq!(payload["expression"], "0 0 * * *");
+        assert_eq!(payload["timezone"], "UTC");
+        assert_eq!(payload["preview"].as_array().map(Vec::len), Some(3));
+        let first_fire_at_ms = payload["preview"][0]["fire_at_ms"]
+            .as_i64()
+            .expect("first preview fire_at_ms");
+        assert!(first_fire_at_ms > 1_700_000_000_000);
     }
 
     #[test]

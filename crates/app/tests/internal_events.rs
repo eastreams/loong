@@ -4,10 +4,11 @@ use std::thread;
 use std::time::Duration;
 
 use loong_app::internal_events::{
-    InternalEventJournalCursor, append_internal_event_to_journal,
-    emit_internal_event_with_metadata, inspect_internal_event_journal_layout,
-    internal_event_active_segment_id_path, internal_event_journal_cursor_from_line_cursor,
-    internal_event_journal_path, internal_event_journal_state_path, internal_event_segment_path,
+    InternalEventJournalCursor, InternalEventJournalGcPolicy, append_internal_event_to_journal,
+    emit_internal_event_with_metadata, gc_internal_event_journal_segments,
+    inspect_internal_event_journal_layout, internal_event_active_segment_id_path,
+    internal_event_journal_cursor_from_line_cursor, internal_event_journal_path,
+    internal_event_journal_state_path, internal_event_segment_path, plan_internal_event_journal_gc,
     probe_internal_event_journal_runtime_ready, prune_internal_event_journal_segments,
     read_internal_event_journal_after, read_internal_event_journal_since,
     repair_internal_event_journal_state, rotate_internal_event_journal_segment,
@@ -485,6 +486,168 @@ fn prune_internal_event_journal_segments_removes_only_fully_consumed_sealed_segm
     assert!(!internal_event_segment_path("segment-000001").exists());
     assert!(internal_event_segment_path("segment-000002").exists());
     assert!(internal_event_segment_path("segment-000003").exists());
+}
+
+#[test]
+fn plan_internal_event_journal_gc_retains_recent_and_young_segments() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    let young_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_millis() as i64;
+    let old_ms = young_ms - 1_000_000;
+
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        internal_event_journal_state_path(),
+        format!(
+            concat!(
+                "{{\n",
+                "  \"schema_version\": 1,\n",
+                "  \"active_segment_id\": \"segment-000004\",\n",
+                "  \"segments\": [\n",
+                "    {{\"segment_id\":\"segment-000001\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":{old_ms}}},\n",
+                "    {{\"segment_id\":\"segment-000002\",\"status\":\"sealed\",\"created_at_ms\":20,\"sealed_at_ms\":{young_ms}}},\n",
+                "    {{\"segment_id\":\"segment-000003\",\"status\":\"sealed\",\"created_at_ms\":30,\"sealed_at_ms\":40}},\n",
+                "    {{\"segment_id\":\"segment-000004\",\"status\":\"active\",\"created_at_ms\":50}}\n",
+                "  ]\n",
+                "}}\n"
+            ),
+            old_ms = old_ms,
+            young_ms = young_ms,
+        ),
+    )
+    .expect("write journal state");
+    for segment_id in [
+        "segment-000001",
+        "segment-000002",
+        "segment-000003",
+        "segment-000004",
+    ] {
+        fs::write(
+            internal_event_segment_path(segment_id),
+            format!(
+                "{{\"event_name\":\"session.cancelled\",\"payload\":{{\"segment_id\":\"{segment_id}\"}},\"recorded_at_ms\":1}}\n"
+            ),
+        )
+        .expect("write segment");
+    }
+
+    let plan = plan_internal_event_journal_gc(&InternalEventJournalGcPolicy {
+        retain_floor_segment_id: Some("segment-000004".to_owned()),
+        retain_last_sealed_segments: 1,
+        retain_min_age_ms: Some(60_000),
+    })
+    .expect("plan journal GC");
+
+    let segment_000001 = plan
+        .decisions
+        .iter()
+        .find(|decision| decision.segment_id == "segment-000001")
+        .expect("segment-000001 decision");
+    let segment_000002 = plan
+        .decisions
+        .iter()
+        .find(|decision| decision.segment_id == "segment-000002")
+        .expect("segment-000002 decision");
+    let segment_000003 = plan
+        .decisions
+        .iter()
+        .find(|decision| decision.segment_id == "segment-000003")
+        .expect("segment-000003 decision");
+    let segment_000004 = plan
+        .decisions
+        .iter()
+        .find(|decision| decision.segment_id == "segment-000004")
+        .expect("segment-000004 decision");
+
+    assert_eq!(segment_000001.action, "prune");
+    assert_eq!(segment_000001.reason, "eligible");
+    assert_eq!(segment_000002.action, "retain");
+    assert_eq!(segment_000002.reason, "retain_min_age");
+    assert_eq!(segment_000003.action, "retain");
+    assert_eq!(segment_000003.reason, "retain_last_sealed");
+    assert_eq!(segment_000004.action, "retain");
+    assert_eq!(segment_000004.reason, "active_segment");
+}
+
+#[test]
+fn gc_internal_event_journal_segments_applies_policy_and_updates_manifest() {
+    let temp_home = tempfile::tempdir().expect("create temp home");
+    let mut env = ScopedEnv::new();
+    env.set("LOONG_HOME", temp_home.path().as_os_str());
+
+    fs::create_dir_all(
+        internal_event_segment_path("segment-000001")
+            .parent()
+            .expect("segment parent"),
+    )
+    .expect("create segment parent");
+    fs::write(
+        internal_event_journal_state_path(),
+        concat!(
+            "{\n",
+            "  \"schema_version\": 1,\n",
+            "  \"active_segment_id\": \"segment-000004\",\n",
+            "  \"segments\": [\n",
+            "    {\"segment_id\":\"segment-000001\",\"status\":\"sealed\",\"created_at_ms\":10,\"sealed_at_ms\":20},\n",
+            "    {\"segment_id\":\"segment-000002\",\"status\":\"sealed\",\"created_at_ms\":20,\"sealed_at_ms\":30},\n",
+            "    {\"segment_id\":\"segment-000003\",\"status\":\"sealed\",\"created_at_ms\":30,\"sealed_at_ms\":40},\n",
+            "    {\"segment_id\":\"segment-000004\",\"status\":\"active\",\"created_at_ms\":50}\n",
+            "  ]\n",
+            "}\n"
+        ),
+    )
+    .expect("write journal state");
+    for segment_id in [
+        "segment-000001",
+        "segment-000002",
+        "segment-000003",
+        "segment-000004",
+    ] {
+        fs::write(
+            internal_event_segment_path(segment_id),
+            format!(
+                "{{\"event_name\":\"session.cancelled\",\"payload\":{{\"segment_id\":\"{segment_id}\"}},\"recorded_at_ms\":1}}\n"
+            ),
+        )
+        .expect("write segment");
+    }
+
+    let plan = gc_internal_event_journal_segments(&InternalEventJournalGcPolicy {
+        retain_floor_segment_id: Some("segment-000004".to_owned()),
+        retain_last_sealed_segments: 1,
+        retain_min_age_ms: None,
+    })
+    .expect("apply journal GC");
+
+    let pruned_segment_ids = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.action == "prune")
+        .map(|decision| decision.segment_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(pruned_segment_ids, vec!["segment-000001", "segment-000002"]);
+    assert!(!internal_event_segment_path("segment-000001").exists());
+    assert!(!internal_event_segment_path("segment-000002").exists());
+    assert!(internal_event_segment_path("segment-000003").exists());
+    assert!(internal_event_segment_path("segment-000004").exists());
+
+    let layout = inspect_internal_event_journal_layout().expect("inspect journal layout");
+    let segment_ids = layout
+        .segments
+        .iter()
+        .map(|segment| segment.segment_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(segment_ids, vec!["segment-000003", "segment-000004"]);
 }
 
 #[test]

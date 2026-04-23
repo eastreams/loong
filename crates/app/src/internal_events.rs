@@ -85,6 +85,33 @@ pub struct InternalEventJournalLayoutInfo {
     pub segments: Vec<InternalEventJournalSegmentInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InternalEventJournalGcPolicy {
+    pub retain_floor_segment_id: Option<String>,
+    pub retain_last_sealed_segments: usize,
+    pub retain_min_age_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InternalEventJournalGcDecision {
+    pub segment_id: String,
+    pub path: String,
+    pub status: String,
+    pub created_at_ms: Option<i64>,
+    pub sealed_at_ms: Option<i64>,
+    pub action: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InternalEventJournalGcPlan {
+    pub active_segment_id: String,
+    pub retain_floor_segment_id: Option<String>,
+    pub retain_last_sealed_segments: usize,
+    pub retain_min_age_ms: Option<u64>,
+    pub decisions: Vec<InternalEventJournalGcDecision>,
+}
+
 fn internal_event_sink_registry() -> &'static RwLock<Option<InternalEventSink>> {
     static REGISTRY: OnceLock<RwLock<Option<InternalEventSink>>> = OnceLock::new();
     REGISTRY.get_or_init(|| RwLock::new(None))
@@ -376,6 +403,172 @@ pub fn prune_internal_event_journal_segments(
         store_internal_event_journal_state(&state)?;
     }
     Ok(pruned)
+}
+
+pub fn plan_internal_event_journal_gc(
+    policy: &InternalEventJournalGcPolicy,
+) -> Result<InternalEventJournalGcPlan, String> {
+    let layout = discover_internal_event_journal_layout()?;
+    let state = load_internal_event_journal_state()?;
+    let retain_floor_segment_id = policy.retain_floor_segment_id.clone();
+
+    if let Some(retain_floor_segment_id) = retain_floor_segment_id.as_deref() {
+        let floor_exists = layout
+            .segments
+            .iter()
+            .any(|segment| segment.segment_id == retain_floor_segment_id);
+        if !floor_exists {
+            return Err(format!(
+                "internal event journal GC floor segment `{retain_floor_segment_id}` does not exist"
+            ));
+        }
+    }
+
+    let older_than_floor = layout
+        .segments
+        .iter()
+        .filter(|segment| {
+            if segment.segment_id == layout.active_segment.segment_id {
+                return false;
+            }
+            let Some(retain_floor_segment_id) = retain_floor_segment_id.as_deref() else {
+                return true;
+            };
+            compare_internal_event_segment_ids(segment.segment_id.as_str(), retain_floor_segment_id)
+                .is_lt()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut recent_retained_segment_ids = older_than_floor
+        .iter()
+        .rev()
+        .take(policy.retain_last_sealed_segments)
+        .map(|segment| segment.segment_id.clone())
+        .collect::<Vec<_>>();
+    recent_retained_segment_ids
+        .sort_by(|left, right| compare_internal_event_segment_ids(left.as_str(), right.as_str()));
+
+    let now_ms = now_ms();
+    let decisions = layout
+        .segments
+        .iter()
+        .map(|segment| {
+            let state_entry = state.as_ref().and_then(|state| {
+                state
+                    .segments
+                    .iter()
+                    .find(|entry| entry.segment_id == segment.segment_id)
+            });
+            let status = state_entry
+                .map(|entry| match entry.status {
+                    InternalEventJournalSegmentStatus::Active => "active".to_owned(),
+                    InternalEventJournalSegmentStatus::Sealed => "sealed".to_owned(),
+                    InternalEventJournalSegmentStatus::Legacy => "legacy".to_owned(),
+                })
+                .unwrap_or_else(|| {
+                    if segment.segment_id == layout.active_segment.segment_id {
+                        "active".to_owned()
+                    } else if segment.segment_id == LEGACY_INTERNAL_EVENT_SEGMENT_ID {
+                        "legacy".to_owned()
+                    } else {
+                        "sealed".to_owned()
+                    }
+                });
+            let created_at_ms = state_entry.and_then(|entry| entry.created_at_ms);
+            let sealed_at_ms = state_entry.and_then(|entry| entry.sealed_at_ms);
+
+            let action_and_reason = if segment.segment_id == layout.active_segment.segment_id {
+                ("retain".to_owned(), "active_segment".to_owned())
+            } else if retain_floor_segment_id
+                .as_deref()
+                .is_some_and(|retain_floor_segment_id| {
+                    compare_internal_event_segment_ids(
+                        segment.segment_id.as_str(),
+                        retain_floor_segment_id,
+                    )
+                    .is_ge()
+                })
+            {
+                ("retain".to_owned(), "floor_segment_or_newer".to_owned())
+            } else if recent_retained_segment_ids
+                .iter()
+                .any(|retained_segment_id| retained_segment_id == &segment.segment_id)
+            {
+                ("retain".to_owned(), "retain_last_sealed".to_owned())
+            } else if policy.retain_min_age_ms.is_some_and(|retain_min_age_ms| {
+                let reference_ms = sealed_at_ms.or(created_at_ms).unwrap_or_default();
+                if reference_ms <= 0 {
+                    return false;
+                }
+                let age_ms = now_ms.saturating_sub(reference_ms);
+                age_ms < i64::try_from(retain_min_age_ms).unwrap_or(i64::MAX)
+            }) {
+                ("retain".to_owned(), "retain_min_age".to_owned())
+            } else {
+                ("prune".to_owned(), "eligible".to_owned())
+            };
+
+            InternalEventJournalGcDecision {
+                segment_id: segment.segment_id.clone(),
+                path: segment.path.display().to_string(),
+                status,
+                created_at_ms,
+                sealed_at_ms,
+                action: action_and_reason.0,
+                reason: action_and_reason.1,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(InternalEventJournalGcPlan {
+        active_segment_id: layout.active_segment.segment_id,
+        retain_floor_segment_id,
+        retain_last_sealed_segments: policy.retain_last_sealed_segments,
+        retain_min_age_ms: policy.retain_min_age_ms,
+        decisions,
+    })
+}
+
+pub fn gc_internal_event_journal_segments(
+    policy: &InternalEventJournalGcPolicy,
+) -> Result<InternalEventJournalGcPlan, String> {
+    let plan = plan_internal_event_journal_gc(policy)?;
+    let pruned_segment_ids = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.action == "prune")
+        .map(|decision| decision.segment_id.clone())
+        .collect::<Vec<_>>();
+
+    for decision in &plan.decisions {
+        if decision.action != "prune" {
+            continue;
+        }
+        let path = PathBuf::from(decision.path.as_str());
+        if !path.exists() {
+            continue;
+        }
+        fs::remove_file(path.as_path()).map_err(|error| {
+            format!(
+                "remove sealed internal event segment {} failed: {error}",
+                path.display()
+            )
+        })?;
+    }
+
+    if !pruned_segment_ids.is_empty()
+        && let Some(mut state) = load_internal_event_journal_state()?
+    {
+        state.segments.retain(|segment| {
+            !pruned_segment_ids
+                .iter()
+                .any(|pruned_segment_id| pruned_segment_id == &segment.segment_id)
+        });
+        store_internal_event_journal_state(&state)?;
+    }
+
+    Ok(plan)
 }
 
 pub fn read_internal_event_journal_since(

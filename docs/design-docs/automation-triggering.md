@@ -52,6 +52,8 @@ Loong now uses a small trigger record with:
 - `cron`
   - 5-field cron expression with a materialized `next_fire_at_ms`
   - current first slice evaluates cron in UTC
+  - operators can preview the next bounded UTC fire times before persisting a
+    trigger through `automation cron preview`
 - `event`
   - exact named event match such as `github.pr.opened` or
     `session.compaction.completed`
@@ -104,6 +106,9 @@ journal:
 - `automation serve` can now prune sealed segments that are strictly older than
   the persisted cursor segment after a successful cursor write, which gives
   Loong a first minimal retention behavior without touching the active segment
+- manual journal pruning is now policy-aware instead of purely cursor-floor
+  driven: operators can dry-run a prune plan, retain the latest sealed
+  segments, and keep recently sealed segments above a minimum age threshold
 - `internal-events.state.json` is now the richer layout truth for segmented
   journals, with the legacy `internal-events.active` marker retained as a
   compatibility shadow
@@ -229,6 +234,9 @@ set of sources that proves the model:
   catch-up bursts
 - cron schedules also persist a materialized next-fire cursor and recompute
   from their expression after each fire
+- cron expressions can be previewed without creating a trigger, so operators
+  can validate UTC cadence and the next bounded fire times before persisting
+  automation state
 - event triggers may optionally require a JSON-pointer payload value match
 - app-owned internal events now preserve `_automation.source_surface`
 - internal journal consumption is a runtime substrate concern only; journal rows
@@ -238,6 +246,8 @@ set of sources that proves the model:
   bridges
 - the immediate callback bridge is only used when there is no live non-stale
   `automation serve` owner
+- manual journal pruning can now be run as a dry-run policy evaluation before
+  any segment is deleted
 - failed fires keep their trigger record and retry on a bounded later tick
 - webhook ingress requires an explicit token when configured
 
@@ -250,8 +260,8 @@ The intentionally reserved next steps are:
 - runtime lifecycle emitters for hook-style events
 - multi-owner scheduling or standby/failover behavior beyond the current leased
   singleton owner model
-- broader retention policy and GC beyond the current minimal “older sealed
-  segments only” pruning rule
+- richer retention policy and GC beyond the current cursor floor + keep-last +
+  minimum-age policy
 - richer operator-facing journal health and repair/reporting surfaces
 - policy/config hardening around automatic rotation thresholds and retention
   controls
