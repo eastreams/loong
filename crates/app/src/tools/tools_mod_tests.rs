@@ -369,15 +369,25 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         "external_skills.policy",
         "provider.switch",
         "session_archive",
+        "session_artifacts",
         "session_cancel",
+        "session_children",
         "session_continue",
+        "session_create_branch_summary",
+        "session_create_checkpoint",
         "session_events",
+        "session_fork_head",
+        "session_heads",
+        "session_pin_head",
+        "session_path",
         "session_recover",
         "session_search",
+        "session_set_active_head",
         "session_status",
         "session_tool_policy_clear",
         "session_tool_policy_set",
         "session_tool_policy_status",
+        "session_unpin_head",
         "session_wait",
         "task_events",
         "task_history",
@@ -415,15 +425,25 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websea
         "external_skills.policy",
         "provider.switch",
         "session_archive",
+        "session_artifacts",
         "session_cancel",
+        "session_children",
         "session_continue",
+        "session_create_branch_summary",
+        "session_create_checkpoint",
         "session_events",
+        "session_fork_head",
+        "session_heads",
+        "session_pin_head",
+        "session_path",
         "session_recover",
         "session_search",
+        "session_set_active_head",
         "session_status",
         "session_tool_policy_clear",
         "session_tool_policy_set",
         "session_tool_policy_status",
+        "session_unpin_head",
         "session_wait",
         "task_events",
         "task_history",
@@ -454,11 +474,17 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"session_archive".to_owned()));
+    assert!(names.contains(&"session_create_checkpoint".to_owned()));
+    assert!(names.contains(&"session_create_branch_summary".to_owned()));
     assert!(names.contains(&"session_cancel".to_owned()));
     assert!(names.contains(&"session_continue".to_owned()));
+    assert!(names.contains(&"session_fork_head".to_owned()));
+    assert!(names.contains(&"session_pin_head".to_owned()));
     assert!(names.contains(&"session_recover".to_owned()));
+    assert!(names.contains(&"session_set_active_head".to_owned()));
     assert!(names.contains(&"session_tool_policy_set".to_owned()));
     assert!(names.contains(&"session_tool_policy_clear".to_owned()));
+    assert!(names.contains(&"session_unpin_head".to_owned()));
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -506,7 +532,11 @@ fn runtime_tool_view_hides_session_mutation_tools_when_explicitly_disabled() {
         "approval_requests_list",
         "delegate",
         "delegate_async",
+        "session_artifacts",
+        "session_children",
         "session_events",
+        "session_heads",
+        "session_path",
         "session_tool_policy_status",
         "session_search",
         "session_status",
@@ -533,7 +563,13 @@ fn runtime_tool_view_hides_session_mutation_tools_when_explicitly_disabled() {
         "session_archive",
         "session_cancel",
         "session_continue",
+        "session_create_branch_summary",
+        "session_create_checkpoint",
+        "session_fork_head",
+        "session_pin_head",
         "session_recover",
+        "session_set_active_head",
+        "session_unpin_head",
     ] {
         assert!(
             !view.contains(tool_name),
@@ -561,9 +597,15 @@ fn runtime_tool_view_re_exposes_session_mutation_tools_when_enabled() {
     assert!(view.contains("session_archive"));
     assert!(view.contains("session_cancel"));
     assert!(view.contains("session_continue"));
+    assert!(view.contains("session_create_branch_summary"));
+    assert!(view.contains("session_create_checkpoint"));
+    assert!(view.contains("session_fork_head"));
+    assert!(view.contains("session_pin_head"));
     assert!(view.contains("session_recover"));
+    assert!(view.contains("session_set_active_head"));
     assert!(view.contains("session_tool_policy_set"));
     assert!(view.contains("session_tool_policy_clear"));
+    assert!(view.contains("session_unpin_head"));
 }
 
 #[test]
@@ -2271,6 +2313,7 @@ fn browser_companion_protocol_times_out_stalled_command() {
 #[cfg(feature = "tool-browser")]
 #[test]
 fn browser_companion_app_tool_click_uses_current_session_scope() {
+    let mut env = ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
     let root = unique_tool_temp_dir("loongclaw-browser-companion-app-click");
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2298,7 +2341,6 @@ fn browser_companion_app_tool_click_uses_current_session_scope() {
         .expect("session id should exist")
         .to_owned();
 
-    let mut env = ScopedEnv::new();
     env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
     let mut tool_config = crate::config::ToolConfig::default();

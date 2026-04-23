@@ -268,6 +268,235 @@ pub(super) fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+pub(super) fn session_heads_definition(descriptor: &ToolDescriptor) -> Value {
+    session_id_only_definition(
+        descriptor,
+        "Visible session identifier whose named branch heads should be listed.",
+    )
+}
+
+pub(super) fn session_path_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible session identifier whose branch path should be loaded."
+                    },
+                    "head_name": {
+                        "type": "string",
+                        "description": "Optional branch head to inspect. Defaults to `active`."
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn session_children_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible session identifier that owns the branch node."
+                    },
+                    "node_id": {
+                        "type": "string",
+                        "description": "Parent node whose direct child nodes should be listed."
+                    }
+                },
+                "required": ["session_id", "node_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn session_artifacts_definition(descriptor: &ToolDescriptor) -> Value {
+    session_id_only_definition(
+        descriptor,
+        "Visible session identifier whose branch artifacts should be listed.",
+    )
+}
+
+pub(super) fn session_fork_head_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible session identifier that owns the source node."
+                    },
+                    "node_id": {
+                        "type": "string",
+                        "description": "Existing node id to fork from."
+                    },
+                    "head_name": {
+                        "type": "string",
+                        "description": "Name for the new or updated branch head."
+                    }
+                },
+                "required": ["session_id", "node_id", "head_name"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn session_set_active_head_definition(descriptor: &ToolDescriptor) -> Value {
+    session_id_head_name_definition(
+        descriptor,
+        "Visible session identifier whose active branch head should change.",
+        "Existing named branch head to promote to `active`.",
+    )
+}
+
+pub(super) fn session_pin_head_definition(descriptor: &ToolDescriptor) -> Value {
+    session_id_head_name_definition(
+        descriptor,
+        "Visible session identifier whose named branch head should be pinned.",
+        "Existing named branch head to mark as `pinned`.",
+    )
+}
+
+pub(super) fn session_unpin_head_definition(descriptor: &ToolDescriptor) -> Value {
+    session_id_head_name_definition(
+        descriptor,
+        "Visible session identifier whose named branch head should be unpinned.",
+        "Existing named branch head to mark as `live`.",
+    )
+}
+
+fn session_id_head_name_definition(
+    descriptor: &ToolDescriptor,
+    session_id_description: &str,
+    head_name_description: &str,
+) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": session_id_description
+                    },
+                    "head_name": {
+                        "type": "string",
+                        "description": head_name_description
+                    }
+                },
+                "required": ["session_id", "head_name"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn session_create_checkpoint_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible session identifier whose branch checkpoint should be created."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Human-readable checkpoint label. The named head becomes `checkpoint/<label>`."
+                    },
+                    "node_id": {
+                        "type": "string",
+                        "description": "Optional explicit anchor node. Defaults to the active path tip."
+                    }
+                },
+                "required": ["session_id", "label"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn session_create_branch_summary_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible session identifier whose branch head should receive a summary artifact."
+                    },
+                    "head_name": {
+                        "type": "string",
+                        "description": "Named branch head whose exclusive segment should be summarized."
+                    },
+                    "summary_text": {
+                        "type": "string",
+                        "description": "Operator-authored summary text for that branch segment."
+                    },
+                    "anchor_node_id": {
+                        "type": "string",
+                        "description": "Optional explicit anchor node. Defaults to the branch fork point."
+                    }
+                },
+                "required": ["session_id", "head_name", "summary_text"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn session_id_only_definition(descriptor: &ToolDescriptor, session_id_description: &str) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": session_id_description
+                    }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 pub(super) fn task_status_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",

@@ -174,8 +174,18 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "delegate" | "delegate_async" => {
             "task:string,label?:string,profile?:string,isolation?:string,timeout_seconds?:integer"
         }
-        "session_archive" | "session_cancel" | "session_events" | "session_recover"
-        | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
+        "session_archive" | "session_artifacts" | "session_cancel" | "session_events"
+        | "session_heads" | "session_recover" | "session_status" | "session_wait"
+        | "sessions_history" => "session_id:string",
+        "session_path" => "session_id:string,head_name?:string",
+        "session_children" => "session_id:string,node_id:string",
+        "session_fork_head" => "session_id:string,node_id:string,head_name:string",
+        "session_pin_head" | "session_unpin_head" => "session_id:string,head_name:string",
+        "session_set_active_head" => "session_id:string,head_name:string",
+        "session_create_checkpoint" => "session_id:string,label:string,node_id?:string",
+        "session_create_branch_summary" => {
+            "session_id:string,head_name:string,summary_text:string,anchor_node_id?:string"
+        }
         "task_status" => "task_id:string,task_ids?:string[]",
         "task_wait" | "task_history" => "task_id:string",
         "task_events" => "task_id:string,after_id?:integer,limit?:integer",
@@ -672,8 +682,31 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("tool_ids", "array"),
             ("runtime_narrowing", "object"),
         ],
-        "session_archive" | "session_cancel" | "session_events" | "session_recover"
-        | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
+        "session_archive" | "session_artifacts" | "session_cancel" | "session_events"
+        | "session_heads" | "session_recover" | "session_status" | "session_wait"
+        | "sessions_history" => &[("session_id", "string")],
+        "session_path" => &[("session_id", "string"), ("head_name", "string")],
+        "session_children" => &[("session_id", "string"), ("node_id", "string")],
+        "session_fork_head" => &[
+            ("session_id", "string"),
+            ("node_id", "string"),
+            ("head_name", "string"),
+        ],
+        "session_pin_head" | "session_unpin_head" => {
+            &[("session_id", "string"), ("head_name", "string")]
+        }
+        "session_set_active_head" => &[("session_id", "string"), ("head_name", "string")],
+        "session_create_checkpoint" => &[
+            ("session_id", "string"),
+            ("label", "string"),
+            ("node_id", "string"),
+        ],
+        "session_create_branch_summary" => &[
+            ("session_id", "string"),
+            ("head_name", "string"),
+            ("summary_text", "string"),
+            ("anchor_node_id", "string"),
+        ],
         "task_status" => &[("task_id", "string")],
         "task_wait" | "task_history" => &[("task_id", "string")],
         "task_events" => &[
@@ -787,12 +820,19 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "delegate" | "delegate_async" => &["task"],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[],
         "session_tool_policy_set" => &[],
-        "session_archive" | "session_cancel" | "session_events" | "session_recover"
-        | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
         "task_status" | "task_wait" | "task_history" | "task_events" => &["task_id"],
         "tasks_list" => &[],
         "tasks_search" => &["query"],
         "session_continue" => &["session_id", "input"],
+        "session_archive" | "session_artifacts" | "session_cancel" | "session_events"
+        | "session_heads" | "session_recover" | "session_status" | "session_wait"
+        | "sessions_history" => &["session_id"],
+        "session_path" => &["session_id"],
+        "session_children" | "session_fork_head" => &["session_id", "node_id"],
+        "session_pin_head" | "session_unpin_head" => &["session_id", "head_name"],
+        "session_set_active_head" => &["session_id", "head_name"],
+        "session_create_checkpoint" => &["session_id", "label"],
+        "session_create_branch_summary" => &["session_id", "head_name", "summary_text"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
@@ -891,8 +931,15 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "session_tool_policy_status" | "session_tool_policy_set" | "session_tool_policy_clear" => {
             &["session", "policy", "tools", "security"]
         }
-        "session_archive" | "session_cancel" | "session_events" | "session_recover"
-        | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
+        "session_create_branch_summary"
+        | "session_create_checkpoint"
+        | "session_fork_head"
+        | "session_pin_head"
+        | "session_set_active_head"
+        | "session_unpin_head" => &["session", "tree", "branch", "write"],
+        "session_artifacts" | "session_children" | "session_events" | "session_heads"
+        | "session_path" | "session_status" | "session_wait" | "sessions_history"
+        | "sessions_list" | "session_archive" | "session_cancel" | "session_recover" => {
             &["session", "history", "runtime"]
         }
         "task_status" | "task_wait" | "task_history" => &["task", "runtime", "history", "status"],

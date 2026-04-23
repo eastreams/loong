@@ -60,13 +60,17 @@ mod session_definition_support;
 use session_definition_support::{
     approval_request_resolve_definition, approval_request_status_definition,
     approval_requests_list_definition, delegate_async_definition, delegate_definition,
-    session_archive_definition, session_cancel_definition, session_continue_definition,
-    session_events_definition, session_recover_definition, session_search_definition,
-    session_status_definition, session_tool_policy_clear_definition,
-    session_tool_policy_set_definition, session_tool_policy_status_definition,
-    session_wait_definition, sessions_history_definition, sessions_list_definition,
-    sessions_send_definition, task_events_definition, task_history_definition,
-    task_status_definition, task_wait_definition, tasks_list_definition, tasks_search_definition,
+    session_archive_definition, session_artifacts_definition, session_cancel_definition,
+    session_children_definition, session_continue_definition,
+    session_create_branch_summary_definition, session_create_checkpoint_definition,
+    session_events_definition, session_fork_head_definition, session_heads_definition,
+    session_path_definition, session_pin_head_definition, session_recover_definition,
+    session_search_definition, session_set_active_head_definition, session_status_definition,
+    session_tool_policy_clear_definition, session_tool_policy_set_definition,
+    session_tool_policy_status_definition, session_unpin_head_definition, session_wait_definition,
+    sessions_history_definition, sessions_list_definition, sessions_send_definition,
+    task_events_definition, task_history_definition, task_status_definition, task_wait_definition,
+    tasks_list_definition, tasks_search_definition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -631,7 +635,11 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "external_skills.list"
         | "approval_request_status"
         | "approval_requests_list"
+        | "session_artifacts"
+        | "session_children"
         | "session_events"
+        | "session_heads"
+        | "session_path"
         | "session_tool_policy_status"
         | "session_search"
         | "session_status"
@@ -668,10 +676,16 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "delegate"
         | "delegate_async"
         | "session_archive"
+        | "session_create_branch_summary"
+        | "session_create_checkpoint"
         | "session_cancel"
+        | "session_fork_head"
+        | "session_pin_head"
+        | "session_set_active_head"
         | "session_tool_policy_set"
         | "session_tool_policy_clear"
         | "session_recover"
+        | "session_unpin_head"
         | "sessions_send"
         | "http.request"
         | "file.write"
@@ -1184,6 +1198,62 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: session_search_definition,
         },
         ToolDescriptor {
+            name: "session_heads",
+            provider_name: "session_heads",
+            aliases: &["session-heads"],
+            description: "List named branch heads for a visible session tree",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_heads_definition,
+        },
+        ToolDescriptor {
+            name: "session_path",
+            provider_name: "session_path",
+            aliases: &["session-path"],
+            description: "Load the node ancestry path for one visible session branch head",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_path_definition,
+        },
+        ToolDescriptor {
+            name: "session_children",
+            provider_name: "session_children",
+            aliases: &["session-children"],
+            description: "List direct child nodes for one visible session tree node",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_children_definition,
+        },
+        ToolDescriptor {
+            name: "session_artifacts",
+            provider_name: "session_artifacts",
+            aliases: &["session-artifacts"],
+            description: "List branch artifacts for a visible session tree",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_artifacts_definition,
+        },
+        ToolDescriptor {
             name: "session_recover",
             provider_name: "session_recover",
             aliases: &[],
@@ -1196,6 +1266,90 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_recover_definition,
+        },
+        ToolDescriptor {
+            name: "session_fork_head",
+            provider_name: "session_fork_head",
+            aliases: &["session-fork-head"],
+            description: "Create or update a named branch head from a visible session node",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_fork_head_definition,
+        },
+        ToolDescriptor {
+            name: "session_set_active_head",
+            provider_name: "session_set_active_head",
+            aliases: &["session-set-active-head"],
+            description: "Promote a named session branch head to the active prompt path",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_set_active_head_definition,
+        },
+        ToolDescriptor {
+            name: "session_pin_head",
+            provider_name: "session_pin_head",
+            aliases: &["session-pin-head"],
+            description: "Mark a named visible session branch head as pinned metadata",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_pin_head_definition,
+        },
+        ToolDescriptor {
+            name: "session_unpin_head",
+            provider_name: "session_unpin_head",
+            aliases: &["session-unpin-head"],
+            description: "Mark a named visible session branch head as live metadata",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_unpin_head_definition,
+        },
+        ToolDescriptor {
+            name: "session_create_checkpoint",
+            provider_name: "session_create_checkpoint",
+            aliases: &["session-create-checkpoint"],
+            description: "Create a named checkpoint head and artifact for a visible session branch",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_create_checkpoint_definition,
+        },
+        ToolDescriptor {
+            name: "session_create_branch_summary",
+            provider_name: "session_create_branch_summary",
+            aliases: &["session-create-branch-summary"],
+            description: "Create a branch summary artifact for a visible named session head",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: session_create_branch_summary_definition,
         },
         ToolDescriptor {
             name: "session_status",

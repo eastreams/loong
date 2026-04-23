@@ -48,6 +48,52 @@ pub enum SessionsCommands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Show named heads for one visible session tree
+    Heads { session_id: String },
+    /// Show one visible session tree path for a head
+    Path {
+        session_id: String,
+        #[arg(long)]
+        head_name: Option<String>,
+    },
+    /// Show tree artifacts for one visible session
+    Artifacts { session_id: String },
+    /// Create a named head from one visible session node
+    ForkHead {
+        session_id: String,
+        node_id: String,
+        head_name: String,
+    },
+    /// Mark a named head as pinned metadata for one visible session
+    PinHead {
+        session_id: String,
+        head_name: String,
+    },
+    /// Switch the active head for one visible session
+    SetActiveHead {
+        session_id: String,
+        head_name: String,
+    },
+    /// Mark a named head as live metadata for one visible session
+    UnpinHead {
+        session_id: String,
+        head_name: String,
+    },
+    /// Create a checkpoint artifact/head for one visible session
+    Checkpoint {
+        session_id: String,
+        label: String,
+        #[arg(long)]
+        node_id: Option<String>,
+    },
+    /// Create a branch summary artifact for one visible session head
+    BranchSummary {
+        session_id: String,
+        head_name: String,
+        summary_text: String,
+        #[arg(long)]
+        anchor_node_id: Option<String>,
+    },
     /// Cancel one visible session
     Cancel {
         session_id: String,
@@ -216,6 +262,137 @@ pub async fn execute_sessions_command(
             tool_config,
             &session_id,
             limit,
+        )?,
+        SessionsCommands::Heads { session_id } => execute_tree_query_command(
+            "heads",
+            "session_heads",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({ "session_id": session_id }),
+        )?,
+        SessionsCommands::Path {
+            session_id,
+            head_name,
+        } => execute_tree_query_command(
+            "path",
+            "session_path",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::Artifacts { session_id } => execute_tree_query_command(
+            "artifacts",
+            "session_artifacts",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({ "session_id": session_id }),
+        )?,
+        SessionsCommands::ForkHead {
+            session_id,
+            node_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "fork-head",
+            "session_fork_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "node_id": node_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::PinHead {
+            session_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "pin-head",
+            "session_pin_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::SetActiveHead {
+            session_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "set-active-head",
+            "session_set_active_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::UnpinHead {
+            session_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "unpin-head",
+            "session_unpin_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::Checkpoint {
+            session_id,
+            label,
+            node_id,
+        } => execute_tree_tool_command(
+            "checkpoint",
+            "session_create_checkpoint",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "label": label,
+                "node_id": node_id,
+            }),
+        )?,
+        SessionsCommands::BranchSummary {
+            session_id,
+            head_name,
+            summary_text,
+            anchor_node_id,
+        } => execute_tree_tool_command(
+            "branch-summary",
+            "session_create_branch_summary",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+                "summary_text": summary_text,
+                "anchor_node_id": anchor_node_id,
+            }),
         )?,
         SessionsCommands::Cancel {
             session_id,
@@ -1162,6 +1339,99 @@ fn execute_mutation_command(
     }))
 }
 
+fn execute_tree_query_command(
+    command_name: &str,
+    tool_name: &str,
+    resolved_config_path: &str,
+    current_session_id: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    payload: Value,
+) -> CliResult<Value> {
+    let session_id = payload
+        .get("session_id")
+        .cloned()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .ok_or_else(|| format!("{command_name} payload missing session_id"))?;
+    let outcome = execute_app_tool_request(
+        memory_config,
+        tool_config,
+        current_session_id,
+        tool_name,
+        payload,
+    )?;
+
+    let detail = normalize_session_tree_detail_payload(outcome.payload);
+
+    Ok(json!({
+        "command": command_name,
+        "config": resolved_config_path,
+        "current_session_id": current_session_id,
+        "session_id": session_id,
+        "detail": detail,
+    }))
+}
+
+fn execute_tree_tool_command(
+    command_name: &str,
+    tool_name: &str,
+    resolved_config_path: &str,
+    current_session_id: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    payload: Value,
+) -> CliResult<Value> {
+    let outcome = execute_app_tool_request(
+        memory_config,
+        tool_config,
+        current_session_id,
+        tool_name,
+        payload,
+    )?;
+    let detail = normalize_session_tree_detail_payload(outcome.payload);
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+
+    Ok(json!({
+        "command": command_name,
+        "config": resolved_config_path,
+        "current_session_id": current_session_id,
+        "session_id": session_id,
+        "detail": detail,
+    }))
+}
+
+fn normalize_session_tree_detail_payload(mut payload: Value) -> Value {
+    if let Some(heads) = payload.get_mut("heads").and_then(Value::as_array_mut) {
+        for head in heads {
+            normalize_session_head_value(head);
+        }
+    }
+
+    if let Some(head) = payload.get_mut("head") {
+        normalize_session_head_value(head);
+    }
+
+    if let Some(active_head) = payload.get_mut("active_head") {
+        normalize_session_head_value(active_head);
+    }
+
+    payload
+}
+
+fn normalize_session_head_value(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+
+    let mode_missing = object.get("mode").is_none();
+    if mode_missing && let Some(head_mode) = object.get("head_mode").cloned() {
+        object.insert("mode".to_owned(), head_mode);
+    }
+}
+
 fn execute_app_tool_request(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -1279,6 +1549,11 @@ pub fn render_sessions_cli_text(execution: &SessionsCommandExecution) -> CliResu
         "events" => render_sessions_events_text(&execution.payload)?,
         "wait" => render_sessions_wait_text(&execution.payload)?,
         "history" => render_sessions_history_text(&execution.payload)?,
+        "heads" => render_sessions_heads_text(&execution.payload)?,
+        "path" => render_sessions_path_text(&execution.payload)?,
+        "artifacts" => render_sessions_artifacts_text(&execution.payload)?,
+        "fork-head" | "pin-head" | "set-active-head" | "unpin-head" | "checkpoint"
+        | "branch-summary" => render_sessions_tree_mutation_text(&execution.payload)?,
         "cancel" | "recover" | "archive" => render_sessions_mutation_text(&execution.payload)?,
         other => {
             return Err(format!("unknown sessions CLI render command `{other}`"));
@@ -1694,6 +1969,243 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
     ))
 }
 
+fn render_sessions_heads_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions heads payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let heads = detail
+        .get("heads")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heads detail missing heads array".to_owned())?;
+
+    let mut lines = vec![format!(
+        "heads for `{}` ({})",
+        sanitize_terminal_text(session_id),
+        heads.len()
+    )];
+    if heads.is_empty() {
+        lines.push("No session heads.".to_owned());
+    } else {
+        for head in heads {
+            let head_name = head
+                .get("head_name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let node_id = head.get("node_id").and_then(Value::as_str).unwrap_or("-");
+            let mode = head.get("mode").and_then(Value::as_str).unwrap_or("live");
+            lines.push(format!(
+                "- {} -> {} mode={}",
+                sanitize_terminal_text(head_name),
+                sanitize_terminal_text(node_id),
+                sanitize_terminal_text(mode)
+            ));
+        }
+    }
+
+    Ok(render_sessions_surface(
+        "session heads",
+        "session shell",
+        Vec::new(),
+        vec![("heads", lines)],
+        vec!["Use `sessions path <id> --head-name <name>` to inspect one branch path.".to_owned()],
+    ))
+}
+
+fn render_sessions_path_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions path payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let head_name = detail
+        .get("head_name")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let path = detail
+        .get("path")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions path detail missing path array".to_owned())?;
+
+    let mut lines = vec![format!(
+        "path for `{}` head `{}` ({})",
+        sanitize_terminal_text(session_id),
+        sanitize_terminal_text(head_name),
+        path.len()
+    )];
+    for node in path {
+        let node_id = node.get("node_id").and_then(Value::as_str).unwrap_or("-");
+        let kind = node
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let role = node.get("role").and_then(Value::as_str).unwrap_or("-");
+        let content = node.get("content").and_then(Value::as_str).unwrap_or("-");
+        lines.push(format!(
+            "- {} kind={} role={} content={}",
+            sanitize_terminal_text(node_id),
+            kind,
+            role,
+            sanitize_terminal_text(content)
+        ));
+    }
+
+    Ok(render_sessions_surface(
+        "session path",
+        "session shell",
+        Vec::new(),
+        vec![("path", lines)],
+        vec!["Use `sessions heads <id>` to list other branches for the same session.".to_owned()],
+    ))
+}
+
+fn render_sessions_artifacts_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions artifacts payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let artifacts = detail
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions artifacts detail missing artifacts array".to_owned())?;
+
+    let mut lines = vec![format!(
+        "artifacts for `{}` ({})",
+        sanitize_terminal_text(session_id),
+        artifacts.len()
+    )];
+    if artifacts.is_empty() {
+        lines.push("No session artifacts.".to_owned());
+    } else {
+        for artifact in artifacts {
+            let artifact_id = artifact
+                .get("artifact_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let kind = artifact
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let head_name = artifact
+                .get("head_name")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let summary_text = artifact
+                .get("summary_text")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            lines.push(format!(
+                "- {} kind={} head={} summary={}",
+                sanitize_terminal_text(artifact_id),
+                kind,
+                sanitize_terminal_text(head_name),
+                sanitize_terminal_text(summary_text)
+            ));
+        }
+    }
+
+    Ok(render_sessions_surface(
+        "session artifacts",
+        "session shell",
+        Vec::new(),
+        vec![("artifacts", lines)],
+        vec![
+            "Use `sessions status <id>` to correlate artifacts with the active tree summary."
+                .to_owned(),
+        ],
+    ))
+}
+
+fn render_sessions_tree_mutation_text(payload: &Value) -> CliResult<String> {
+    let command = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("tree-mutation");
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions tree mutation payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let mut lines = vec![format!(
+        "{} for `{}`",
+        sanitize_terminal_text(command),
+        sanitize_terminal_text(session_id)
+    )];
+
+    if let Some(head) = detail.get("head") {
+        let head_name = head.get("head_name").and_then(Value::as_str).unwrap_or("-");
+        let node_id = head.get("node_id").and_then(Value::as_str).unwrap_or("-");
+        let mode = head.get("mode").and_then(Value::as_str).unwrap_or("live");
+        lines.push(format!(
+            "head: {} -> {} mode={}",
+            sanitize_terminal_text(head_name),
+            sanitize_terminal_text(node_id),
+            sanitize_terminal_text(mode)
+        ));
+    }
+    if let Some(active_head) = detail.get("active_head") {
+        let head_name = active_head
+            .get("head_name")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let node_id = active_head
+            .get("node_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let mode = active_head
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("live");
+        lines.push(format!(
+            "active_head: {} -> {} mode={}",
+            sanitize_terminal_text(head_name),
+            sanitize_terminal_text(node_id),
+            sanitize_terminal_text(mode)
+        ));
+    }
+    if let Some(artifact) = detail.get("artifact") {
+        let kind = artifact
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let artifact_id = artifact
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let summary_text = artifact
+            .get("summary_text")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        lines.push(format!(
+            "artifact: {} kind={} summary={}",
+            sanitize_terminal_text(artifact_id),
+            kind,
+            sanitize_terminal_text(summary_text)
+        ));
+    }
+
+    Ok(render_sessions_surface(
+        "session tree mutation",
+        "session shell",
+        Vec::new(),
+        vec![("result", lines)],
+        vec![
+            "Use `sessions status <id>` or `sessions path <id>` to inspect the updated tree."
+                .to_owned(),
+        ],
+    ))
+}
+
 fn render_sessions_mutation_text(payload: &Value) -> CliResult<String> {
     let command = payload
         .get("command")
@@ -1951,6 +2463,50 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         .and_then(Value::as_array)
         .map(|value| value.len())
         .unwrap_or(0);
+    let tree = detail.get("tree").cloned().unwrap_or(Value::Null);
+    let tree_head_count = tree
+        .get("head_count")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_active_path_count = tree
+        .get("active_path_count")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_artifact_count = tree
+        .get("artifact_count")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_checkpoint_count = tree
+        .get("artifact_counts")
+        .and_then(|value| value.get("checkpoint"))
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_branch_summary_count = tree
+        .get("artifact_counts")
+        .and_then(|value| value.get("branch_summary"))
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_active_head_name = tree
+        .get("active_head_name")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let tree_head_names = tree
+        .get("heads")
+        .and_then(Value::as_array)
+        .map(|heads| {
+            heads
+                .iter()
+                .filter_map(|head| head.get("head_name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_owned());
     let sanitized_session_id = sanitize_terminal_text(session_id.as_str());
     let sanitized_parent_session_id = sanitize_terminal_text(parent_session_id);
     let sanitized_label = sanitize_terminal_text(label);
@@ -1963,6 +2519,8 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     let sanitized_workflow_workspace_root = sanitize_terminal_text(workflow_workspace_root);
     let sanitized_lineage_root_session_id = sanitize_terminal_text(lineage_root_session_id);
     let sanitized_last_error = sanitize_terminal_text(last_error);
+    let sanitized_tree_active_head_name = sanitize_terminal_text(tree_active_head_name);
+    let sanitized_tree_head_names = sanitize_terminal_text(tree_head_names.as_str());
 
     let mut lines = Vec::new();
     lines.push(format!("session_id: {sanitized_session_id}"));
@@ -2009,6 +2567,17 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         "recommended_action: {diagnostics_recommended_action}"
     ));
     lines.push(format!("turn_count: {turn_count}"));
+    lines.push(format!("tree_head_count: {tree_head_count}"));
+    lines.push(format!(
+        "tree_active_head: {sanitized_tree_active_head_name}"
+    ));
+    lines.push(format!("tree_head_names: {sanitized_tree_head_names}"));
+    lines.push(format!("tree_active_path_count: {tree_active_path_count}"));
+    lines.push(format!("tree_artifact_count: {tree_artifact_count}"));
+    lines.push(format!("tree_checkpoint_count: {tree_checkpoint_count}"));
+    lines.push(format!(
+        "tree_branch_summary_count: {tree_branch_summary_count}"
+    ));
     lines.push(format!("last_turn_at: {last_turn_at}"));
     lines.push(format!("last_error: {sanitized_last_error}"));
     lines.push(format!("delegate_mode: {delegate_mode}"));
@@ -2093,7 +2662,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_session_heal_plan, render_session_heal_plan_lines, render_session_inspection_lines,
+        SessionsCommandExecution, build_session_heal_plan, render_session_heal_plan_lines,
+        render_session_inspection_lines, render_sessions_cli_text,
     };
 
     #[test]
@@ -2272,5 +2842,152 @@ mod tests {
                 .any(|line| { line.contains("hint provider_failover_present") }),
             "expected attention hint line, got: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn render_session_inspection_lines_includes_tree_summary() {
+        let detail = json!({
+            "session": {
+                "session_id": "root-session",
+                "kind": "root",
+                "parent_session_id": null,
+                "label": "Root",
+                "state": "ready",
+                "turn_count": 2,
+                "last_turn_at": 123,
+                "last_error": null,
+            },
+            "workflow": {
+                "workflow_id": "root-session",
+            },
+            "tree": {
+                "head_count": 2,
+                "active_path_count": 3,
+                "artifact_count": 2,
+                "active_head_name": "active",
+                "artifact_counts": {
+                    "checkpoint": 1,
+                    "branch_summary": 1,
+                },
+                "heads": [
+                    {"head_name": "active"},
+                    {"head_name": "thread/alpha"},
+                ],
+            },
+            "recent_events": [],
+        });
+
+        let lines = render_session_inspection_lines(&detail).expect("render session inspection");
+
+        assert!(lines.iter().any(|line| line == "tree_head_count: 2"));
+        assert!(lines.iter().any(|line| line == "tree_active_head: active"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "tree_head_names: active, thread/alpha")
+        );
+        assert!(lines.iter().any(|line| line == "tree_artifact_count: 2"));
+    }
+
+    #[test]
+    fn render_session_inspection_lines_includes_branch_summary_counts() {
+        let detail = json!({
+            "session": {
+                "session_id": "root-session",
+                "kind": "root",
+                "parent_session_id": null,
+                "label": "Root",
+                "state": "ready",
+                "turn_count": 1,
+                "last_turn_at": null,
+                "last_error": null,
+            },
+            "workflow": {
+                "workflow_id": "root-session",
+            },
+            "tree": {
+                "head_count": 1,
+                "active_path_count": 2,
+                "artifact_count": 3,
+                "active_head_name": "active",
+                "artifact_counts": {
+                    "checkpoint": 1,
+                    "branch_summary": 2,
+                },
+                "heads": [
+                    {"head_name": "active"},
+                ],
+            },
+            "recent_events": [],
+        });
+
+        let lines = render_session_inspection_lines(&detail).expect("render session inspection");
+
+        assert!(lines.iter().any(|line| line == "tree_checkpoint_count: 1"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "tree_branch_summary_count: 2")
+        );
+    }
+
+    #[test]
+    fn render_sessions_path_text_includes_head_and_nodes() {
+        let execution = SessionsCommandExecution {
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
+            current_session_id: "root-session".to_owned(),
+            payload: json!({
+                "command": "path",
+                "detail": {
+                    "session_id": "root-session",
+                    "head_name": "thread/alpha",
+                    "path": [
+                        {
+                            "node_id": "session-root:root-session",
+                            "kind": "root",
+                            "role": null,
+                            "content": null,
+                        },
+                        {
+                            "node_id": "session-turn:root-session:1",
+                            "kind": "user_turn",
+                            "role": "user",
+                            "content": "hello",
+                        }
+                    ]
+                }
+            }),
+        };
+
+        let rendered = render_sessions_cli_text(&execution).expect("rendered path");
+
+        assert!(rendered.contains("path for `root-session` head `thread/alpha` (2)"));
+        assert!(rendered.contains("session-turn:root-session:1"));
+        assert!(rendered.contains("content=hello"));
+    }
+
+    #[test]
+    fn render_sessions_tree_mutation_text_includes_artifact_summary() {
+        let execution = SessionsCommandExecution {
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
+            current_session_id: "root-session".to_owned(),
+            payload: json!({
+                "command": "branch-summary",
+                "detail": {
+                    "session_id": "root-session",
+                    "artifact": {
+                        "artifact_id": "branch-summary:root-session:1:thread_alpha",
+                        "kind": "branch_summary",
+                        "summary_text": "alpha summary"
+                    }
+                }
+            }),
+        };
+
+        let rendered = render_sessions_cli_text(&execution).expect("rendered mutation");
+
+        assert!(rendered.contains("branch-summary for `root-session`"));
+        assert!(rendered.contains("kind=branch_summary"));
+        assert!(rendered.contains("summary=alpha summary"));
     }
 }
