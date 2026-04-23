@@ -2985,8 +2985,6 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MissingToolContinuationExpectation {
-    Result,
-    ResultAfterFallback,
     RetryableFailure,
     RetryableFailureAfterRepair,
 }
@@ -2994,7 +2992,9 @@ enum MissingToolContinuationExpectation {
 impl MissingToolContinuationExpectation {
     fn from_tool_failure(payload: &ToolDrivenFollowupPayload) -> Option<Self> {
         match payload {
-            ToolDrivenFollowupPayload::ToolFailure { retryable, .. } if *retryable => {
+            ToolDrivenFollowupPayload::ToolFailure { reason, retryable }
+                if *retryable && reason.starts_with("missing_tool_call_followup:") =>
+            {
                 Some(Self::RetryableFailure)
             }
             ToolDrivenFollowupPayload::ToolFailure { .. }
@@ -3003,19 +3003,9 @@ impl MissingToolContinuationExpectation {
         }
     }
 
-    fn from_tool_result(payload: &ToolDrivenFollowupPayload) -> Option<Self> {
-        match payload {
-            ToolDrivenFollowupPayload::ToolResult { .. } => Some(Self::Result),
-            ToolDrivenFollowupPayload::ToolFailure { .. }
-            | ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => None,
-        }
-    }
-
     fn contract_mode(self) -> ToolDrivenFollowupContractMode {
         match self {
-            Self::Result => ToolDrivenFollowupContractMode::Normal,
             Self::RetryableFailure => ToolDrivenFollowupContractMode::RetryableFailure,
-            Self::ResultAfterFallback => ToolDrivenFollowupContractMode::Repair,
             Self::RetryableFailureAfterRepair => {
                 ToolDrivenFollowupContractMode::RepairRetryableFailure
             }
@@ -3024,23 +3014,17 @@ impl MissingToolContinuationExpectation {
 
     fn after_attempt(self) -> Self {
         match self {
-            Self::Result => Self::ResultAfterFallback,
             Self::RetryableFailure => Self::RetryableFailureAfterRepair,
-            Self::ResultAfterFallback => Self::ResultAfterFallback,
             Self::RetryableFailureAfterRepair => Self::RetryableFailureAfterRepair,
         }
     }
 
     fn after_attempted(self) -> bool {
-        matches!(
-            self,
-            Self::ResultAfterFallback | Self::RetryableFailureAfterRepair
-        )
+        matches!(self, Self::RetryableFailureAfterRepair)
     }
 
     fn payload_kind(self) -> ToolDrivenFollowupKind {
         match self {
-            Self::Result | Self::ResultAfterFallback => ToolDrivenFollowupKind::ToolResult,
             Self::RetryableFailure | Self::RetryableFailureAfterRepair => {
                 ToolDrivenFollowupKind::ToolFailure
             }
@@ -3438,12 +3422,10 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
     requires_completion_pass: bool,
     loop_warning_reason: Option<String>,
 ) -> Option<ResolvedProviderTurn> {
-    let continuation_expectation = MissingToolContinuationExpectation::from_tool_failure(&followup)
-        .or_else(|| MissingToolContinuationExpectation::from_tool_result(&followup));
-    let provider_continuation_enabled = continuation_expectation.is_some()
-        || current_continue_phase
-            .lane_execution
-            .supports_provider_turn_followup;
+    let continuation_expectation = MissingToolContinuationExpectation::from_tool_failure(&followup);
+    let provider_continuation_enabled = current_continue_phase
+        .lane_execution
+        .supports_provider_turn_followup;
     #[cfg(feature = "memory-sqlite")]
     persist_active_external_skills_from_followup_payload_if_needed(
         &current_continue_phase.followup_config,

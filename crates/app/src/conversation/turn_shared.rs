@@ -228,9 +228,7 @@ impl ToolDrivenContinuationState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolDrivenFollowupContractMode {
-    Normal,
     RetryableFailure,
-    Repair,
     RepairRetryableFailure,
 }
 
@@ -466,11 +464,7 @@ pub(crate) fn render_tool_followup_continuation_contract(
     mode: ToolDrivenFollowupContractMode,
 ) -> String {
     let mut sections = Vec::new();
-    if matches!(
-        mode,
-        ToolDrivenFollowupContractMode::Repair
-            | ToolDrivenFollowupContractMode::RepairRetryableFailure
-    ) {
+    if matches!(mode, ToolDrivenFollowupContractMode::RepairRetryableFailure) {
         sections.push(TOOL_FOLLOWUP_REPAIR_PROMPT.to_owned());
     }
     if matches!(
