@@ -23,12 +23,31 @@ use super::{
     runtime_config::MemoryRuntimeConfig,
 };
 use crate::search_text::build_search_index_text;
+use crate::task_progress::{
+    TASK_PROGRESS_EVENT_KIND, TaskProgressRecord, task_progress_from_event_payload,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationTurn {
     pub role: String,
     pub content: String,
     pub ts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionMetadataHint {
+    pub kind: String,
+    pub state: String,
+    pub parent_session_id: Option<String>,
+    pub label: Option<String>,
+    pub parent_label: Option<String>,
+    pub lineage_root_session_id: Option<String>,
+    pub lineage_root_label: Option<String>,
+    pub lineage_depth: usize,
+    pub workflow_task: Option<String>,
+    pub workflow_phase: Option<String>,
+    pub workflow_operation_kind: Option<String>,
+    pub workflow_operation_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -950,6 +969,267 @@ pub(super) fn load_summary_body_for_durable_flush(
 
         Ok(checkpoint.map(|value| value.summary_body))
     })
+}
+
+pub(crate) fn load_latest_task_progress_record(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Option<TaskProgressRecord>, String> {
+    let runtime = acquire_memory_runtime(config)?;
+
+    runtime.with_connection("memory.latest_task_progress_record", |conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT payload_json
+                 FROM session_events
+                 WHERE session_id = ?1 AND event_kind = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+            )
+            .map_err(|error| {
+                format!("prepare latest task progress record query failed: {error}")
+            })?;
+        let payload_json = stmt
+            .query_row(
+                rusqlite::params![session_id, TASK_PROGRESS_EVENT_KIND],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("query latest task progress record failed: {error}"))?;
+        let Some(payload_json) = payload_json else {
+            return Ok(None);
+        };
+
+        let payload = serde_json::from_str::<Value>(payload_json.as_str()).map_err(|error| {
+            format!("decode latest task progress record payload failed: {error}")
+        })?;
+        Ok(task_progress_from_event_payload(&payload))
+    })
+}
+
+pub(crate) fn load_session_metadata_hint(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Option<SessionMetadataHint>, String> {
+    let runtime = acquire_memory_runtime(config)?;
+
+    runtime.with_connection("memory.session_metadata_hint", |conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, kind, state, parent_session_id, label
+                 FROM sessions
+                 WHERE session_id = ?1
+                 LIMIT 1",
+            )
+            .map_err(|error| format!("prepare session metadata hint query failed: {error}"))?;
+        let raw = stmt
+            .query_row(rusqlite::params![session_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .optional()
+            .map_err(|error| format!("query session metadata hint failed: {error}"))?;
+        let Some((resolved_session_id, kind, state, parent_session_id, label)) = raw else {
+            return Ok(None);
+        };
+
+        let parent_label = match parent_session_id.as_deref() {
+            Some(parent_session_id) => load_session_label_with_conn(conn, parent_session_id)?,
+            None => None,
+        };
+        let lineage_root_session_id =
+            load_lineage_root_session_id_with_conn(conn, resolved_session_id.as_str())?;
+        let lineage_root_label = match lineage_root_session_id.as_deref() {
+            Some(lineage_root_session_id) => {
+                load_session_label_with_conn(conn, lineage_root_session_id)?
+            }
+            None => None,
+        };
+        let lineage_depth =
+            load_session_lineage_depth_with_conn(conn, resolved_session_id.as_str())?;
+        let workflow_hint = load_session_workflow_hint_with_conn(
+            conn,
+            kind.as_str(),
+            state.as_str(),
+            resolved_session_id.as_str(),
+        )?;
+
+        Ok(Some(SessionMetadataHint {
+            kind,
+            state,
+            parent_session_id,
+            label,
+            parent_label,
+            lineage_root_session_id,
+            lineage_root_label,
+            lineage_depth,
+            workflow_task: workflow_hint.as_ref().and_then(|hint| hint.task.clone()),
+            workflow_phase: workflow_hint.as_ref().and_then(|hint| hint.phase.clone()),
+            workflow_operation_kind: workflow_hint
+                .as_ref()
+                .and_then(|hint| hint.operation_kind.clone()),
+            workflow_operation_scope: workflow_hint
+                .as_ref()
+                .and_then(|hint| hint.operation_scope.clone()),
+        }))
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionWorkflowHint {
+    task: Option<String>,
+    phase: Option<String>,
+    operation_kind: Option<String>,
+    operation_scope: Option<String>,
+}
+
+fn load_session_label_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT label FROM sessions WHERE session_id = ?1 LIMIT 1",
+        rusqlite::params![session_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|value| value.flatten())
+    .map_err(|error| format!("query session label failed: {error}"))
+}
+
+fn load_session_lineage_depth_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<usize, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut next_session_id = Some(session_id.to_owned());
+    let mut depth = 0usize;
+
+    while let Some(current_session_id) = next_session_id {
+        if !seen.insert(current_session_id.clone()) {
+            return Err(format!(
+                "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing metadata hint depth"
+            ));
+        }
+        let maybe_parent = conn
+            .query_row(
+                "SELECT parent_session_id FROM sessions WHERE session_id = ?1 LIMIT 1",
+                rusqlite::params![current_session_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|error| format!("query session lineage depth failed: {error}"))?;
+        let Some(parent_session_id) = maybe_parent.flatten() else {
+            return Ok(depth);
+        };
+        depth += 1;
+        next_session_id = Some(parent_session_id);
+    }
+
+    Ok(depth)
+}
+
+fn load_lineage_root_session_id_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut next_session_id = Some(session_id.to_owned());
+
+    while let Some(current_session_id) = next_session_id {
+        if !seen.insert(current_session_id.clone()) {
+            return Err(format!(
+                "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing metadata hint root"
+            ));
+        }
+        let raw = conn
+            .query_row(
+                "SELECT session_id, parent_session_id FROM sessions WHERE session_id = ?1 LIMIT 1",
+                rusqlite::params![current_session_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("query session lineage root failed: {error}"))?;
+        let Some((resolved_session_id, parent_session_id)) = raw else {
+            return Ok(None);
+        };
+        match parent_session_id {
+            Some(parent_session_id) => next_session_id = Some(parent_session_id),
+            None => return Ok(Some(resolved_session_id)),
+        }
+    }
+
+    Ok(None)
+}
+
+fn load_session_workflow_hint_with_conn(
+    conn: &Connection,
+    kind: &str,
+    state: &str,
+    session_id: &str,
+) -> Result<Option<SessionWorkflowHint>, String> {
+    let is_delegate_child = kind == "delegate_child";
+    if !is_delegate_child {
+        return Ok(None);
+    }
+
+    let task = load_latest_delegate_task_hint_with_conn(conn, session_id)?;
+    let phase = match state {
+        "ready" | "running" => Some("execute".to_owned()),
+        "completed" => Some("complete".to_owned()),
+        "failed" | "timed_out" => Some("failed".to_owned()),
+        _ => None,
+    };
+
+    Ok(Some(SessionWorkflowHint {
+        task,
+        phase,
+        operation_kind: Some("task".to_owned()),
+        operation_scope: Some("task".to_owned()),
+    }))
+}
+
+fn load_latest_delegate_task_hint_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT payload_json
+             FROM session_events
+             WHERE session_id = ?1
+               AND event_kind LIKE 'delegate_%'
+             ORDER BY id DESC
+             LIMIT 16",
+        )
+        .map_err(|error| format!("prepare latest delegate task hint query failed: {error}"))?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("query latest delegate task hint failed: {error}"))?;
+
+    for row in rows {
+        let payload_json =
+            row.map_err(|error| format!("read latest delegate task hint row failed: {error}"))?;
+        let payload = serde_json::from_str::<Value>(payload_json.as_str())
+            .map_err(|error| format!("decode latest delegate task hint payload failed: {error}"))?;
+        let task = payload
+            .get("task")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if task.is_some() {
+            return Ok(task);
+        }
+    }
+
+    Ok(None)
 }
 
 pub(super) fn ensure_memory_db_ready(

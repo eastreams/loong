@@ -257,9 +257,22 @@ Current baseline already in place:
 - active `http_json` runtime execution lane (no longer plan-only):
   - timeout-controlled request execution
   - structured runtime evidence (`status_code`, `response_json`)
-- builtin-only memory-system foundation for `dev`:
+- memory-system foundation for `dev`:
   - typed memory-system metadata and registry seam
   - hydrated memory orchestration over Loong-owned canonical history
+  - result-first retrieval-plan envelope with explicit request/planner-snapshot
+    compatibility adapters for legacy request-only systems
+  - symmetric explicit helper pair for request-only and plan-result-only
+    compatibility paths while keeping the generic trait defaults intentionally
+    asymmetric until a wider policy flip is accepted
+  - direct and boxed regression coverage now fence the compatibility matrix
+    across request-only, plan-result-only, and shipped built-in memory systems;
+    direct and boxed request/snapshot alignment is now explicit for `builtin`,
+    `recall_first`, and `workspace_recall`
+  - the remaining decision is whether to keep that asymmetric contract or later
+    promote result-first defaults as policy
+  - stable planner diagnostics carrying memory-system identity through stage
+    envelopes and protocol decode/backfill paths
   - operator diagnostics for selected system, capability set, and effective
     memory fail-open policy
 

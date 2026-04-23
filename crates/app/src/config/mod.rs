@@ -2738,6 +2738,17 @@ system = " Builtin "
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn memory_system_field_parses_recall_first_variant() {
+        let raw = r#"
+[memory]
+system = " recall_first "
+"#;
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse recall_first memory.system");
+        assert_eq!(parsed.memory.resolved_system().as_str(), "recall_first");
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn memory_system_id_field_parses_and_normalizes() {
         let raw = r#"
 [memory]
@@ -2757,8 +2768,10 @@ system = " LuCid "
 "#;
         let error = toml::from_str::<LoongConfig>(raw).expect_err("lucid should stay unsupported");
         assert!(
-            error.to_string().contains("available: builtin"),
-            "error should keep builtin-only surface: {error}"
+            error
+                .to_string()
+                .contains("available: builtin, workspace_recall, recall_first"),
+            "error should expose the supported memory-system surface: {error}"
         );
     }
 

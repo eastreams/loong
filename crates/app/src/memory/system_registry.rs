@@ -290,6 +290,15 @@ pub fn resolve_memory_system_selection(config: &LoongConfig) -> MemorySystemSele
         };
     }
 
+    resolve_memory_system_selection_without_env(config)
+}
+
+/// Resolve memory-system selection from config only.
+///
+/// Use this for config-grounded surfaces that must stay stable even when the
+/// process environment carries `LOONG_MEMORY_SYSTEM` overrides for other
+/// runtime entrypoints.
+pub fn resolve_memory_system_selection_without_env(config: &LoongConfig) -> MemorySystemSelection {
     if let Some(config_system_id) = config.memory.system_id.as_deref() {
         if let Some(system_id) = registered_memory_system_id(Some(config_system_id)) {
             return MemorySystemSelection {
@@ -788,6 +797,21 @@ mod tests {
         let selection = resolve_memory_system_selection(&config);
         assert_eq!(selection.id, DEFAULT_MEMORY_SYSTEM_ID);
         assert_eq!(selection.source, MemorySystemSelectionSource::Env);
+    }
+
+    #[test]
+    fn memory_system_selection_without_env_uses_configured_system() {
+        let mut env = ScopedEnv::new();
+        clear_memory_runtime_env_overrides(&mut env);
+        env.set(MEMORY_SYSTEM_ENV, "recall_first");
+
+        let mut config = LoongConfig::default();
+        config.memory.system = MemorySystemKind::WorkspaceRecall;
+
+        let selection = resolve_memory_system_selection_without_env(&config);
+
+        assert_eq!(selection.id, WORKSPACE_RECALL_MEMORY_SYSTEM_ID);
+        assert_eq!(selection.source, MemorySystemSelectionSource::Config);
     }
 
     #[test]
