@@ -1,11 +1,11 @@
-# LoongClaw Web 技术栈与目录结构
+# Loong Web 技术栈与目录结构
 
 状态：已进入可用 MVP，持续迭代中  
 最后更新：2026-04-22
 
 ## 1. 目标
 
-`web/` 目录承载 LoongClaw 的本地优先 Web Console。
+`web/` 目录承载 Loong 的本地优先 Web Console。
 
 当前目标不是独立云端产品，而是基于本地 runtime 提供：
 
@@ -65,9 +65,9 @@
 
 当前已实现第一版命令：
 
-- `loongclaw web install --source <dist-dir>`
-- `loongclaw web status`
-- `loongclaw web remove [--force]`
+- `loong web install --source <dist-dir>`
+- `loong web status`
+- `loong web remove [--force]`
 
 安装目录：
 
@@ -119,15 +119,12 @@ web/
 - turn 流式读取
 - tool 状态
 - 流式占位消息
-- 实验性小宠物显示
 
 关键点：
 
 - `hooks/useChatSessions.ts`
 - `hooks/useChatStream.ts`
 - `pages/ChatPage.tsx`
-- `components/ChatMascot.tsx`
-- `mascotPreference.ts`
 
 ### `web/src/features/abilities/`
 
@@ -136,7 +133,6 @@ web/
 - personalization 读取与最小编辑
 - channels snapshot
 - skills runtime truth
-- mascot 实验开关
 
 关键点：
 
@@ -144,7 +140,6 @@ web/
 - `components/PersonalizationPanel.tsx`
 - `components/ChannelsPanel.tsx`
 - `components/SkillsPanel.tsx`
-- `components/MascotPanel.tsx`
 - `hooks/useAbilitiesData.ts`
 
 ### `web/src/features/dashboard/`
@@ -265,7 +260,7 @@ web/
 - 大状态已经开始从页面文件拆到 feature hooks，方向是对的
 - Chat / Dashboard / Onboarding / Abilities 都已经形成独立 feature 面
 - Debug Console、approval queue、skills runtime truth 这类“读真值”能力适合继续留在现有页面里演进
-- 小宠物目前仍应视为 `chat + abilities` 间的实验能力，而不是单独 runtime 子系统
+- 小宠物相关实验已经从 Web 前端移出，后续应在独立 Qoong 项目里演进
 
 ## 10. 当前仍未完成
 

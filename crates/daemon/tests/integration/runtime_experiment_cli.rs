@@ -1032,7 +1032,7 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
     );
     assert!(
         snapshot_delta
-            .enabled_plugin_backed_channel_ids
+            .enabled_runtime_backed_channel_ids
             .added
             .contains(&"qqbot".to_owned())
     );

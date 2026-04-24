@@ -15,14 +15,14 @@
   <img src="https://img.shields.io/badge/rust-edition%202024-orange.svg?style=flat-square" alt="Rust Edition 2024" />
   <a href="https://github.com/eastreams/loong/releases"><img src="https://img.shields.io/github/v/release/eastreams/loong?label=version&color=yellow&include_prereleases&style=flat-square" alt="Version" /></a>
   <br/>
-  <a href="https://x.com/loongclawai"><img src="https://img.shields.io/badge/Follow-loongclawai-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
-  <a href="https://t.me/loongclaw"><img src="https://img.shields.io/badge/Telegram-loongclaw-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
+  <a href="https://x.com/loongai"><img src="https://img.shields.io/badge/Follow-loongai-000000?logo=x&logoColor=white&style=flat-square" alt="X" /></a>
+  <a href="https://t.me/loong"><img src="https://img.shields.io/badge/Telegram-loong-26A5E4?logo=telegram&logoColor=white&style=flat-square" alt="Telegram" /></a>
   <a href="https://discord.gg/7kSTX9mca"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white&style=flat-square" alt="Discord" /></a>
-  <a href="https://www.reddit.com/r/LoongClaw"><img src="https://img.shields.io/badge/Reddit-r%2Floongclaw-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
+  <a href="https://www.reddit.com/r/Loong"><img src="https://img.shields.io/badge/Reddit-r%2Floong-FF4500?logo=reddit&logoColor=white&style=flat-square" alt="Reddit" /></a>
   <br/>
   <a href="https://xhslink.com/m/1dqFqF1IKDk"><img src="https://img.shields.io/badge/Xiaohongshu-follow-FF2442?logo=xiaohongshu&logoColor=white&style=flat-square" alt="Xiaohongshu" /></a>
-  <a href="https://loongclaw.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
-  <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
+  <a href="https://loong.ai/feishu.jpg"><img src="https://img.shields.io/badge/Feishu-QR-3370FF?logo=lark&logoColor=white&style=flat-square" alt="Feishu QR" /></a>
+  <a href="https://loong.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
 ***Secure, extensible, and sustainably evolvable*** — Loong is an agent base for vertical AI agents, built in Rust. On a secure and controlled base, it supports longer-horizon workflow construction, compound task execution, and closed-loop improvement — enabling people and AI to collaborate in real-world scenarios.
@@ -47,7 +47,7 @@
 **Because it already has the core capabilities you need to inspect, operate, and extend:**
 
 - **🚀 Rich configuration out of the box**: 42+ built-in providers, 25+ channels — up and running in a few commands.
-- **👀 Transparent and controllable**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are all exposed as directly usable commands.
+- **👀 Transparent and controllable**: product commands stay short at the root, while `sessions`, `skills`, `channels`, `gateway`, `runtime`, `plugins`, and `feishu` stay grouped under named operator shells instead of one flat command pile.
 - **🛡️ Secure and controllable base**: provider selection, tools, memory, channels, approvals, policy, and audit operate within explicit runtime boundaries.
 
 **Also because whether you are a beginner or a power user, it fits you:**
@@ -151,6 +151,13 @@ loong update                 # Replace this install with the latest stable GitHu
 
 `loong update` always targets the latest stable GitHub release and never installs a pre-release.
 
+### Canonical CLI Shape
+
+Loong keeps `loong` as the only public binary, but the canonical command story is intentionally grouped:
+
+- product path at root: `onboard`, `ask`, `chat`, `doctor`, `status`, `update`
+- operator shells at root: `sessions`, `skills`, `channels`, `gateway`, `runtime`, `plugins`, `feishu`, `completions`
+
 Running `onboard` is enough for the golden path — it writes a working config to `~/.loong/config.toml` without asking you to hand-edit TOML. The snippets below show what that file looks like on `dev` today, when you want to add another provider or wire up a channel.
 
 #### Providers
@@ -173,13 +180,19 @@ model = "auto"
 - `api_key = { env = "OPENAI_API_KEY" }` reads the secret from that environment variable. `api_key = "OPENAI_API_KEY"` would instead treat the string as the literal key value — a common pitfall.
 - `model = "auto"` uses provider-side discovery; pin `model = "<id>"` when discovery is unreliable for your region or account.
 
-#### Channels — Lark
+#### Channels — Lark / Feishu
 
 Recommended first-run setup:
 
 ```bash
+# International Lark tenants (open.larksuite.com)
 loong feishu onboard --domain lark
+
+# China Feishu tenants (open.feishu.cn) — the CLI default
+loong feishu onboard --domain feishu
 ```
+
+Pick the `--domain` that matches the tenant you log in to: `lark` hits `open.larksuite.com` (international), `feishu` hits `open.feishu.cn` (China). Running with the wrong domain sends you to the wrong registration endpoint and the QR flow will fail to bind. If you omit `--domain` entirely the CLI defaults to `feishu`.
 
 That flow shows an in-terminal QR code, creates the bot app through the official Lark/Feishu registration API, and writes the generated credentials into `loong.toml`. Manual fallback is still available through `loong feishu onboard --manual --app-id ... --app-secret ...`.
 
@@ -198,9 +211,11 @@ Smoke-test before anything else:
 
 ```bash
 loong doctor
-loong feishu-send --receive-id "ou_example_user" --text "hello from loong"
-loong feishu-serve
+loong feishu send --receive-id "ou_example_user" --text "hello from loong"
+loong feishu serve
 ```
+
+Feishu keeps its richer family namespace at `loong feishu ...`. For thinner channel families, the canonical public shape is `loong channels send <surface> ...` and `loong channels serve <surface> ...`.
 
 For the full provider and channel matrices, multi-account setups, and the long-running delivery model, see the [Documentation](#documentation) table below.
 

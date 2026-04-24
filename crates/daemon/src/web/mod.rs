@@ -45,6 +45,7 @@ mod chat;
 mod dashboard;
 mod debug_console;
 mod install;
+mod mascot;
 mod onboarding;
 mod serve;
 
@@ -61,8 +62,8 @@ use chat::{
     delete_chat_session,
 };
 use dashboard::{
-    dashboard_approvals, dashboard_config, dashboard_connectivity, dashboard_providers, dashboard_runtime,
-    dashboard_summary, dashboard_tools, provider_catalog,
+    dashboard_approvals, dashboard_config, dashboard_connectivity, dashboard_providers,
+    dashboard_runtime, dashboard_summary, dashboard_tools, provider_catalog,
 };
 use debug_console::{dashboard_debug_console, record_debug_operation};
 use install::{
@@ -83,7 +84,7 @@ pub enum WebCommand {
         #[arg(long)]
         static_root: Option<String>,
     },
-    /// Install the Web Console UI assets to ~/.loongclaw/web
+    /// Install the Web Console UI assets to ~/.loong/web
     Install {
         /// Path to the built frontend assets directory (e.g. web/dist)
         #[arg(long)]
@@ -106,10 +107,10 @@ struct WebInstallManifest {
     install_dir: String,
 }
 
-const WEB_API_TOKEN_ENV: &str = "LOONGCLAW_WEB_TOKEN";
+const WEB_API_TOKEN_ENV: &str = "LOONG_WEB_TOKEN";
 const WEB_API_TOKEN_FILE: &str = "web-api-token";
-const WEB_API_PAIRING_COOKIE: &str = "loongclaw-web-pair";
-const WEB_API_SESSION_COOKIE: &str = "loongclaw-web-session";
+const WEB_API_PAIRING_COOKIE: &str = "loong-web-pair";
+const WEB_API_SESSION_COOKIE: &str = "loong-web-session";
 
 #[derive(Debug)]
 struct WebApiState {
@@ -247,6 +248,9 @@ impl mvp::acp::AcpTurnEventSink for WebTurnEventSink {
         if delta.is_empty() {
             return Ok(());
         }
+        if is_internal_assistant_record(delta.as_str()) {
+            return Ok(());
+        }
         self.emitted_text.store(true, Ordering::Relaxed);
         send_stream_event(
             &self.sender,
@@ -310,13 +314,17 @@ impl mvp::conversation::ConversationTurnObserver for WebTurnEventSink {
             | mvp::conversation::ConversationTurnToolState::Denied
             | mvp::conversation::ConversationTurnToolState::Failed
             | mvp::conversation::ConversationTurnToolState::Interrupted => {
-                let outcome = if matches!(
-                    event.state,
-                    mvp::conversation::ConversationTurnToolState::Completed
-                ) {
-                    "ok"
-                } else {
-                    "error"
+                let (outcome, state_label) = match event.state {
+                    mvp::conversation::ConversationTurnToolState::Completed => ("ok", "completed"),
+                    mvp::conversation::ConversationTurnToolState::NeedsApproval => {
+                        ("needs_approval", "needs_approval")
+                    }
+                    mvp::conversation::ConversationTurnToolState::Denied => ("denied", "denied"),
+                    mvp::conversation::ConversationTurnToolState::Failed => ("error", "failed"),
+                    mvp::conversation::ConversationTurnToolState::Interrupted => {
+                        ("error", "interrupted")
+                    }
+                    mvp::conversation::ConversationTurnToolState::Running => ("error", "running"),
                 };
                 let detail = event
                     .detail
@@ -331,6 +339,7 @@ impl mvp::conversation::ConversationTurnObserver for WebTurnEventSink {
                         "toolId": event.tool_call_id,
                         "label": event.tool_name,
                         "outcome": outcome,
+                        "state": state_label,
                         "detail": detail,
                     }),
                 );
@@ -670,6 +679,8 @@ struct ProviderCatalogItemPayload {
     default_base_url: String,
     default_chat_path: String,
     default_models_path: Option<String>,
+    default_model: Option<String>,
+    recommended_onboarding_model: Option<String>,
     auth_scheme: String,
     feature_family: String,
     is_coding_variant: bool,
@@ -876,11 +887,18 @@ fn load_visible_session_messages(
     raw_limit: usize,
 ) -> Result<Vec<mvp::memory::ConversationTurn>, WebApiError> {
     let mut turns = mvp::memory::window_direct(session_id, raw_limit, memory_config)
-        .map_err(WebApiError::internal)?;
-    turns.retain(|turn| {
-        !(turn.role.eq_ignore_ascii_case("assistant")
-            && is_internal_assistant_record(&turn.content))
-    });
+        .map_err(WebApiError::internal)?
+        .into_iter()
+        .filter_map(|mut turn| {
+            if !turn.role.eq_ignore_ascii_case("assistant") {
+                return Some(turn);
+            }
+
+            let visible_content = sanitize_visible_assistant_content(&turn.content)?;
+            turn.content = visible_content;
+            Some(turn)
+        })
+        .collect::<Vec<_>>();
 
     if turns.len() > visible_limit {
         let start = turns.len() - visible_limit;
@@ -1155,14 +1173,16 @@ fn build_provider_items(config: &mvp::config::LoongConfig) -> Vec<ProviderItemPa
     config
         .providers
         .iter()
-        .map(|(profile_id, profile): (&String, &mvp::config::ProviderProfileConfig)| {
-            provider_item_from_parts(
-                profile_id.clone(),
-                &profile.provider,
-                Some(profile_id.as_str()) == config.active_provider_id(),
-                profile.default_for_kind,
-            )
-        })
+        .map(
+            |(profile_id, profile): (&String, &mvp::config::ProviderProfileConfig)| {
+                provider_item_from_parts(
+                    profile_id.clone(),
+                    &profile.provider,
+                    Some(profile_id.as_str()) == config.active_provider_id(),
+                    profile.default_for_kind,
+                )
+            },
+        )
         .collect()
 }
 
@@ -1175,6 +1195,8 @@ fn build_provider_catalog_items() -> Vec<ProviderCatalogItemPayload> {
             default_base_url: entry.default_base_url,
             default_chat_path: entry.default_chat_path,
             default_models_path: entry.default_models_path,
+            default_model: entry.default_model,
+            recommended_onboarding_model: entry.recommended_onboarding_model,
             auth_scheme: entry.auth_scheme,
             feature_family: entry.feature_family,
             is_coding_variant: entry.is_coding_variant,
@@ -1273,11 +1295,11 @@ fn mask_secret(value: &str) -> String {
 }
 
 fn resolve_local_web_token() -> Result<(String, PathBuf), WebApiError> {
-    let loongclaw_home = mvp::config::default_loong_home();
-    fs::create_dir_all(&loongclaw_home)
-        .map_err(|error| WebApiError::internal(format!("create loongclaw home failed: {error}")))?;
+    let loong_home = mvp::config::default_loong_home();
+    fs::create_dir_all(&loong_home)
+        .map_err(|error| WebApiError::internal(format!("create loong home failed: {error}")))?;
 
-    let token_path = loongclaw_home.join(WEB_API_TOKEN_FILE);
+    let token_path = loong_home.join(WEB_API_TOKEN_FILE);
     if let Ok(raw_env_token) = env::var(WEB_API_TOKEN_ENV) {
         let token = raw_env_token.trim();
         if !token.is_empty() {
@@ -1325,10 +1347,82 @@ fn format_timestamp(unix_seconds: i64) -> String {
 }
 
 fn is_internal_assistant_record(content: &str) -> bool {
-    content.contains("\"_loongclaw_internal\":true")
-        && (content.contains("\"type\":\"conversation_event\"")
-            || content.contains("\"type\":\"tool_decision\"")
-            || content.contains("\"type\":\"tool_outcome\""))
+    if is_internal_tool_result_text(content) {
+        return true;
+    }
+    if is_internal_assistant_control_text(content) {
+        return true;
+    }
+
+    is_internal_structured_assistant_record(content)
+}
+
+fn is_internal_structured_assistant_record(content: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(content.trim()) else {
+        return false;
+    };
+
+    let marked_internal = parsed.get("_loong_internal").and_then(Value::as_bool) == Some(true);
+
+    let is_internal_type = matches!(
+        parsed.get("type").and_then(Value::as_str),
+        Some("conversation_event" | "tool_decision" | "tool_outcome")
+    );
+
+    marked_internal || is_internal_type
+}
+
+fn is_internal_tool_result_text(content: &str) -> bool {
+    content.trim_start().starts_with("[tool_result]")
+}
+
+fn is_internal_assistant_control_text(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    [
+        "[tool_request]",
+        "[tool_failure]",
+        "[tool_recovery]",
+        "[tool_loop_guard]",
+        "[tool_loop_warning]",
+        "[tool_discovery_runtime]",
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix))
+}
+
+fn strip_internal_tool_result_prefix(content: &str) -> &str {
+    let mut remaining = content.trim_start();
+    if !remaining.starts_with("[tool_result]") {
+        return content;
+    }
+
+    loop {
+        let Some(next_separator) = remaining.find("\n\n") else {
+            return "";
+        };
+        remaining = remaining[next_separator..].trim_start();
+        if !remaining.starts_with("[tool_result]") {
+            return remaining;
+        }
+    }
+}
+
+fn sanitize_visible_assistant_content(content: &str) -> Option<String> {
+    let without_tool_prefix = strip_internal_tool_result_prefix(content);
+    if without_tool_prefix != content {
+        let visible = without_tool_prefix.trim();
+        return (!visible.is_empty()).then(|| visible.to_owned());
+    }
+
+    if is_internal_assistant_control_text(content) {
+        return None;
+    }
+
+    if is_internal_structured_assistant_record(content) {
+        return None;
+    }
+
+    Some(content.to_owned())
 }
 
 fn extract_stream_text_delta(event: &Value) -> Option<String> {
@@ -1423,20 +1517,20 @@ async fn run_chat_turn_stream(
             sender: sender.clone(),
             emitted_text: emitted_text.clone(),
         });
-        let observer_handle: mvp::conversation::ConversationTurnObserverHandle =
-            event_sink.clone();
-        let acp_options =
-            mvp::acp::AcpConversationTurnOptions::automatic().with_event_sink(Some(event_sink.as_ref()));
+        let observer_handle: mvp::conversation::ConversationTurnObserverHandle = event_sink.clone();
+        let acp_options = mvp::acp::AcpConversationTurnOptions::automatic()
+            .with_event_sink(Some(event_sink.as_ref()));
 
-        let turn_future = coordinator.handle_production_turn_with_address_and_acp_options_and_observer(
-            &turn_config,
-            &address,
-            &input,
-            mvp::conversation::ProviderErrorMode::InlineMessage,
-            &acp_options,
-            mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
-            Some(observer_handle),
-        );
+        let turn_future = coordinator
+            .handle_production_turn_with_address_and_acp_options_and_observer(
+                &turn_config,
+                &address,
+                &input,
+                mvp::conversation::ProviderErrorMode::InlineMessage,
+                &acp_options,
+                mvp::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
+                Some(observer_handle),
+            );
         tokio::pin!(turn_future);
 
         let assistant_text: String = loop {
@@ -1449,7 +1543,7 @@ async fn run_chat_turn_stream(
 
         let final_message =
             latest_assistant_message(&snapshot.memory_config, &session_id, &assistant_text);
-        if !emitted_text.load(Ordering::Relaxed) {
+        if !emitted_text.load(Ordering::Relaxed) && !final_message.content.is_empty() {
             // Older buffered providers still produce only the final assistant text.
             // Preserve the previous chunked fallback so the Web stream stays compatible.
             for delta in chunk_text(final_message.content.as_str(), 48) {
@@ -1759,13 +1853,35 @@ fn latest_assistant_message(
     session_id: &str,
     fallback_content: &str,
 ) -> ChatMessagePayload {
+    if let Some(visible_fallback) = sanitize_visible_assistant_content(fallback_content) {
+        if visible_fallback != fallback_content {
+            let created_at = OffsetDateTime::now_utc().unix_timestamp();
+            return ChatMessagePayload {
+                id: format!("{session_id}:{created_at}"),
+                role: "assistant".to_owned(),
+                content: visible_fallback,
+                created_at: format_timestamp(created_at),
+            };
+        }
+    } else {
+        let created_at = OffsetDateTime::now_utc().unix_timestamp();
+        return ChatMessagePayload {
+            id: format!("{session_id}:{created_at}"),
+            role: "assistant".to_owned(),
+            content: String::new(),
+            created_at: format_timestamp(created_at),
+        };
+    }
+
     let visible_history = load_session_messages(memory_config, session_id)
         .ok()
         .unwrap_or_default()
         .into_iter()
-        .filter(|turn| {
-            turn.role.eq_ignore_ascii_case("assistant")
-                && !is_internal_assistant_record(&turn.content)
+        .filter(|turn| turn.role.eq_ignore_ascii_case("assistant"))
+        .filter_map(|mut turn| {
+            let visible_content = sanitize_visible_assistant_content(&turn.content)?;
+            turn.content = visible_content;
+            Some(turn)
         })
         .collect::<Vec<_>>();
 
@@ -1834,5 +1950,98 @@ fn session_id_from_title(title: &str) -> String {
         generate_session_id()
     } else {
         format!("{normalized}-{:08x}", random::<u32>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        is_internal_assistant_record, sanitize_visible_assistant_content,
+        strip_internal_tool_result_prefix,
+    };
+
+    #[test]
+    fn internal_assistant_record_detects_current_marker() {
+        let content = json!({
+            "_loong_internal": true,
+            "type": "conversation_event",
+            "event": "turn_checkpoint",
+            "payload": {}
+        })
+        .to_string();
+
+        assert!(is_internal_assistant_record(&content));
+    }
+
+    #[test]
+    fn internal_assistant_record_ignores_user_visible_json() {
+        let content = json!({
+            "type": "user_supplied",
+            "event": "user_supplied",
+            "payload": {}
+        })
+        .to_string();
+
+        assert!(!is_internal_assistant_record(&content));
+    }
+
+    #[test]
+    fn internal_assistant_record_detects_tool_result_text() {
+        let content = r#"[tool_result] [ok] {"status":"ok","tool":"tool.search"}"#;
+
+        assert!(is_internal_assistant_record(content));
+    }
+
+    #[test]
+    fn strip_internal_tool_result_prefix_preserves_visible_reply() {
+        let content = "[tool_result] [ok] {}\n\n早，nox。";
+
+        assert_eq!(strip_internal_tool_result_prefix(content), "早，nox。");
+    }
+
+    #[test]
+    fn sanitize_visible_assistant_content_hides_pure_tool_result() {
+        let content = "[tool_result] [ok] {}";
+
+        assert_eq!(sanitize_visible_assistant_content(content), None);
+    }
+
+    #[test]
+    fn sanitize_visible_assistant_content_keeps_reply_after_tool_result() {
+        let content = "[tool_result] [ok] {}\n\n早，nox。";
+
+        assert_eq!(
+            sanitize_visible_assistant_content(content).as_deref(),
+            Some("早，nox。")
+        );
+    }
+
+    #[test]
+    fn sanitize_visible_assistant_content_hides_control_blocks() {
+        for content in [
+            "[tool_request]\n{}",
+            "[tool_failure]\nfailed",
+            "[tool_recovery]\nretry",
+            "[tool_loop_guard]\nstop",
+            "[tool_loop_warning]\nwarning",
+            "[tool_discovery_runtime]\n{}",
+        ] {
+            assert_eq!(sanitize_visible_assistant_content(content), None);
+        }
+    }
+
+    #[test]
+    fn internal_assistant_record_detects_legacy_unmarked_event_json() {
+        let content = json!({
+            "type": "conversation_event",
+            "event": "final_status",
+            "payload": {}
+        })
+        .to_string();
+
+        assert!(is_internal_assistant_record(&content));
+        assert_eq!(sanitize_visible_assistant_content(&content), None);
     }
 }

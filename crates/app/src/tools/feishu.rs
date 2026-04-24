@@ -778,7 +778,7 @@ struct FeishuCalendarPrimaryGetPayload {
     #[serde(flatten)]
     selector: GrantSelectorPayload,
     user_id_type: Option<String>,
-    #[serde(default, rename = "_loong", alias = "_loongclaw")]
+    #[serde(default, rename = "_loong", alias = "_loong")]
     internal: LoongInternalToolPayload,
 }
 

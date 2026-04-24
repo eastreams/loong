@@ -64,7 +64,8 @@ fn collect_trajectory_export_artifact_includes_turns_and_events() {
     .expect("load config fixture");
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)
         .expect("session repository");
 
     repo.create_session(mvp::session::repository::NewSessionRecord {
@@ -163,7 +164,8 @@ fn load_trajectory_export_artifact_round_trips_written_json() {
     .expect("load config fixture");
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)
         .expect("session repository");
 
     repo.create_session(mvp::session::repository::NewSessionRecord {

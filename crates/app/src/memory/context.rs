@@ -1,7 +1,7 @@
 use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
-use crate::config::{MemoryMode, MemoryProfile, MemorySystemKind};
+use crate::config::MemoryMode;
 use crate::runtime_identity;
 
 #[cfg(feature = "memory-sqlite")]
@@ -19,18 +19,9 @@ pub(crate) fn read_context(
     request: MemoryCoreRequest,
     config: &MemoryRuntimeConfig,
 ) -> Result<MemoryCoreOutcome, String> {
-    let payload = request
-        .payload
-        .as_object()
-        .ok_or_else(|| "memory.read_context payload must be an object".to_owned())?;
-    let session_id = payload
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "memory.read_context requires payload.session_id".to_owned())?;
-    let runtime_config = read_context_runtime_config(payload, config)?;
-    let entries = load_prompt_context(session_id, &runtime_config)?;
+    let (session_id, envelope) =
+        read_stage_envelope_from_request_payload(&request, MEMORY_OP_READ_CONTEXT, config)?;
+    let entries = envelope.hydrated.entries;
 
     Ok(MemoryCoreOutcome {
         status: "ok".to_owned(),
@@ -43,122 +34,11 @@ pub(crate) fn read_context(
     })
 }
 
-fn read_context_runtime_config(
+fn read_context_workspace_root(
     payload: &serde_json::Map<String, Value>,
-    config: &MemoryRuntimeConfig,
-) -> Result<MemoryRuntimeConfig, String> {
-    let mut runtime_config = config.clone();
-
-    if let Some(profile_value) = payload.get("profile") {
-        let profile_text = profile_value
-            .as_str()
-            .ok_or_else(|| "memory.read_context payload.profile must be a string".to_owned())?;
-        let profile = MemoryProfile::parse_id(profile_text).ok_or_else(|| {
-            format!("memory.read_context payload.profile `{profile_text}` is unsupported")
-        })?;
-        let mode = profile.mode();
-
-        runtime_config.profile = profile;
-        runtime_config.mode = mode;
-    }
-
-    if let Some(system_value) = payload.get("system") {
-        let system_text = system_value
-            .as_str()
-            .ok_or_else(|| "memory.read_context payload.system must be a string".to_owned())?;
-        let system = MemorySystemKind::parse_id(system_text).ok_or_else(|| {
-            format!("memory.read_context payload.system `{system_text}` is unsupported")
-        })?;
-
-        runtime_config.system = system;
-    }
-
-    if let Some(system_id_value) = payload.get("system_id") {
-        let normalized_system_id = match system_id_value {
-            Value::Null => None,
-            Value::String(raw_value) => super::normalize_system_id(raw_value.as_str()),
-            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-                return Err(
-                    "memory.read_context payload.system_id must be a string or null".to_owned(),
-                );
-            }
-        };
-
-        runtime_config.resolved_system_id = normalized_system_id;
-    }
-
-    if let Some(sliding_window_value) = payload.get("sliding_window") {
-        let sliding_window = sliding_window_value.as_u64().ok_or_else(|| {
-            "memory.read_context payload.sliding_window must be a positive integer".to_owned()
-        })?;
-        let sliding_window = usize::try_from(sliding_window).map_err(|conversion_error| {
-            format!("memory.read_context payload.sliding_window exceeds usize: {conversion_error}")
-        })?;
-        if sliding_window == 0 {
-            return Err("memory.read_context payload.sliding_window must be at least 1".to_owned());
-        }
-
-        runtime_config.sliding_window = sliding_window;
-    }
-
-    if let Some(summary_max_chars_value) = payload.get("summary_max_chars") {
-        let summary_max_chars = summary_max_chars_value.as_u64().ok_or_else(|| {
-            "memory.read_context payload.summary_max_chars must be a positive integer".to_owned()
-        })?;
-        let summary_max_chars = usize::try_from(summary_max_chars).map_err(|conversion_error| {
-            format!(
-                "memory.read_context payload.summary_max_chars exceeds usize: {conversion_error}"
-            )
-        })?;
-        if summary_max_chars == 0 {
-            return Err(
-                "memory.read_context payload.summary_max_chars must be at least 1".to_owned(),
-            );
-        }
-
-        runtime_config.summary_max_chars = summary_max_chars;
-    }
-
-    if let Some(profile_note_value) = payload.get("profile_note") {
-        let profile_note = match profile_note_value {
-            Value::Null => None,
-            Value::String(value) => {
-                let trimmed_value = value.trim();
-                if trimmed_value.is_empty() {
-                    None
-                } else {
-                    Some(trimmed_value.to_owned())
-                }
-            }
-            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
-                return Err(
-                    "memory.read_context payload.profile_note must be a string or null".to_owned(),
-                );
-            }
-        };
-
-        runtime_config.profile_note = profile_note;
-    }
-
-    Ok(runtime_config)
-}
-
-pub(crate) fn read_stage_envelope(
-    request: MemoryCoreRequest,
-    config: &MemoryRuntimeConfig,
-) -> Result<MemoryCoreOutcome, String> {
-    let payload = request
-        .payload
-        .as_object()
-        .ok_or_else(|| "memory.read_stage_envelope payload must be an object".to_owned())?;
-    let session_id = payload
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "memory.read_stage_envelope requires payload.session_id".to_owned())?;
-    let runtime_config = read_context_runtime_config(payload, config)?;
-    let workspace_root = payload
+    operation: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    payload
         .get("workspace_root")
         .map(|value| match value {
             Value::Null => Ok(None),
@@ -170,18 +50,20 @@ pub(crate) fn read_stage_envelope(
                     Ok(Some(std::path::PathBuf::from(trimmed_path)))
                 }
             }
-            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => Err(
-                "memory.read_stage_envelope payload.workspace_root must be a string or null"
-                    .to_owned(),
-            ),
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => Err(format!(
+                "{operation} payload.workspace_root must be a string or null"
+            )),
         })
-        .transpose()?
-        .flatten();
-    let envelope = hydrate_stage_envelope_with_workspace_root(
-        session_id,
-        workspace_root.as_deref(),
-        &runtime_config,
-    )?;
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(crate) fn read_stage_envelope(
+    request: MemoryCoreRequest,
+    config: &MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
+    let (session_id, envelope) =
+        read_stage_envelope_from_request_payload(&request, MEMORY_OP_READ_STAGE_ENVELOPE, config)?;
     let mut response_payload = encode_stage_envelope_payload(&envelope);
 
     if let Some(map) = response_payload.as_object_mut() {
@@ -194,6 +76,28 @@ pub(crate) fn read_stage_envelope(
         status: "ok".to_owned(),
         payload: response_payload,
     })
+}
+
+fn read_stage_envelope_from_request_payload<'a>(
+    request: &'a MemoryCoreRequest,
+    operation: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<(&'a str, super::StageEnvelope), String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| format!("{operation} payload must be an object"))?;
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{operation} requires payload.session_id"))?;
+    let workspace_root = read_context_workspace_root(payload, operation)?;
+    let envelope =
+        hydrate_stage_envelope_with_workspace_root(session_id, workspace_root.as_deref(), config)?;
+
+    Ok((session_id, envelope))
 }
 
 pub fn load_prompt_context(
@@ -305,10 +209,10 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "memory-sqlite")]
-    use crate::config::MemoryProfile;
+    use crate::config::{MemoryProfile, MemorySystemKind};
     use crate::memory::{
         build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
-        decode_stage_envelope,
+        decode_memory_context_entries, decode_stage_envelope,
     };
 
     #[cfg(feature = "memory-sqlite")]
@@ -789,6 +693,71 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn read_context_operation_projects_entries_from_stage_envelope() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let curated_memory_path = workspace_root.join("MEMORY.md");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nRemember the deploy freeze window.\n",
+        )
+        .expect("write durable recall");
+
+        let db_path = workspace_root.join("read-context-stage-envelope.sqlite3");
+        let config =
+            sqlite_memory_config_with_profile(db_path, MemoryProfile::WindowPlusSummary, 2);
+
+        super::super::append_turn_direct(
+            "read-context-envelope-session",
+            "user",
+            "turn 1",
+            &config,
+        )
+        .expect("append turn 1 should succeed");
+        super::super::append_turn_direct(
+            "read-context-envelope-session",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        super::super::append_turn_direct(
+            "read-context-envelope-session",
+            "user",
+            "deploy freeze timing",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let read_context_request = MemoryCoreRequest {
+            operation: MEMORY_OP_READ_CONTEXT.to_owned(),
+            payload: json!({
+                "session_id": "read-context-envelope-session",
+                "workspace_root": workspace_root,
+            }),
+        };
+        let read_context_outcome =
+            super::super::execute_memory_core_with_config(read_context_request, &config)
+                .expect("read_context should succeed");
+        let context_entries = decode_memory_context_entries(&read_context_outcome.payload);
+
+        let staged_outcome = super::super::execute_memory_core_with_config(
+            build_read_stage_envelope_request_with_workspace_root(
+                "read-context-envelope-session",
+                Some(workspace_root),
+            ),
+            &config,
+        )
+        .expect("read_stage_envelope should succeed");
+        let staged_envelope =
+            decode_stage_envelope(&staged_outcome.payload).expect("decode staged envelope");
+
+        assert_eq!(context_entries, staged_envelope.hydrated.entries);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn read_stage_envelope_operation_preserves_durable_recall_with_workspace_root() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
@@ -807,7 +776,6 @@ mod tests {
             build_read_stage_envelope_request_with_workspace_root(
                 "durable-recall-stage-envelope-session",
                 Some(workspace_root),
-                &config,
             ),
             &config,
         )
@@ -822,6 +790,141 @@ mod tests {
         assert!(
             has_durable_recall,
             "expected staged envelope payload to keep workspace durable recall"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn read_stage_envelope_operation_ignores_request_level_memory_form_overrides() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = temp_dir
+            .path()
+            .join("read-stage-envelope-request-overrides.sqlite3");
+        let config = sqlite_memory_config_with_profile(db_path, MemoryProfile::WindowOnly, 2);
+
+        super::super::append_turn_direct(
+            "read-stage-envelope-ignore-overrides",
+            "user",
+            "turn 1",
+            &config,
+        )
+        .expect("append turn 1 should succeed");
+        super::super::append_turn_direct(
+            "read-stage-envelope-ignore-overrides",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        super::super::append_turn_direct(
+            "read-stage-envelope-ignore-overrides",
+            "user",
+            "turn 3",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let outcome = super::super::execute_memory_core_with_config(
+            MemoryCoreRequest {
+                operation: MEMORY_OP_READ_STAGE_ENVELOPE.to_owned(),
+                payload: json!({
+                    "session_id": "read-stage-envelope-ignore-overrides",
+                    "profile": "window_plus_summary",
+                    "system": MemorySystemKind::RecallFirst.as_str(),
+                    "system_id": MemorySystemKind::RecallFirst.as_str(),
+                    "sliding_window": 64,
+                    "summary_max_chars": 4096,
+                    "profile_note": "request level profile note should be ignored",
+                }),
+            },
+            &config,
+        )
+        .expect("read_stage_envelope operation should succeed");
+
+        let envelope = decode_stage_envelope(&outcome.payload).expect("decode staged envelope");
+        assert!(
+            envelope
+                .hydrated
+                .entries
+                .iter()
+                .all(|entry| entry.kind != MemoryContextKind::Summary),
+            "request-level summary overrides should not change the canonical staged memory form"
+        );
+        assert!(
+            envelope
+                .hydrated
+                .entries
+                .iter()
+                .all(|entry| entry.kind != MemoryContextKind::Profile),
+            "request-level profile overrides should not change the canonical staged memory form"
+        );
+        assert_eq!(
+            envelope.hydrated.diagnostics.system_id,
+            super::super::selected_prompt_hydration_system_id(&config),
+            "request-level system overrides should not change the canonical staged memory form"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn read_context_operation_ignores_request_level_memory_form_overrides() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = temp_dir
+            .path()
+            .join("read-context-request-overrides.sqlite3");
+        let config = sqlite_memory_config_with_profile(db_path, MemoryProfile::WindowOnly, 2);
+
+        super::super::append_turn_direct(
+            "read-context-ignore-overrides",
+            "user",
+            "turn 1",
+            &config,
+        )
+        .expect("append turn 1 should succeed");
+        super::super::append_turn_direct(
+            "read-context-ignore-overrides",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        super::super::append_turn_direct(
+            "read-context-ignore-overrides",
+            "user",
+            "turn 3",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let outcome = super::super::execute_memory_core_with_config(
+            MemoryCoreRequest {
+                operation: MEMORY_OP_READ_CONTEXT.to_owned(),
+                payload: json!({
+                    "session_id": "read-context-ignore-overrides",
+                    "profile": "window_plus_summary",
+                    "system": MemorySystemKind::RecallFirst.as_str(),
+                    "system_id": MemorySystemKind::RecallFirst.as_str(),
+                    "sliding_window": 64,
+                    "summary_max_chars": 4096,
+                    "profile_note": "request level profile note should be ignored",
+                }),
+            },
+            &config,
+        )
+        .expect("read_context operation should succeed");
+
+        let entries = decode_memory_context_entries(&outcome.payload);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.kind != MemoryContextKind::Summary),
+            "request-level summary overrides should not change the canonical runtime memory form"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.kind != MemoryContextKind::Profile),
+            "request-level profile overrides should not change the canonical runtime memory form"
         );
     }
 

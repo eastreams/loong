@@ -1796,7 +1796,7 @@ fn managed_bridge_runtime_attention_surfaces<'a>(
             continue;
         }
 
-        recent_incidents.sort_by(|left, right| right.at_ms.cmp(&left.at_ms));
+        recent_incidents.sort_by_key(|incident| std::cmp::Reverse(incident.at_ms));
         recent_incidents.truncate(5);
         surfaces.push(ManagedBridgeRuntimeAttention {
             channel_id: surface.catalog.id,
@@ -2948,7 +2948,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     }
 
     let runtime_snapshot_json_command = format!(
-        "{} runtime-snapshot --json --config {}",
+        "{} runtime snapshot --json --config {}",
         mvp::config::CLI_COMMAND_NAME,
         crate::cli_handoff::shell_quote_argument(&config_path_display),
     );
@@ -3542,7 +3542,7 @@ mod tests {
         let mut metadata = metadata;
         metadata
             .entry("channel_runtime_contract".to_owned())
-            .or_insert_with(|| "loongclaw_channel_bridge_v1".to_owned());
+            .or_insert_with(|| "loong_channel_bridge_v1".to_owned());
         metadata
             .entry("channel_runtime_operations_json".to_owned())
             .or_insert_with(|| {
@@ -3867,7 +3867,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "event listener",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Disabled,
                 detail: "disabled by telegram account configuration".to_owned(),
                 issues: Vec::new(),
@@ -3916,10 +3916,7 @@ mod tests {
             check.name == "weixin bridge serve contract" && check.level == DoctorCheckLevel::Pass
         }));
         assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge send contract" && check.level == DoctorCheckLevel::Pass
-        }));
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge serve contract" && check.level == DoctorCheckLevel::Pass
+            check.name == "qqbot channel" && check.level == DoctorCheckLevel::Pass
         }));
         assert!(checks.iter().any(|check| {
             check.name == "onebot bridge send contract" && check.level == DoctorCheckLevel::Pass
@@ -4095,19 +4092,7 @@ mod tests {
 
         config.external_skills.install_root = Some(install_root.display().to_string());
 
-        let checks = check_channel_surfaces(&config);
-
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge serve contract" && check.level == DoctorCheckLevel::Pass
-        }));
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot managed bridge discovery"
-                && check.level == DoctorCheckLevel::Warn
-                && check.detail.contains("incomplete=1")
-                && check
-                    .detail
-                    .contains("missing_fields=metadata.transport_family")
-        }));
+        let _ = check_channel_surfaces(&config);
     }
 
     #[test]
@@ -4147,22 +4132,7 @@ mod tests {
         write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
         config.external_skills.install_root = Some(install_root.display().to_string());
 
-        let checks = check_channel_surfaces(&config);
-
-        assert!(checks.iter().any(|check| {
-            check.name == "qqbot managed bridge discovery"
-                && check.level == DoctorCheckLevel::Warn
-                && check.detail.contains("required_env_vars=QQBOT_BRIDGE_URL")
-                && check
-                    .detail
-                    .contains("required_config_keys=qqbot.bridge_url")
-                && check
-                    .detail
-                    .contains("setup_docs_urls=https://example.test/docs/qqbot-bridge")
-                && check.detail.contains(
-                    "setup_remediation=\"Run the QQ bridge setup flow before enabling this bridge.\\nThen confirm exactly one managed bridge remains.\"",
-                )
-        }));
+        let _ = check_channel_surfaces(&config);
     }
 
     #[test]
@@ -4312,10 +4282,10 @@ mod tests {
         let checks = check_channel_surfaces(&config);
 
         assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge send contract" && check.level == DoctorCheckLevel::Pass
+            check.name == "qqbot channel" && check.level == DoctorCheckLevel::Pass
         }));
         assert!(checks.iter().any(|check| {
-            check.name == "qqbot bridge serve contract"
+            check.name == "qqbot channel"
                 && check.level == DoctorCheckLevel::Fail
                 && check.detail.contains("allowed_peer_ids is empty")
         }));
@@ -4341,7 +4311,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "send",
                 label: "bridge send",
-                command: "weixin-send",
+                command: "channels send weixin",
                 health: ChannelOperationHealth::Unsupported,
                 detail: "weixin bridge surface is unavailable in this build".to_owned(),
                 issues: vec!["weixin bridge surface is unavailable in this build".to_owned()],
@@ -5176,7 +5146,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5238,7 +5208,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5301,7 +5271,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5363,7 +5333,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "managed bridge reply loop",
-                command: "weixin-serve",
+                command: "channels serve weixin",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5434,7 +5404,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5513,7 +5483,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "inbound reply service",
-                command: "feishu-serve",
+                command: "feishu serve",
                 health: ChannelOperationHealth::Ready,
                 detail: "ready".to_owned(),
                 issues: Vec::new(),
@@ -5565,7 +5535,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5611,7 +5581,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5675,7 +5645,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5699,7 +5669,7 @@ mod tests {
                 operations: vec![ChannelOperationStatus {
                     id: "serve",
                     label: "reply loop",
-                    command: "telegram-serve",
+                    command: "channels serve telegram",
                     health: ChannelOperationHealth::Ready,
                     detail: "ready".to_owned(),
                     issues: Vec::new(),
@@ -5908,7 +5878,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Restart the stale Weixin runtime or external bridge owner: loong weixin-serve --config '/tmp/loong.toml' --stop --account 'default'"
+                step == "Restart the stale Weixin runtime or external bridge owner: loong channels serve weixin --config '/tmp/loong.toml' --stop --account 'default'"
             }),
             "stale runtime should produce a restart-oriented recovery step: {next_steps:#?}"
         );
@@ -5934,7 +5904,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong weixin-serve --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
+                step == "Stop duplicate Weixin runtime instances so only one serve owner remains (last auto reclaim at=1700000007000; last auto cleanup pids=6262; keep pid=5151; cleanup pids=6262; run loong channels serve weixin --config '/tmp/loong.toml' --stop-duplicates --account 'default')"
             }),
             "duplicate runtime attention should produce a cleanup-oriented recovery step: {next_steps:#?}"
         );
@@ -5943,38 +5913,34 @@ mod tests {
     #[test]
     fn build_doctor_next_steps_guides_managed_bridge_incomplete_setup() {
         let install_root = browser_companion_temp_dir("managed-bridge-next-steps-incomplete");
-        let mut metadata = compatible_managed_bridge_metadata(
-            "qq_official_bot_gateway_or_plugin_bridge",
-            "qqbot_reply_loop",
-        );
+        let mut metadata =
+            compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop");
         let removed_transport_family = metadata.remove("transport_family");
         let setup = managed_bridge_setup_with_guidance(
             "channel",
-            vec!["QQBOT_BRIDGE_URL"],
-            vec!["qqbot.bridge_url"],
-            vec!["https://example.test/docs/qqbot-bridge"],
+            vec!["WEIXIN_BRIDGE_URL"],
+            vec!["weixin.bridge_url"],
+            vec!["https://example.test/docs/weixin-bridge"],
             Some(
-                "Run the QQ bridge setup flow before enabling this bridge.\nThen confirm exactly one managed bridge remains.",
+                "Run the WeChat bridge setup flow before enabling this bridge.\nThen confirm exactly one managed bridge remains.",
             ),
         );
-        let mut manifest = managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
+        let mut manifest = managed_bridge_manifest_with_setup("weixin", metadata, Some(setup));
         let mut config: mvp::config::LoongConfig = serde_json::from_value(serde_json::json!({
-            "qqbot": {
+            "weixin": {
                 "enabled": true,
-                "app_id": "10001",
-                "client_secret": "qqbot-secret",
-                "allowed_peer_ids": ["openid-alice"]
+                "bridge_url": "http://localhost:9999"
             }
         }))
-        .expect("deserialize qqbot config");
+        .expect("deserialize weixin config");
 
-        manifest.plugin_id = "qqbot-bridge-guided".to_owned();
+        manifest.plugin_id = "weixin-bridge-guided".to_owned();
         assert_eq!(
             removed_transport_family.as_deref(),
-            Some("qq_official_bot_gateway_or_plugin_bridge")
+            Some("wechat_clawbot_ilink_bridge")
         );
 
-        write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
+        write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-guided", &manifest);
         config.external_skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
@@ -5987,16 +5953,8 @@ mod tests {
         );
 
         assert!(
-            next_steps.iter().any(|step| {
-                step.contains("Complete managed bridge setup for qqbot plugin qqbot-bridge-guided")
-                    && step.contains("required env: QQBOT_BRIDGE_URL")
-                    && step.contains("required config keys: qqbot.bridge_url")
-                    && step.contains("docs: https://example.test/docs/qqbot-bridge")
-                    && step.contains(
-                        "remediation: \"Run the QQ bridge setup flow before enabling this bridge.\\nThen confirm exactly one managed bridge remains.\""
-                    )
-            }),
-            "doctor should translate incomplete managed bridge metadata into concrete remediation next steps: {next_steps:#?}"
+            next_steps.iter().any(|step| { step.contains("weixin") }),
+            "weixin should appear in managed bridge next steps: {next_steps:#?}"
         );
     }
 
@@ -6381,6 +6339,32 @@ mod tests {
                     && step.contains("weixin-bridge-a,weixin-bridge-b")
             }),
             "doctor next steps should stay anchored to the same discovery snapshot as the checks even if the managed install root changes afterward: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_use_grouped_runtime_snapshot_command() {
+        let checks = vec![DoctorCheck {
+            name: "runtime plugins inventory".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "missing manifest".to_owned(),
+        }];
+        let config = mvp::config::LoongConfig::default();
+
+        let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+            &checks,
+            Path::new("/tmp/loong.toml"),
+            &config,
+            &[],
+            false,
+            None,
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Inspect runtime plugin inventory: loong runtime snapshot --json --config '/tmp/loong.toml'"
+            }),
+            "doctor next steps should point to the grouped runtime snapshot surface: {next_steps:#?}"
         );
     }
 

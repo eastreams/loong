@@ -1073,6 +1073,7 @@ mod tests {
             "preface",
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+                retryable: false,
             },
             "summarize note.md",
             &mut budget,
@@ -1107,6 +1108,7 @@ mod tests {
             "preface",
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_preflight_denied: tool input needs repair".to_owned(),
+                retryable: false,
             },
             "retry the command",
             &mut budget,
@@ -1662,6 +1664,7 @@ mod tests {
                     latest_tool_payload:
                         Some(ToolDrivenFollowupPayload::ToolFailure {
                             reason: tool_reason,
+                            ..
                         }),
                 },
         } = decision

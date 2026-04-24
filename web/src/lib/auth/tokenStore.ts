@@ -1,4 +1,4 @@
-const STORAGE_KEY = "loongclaw-web-token";
+const STORAGE_KEY = "loong-web-token";
 
 export function getStoredToken(): string | null {
   try {

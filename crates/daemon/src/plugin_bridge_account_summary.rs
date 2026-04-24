@@ -259,7 +259,7 @@ mod tests {
         mvp::channel::ChannelOperationStatus {
             id: "send",
             label,
-            command: "weixin-send",
+            command: "channels send weixin",
             health: mvp::channel::ChannelOperationHealth::Ready,
             detail: "ready".to_owned(),
             issues: Vec::new(),
@@ -274,7 +274,7 @@ mod tests {
         mvp::channel::ChannelOperationStatus {
             id: "send",
             label,
-            command: "weixin-send",
+            command: "channels send weixin",
             health: mvp::channel::ChannelOperationHealth::Misconfigured,
             detail: detail.to_owned(),
             issues: Vec::new(),
@@ -286,7 +286,7 @@ mod tests {
         mvp::channel::ChannelOperationStatus {
             id: "serve",
             label: "bridge reply loop",
-            command: "weixin-serve",
+            command: "channels serve weixin",
             health: mvp::channel::ChannelOperationHealth::Unsupported,
             detail: detail.to_owned(),
             issues: Vec::new(),

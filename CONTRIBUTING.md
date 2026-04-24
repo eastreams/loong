@@ -128,6 +128,12 @@ source of truth, with a fallback to the full `integration` binary for broad
 harness edits. These fast loops **do not** replace the Track A required checks
 or CI parity.
 
+When you open a pull request, record the exact Rust validation that matches the
+touched package and feature surface. If a known baseline or platform-specific
+repository issue blocks full local parity, document the blocker together with
+the narrower checks you did run instead of checking boxes for commands you
+could not complete.
+
 If `task` or its transitive dependencies are unavailable locally, run at least
 CI parity plus architecture/dep-graph checks directly:
 
@@ -214,7 +220,7 @@ If you are unsure which track applies, open an issue and ask maintainers for tri
 - Use community channels such as Discord and Telegram. If you are already active in Feishu or
   WeChat community spaces, those are also good places to ask.
 - If you want to introduce yourself directly or talk about where you could help most, email
-  [contact@loongclaw.ai](mailto:contact@loongclaw.ai).
+  [contact@loong.ai](mailto:contact@loong.ai).
 - Use the private security advisory flow for vulnerabilities instead of public issues.
 
 The public workflow in this guide is the contributor-facing source of truth.
@@ -242,7 +248,7 @@ care.
 - If your strengths are design, docs, docs-site editing, QA, operations, support, or community work,
   those are first-class contributions here, not second-tier work.
 - If you would rather start with a direct introduction, email
-  [contact@loongclaw.ai](mailto:contact@loongclaw.ai). A short note is enough. You do not need a
+  [contact@loong.ai](mailto:contact@loong.ai). A short note is enough. You do not need a
   formal application.
 - If you are unsure where to begin, open a Discussion or send that introduction email and we will
   help point you toward good starting areas.

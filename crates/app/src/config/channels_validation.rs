@@ -383,6 +383,106 @@ pub(super) fn validate_discord_secret_ref_env_pointer(
     }
 }
 
+pub(super) fn validate_effective_qqbot_runtime_account_ids(
+    issues: &mut Vec<ConfigValidationIssue>,
+    config: &QqbotChannelConfig,
+) {
+    let mut runtime_account_ids = BTreeMap::<String, Vec<String>>::new();
+    for configured_account_id in config.configured_account_ids() {
+        let resolved = config.resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let normalized_runtime_account_id =
+            normalize_channel_account_id(resolved.account.id.as_str());
+        runtime_account_ids
+            .entry(normalized_runtime_account_id)
+            .or_default()
+            .push(resolved.configured_account_label);
+    }
+    push_duplicate_effective_runtime_account_id_issues(issues, "qqbot", runtime_account_ids);
+}
+
+pub(super) fn validate_qqbot_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("client_secret_env") {
+        QQBOT_CLIENT_SECRET_ENV
+    } else {
+        QQBOT_APP_ID_ENV
+    };
+
+    let validation_result = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    );
+    if let Err(issue) = validation_result {
+        issues.push(*issue);
+    }
+}
+
+pub(super) fn validate_qqbot_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    let example_env_name = if field_path.ends_with("client_secret") {
+        QQBOT_CLIENT_SECRET_ENV
+    } else {
+        QQBOT_APP_ID_ENV
+    };
+
+    let validation_result = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    );
+    if let Err(issue) = validation_result {
+        issues.push(*issue);
+    }
+}
+// TODO: dupulicate func
+pub(super) fn push_duplicate_effective_runtime_account_id_issues(
+    issues: &mut Vec<ConfigValidationIssue>,
+    channel_key: &str,
+    runtime_account_ids: BTreeMap<String, Vec<String>>,
+) {
+    for (normalized_account_id, labels) in runtime_account_ids {
+        if labels.len() < 2 {
+            continue;
+        }
+
+        let mut extra_message_variables = BTreeMap::new();
+        extra_message_variables.insert(
+            "normalized_account_id".to_owned(),
+            normalized_account_id.clone(),
+        );
+        extra_message_variables.insert("raw_account_labels".to_owned(), labels.join(", "));
+
+        issues.push(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
+            code: ConfigValidationCode::DuplicateChannelAccountId,
+            field_path: format!("{channel_key}.accounts"),
+            inline_field_path: format!("{channel_key}.accounts.{normalized_account_id}"),
+            example_env_name: String::new(),
+            suggested_env_name: None,
+            extra_message_variables,
+        });
+    }
+}
+
 pub(super) fn validate_google_chat_env_pointer(
     issues: &mut Vec<ConfigValidationIssue>,
     field_path: &str,

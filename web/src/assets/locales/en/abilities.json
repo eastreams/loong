@@ -28,25 +28,8 @@
                                                       "title":  "Skills",
                                                       "summary":  "Skills, external skills, and capability sources.",
                                                       "description":  "Visible runtime tools, browser companion status, and external skill policy are summarized here."
-                                                  },
-                                       "mascot":  {
-                                                      "title":  "Mascot",
-                                                      "summary":  "Experimental chat mascot visibility toggle.",
-                                                      "description":  "Control whether the experimental chat mascot is shown."
                                                   }
                                    },
-                      "mascot":  {
-                                     "introTitle":  "Mascot",
-                                     "settingsTitle":  "Display settings",
-                                     "helper":  "This is an experimental feature and stays off by default.",
-                                     "fields":  {
-                                                    "display":  "Show chat mascot"
-                                                },
-                                     "actions":  {
-                                                    "show":  "Show mascot",
-                                                    "hide":  "Hide mascot"
-                                                }
-                                 },
                       "personalization":  {
                                               "introTitle":  "Personalization",
                                               "snapshotTitle":  "Current personalization",

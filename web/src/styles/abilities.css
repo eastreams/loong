@@ -612,14 +612,6 @@
   cursor: pointer;
 }
 
-.abilities-mascot-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-top: 0.9rem;
-}
-
 @media (max-width: 980px) {
   .abilities-shell {
     grid-template-columns: 1fr;
@@ -698,10 +690,6 @@
     padding-right: 0;
   }
 
-  .abilities-mascot-controls {
-    flex-direction: column;
-    align-items: flex-start;
-  }
 }
 
 @media (max-width: 720px) {

@@ -221,14 +221,23 @@ pub(super) async fn abilities_skills(
         ok: true,
         data: AbilitiesSkillsPayload {
             visible_runtime_tool_count: runtime_snapshot.tools.visible_tool_count,
-            visible_runtime_direct_tool_count: runtime_snapshot.tools.visible_direct_tool_names.len(),
+            visible_runtime_direct_tool_count: runtime_snapshot
+                .tools
+                .visible_direct_tool_names
+                .len(),
             hidden_tool_count: runtime_snapshot.tools.hidden_tool_count,
             visible_runtime_tools: runtime_snapshot.tools.visible_tool_names.clone(),
             visible_runtime_catalog,
             hidden_tool_surfaces,
             approval_mode: approval_mode_label(snapshot.config.tools.approval.mode).to_owned(),
             autonomy_profile: snapshot.config.tools.autonomy_profile.as_str().to_owned(),
-            consent_default_mode: snapshot.config.tools.consent.default_mode.as_str().to_owned(),
+            consent_default_mode: snapshot
+                .config
+                .tools
+                .consent
+                .default_mode
+                .as_str()
+                .to_owned(),
             sessions_allow_mutation: snapshot.config.tools.sessions.allow_mutation,
             browser_companion: AbilitiesBrowserCompanionPayload {
                 enabled: json_bool_field(browser_companion, "enabled"),
@@ -307,9 +316,7 @@ fn build_visible_tool_payload(tool_name: &str) -> AbilitiesVisibleToolPayload {
     }
 }
 
-fn tool_execution_kind_label(
-    execution_kind: mvp::tools::ToolExecutionKind,
-) -> &'static str {
+fn tool_execution_kind_label(execution_kind: mvp::tools::ToolExecutionKind) -> &'static str {
     match execution_kind {
         mvp::tools::ToolExecutionKind::Core => "core",
         mvp::tools::ToolExecutionKind::App => "app",

@@ -39,14 +39,15 @@ pub use self::channel_cli_specs::{
     GOOGLE_CHAT_SEND_CLI_SPEC, IMESSAGE_SEND_CLI_SPEC, IRC_SEND_CLI_SPEC, LINE_SEND_CLI_SPEC,
     MATRIX_SEND_CLI_SPEC, MATRIX_SERVE_CLI_SPEC, MATTERMOST_SEND_CLI_SPEC,
     NEXTCLOUD_TALK_SEND_CLI_SPEC, NOSTR_SEND_CLI_SPEC, ONEBOT_SEND_CLI_SPEC, ONEBOT_SERVE_CLI_SPEC,
-    QQBOT_SEND_CLI_SPEC, QQBOT_SERVE_CLI_SPEC, SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC,
-    SYNOLOGY_CHAT_SEND_CLI_SPEC, TEAMS_SEND_CLI_SPEC, TELEGRAM_SEND_CLI_SPEC,
-    TELEGRAM_SERVE_CLI_SPEC, TWITCH_SEND_CLI_SPEC, WEBHOOK_SEND_CLI_SPEC, WECOM_SEND_CLI_SPEC,
-    WECOM_SERVE_CLI_SPEC, WEIXIN_SEND_CLI_SPEC, WEIXIN_SERVE_CLI_SPEC, WHATSAPP_SEND_CLI_SPEC,
+    QQBOT_SEND_CLI_SPEC, SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC, SYNOLOGY_CHAT_SEND_CLI_SPEC,
+    TEAMS_SEND_CLI_SPEC, TELEGRAM_SEND_CLI_SPEC, TELEGRAM_SERVE_CLI_SPEC, TWITCH_SEND_CLI_SPEC,
+    WEBHOOK_SEND_CLI_SPEC, WECOM_SEND_CLI_SPEC, WECOM_SERVE_CLI_SPEC, WEIXIN_SEND_CLI_SPEC,
+    WEIXIN_SERVE_CLI_SPEC, WHATSAPP_SEND_CLI_SPEC,
 };
 pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
+pub use self::channels_cli::{ChannelsCommands, run_grouped_channels_cli};
 pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
 pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
@@ -54,8 +55,7 @@ pub use self::managed_plugin_bridge_runtime::{
     default_onebot_send_target_kind, default_qqbot_send_target_kind,
     default_weixin_send_target_kind, parse_onebot_send_target_kind, parse_qqbot_send_target_kind,
     parse_weixin_send_target_kind, run_onebot_send_cli_impl, run_onebot_serve_cli_impl,
-    run_qqbot_send_cli_impl, run_qqbot_serve_cli_impl, run_weixin_send_cli_impl,
-    run_weixin_serve_cli_impl,
+    run_qqbot_send_cli_impl, run_weixin_send_cli_impl, run_weixin_serve_cli_impl,
 };
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
@@ -75,6 +75,7 @@ pub use loong_bench::{
 };
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
+pub use runtime_cli::{RuntimeCommands, run_runtime_cli};
 pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
 pub fn run_memory_context_benchmark_cli(
@@ -122,12 +123,14 @@ mod channel_resolution;
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
 mod channel_serve_cli;
+pub mod channels_cli;
 mod cli_handoff;
 mod cli_json;
 mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
 mod copilot_onboarding;
+pub mod debug_cli;
 mod delegate_child_cli;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
@@ -163,6 +166,7 @@ mod provider_model_probe_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
+pub mod runtime_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
@@ -230,7 +234,6 @@ pub use session_cli::{
 use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
-use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
 pub use update_cli::run_update_cli;
 pub use web::{WebCommand, run_web_command};
@@ -252,7 +255,8 @@ pub use trajectory_cli::{
 #[doc(hidden)]
 pub mod test_support;
 pub use channel_serve_cli::{
-    FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC, WHATSAPP_SERVE_CLI_SPEC,
+    FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, QQBOT_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC,
+    WHATSAPP_SERVE_CLI_SPEC,
 };
 
 pub const PUBLIC_GITHUB_REPO: &str = "loong-ai/loong";
@@ -453,7 +457,7 @@ impl std::str::FromStr for MultiChannelServeChannelAccount {
 #[derive(Parser, Debug)]
 #[command(
     name = CLI_COMMAND_NAME,
-    about = "Loong low-level runtime daemon",
+    about = "Loong assistant and runtime CLI",
     version
 )]
 pub struct Cli {
@@ -475,6 +479,7 @@ pub enum Commands {
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
+    #[command(hide = true)]
     /// Run the original end-to-end bootstrap demo
     Demo,
     #[command(
@@ -490,11 +495,13 @@ pub enum Commands {
         #[arg(long, default_value = "{}")]
         payload: String,
     },
+    #[command(hide = true)]
     /// Run agent turns through the unified runtime entry surface
     Turn {
         #[command(subcommand)]
         command: TurnCommands,
     },
+    #[command(hide = true)]
     /// Invoke one connector operation through kernel policy gate
     InvokeConnector {
         #[arg(long)]
@@ -502,6 +509,7 @@ pub enum Commands {
         #[arg(long, default_value = "{}")]
         payload: String,
     },
+    #[command(hide = true)]
     /// Demonstrate audit lifecycle with fixed clock and token revocation
     AuditDemo,
     /// Manage the local Web Console surface
@@ -509,6 +517,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: WebCommand,
     },
+    #[command(hide = true)]
     /// Generate a runnable JSON spec template for quick vertical customization
     InitSpec {
         #[arg(long, default_value = "loong.spec.json")]
@@ -516,6 +525,7 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = InitSpecPreset::Default)]
         preset: InitSpecPreset,
     },
+    #[command(hide = true)]
     /// Run a full workflow from a JSON spec (task/connector/runtime/tool/memory)
     RunSpec {
         #[arg(long)]
@@ -527,6 +537,7 @@ pub enum Commands {
         #[command(flatten)]
         bridge_support: RunSpecBridgeSupportArgs,
     },
+    #[command(hide = true)]
     /// Run pressure benchmarks for programmatic orchestration and optional regression gate checks
     BenchmarkProgrammaticPressure {
         #[arg(
@@ -546,6 +557,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         preflight_fail_on_warnings: bool,
     },
+    #[command(hide = true)]
     /// Lint pressure baseline coverage without running benchmark scenarios
     BenchmarkProgrammaticPressureLint {
         #[arg(
@@ -565,6 +577,7 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         fail_on_warnings: bool,
     },
+    #[command(hide = true)]
     /// Benchmark Wasm compile cache behavior and enforce hot-path speedup gate
     BenchmarkWasmCache {
         #[arg(long, default_value = "examples/plugins-wasm/secure_echo.wasm")]
@@ -585,6 +598,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 1.5)]
         min_speedup_ratio: f64,
     },
+    #[command(hide = true)]
     /// Benchmark memory prompt-context hydration across window-only, rebuild, steady-state, and shrink catch-up summary paths
     BenchmarkMemoryContext {
         #[arg(
@@ -615,6 +629,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 1.2)]
         min_steady_state_speedup_ratio: f64,
     },
+    #[command(hide = true)]
     /// Validate config semantics and report structured diagnostics
     ValidateConfig {
         #[arg(long)]
@@ -780,6 +795,17 @@ pub enum Commands {
         #[command(subcommand)]
         command: Option<doctor_cli::DoctorCommands>,
     },
+    /// Build one developer-facing debug bundle over runtime, provider, ACP, session, and audit signals
+    Debug {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[arg(long, global = true, default_value = "default")]
+        session: String,
+        #[command(subcommand)]
+        command: debug_cli::DebugCommands,
+    },
     /// Inspect the retained audit journal through a bounded CLI surface
     Audit {
         #[arg(long, global = true)]
@@ -844,7 +870,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: plugins_cli::PluginsCommands,
     },
-    /// List compiled channel surfaces, aliases, and readiness status
+    /// Inspect channels or run canonical grouped channel operations
     Channels {
         #[arg(long)]
         config: Option<String>,
@@ -852,174 +878,13 @@ pub enum Commands {
         resolve: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
-    },
-    /// Fetch and print currently available provider model list
-    ListModels {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Print a unified runtime snapshot for experiment reproducibility and lineage capture
-    RuntimeSnapshot {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        #[arg(long)]
-        output: Option<String>,
-        #[arg(long)]
-        label: Option<String>,
-        #[arg(long)]
-        experiment_id: Option<String>,
-        #[arg(long)]
-        parent_snapshot_id: Option<String>,
-    },
-    #[command(
-        long_about = "Restore a persisted runtime snapshot artifact into the current config and managed skill state.\n\nDry-run by default; pass --apply to mutate config or managed skills."
-    )]
-    /// Restore a persisted runtime snapshot artifact into the current config and managed skill state
-    RuntimeRestore {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        snapshot: String,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-    },
-    /// Manage snapshot-linked experiment run records
-    RuntimeExperiment {
         #[command(subcommand)]
-        command: runtime_experiment_cli::RuntimeExperimentCommands,
+        command: Option<channels_cli::ChannelsCommands>,
     },
-    /// Manage run-derived capability candidates, family readiness, promotion plans, and governed apply outputs
-    RuntimeCapability {
+    /// Inspect runtime, ACP, MCP, snapshot, and trajectory operator surfaces
+    Runtime {
         #[command(subcommand)]
-        command: runtime_capability_cli::RuntimeCapabilityCommands,
-    },
-    /// Manage durable work units for long-running runtime orchestration
-    WorkUnit {
-        #[command(subcommand)]
-        command: work_unit_cli::WorkUnitCommands,
-    },
-    /// List available conversation context engines and selected runtime engine
-    ListContextEngines {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// List available memory systems and selected runtime memory system
-    ListMemorySystems {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// List configured MCP servers and their runtime-visible inventory state
-    ListMcpServers {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Show one configured MCP server and its runtime-visible inventory state
-    ShowMcpServer {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        name: String,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// List available ACP runtime backends and current control-plane selection
-    ListAcpBackends {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// List persisted ACP session metadata from the local control-plane store
-    ListAcpSessions {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Inspect live ACP session status by session key or conversation identity
-    AcpStatus {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, conflicts_with_all = ["conversation_id", "route_session_id"])]
-        session: Option<String>,
-        #[arg(long, conflicts_with_all = ["session", "route_session_id"])]
-        conversation_id: Option<String>,
-        #[arg(long, conflicts_with_all = ["session", "conversation_id"])]
-        route_session_id: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Inspect ACP control-plane observability snapshot from the shared session manager
-    AcpObservability {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Print ACP runtime event summary for a conversation session
-    AcpEventSummary {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long, default_value_t = 200)]
-        limit: usize,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Evaluate ACP conversation dispatch policy for a session or structured channel address
-    AcpDispatch {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        channel: Option<String>,
-        #[arg(long)]
-        conversation_id: Option<String>,
-        #[arg(long)]
-        account_id: Option<String>,
-        #[arg(long)]
-        participant_id: Option<String>,
-        #[arg(long)]
-        thread_id: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Run ACP backend readiness diagnostics for the selected or requested backend
-    AcpDoctor {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        backend: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    #[command(
-        about = "Run the loopback-only internal control-plane skeleton",
-        long_about = "Run the internal control-plane skeleton.\n\nBy default this control-plane listener binds 127.0.0.1 only. You may provide `--bind <host:port>` to override the listener address, but non-loopback binds require `--config` plus `control_plane.allow_remote=true` and a configured `control_plane.shared_token`. Baseline endpoints are `/readyz`, `/healthz`, `/control/challenge`, `/control/connect`, `/control/subscribe`, `/control/snapshot`, and `/control/events`. When `--config` is provided, repository-backed `/session/list`, `/session/read`, `/approval/list`, `/pairing/list`, `/pairing/resolve`, `/acp/session/list`, and `/acp/session/read` views become available for the selected session root."
-    )]
-    ControlPlaneServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        bind: Option<String>,
-        #[arg(long, default_value_t = 0)]
-        port: u16,
+        command: runtime_cli::RuntimeCommands,
     },
     #[command(
         about = "Run one non-interactive assistant turn",
@@ -1055,652 +920,6 @@ pub enum Commands {
         acp_bootstrap_mcp_server: Vec<String>,
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
-    },
-    /// Print safe-lane runtime event summary for a session
-    SafeLaneSummary {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long, default_value_t = 200)]
-        limit: usize,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Search transcript turns across visible sessions
-    SessionSearch {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        query: String,
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-        #[arg(long)]
-        output: Option<String>,
-        #[arg(long, default_value_t = false)]
-        include_archived: bool,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Inspect one exported session-search artifact
-    SessionSearchInspect {
-        #[arg(long)]
-        artifact: String,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Export one session trajectory artifact with transcript turns and session events
-    TrajectoryExport {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: Option<String>,
-        #[arg(long)]
-        output: Option<String>,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Inspect one exported trajectory artifact
-    TrajectoryInspect {
-        #[arg(long)]
-        artifact: String,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    /// Export or inspect runtime trajectory artifacts for replay, evaluation, or research workflows
-    RuntimeTrajectory {
-        #[command(subcommand)]
-        command: runtime_trajectory_cli::RuntimeTrajectoryCommands,
-    },
-    /// Send one Telegram message
-    TelegramSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_telegram_send_target_kind(),
-            value_parser = parse_telegram_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run Telegram channel polling/response loop
-    TelegramServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        once: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "once")]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-    },
-    /// Send one Feishu message or card
-    FeishuSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long)]
-        receive_id_type: Option<String>,
-        #[arg(long = "target", visible_alias = "receive-id")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_feishu_send_target_kind(),
-            value_parser = parse_feishu_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: Option<String>,
-        #[arg(long = "post-json")]
-        post_json: Option<String>,
-        #[arg(long)]
-        image_key: Option<String>,
-        #[arg(long)]
-        file_key: Option<String>,
-        #[arg(long)]
-        image_path: Option<String>,
-        #[arg(long)]
-        file_path: Option<String>,
-        #[arg(long)]
-        file_type: Option<String>,
-        #[arg(long, default_value_t = false)]
-        card: bool,
-        #[arg(long)]
-        uuid: Option<String>,
-    },
-    /// Run Feishu event callback server and auto-reply via provider
-    FeishuServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "stop")]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long)]
-        bind: Option<String>,
-        #[arg(long)]
-        path: Option<String>,
-    },
-    /// Send one Matrix room message
-    MatrixSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_matrix_send_target_kind(),
-            value_parser = parse_matrix_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run Matrix sync reply loop
-    MatrixServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        once: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "once")]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-    },
-    /// Send one WeCom AIBot proactive message
-    WecomSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_wecom_send_target_kind(),
-            value_parser = parse_wecom_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run WeCom AIBot long-connection reply loop
-    WecomServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "stop")]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-    },
-    /// Send one managed Weixin bridge message
-    WeixinSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_weixin_send_target_kind(),
-            value_parser = parse_weixin_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run one managed Weixin bridge reply loop
-    WeixinServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        once: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "once")]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-    },
-    /// Send one managed QQBot bridge message
-    QqbotSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_qqbot_send_target_kind(),
-            value_parser = parse_qqbot_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run one managed QQBot bridge reply loop
-    QqbotServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        once: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "once")]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-    },
-    /// Send one managed OneBot bridge message
-    OnebotSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_onebot_send_target_kind(),
-            value_parser = parse_onebot_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run one managed OneBot bridge reply loop
-    OnebotServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        once: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "once")]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with_all = ["once", "stop"])]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-    },
-    /// Run WhatsApp Cloud API webhook server and auto-reply via provider
-    WhatsappServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "stop")]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long)]
-        bind: Option<String>,
-        #[arg(long)]
-        path: Option<String>,
-    },
-    /// Send one Discord channel message
-    DiscordSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_discord_send_target_kind(),
-            value_parser = parse_discord_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one DingTalk custom robot webhook message
-    DingtalkSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: Option<String>,
-        #[arg(
-            long,
-            default_value_t = default_dingtalk_send_target_kind(),
-            value_parser = parse_dingtalk_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Slack channel message
-    SlackSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_slack_send_target_kind(),
-            value_parser = parse_slack_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one LINE push message
-    LineSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_line_send_target_kind(),
-            value_parser = parse_line_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run LINE webhook callback server and auto-reply via provider
-    LineServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "stop")]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long)]
-        bind: Option<String>,
-        #[arg(long)]
-        path: Option<String>,
-    },
-    /// Send one WhatsApp business message
-    WhatsappSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_whatsapp_send_target_kind(),
-            value_parser = parse_whatsapp_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one SMTP email message
-    EmailSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_email_send_target_kind(),
-            value_parser = parse_email_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one generic webhook POST message
-    WebhookSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: Option<String>,
-        #[arg(
-            long,
-            default_value_t = default_webhook_send_target_kind(),
-            value_parser = parse_webhook_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run a generic inbound webhook server and auto-reply via provider
-    WebhookServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long, default_value_t = false)]
-        stop: bool,
-        #[arg(long, default_value_t = false, conflicts_with = "stop")]
-        stop_duplicates: bool,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long)]
-        bind: Option<String>,
-        #[arg(long)]
-        path: Option<String>,
-    },
-    /// Send one Google Chat incoming webhook message
-    GoogleChatSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: Option<String>,
-        #[arg(
-            long,
-            default_value_t = default_google_chat_send_target_kind(),
-            value_parser = parse_google_chat_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Microsoft Teams incoming webhook message
-    TeamsSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: Option<String>,
-        #[arg(
-            long,
-            default_value_t = default_teams_send_target_kind(),
-            value_parser = parse_teams_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Tlon direct message or group post
-    TlonSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_tlon_send_target_kind(),
-            value_parser = parse_tlon_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Signal direct message
-    SignalSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_signal_send_target_kind(),
-            value_parser = parse_signal_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Twitch chat message
-    TwitchSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_twitch_send_target_kind(),
-            value_parser = parse_twitch_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Mattermost channel post
-    MattermostSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_mattermost_send_target_kind(),
-            value_parser = parse_mattermost_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Nextcloud Talk bot room message
-    NextcloudTalkSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_nextcloud_talk_send_target_kind(),
-            value_parser = parse_nextcloud_talk_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one Synology Chat incoming webhook message
-    SynologyChatSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: Option<String>,
-        #[arg(
-            long,
-            default_value_t = default_synology_chat_send_target_kind(),
-            value_parser = parse_synology_chat_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one IRC message to a channel or nick
-    IrcSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_irc_send_target_kind(),
-            value_parser = parse_irc_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Send one iMessage chat through BlueBubbles
-    ImessageSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: String,
-        #[arg(
-            long,
-            default_value_t = default_imessage_send_target_kind(),
-            value_parser = parse_imessage_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Publish one signed Nostr text note
-    NostrSend {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        account: Option<String>,
-        #[arg(long = "target")]
-        target: Option<String>,
-        #[arg(
-            long,
-            default_value_t = default_nostr_send_target_kind(),
-            value_parser = parse_nostr_send_target_kind
-        )]
-        target_kind: mvp::channel::ChannelOutboundTargetKind,
-        #[arg(long)]
-        text: String,
-    },
-    /// Run the multi-channel supervisor for coordinated runtime-backed service-channel serving
-    MultiChannelServe {
-        #[arg(long)]
-        config: Option<String>,
-        #[arg(long)]
-        session: String,
-        #[arg(long = "channel-account", value_name = "CHANNEL=ACCOUNT")]
-        channel_account: Vec<MultiChannelServeChannelAccount>,
     },
     /// Run the gateway lifecycle namespace
     Gateway {
@@ -1787,11 +1006,14 @@ fn supported_multi_channel_serve_channel_ids() -> Vec<&'static str> {
 #[path = "lib_multi_channel_serve_tests.rs"]
 mod multi_channel_serve_tests;
 
-fn resolved_default_entry_config_path() -> PathBuf {
+fn default_entry_config_path_override() -> Option<PathBuf> {
     std::env::var_os("LOONG_CONFIG_PATH")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(mvp::config::default_config_path)
+}
+
+fn resolved_default_entry_config_path() -> PathBuf {
+    default_entry_config_path_override().unwrap_or_else(mvp::config::default_config_path)
 }
 
 fn default_onboard_command() -> Commands {
@@ -2803,11 +2025,18 @@ fn collect_runtime_snapshot_provider_state(
     };
 
     let transport_metrics = mvp::provider::provider_http_client_runtime_metrics_snapshot();
+    let failover_metrics = mvp::provider::provider_failover_metrics_snapshot();
     let transport_runtime = RuntimeSnapshotProviderTransportState {
         http_client_cache_entries: transport_metrics.cache_entry_count,
         http_client_cache_hits: transport_metrics.cache_hit_count,
         http_client_cache_misses: transport_metrics.cache_miss_count,
         built_http_clients: transport_metrics.built_client_count,
+        failover_total_events: failover_metrics.total_events,
+        failover_continued_events: failover_metrics.continued_events,
+        failover_exhausted_events: failover_metrics.exhausted_events,
+        failover_by_reason: failover_metrics.by_reason,
+        failover_by_stage: failover_metrics.by_stage,
+        failover_by_provider: failover_metrics.by_provider,
     };
 
     RuntimeSnapshotProviderState {
@@ -4253,7 +3482,7 @@ pub fn run_wecom_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
 pub fn run_discord_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("discord-send", args.target)?;
+        let target = require_channel_send_target("channels send discord", args.target)?;
         mvp::channel::run_discord_send(
             args.config_path,
             args.account,
@@ -4327,7 +3556,7 @@ pub fn run_whatsapp_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCom
 pub fn run_email_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("email-send", args.target)?;
+        let target = require_channel_send_target("channels send email", args.target)?;
         mvp::channel::run_email_send(
             args.config_path,
             args.account,
@@ -4384,7 +3613,7 @@ pub fn run_teams_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
 pub fn run_mattermost_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("mattermost-send", args.target)?;
+        let target = require_channel_send_target("channels send mattermost", args.target)?;
         mvp::channel::run_mattermost_send(
             args.config_path,
             args.account,
@@ -4401,7 +3630,7 @@ pub fn run_nextcloud_talk_send_cli_impl(
 ) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("nextcloud-talk-send", args.target)?;
+        let target = require_channel_send_target("channels send nextcloud-talk", args.target)?;
         mvp::channel::run_nextcloud_talk_send(
             args.config_path,
             args.account,
@@ -4432,7 +3661,7 @@ pub fn run_synology_chat_send_cli_impl(
 pub fn run_irc_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("irc-send", args.target)?;
+        let target = require_channel_send_target("channels send irc", args.target)?;
         mvp::channel::run_irc_send(
             args.config_path,
             args.account,
@@ -4447,7 +3676,7 @@ pub fn run_irc_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandF
 pub fn run_imessage_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("imessage-send", args.target)?;
+        let target = require_channel_send_target("channels send imessage", args.target)?;
         mvp::channel::run_imessage_send(
             args.config_path,
             args.account,
@@ -4491,7 +3720,7 @@ pub fn run_signal_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComma
 pub fn run_twitch_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
-        let target = require_channel_send_target("twitch-send", args.target)?;
+        let target = require_channel_send_target("channels send twitch", args.target)?;
         mvp::channel::run_twitch_send(
             args.config_path,
             args.account,

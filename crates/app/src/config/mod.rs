@@ -24,9 +24,8 @@ pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::bridge::{
-    OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
-    ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
-    WeixinAccountConfig, WeixinChannelConfig,
+    OnebotAccountConfig, OnebotChannelConfig, ResolvedOnebotChannelConfig,
+    ResolvedWeixinChannelConfig, WeixinAccountConfig, WeixinChannelConfig,
 };
 #[allow(unused_imports)]
 pub use channels::{
@@ -39,20 +38,20 @@ pub use channels::{
     IrcAccountConfig, IrcChannelConfig, LineAccountConfig, LineChannelConfig, MatrixAccountConfig,
     MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
     NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, NostrAccountConfig, NostrChannelConfig,
-    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
-    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
-    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
-    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SignalAccountConfig,
-    SignalChannelConfig, SlackAccountConfig, SlackChannelConfig, SynologyChatAccountConfig,
-    SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig, TelegramAccountConfig,
-    TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig, TlonChannelConfig,
-    TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig, WebhookChannelConfig,
-    WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig, WhatsappAccountConfig,
-    WhatsappChannelConfig,
+    QqbotAccountConfig, QqbotChannelConfig, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedQqbotChannelConfig,
+    ResolvedSignalChannelConfig, ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig,
+    ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig,
+    ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig,
+    ResolvedWhatsappChannelConfig, SignalAccountConfig, SignalChannelConfig, SlackAccountConfig,
+    SlackChannelConfig, SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig,
+    TeamsChannelConfig, TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode,
+    TlonAccountConfig, TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig,
+    WebhookAccountConfig, WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig,
+    WecomChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
@@ -188,12 +187,12 @@ mod tests {
 
     fn expected_service_channel_ids() -> Vec<&'static str> {
         vec![
-            "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
+            "telegram", "feishu", "matrix", "wecom", "qqbot", "line", "whatsapp", "webhook",
         ]
     }
 
     fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
-        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+        vec!["telegram", "feishu", "matrix", "wecom", "qqbot", "whatsapp"]
     }
 
     fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
@@ -201,7 +200,7 @@ mod tests {
     }
 
     fn expected_plugin_backed_channel_ids() -> Vec<&'static str> {
-        vec!["weixin", "qqbot", "onebot"]
+        vec!["weixin", "onebot"]
     }
 
     fn expected_outbound_channel_ids() -> Vec<&'static str> {
@@ -253,7 +252,7 @@ mod tests {
             telegram.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(telegram.serve_subcommand, Some("telegram-serve"));
+        assert_eq!(telegram.serve_subcommand, Some("channels serve telegram"));
 
         let feishu = channel_descriptor("feishu").expect("feishu descriptor");
         assert_eq!(feishu.id, "feishu");
@@ -263,7 +262,7 @@ mod tests {
             feishu.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
+        assert_eq!(feishu.serve_subcommand, Some("feishu serve"));
 
         let wecom = channel_descriptor("wecom").expect("wecom descriptor");
         assert_eq!(wecom.id, "wecom");
@@ -273,7 +272,7 @@ mod tests {
             wecom.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
+        assert_eq!(wecom.serve_subcommand, Some("channels serve wecom"));
 
         let weixin = channel_descriptor("wechat").expect("weixin descriptor");
         assert_eq!(weixin.id, "weixin");
@@ -283,17 +282,17 @@ mod tests {
             weixin.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(weixin.serve_subcommand, None);
+        assert_eq!(weixin.serve_subcommand, Some("channels serve weixin"));
 
         let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
-        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(
             qqbot.operational_model,
-            ChannelOperationalModel::PluginBacked
+            ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(qqbot.serve_subcommand, None);
+        assert_eq!(qqbot.serve_subcommand, Some("qqbot-serve"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
         assert_eq!(onebot.id, "onebot");
@@ -303,7 +302,7 @@ mod tests {
             onebot.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(onebot.serve_subcommand, None);
+        assert_eq!(onebot.serve_subcommand, Some("channels serve onebot"));
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");
@@ -333,7 +332,7 @@ mod tests {
             line.operational_model,
             ChannelOperationalModel::StandaloneRuntime
         );
-        assert_eq!(line.serve_subcommand, Some("line-serve"));
+        assert_eq!(line.serve_subcommand, Some("channels serve line"));
 
         let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
         assert_eq!(dingtalk.id, "dingtalk");
@@ -349,7 +348,7 @@ mod tests {
             whatsapp.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(whatsapp.serve_subcommand, Some("whatsapp-serve"));
+        assert_eq!(whatsapp.serve_subcommand, Some("channels serve whatsapp"));
 
         let email = channel_descriptor("email").expect("email descriptor");
         assert_eq!(email.id, "email");
@@ -365,7 +364,7 @@ mod tests {
             webhook.operational_model,
             ChannelOperationalModel::StandaloneRuntime
         );
-        assert_eq!(webhook.serve_subcommand, Some("webhook-serve"));
+        assert_eq!(webhook.serve_subcommand, Some("channels serve webhook"));
 
         let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
         assert_eq!(google_chat.id, "google-chat");
@@ -499,7 +498,7 @@ mod tests {
         assert_eq!(matrix.id, "matrix");
         assert_eq!(matrix.surface_label, "matrix channel");
         assert_eq!(matrix.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
-        assert_eq!(matrix.serve_subcommand, Some("matrix-serve"));
+        assert_eq!(matrix.serve_subcommand, Some("channels serve matrix"));
     }
 
     #[test]
@@ -2739,6 +2738,17 @@ system = " Builtin "
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn memory_system_field_parses_recall_first_variant() {
+        let raw = r#"
+[memory]
+system = " recall_first "
+"#;
+        let parsed = toml::from_str::<LoongConfig>(raw).expect("parse recall_first memory.system");
+        assert_eq!(parsed.memory.resolved_system().as_str(), "recall_first");
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn memory_system_id_field_parses_and_normalizes() {
         let raw = r#"
 [memory]
@@ -2758,8 +2768,10 @@ system = " LuCid "
 "#;
         let error = toml::from_str::<LoongConfig>(raw).expect_err("lucid should stay unsupported");
         assert!(
-            error.to_string().contains("available: builtin"),
-            "error should keep builtin-only surface: {error}"
+            error
+                .to_string()
+                .contains("available: builtin, workspace_recall, recall_first"),
+            "error should expose the supported memory-system surface: {error}"
         );
     }
 

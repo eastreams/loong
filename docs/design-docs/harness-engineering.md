@@ -64,7 +64,9 @@ Current built-in core tool slice: `shell.exec`, `file.read`, `file.write`, `file
 Turn persistence to SQLite and audit event recording remain in place. Runtime
 self continuity and turn checkpoint artifacts are implemented, and durable
 task-progress events now provide a session-visible MVP for long-running
-ownership and completion state.
+ownership and completion state, with canonical task identity expected to remain
+distinct from the backing session address carried for runtime recovery and
+observation.
 
 ---
 

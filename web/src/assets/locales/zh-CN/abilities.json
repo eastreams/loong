@@ -28,25 +28,8 @@
                                                       "title":  "Skills",
                                                       "summary":  "Skills、external skills 与能力来源。",
                                                       "description":  "这里展示运行时可见工具、浏览器助手状态，以及 external skills 当前的治理配置。"
-                                                  },
-                                       "mascot":  {
-                                                      "title":  "小宠物",
-                                                      "summary":  "实验性的聊天宠物显示开关。",
-                                                      "description":  "控制聊天页实验性小宠物的显示。"
                                                   }
                                    },
-                      "mascot":  {
-                                     "introTitle":  "小宠物",
-                                     "settingsTitle":  "显示设置",
-                                     "helper":  "这是一个实验功能，默认关闭。开启后才会在聊天页显示。",
-                                     "fields":  {
-                                                    "display":  "显示聊天小宠物"
-                                                },
-                                     "actions":  {
-                                                     "show":  "显示小宠物",
-                                                     "hide":  "隐藏小宠物"
-                                                 }
-                                 },
                       "personalization":  {
                                               "introTitle":  "个性化",
                                               "snapshotTitle":  "当前个性化",

@@ -31,32 +31,6 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
                         == Some("external_plugin")
             })
     );
-
-    assert!(
-        encoded["channel_surfaces"]
-            .as_array()
-            .expect("channel surfaces array")
-            .iter()
-            .any(|surface| {
-                surface
-                    .get("catalog")
-                    .and_then(|catalog| catalog.get("id"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some("qqbot")
-                    && surface
-                        .get("catalog")
-                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
-                        .and_then(|contract| contract.get("supported_operations"))
-                        .and_then(serde_json::Value::as_array)
-                        .map(|operations| {
-                            operations
-                                .iter()
-                                .filter_map(serde_json::Value::as_str)
-                                .collect::<Vec<_>>()
-                        })
-                        == Some(vec!["send", "serve"])
-            })
-    );
 }
 
 #[test]
@@ -105,33 +79,6 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_stable_targets() {
                                 Some("group room conversation"),
                             ),
                         ])
-            })
-    );
-
-    assert!(
-        encoded["channel_surfaces"]
-            .as_array()
-            .expect("channel surfaces array")
-            .iter()
-            .any(|surface| {
-                surface
-                    .get("catalog")
-                    .and_then(|catalog| catalog.get("id"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some("qqbot")
-                    && surface
-                        .get("catalog")
-                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
-                        .and_then(|contract| contract.get("account_scope_note"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some("openids are scoped to the selected qq bot account")
-                    && surface
-                        .get("catalog")
-                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
-                        .and_then(|contract| contract.get("stable_targets"))
-                        .and_then(serde_json::Value::as_array)
-                        .map(|targets| targets.len())
-                        == Some(3)
             })
     );
 }

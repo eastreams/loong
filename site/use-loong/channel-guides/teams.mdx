@@ -29,14 +29,14 @@ webhook_url_env = "TEAMS_WEBHOOK_URL"
 ## Smoke Test
 
 ```bash
-loong teams-send --text "hello from loong"
+loong channels send teams --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| incoming webhook send | `teams-send` | Usage: loong teams-send [OPTIONS] --text &lt;TEXT&gt; |
+| incoming webhook send | `channels send teams` | Usage: loong channels send teams [OPTIONS] --text &lt;TEXT&gt; |
 | bot event service | `teams-serve` | microsoft teams incoming webhook surface is outbound-only today |
 
 ## Required Fields For Send
@@ -48,7 +48,7 @@ loong teams-send --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

@@ -46,7 +46,7 @@ const TLON_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 pub(super) const TLON_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "ship message send",
-    command: "tlon-send",
+    command: "channels send tlon",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TLON_REQUIREMENTS,

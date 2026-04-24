@@ -25,15 +25,15 @@ Use this short list when you want a practical starting point before scanning the
 ## Gateway-Supervised Runtime Surfaces
 
 These are the shipped send plus serve lanes that can currently join `gateway run`
-or `multi-channel-serve`.
+or `gateway run`.
 
 | Surface | Transport | Send | Serve |
 | --- | --- | --- | --- |
-| [Feishu/Lark](/use-loong/channel-guides/feishu) | feishu_openapi_webhook_or_websocket | `feishu-send` | `feishu-serve` |
-| [Telegram](/use-loong/channel-guides/telegram) | telegram_bot_api_polling | `telegram-send` | `telegram-serve` |
-| [Matrix](/use-loong/channel-guides/matrix) | matrix_client_server_sync | `matrix-send` | `matrix-serve` |
-| [WhatsApp](/use-loong/channel-guides/whatsapp) | whatsapp_cloud_api | `whatsapp-send` | `whatsapp-serve` |
-| [WeCom](/use-loong/channel-guides/wecom) | wecom_aibot_long_connection | `wecom-send` | `wecom-serve` |
+| [Feishu/Lark](/use-loong/channel-guides/feishu) | feishu_openapi_webhook_or_websocket | `feishu send` | `feishu serve` |
+| [Telegram](/use-loong/channel-guides/telegram) | telegram_bot_api_polling | `channels send telegram` | `channels serve telegram` |
+| [Matrix](/use-loong/channel-guides/matrix) | matrix_client_server_sync | `channels send matrix` | `channels serve matrix` |
+| [WhatsApp](/use-loong/channel-guides/whatsapp) | whatsapp_cloud_api | `channels send whatsapp` | `channels serve whatsapp` |
+| [WeCom](/use-loong/channel-guides/wecom) | wecom_aibot_long_connection | `channels send wecom` | `channels serve wecom` |
 
 ## Standalone Native-Serve Surfaces
 
@@ -42,8 +42,8 @@ stays on the direct `*-serve` command instead of gateway supervision.
 
 | Surface | Transport | Send | Serve | Runtime owner |
 | --- | --- | --- | --- | --- |
-| [LINE](/use-loong/channel-guides/line) | line_messaging_api | `line-send` | `line-serve` | standalone native serve |
-| [Webhook](/use-loong/channel-guides/webhook) | generic_webhook | `webhook-send` | `webhook-serve` | standalone native serve |
+| [LINE](/use-loong/channel-guides/line) | line_messaging_api | `channels send line` | `channels serve line` | standalone native serve |
+| [Webhook](/use-loong/channel-guides/webhook) | generic_webhook | `channels send webhook` | `channels serve webhook` | standalone native serve |
 
 ## Plugin-Backed Bridge Surfaces
 
@@ -61,21 +61,21 @@ These surfaces ship direct sends today and keep serve in the catalog without ove
 
 | Surface | Transport | Send | Serve status |
 | --- | --- | --- | --- |
-| [Discord](/use-loong/channel-guides/discord) | discord_http_api | `discord-send` | outbound-only |
+| [Discord](/use-loong/channel-guides/discord) | discord_http_api | `channels send discord` | outbound-only |
 | [Slack](/use-loong/channel-guides/slack) | slack_web_api | `slack-send` | outbound-only |
-| [DingTalk](/use-loong/channel-guides/dingtalk) | dingtalk_custom_robot_webhook | `dingtalk-send` | outbound-only |
-| [Email](/use-loong/channel-guides/email) | smtp_imap | `email-send` | outbound-only |
-| [Google Chat](/use-loong/channel-guides/google-chat) | google_chat_incoming_webhook | `google-chat-send` | outbound-only |
-| [Signal](/use-loong/channel-guides/signal) | signal_cli_rest_api | `signal-send` | outbound-only |
-| [Twitch](/use-loong/channel-guides/twitch) | twitch_chat_api | `twitch-send` | outbound-only |
-| [Microsoft Teams](/use-loong/channel-guides/teams) | microsoft_teams_incoming_webhook | `teams-send` | outbound-only |
-| [Mattermost](/use-loong/channel-guides/mattermost) | mattermost_rest_api | `mattermost-send` | outbound-only |
-| [Nextcloud Talk](/use-loong/channel-guides/nextcloud-talk) | nextcloud_talk_bot_api | `nextcloud-talk-send` | outbound-only |
-| [Synology Chat](/use-loong/channel-guides/synology-chat) | synology_chat_outgoing_incoming_webhooks | `synology-chat-send` | outbound-only |
-| [IRC](/use-loong/channel-guides/irc) | irc_socket | `irc-send` | outbound-only |
-| [iMessage](/use-loong/channel-guides/imessage) | imessage_bridge_api | `imessage-send` | outbound-only |
+| [DingTalk](/use-loong/channel-guides/dingtalk) | dingtalk_custom_robot_webhook | `channels send dingtalk` | outbound-only |
+| [Email](/use-loong/channel-guides/email) | smtp_imap | `channels send email` | outbound-only |
+| [Google Chat](/use-loong/channel-guides/google-chat) | google_chat_incoming_webhook | `channels send google-chat` | outbound-only |
+| [Signal](/use-loong/channel-guides/signal) | signal_cli_rest_api | `channels send signal` | outbound-only |
+| [Twitch](/use-loong/channel-guides/twitch) | twitch_chat_api | `channels send twitch` | outbound-only |
+| [Microsoft Teams](/use-loong/channel-guides/teams) | microsoft_teams_incoming_webhook | `channels send teams` | outbound-only |
+| [Mattermost](/use-loong/channel-guides/mattermost) | mattermost_rest_api | `channels send mattermost` | outbound-only |
+| [Nextcloud Talk](/use-loong/channel-guides/nextcloud-talk) | nextcloud_talk_bot_api | `channels send nextcloud-talk` | outbound-only |
+| [Synology Chat](/use-loong/channel-guides/synology-chat) | synology_chat_outgoing_incoming_webhooks | `channels send synology-chat` | outbound-only |
+| [IRC](/use-loong/channel-guides/irc) | irc_socket | `channels send irc` | outbound-only |
+| [iMessage](/use-loong/channel-guides/imessage) | imessage_bridge_api | `channels send imessage` | outbound-only |
 | [Nostr](/use-loong/channel-guides/nostr) | nostr_relays | `nostr-send` | outbound-only |
-| [Tlon](/use-loong/channel-guides/tlon) | tlon_urbit_ship_api | `tlon-send` | outbound-only |
+| [Tlon](/use-loong/channel-guides/tlon) | tlon_urbit_ship_api | `channels send tlon` | outbound-only |
 
 ## Catalog-Only Planned Surfaces
 

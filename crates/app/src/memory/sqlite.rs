@@ -23,6 +23,9 @@ use super::{
     runtime_config::MemoryRuntimeConfig,
 };
 use crate::search_text::build_search_index_text;
+use crate::task_progress::{
+    TASK_PROGRESS_EVENT_KIND, TaskProgressRecord, task_progress_from_event_payload,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationTurn {
@@ -36,6 +39,22 @@ pub struct ConversationSessionSummary {
     pub session_id: String,
     pub turn_count: usize,
     pub latest_turn_ts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionMetadataHint {
+    pub kind: String,
+    pub state: String,
+    pub parent_session_id: Option<String>,
+    pub label: Option<String>,
+    pub parent_label: Option<String>,
+    pub lineage_root_session_id: Option<String>,
+    pub lineage_root_label: Option<String>,
+    pub lineage_depth: usize,
+    pub workflow_task: Option<String>,
+    pub workflow_phase: Option<String>,
+    pub workflow_operation_kind: Option<String>,
+    pub workflow_operation_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -125,9 +144,9 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 12;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 14;
 const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 24;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 29;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
@@ -231,6 +250,9 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'memory_canonical_records_fts',
                         'workspace_memory_documents',
                         'workspace_memory_documents_fts',
+                        'session_nodes',
+                        'session_heads',
+                        'session_artifacts',
                         'session_events_fts',
                         'approval_requests',
                         'approval_grants',
@@ -240,6 +262,8 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                 OR (type = 'index' AND name IN (
                         'idx_turns_session_id',
                         'idx_turns_session_turn_index',
+                        'idx_session_nodes_session_parent_created',
+                        'idx_session_nodes_session_turn_index',
                         'idx_memory_canonical_records_scope_kind_ts',
                         'idx_memory_canonical_records_session_turn',
                         'idx_approval_requests_session_status_requested_at'
@@ -1005,6 +1029,267 @@ pub(super) fn load_summary_body_for_durable_flush(
     })
 }
 
+pub(crate) fn load_latest_task_progress_record(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Option<TaskProgressRecord>, String> {
+    let runtime = acquire_memory_runtime(config)?;
+
+    runtime.with_connection("memory.latest_task_progress_record", |conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT payload_json
+                 FROM session_events
+                 WHERE session_id = ?1 AND event_kind = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+            )
+            .map_err(|error| {
+                format!("prepare latest task progress record query failed: {error}")
+            })?;
+        let payload_json = stmt
+            .query_row(
+                rusqlite::params![session_id, TASK_PROGRESS_EVENT_KIND],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("query latest task progress record failed: {error}"))?;
+        let Some(payload_json) = payload_json else {
+            return Ok(None);
+        };
+
+        let payload = serde_json::from_str::<Value>(payload_json.as_str()).map_err(|error| {
+            format!("decode latest task progress record payload failed: {error}")
+        })?;
+        Ok(task_progress_from_event_payload(&payload))
+    })
+}
+
+pub(crate) fn load_session_metadata_hint(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Option<SessionMetadataHint>, String> {
+    let runtime = acquire_memory_runtime(config)?;
+
+    runtime.with_connection("memory.session_metadata_hint", |conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, kind, state, parent_session_id, label
+                 FROM sessions
+                 WHERE session_id = ?1
+                 LIMIT 1",
+            )
+            .map_err(|error| format!("prepare session metadata hint query failed: {error}"))?;
+        let raw = stmt
+            .query_row(rusqlite::params![session_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .optional()
+            .map_err(|error| format!("query session metadata hint failed: {error}"))?;
+        let Some((resolved_session_id, kind, state, parent_session_id, label)) = raw else {
+            return Ok(None);
+        };
+
+        let parent_label = match parent_session_id.as_deref() {
+            Some(parent_session_id) => load_session_label_with_conn(conn, parent_session_id)?,
+            None => None,
+        };
+        let lineage_root_session_id =
+            load_lineage_root_session_id_with_conn(conn, resolved_session_id.as_str())?;
+        let lineage_root_label = match lineage_root_session_id.as_deref() {
+            Some(lineage_root_session_id) => {
+                load_session_label_with_conn(conn, lineage_root_session_id)?
+            }
+            None => None,
+        };
+        let lineage_depth =
+            load_session_lineage_depth_with_conn(conn, resolved_session_id.as_str())?;
+        let workflow_hint = load_session_workflow_hint_with_conn(
+            conn,
+            kind.as_str(),
+            state.as_str(),
+            resolved_session_id.as_str(),
+        )?;
+
+        Ok(Some(SessionMetadataHint {
+            kind,
+            state,
+            parent_session_id,
+            label,
+            parent_label,
+            lineage_root_session_id,
+            lineage_root_label,
+            lineage_depth,
+            workflow_task: workflow_hint.as_ref().and_then(|hint| hint.task.clone()),
+            workflow_phase: workflow_hint.as_ref().and_then(|hint| hint.phase.clone()),
+            workflow_operation_kind: workflow_hint
+                .as_ref()
+                .and_then(|hint| hint.operation_kind.clone()),
+            workflow_operation_scope: workflow_hint
+                .as_ref()
+                .and_then(|hint| hint.operation_scope.clone()),
+        }))
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionWorkflowHint {
+    task: Option<String>,
+    phase: Option<String>,
+    operation_kind: Option<String>,
+    operation_scope: Option<String>,
+}
+
+fn load_session_label_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT label FROM sessions WHERE session_id = ?1 LIMIT 1",
+        rusqlite::params![session_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|value| value.flatten())
+    .map_err(|error| format!("query session label failed: {error}"))
+}
+
+fn load_session_lineage_depth_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<usize, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut next_session_id = Some(session_id.to_owned());
+    let mut depth = 0usize;
+
+    while let Some(current_session_id) = next_session_id {
+        if !seen.insert(current_session_id.clone()) {
+            return Err(format!(
+                "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing metadata hint depth"
+            ));
+        }
+        let maybe_parent = conn
+            .query_row(
+                "SELECT parent_session_id FROM sessions WHERE session_id = ?1 LIMIT 1",
+                rusqlite::params![current_session_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|error| format!("query session lineage depth failed: {error}"))?;
+        let Some(parent_session_id) = maybe_parent.flatten() else {
+            return Ok(depth);
+        };
+        depth += 1;
+        next_session_id = Some(parent_session_id);
+    }
+
+    Ok(depth)
+}
+
+fn load_lineage_root_session_id_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut next_session_id = Some(session_id.to_owned());
+
+    while let Some(current_session_id) = next_session_id {
+        if !seen.insert(current_session_id.clone()) {
+            return Err(format!(
+                "session_lineage_cycle_detected: `{current_session_id}` reappeared while computing metadata hint root"
+            ));
+        }
+        let raw = conn
+            .query_row(
+                "SELECT session_id, parent_session_id FROM sessions WHERE session_id = ?1 LIMIT 1",
+                rusqlite::params![current_session_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("query session lineage root failed: {error}"))?;
+        let Some((resolved_session_id, parent_session_id)) = raw else {
+            return Ok(None);
+        };
+        match parent_session_id {
+            Some(parent_session_id) => next_session_id = Some(parent_session_id),
+            None => return Ok(Some(resolved_session_id)),
+        }
+    }
+
+    Ok(None)
+}
+
+fn load_session_workflow_hint_with_conn(
+    conn: &Connection,
+    kind: &str,
+    state: &str,
+    session_id: &str,
+) -> Result<Option<SessionWorkflowHint>, String> {
+    let is_delegate_child = kind == "delegate_child";
+    if !is_delegate_child {
+        return Ok(None);
+    }
+
+    let task = load_latest_delegate_task_hint_with_conn(conn, session_id)?;
+    let phase = match state {
+        "ready" | "running" => Some("execute".to_owned()),
+        "completed" => Some("complete".to_owned()),
+        "failed" | "timed_out" => Some("failed".to_owned()),
+        _ => None,
+    };
+
+    Ok(Some(SessionWorkflowHint {
+        task,
+        phase,
+        operation_kind: Some("task".to_owned()),
+        operation_scope: Some("task".to_owned()),
+    }))
+}
+
+fn load_latest_delegate_task_hint_with_conn(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT payload_json
+             FROM session_events
+             WHERE session_id = ?1
+               AND event_kind LIKE 'delegate_%'
+             ORDER BY id DESC
+             LIMIT 16",
+        )
+        .map_err(|error| format!("prepare latest delegate task hint query failed: {error}"))?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("query latest delegate task hint failed: {error}"))?;
+
+    for row in rows {
+        let payload_json =
+            row.map_err(|error| format!("read latest delegate task hint row failed: {error}"))?;
+        let payload = serde_json::from_str::<Value>(payload_json.as_str())
+            .map_err(|error| format!("decode latest delegate task hint payload failed: {error}"))?;
+        let task = payload
+            .get("task")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if task.is_some() {
+            return Ok(task);
+        }
+    }
+
+    Ok(None)
+}
+
 pub(super) fn ensure_memory_db_ready(
     path: Option<PathBuf>,
     config: &MemoryRuntimeConfig,
@@ -1250,6 +1535,7 @@ fn append_turn_internal(
             &tx,
             build_canonical_insert_input(session_id, next_session_turn_index, role, content, ts),
         )?;
+        append_turn_session_tree_node(&tx, session_id, role, content, next_session_turn_index, ts)?;
 
         let summary_window_size = default_window_size(config);
         if matches!(config.mode, crate::config::MemoryMode::WindowPlusSummary)
@@ -1293,6 +1579,246 @@ struct CanonicalInsertInput {
     metadata_json: String,
     search_text: String,
     ts: i64,
+}
+
+const ACTIVE_SESSION_HEAD_NAME: &str = "active";
+
+fn session_root_node_id(session_id: &str) -> String {
+    format!("session-root:{session_id}")
+}
+
+fn session_turn_node_id(session_id: &str, session_turn_index: i64) -> String {
+    format!("session-turn:{session_id}:{session_turn_index}")
+}
+
+fn append_turn_session_tree_node(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    session_turn_index: i64,
+    ts: i64,
+) -> Result<(), String> {
+    let session_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+            rusqlite::params![session_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            format!("probe session existence for session tree append failed: {error}")
+        })?;
+    if !session_exists {
+        return Ok(());
+    }
+
+    let root_node_id = session_root_node_id(session_id);
+    conn.execute(
+        "INSERT OR IGNORE INTO session_nodes(
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            metadata_json,
+            created_at
+         ) VALUES (?1, ?2, NULL, 'root', NULL, NULL, NULL, '{}', ?3)",
+        rusqlite::params![root_node_id, session_id, ts],
+    )
+    .map_err(|error| format!("ensure session root node during append failed: {error}"))?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO session_heads(
+            session_id,
+            head_name,
+            node_id,
+            head_mode,
+            updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            session_id,
+            ACTIVE_SESSION_HEAD_NAME,
+            root_node_id,
+            "live",
+            ts
+        ],
+    )
+    .map_err(|error| format!("ensure active session head during append failed: {error}"))?;
+
+    let parent_node_id = conn
+        .query_row(
+            "SELECT node_id
+             FROM session_heads
+             WHERE session_id = ?1 AND head_name = ?2",
+            rusqlite::params![session_id, ACTIVE_SESSION_HEAD_NAME],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| format!("load active session head during append failed: {error}"))?;
+    let node_id = session_turn_node_id(session_id, session_turn_index);
+    let node_kind = if role == "user" {
+        "user_turn"
+    } else {
+        "assistant_turn"
+    };
+
+    conn.execute(
+        "INSERT OR IGNORE INTO session_nodes(
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            metadata_json,
+            created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', ?8)",
+        rusqlite::params![
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            ts
+        ],
+    )
+    .map_err(|error| format!("insert session turn node during append failed: {error}"))?;
+
+    conn.execute(
+        "UPDATE session_heads
+         SET node_id = ?3, updated_at = ?4
+         WHERE session_id = ?1 AND head_name = ?2",
+        rusqlite::params![session_id, ACTIVE_SESSION_HEAD_NAME, node_id, ts],
+    )
+    .map_err(|error| format!("advance active session head during append failed: {error}"))?;
+
+    Ok(())
+}
+
+fn rebuild_linear_session_tree_for_turns(
+    conn: &Connection,
+    session_id: &str,
+    turns: &[WindowTurn],
+) -> Result<(), String> {
+    let session_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+            rusqlite::params![session_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            format!("probe session existence for session tree rebuild failed: {error}")
+        })?;
+    if !session_exists {
+        return Ok(());
+    }
+
+    let root_created_at = conn
+        .query_row(
+            "SELECT created_at FROM sessions WHERE session_id = ?1",
+            rusqlite::params![session_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("load session created_at for tree rebuild failed: {error}"))?;
+    let root_node_id = session_root_node_id(session_id);
+
+    conn.execute(
+        "DELETE FROM session_nodes WHERE session_id = ?1",
+        rusqlite::params![session_id],
+    )
+    .map_err(|error| format!("clear session nodes during tree rebuild failed: {error}"))?;
+
+    conn.execute(
+        "INSERT INTO session_nodes(
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            metadata_json,
+            created_at
+         ) VALUES (?1, ?2, NULL, 'root', NULL, NULL, NULL, '{}', ?3)",
+        rusqlite::params![root_node_id, session_id, root_created_at],
+    )
+    .map_err(|error| format!("insert session root node during tree rebuild failed: {error}"))?;
+
+    let mut parent_node_id = root_node_id.clone();
+    let mut active_node_id = root_node_id;
+    let mut active_updated_at = root_created_at;
+
+    for (index, turn) in turns.iter().enumerate() {
+        let session_turn_index = (index + 1) as i64;
+        let role =
+            normalize_required_str(&turn.role, "memory.replace_turns requires turns[*].role")?;
+        let ts = turn
+            .ts
+            .ok_or_else(|| "memory.replace_turns requires turns[*].ts".to_owned())?;
+        let node_id = session_turn_node_id(session_id, session_turn_index);
+        let node_kind = if role == "user" {
+            "user_turn"
+        } else {
+            "assistant_turn"
+        };
+
+        conn.execute(
+            "INSERT INTO session_nodes(
+                node_id,
+                session_id,
+                parent_node_id,
+                node_kind,
+                role,
+                content,
+                session_turn_index,
+                metadata_json,
+                created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '{}', ?8)",
+            rusqlite::params![
+                node_id,
+                session_id,
+                parent_node_id,
+                node_kind,
+                role,
+                &turn.content,
+                session_turn_index,
+                ts
+            ],
+        )
+        .map_err(|error| format!("insert session turn node during tree rebuild failed: {error}"))?;
+
+        parent_node_id = node_id.clone();
+        active_node_id = node_id;
+        active_updated_at = ts;
+    }
+
+    conn.execute(
+        "INSERT INTO session_heads(
+            session_id,
+            head_name,
+            node_id,
+            head_mode,
+            updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(session_id, head_name) DO UPDATE SET
+            node_id = excluded.node_id,
+            head_mode = excluded.head_mode,
+            updated_at = excluded.updated_at",
+        rusqlite::params![
+            session_id,
+            ACTIVE_SESSION_HEAD_NAME,
+            active_node_id,
+            "live",
+            active_updated_at
+        ],
+    )
+    .map_err(|error| format!("insert active session head during tree rebuild failed: {error}"))?;
+
+    Ok(())
 }
 
 fn build_canonical_insert_input(
@@ -1457,6 +1983,8 @@ fn replace_turns_internal(
                         format!("upsert replace-turns session state failed: {error}")
                     })?;
             }
+
+            rebuild_linear_session_tree_for_turns(&tx, session_id, turns)?;
 
             tx.commit()
                 .map_err(|error| format!("commit memory replace transaction failed: {error}"))?;
@@ -1949,6 +2477,7 @@ fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), S
     ensure_approval_lifecycle_tables(conn)?;
     ensure_session_tool_consent_storage(conn)?;
     ensure_session_tool_policy_storage(conn)?;
+    ensure_session_tree_storage(conn)?;
     ensure_summary_checkpoint_storage_layout(conn)?;
     ensure_canonical_record_storage(conn)?;
     ensure_workspace_memory_search_storage(conn)?;
@@ -1975,12 +2504,14 @@ fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String
     let workspace_memory_search_ready = !workspace_memory_search_storage_needs_rebuild(conn)?;
     let terminal_outcome_storage_ready =
         sqlite_table_has_column(conn, "session_terminal_outcomes", "frozen_result_json")?;
+    let session_head_mode_ready = sqlite_table_has_column(conn, "session_heads", "head_mode")?;
 
     Ok(object_count_ready
         && canonical_fts_ready
         && session_event_fts_ready
         && workspace_memory_search_ready
-        && terminal_outcome_storage_ready)
+        && terminal_outcome_storage_ready
+        && session_head_mode_ready)
 }
 
 fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(), String> {
@@ -2072,6 +2603,187 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         [],
     )
     .map_err(|error| format!("remove stale session turn count metadata failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_session_tree_storage(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("session_tree");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS session_nodes(
+          node_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          parent_node_id TEXT NULL,
+          node_kind TEXT NOT NULL,
+          role TEXT NULL,
+          content TEXT NULL,
+          session_turn_index INTEGER NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_nodes_session_parent_created
+          ON session_nodes(session_id, parent_node_id, created_at, node_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_session_nodes_session_turn_index
+          ON session_nodes(session_id, session_turn_index)
+          WHERE session_turn_index IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS session_heads(
+          session_id TEXT NOT NULL,
+          head_name TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          head_mode TEXT NOT NULL DEFAULT 'live',
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY(session_id, head_name)
+        );
+        CREATE TABLE IF NOT EXISTS session_artifacts(
+          artifact_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          artifact_type TEXT NOT NULL,
+          head_name TEXT NULL,
+          anchor_node_id TEXT NULL,
+          source_start_node_id TEXT NULL,
+          source_end_node_id TEXT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          summary_text TEXT NULL,
+          created_at INTEGER NOT NULL
+        );
+        ",
+    )
+    .map_err(|error| format!("ensure session tree storage failed: {error}"))?;
+
+    ensure_session_head_mode_storage(conn)?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO session_nodes(
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            metadata_json,
+            created_at
+         )
+         SELECT
+            'session-root:' || session_id,
+            session_id,
+            NULL,
+            'root',
+            NULL,
+            NULL,
+            NULL,
+            '{}',
+            created_at
+         FROM sessions",
+        [],
+    )
+    .map_err(|error| format!("backfill session root nodes failed: {error}"))?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO session_nodes(
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            metadata_json,
+            created_at
+         )
+         SELECT
+            'session-turn:' || turns.session_id || ':' || turns.session_turn_index,
+            turns.session_id,
+            CASE
+              WHEN turns.session_turn_index = 1 THEN 'session-root:' || turns.session_id
+              ELSE 'session-turn:' || turns.session_id || ':' || (turns.session_turn_index - 1)
+            END,
+            CASE
+              WHEN turns.role = 'user' THEN 'user_turn'
+              ELSE 'assistant_turn'
+            END,
+            turns.role,
+            turns.content,
+            turns.session_turn_index,
+            '{}',
+            turns.ts
+         FROM turns
+         JOIN sessions ON sessions.session_id = turns.session_id
+         WHERE turns.session_turn_index IS NOT NULL
+           AND turns.session_turn_index > 0",
+        [],
+    )
+    .map_err(|error| format!("backfill linear session turn nodes failed: {error}"))?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO session_heads(
+            session_id,
+            head_name,
+            node_id,
+            head_mode,
+            updated_at
+         )
+         SELECT
+            sessions.session_id,
+            'active',
+            COALESCE(
+              (
+                SELECT 'session-turn:' || turns.session_id || ':' || turns.session_turn_index
+                FROM turns
+                WHERE turns.session_id = sessions.session_id
+                  AND turns.session_turn_index IS NOT NULL
+                  AND turns.session_turn_index > 0
+                ORDER BY turns.session_turn_index DESC
+                LIMIT 1
+              ),
+              'session-root:' || sessions.session_id
+            ),
+            'live',
+            sessions.updated_at
+         FROM sessions",
+        [],
+    )
+    .map_err(|error| format!("backfill active session heads failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_session_head_mode_storage(conn: &Connection) -> Result<(), String> {
+    if !sqlite_table_has_column(conn, "session_heads", "head_mode")? {
+        conn.execute(
+            "ALTER TABLE session_heads
+             ADD COLUMN head_mode TEXT NOT NULL DEFAULT 'live'",
+            [],
+        )
+        .map_err(|error| format!("add session head mode column failed: {error}"))?;
+    }
+
+    conn.execute(
+        "UPDATE session_heads
+         SET head_mode = 'live'
+         WHERE head_mode IS NULL OR head_mode = ''",
+        [],
+    )
+    .map_err(|error| format!("backfill default session head mode failed: {error}"))?;
+
+    conn.execute(
+        "UPDATE session_heads
+         SET head_mode = 'pinned'
+         WHERE head_name LIKE 'checkpoint/%'",
+        [],
+    )
+    .map_err(|error| format!("backfill checkpoint session head mode failed: {error}"))?;
+
+    conn.execute(
+        "UPDATE session_heads
+         SET head_mode = 'live'
+         WHERE head_name = 'active'",
+        [],
+    )
+    .map_err(|error| format!("normalize active session head mode failed: {error}"))?;
 
     Ok(())
 }
@@ -6368,7 +7080,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-session-event-search-storage-{}",
+            "loong-session-event-search-storage-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -9707,7 +10419,7 @@ mod tests {
     #[test]
     fn canonical_memory_search_matches_segmented_chinese_queries() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-chinese-search-{}",
+            "loong-canonical-memory-chinese-search-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);

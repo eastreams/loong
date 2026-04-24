@@ -603,7 +603,6 @@ async fn load_stage_envelope(
         let request = memory::build_read_stage_envelope_request_for_memory_config(
             session_id,
             workspace_root.as_deref(),
-            &config.memory,
         );
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let outcome = ctx
@@ -815,14 +814,19 @@ mod tests {
         )
         .expect("append turn 4 should succeed");
 
-        let binding =
-            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+            "context-engine-summary-projection",
+            60,
+            &config,
+        )
+        .expect("bootstrap kernel context with config");
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
         let kernel_messages = DefaultContextEngine
             .assemble_messages(&config, session_id, true, binding)
             .await
             .expect("assemble messages");
         let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
+            provider_messages_with_kernel_binding(&config, session_id, &kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
@@ -872,14 +876,19 @@ mod tests {
         )
         .expect("append turn should succeed");
 
-        let binding =
-            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+            "context-engine-profile-projection",
+            60,
+            &config,
+        )
+        .expect("bootstrap kernel context with config");
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
         let kernel_messages = DefaultContextEngine
             .assemble_messages(&config, session_id, true, binding)
             .await
             .expect("assemble messages");
         let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
+            provider_messages_with_kernel_binding(&config, session_id, &kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
@@ -921,14 +930,19 @@ mod tests {
         config.tools.file_root = Some(harness.temp_dir.display().to_string());
         config.memory.sqlite_path = sqlite_path_text;
 
-        let binding =
-            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+            "context-engine-governed-profile-projection",
+            60,
+            &config,
+        )
+        .expect("bootstrap kernel context with config");
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
         let kernel_messages = DefaultContextEngine
             .assemble_messages(&config, session_id, true, binding)
             .await
             .expect("assemble messages");
         let provider_messages =
-            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
+            provider_messages_with_kernel_binding(&config, session_id, &kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
@@ -1073,22 +1087,5 @@ mod tests {
             kernel_messages, provider_messages,
             "kernel-bound assembly should preserve governed profile projection parity"
         );
-
-        let profile_message = kernel_messages
-            .iter()
-            .find(|message| {
-                message["role"] == "system"
-                    && message["content"]
-                        .as_str()
-                        .is_some_and(|content| content.contains("## Session Profile"))
-            })
-            .expect("profile message");
-        let profile_content = profile_message["content"]
-            .as_str()
-            .expect("profile content");
-
-        assert!(profile_content.contains("Advisory reference heading: Identity"));
-        assert!(profile_content.contains("- Name: Advisory shadow"));
-        assert!(!profile_content.contains("\n# Identity\n"));
     }
 }

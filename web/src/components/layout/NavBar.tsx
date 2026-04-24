@@ -16,10 +16,10 @@ export default function NavBar() {
   return (
     <header className="navbar">
       <div className="brand-block">
-        <img src={brandIcon} alt="LoongClaw" className="brand-logo" />
+        <img src={brandIcon} alt="Loong" className="brand-logo" />
         <div className="brand-lockup" aria-label={t("appName")}>
           <div className="brand-wordmark-row">
-            <span className="brand-wordmark">LOONGCLAW</span>
+            <span className="brand-wordmark">LOONG</span>
             <span className="brand-suffix">web</span>
           </div>
         </div>

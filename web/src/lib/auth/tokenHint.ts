@@ -1,5 +1,5 @@
 const DEFAULT_TOKEN_PATH = "%USERPROFILE%\\.loong\\web-api-token";
-const DEFAULT_TOKEN_ENV = "LOONGCLAW_WEB_TOKEN";
+const DEFAULT_TOKEN_ENV = "LOONG_WEB_TOKEN";
 
 export function resolveTokenHintPath(tokenPath: string | null | undefined): string {
   const normalized = tokenPath?.trim();

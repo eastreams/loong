@@ -186,6 +186,50 @@ fn bridge_setup_with_docs_and_remediation(
 }
 
 #[test]
+fn metadata_only_channel_bridge_manifest_is_discovery_ready_without_runtime_metadata() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let manifest = sample_channel_bridge_manifest_with_metadata(
+        Some("weixin"),
+        Some("channel"),
+        BTreeMap::from([
+            ("adapter_family".to_owned(), "channel-bridge".to_owned()),
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            ("target_contract".to_owned(), "weixin_reply_loop".to_owned()),
+        ]),
+    );
+    let mut config = LoongConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-metadata-only", &manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+    let plugin = discovery.plugins.first().expect("discovered plugin");
+
+    assert_eq!(
+        plugin.status,
+        ChannelDiscoveredPluginBridgeStatus::CompatibleReady
+    );
+    assert_eq!(discovery.compatible_plugins, 1);
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::SingleCompatibleMatch)
+    );
+}
+
+#[test]
 fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
     let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
     let weixin = resolve_channel_catalog_entry("weixin").expect("weixin entry");
@@ -227,10 +271,7 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         ]
     );
 
-    let qqbot_contract = qqbot
-        .plugin_bridge_contract
-        .as_ref()
-        .expect("qqbot plugin bridge contract");
+    assert_eq!(qqbot.plugin_bridge_contract, None);
     assert_eq!(
         qqbot
             .operations
@@ -238,11 +279,10 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
             .map(|operation| operation.availability)
             .collect::<Vec<_>>(),
         vec![
-            ChannelCatalogOperationAvailability::ManagedBridge,
-            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::Implemented,
+            ChannelCatalogOperationAvailability::Implemented,
         ]
     );
-    assert_eq!(qqbot_contract.manifest_channel_id, "qqbot");
 
     let onebot_contract = onebot
         .plugin_bridge_contract
@@ -272,10 +312,7 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         .plugin_bridge_contract
         .as_ref()
         .expect("weixin plugin bridge contract");
-    let qqbot_contract = qqbot
-        .plugin_bridge_contract
-        .as_ref()
-        .expect("qqbot plugin bridge contract");
+    assert_eq!(qqbot.plugin_bridge_contract, None);
     let onebot_contract = onebot
         .plugin_bridge_contract
         .as_ref()
@@ -301,35 +338,6 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         ]
     );
     assert_eq!(weixin_contract.account_scope_note, None);
-
-    assert_eq!(
-        qqbot_contract
-            .stable_targets
-            .iter()
-            .map(|target| { (target.template, target.target_kind, target.description,) })
-            .collect::<Vec<_>>(),
-        vec![
-            (
-                "qqbot:<account>:c2c:<openid>",
-                ChannelCatalogTargetKind::Conversation,
-                "direct message openid",
-            ),
-            (
-                "qqbot:<account>:group:<openid>",
-                ChannelCatalogTargetKind::Conversation,
-                "group openid",
-            ),
-            (
-                "qqbot:<account>:channel:<id>",
-                ChannelCatalogTargetKind::Conversation,
-                "guild channel id",
-            ),
-        ]
-    );
-    assert_eq!(
-        qqbot_contract.account_scope_note,
-        Some("openids are scoped to the selected qq bot account")
-    );
 
     assert_eq!(
         onebot_contract
@@ -398,13 +406,12 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
         ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
     );
 
-    let missing_surface_manifest = sample_channel_bridge_manifest(Some("qqbot"), None);
-    let missing_surface_validation =
-        validate_plugin_channel_bridge_manifest(&missing_surface_manifest)
-            .expect("missing setup surface validation");
+    let qqbot_manifest = sample_channel_bridge_manifest(Some("qqbot"), None);
+    let qqbot_validation = validate_plugin_channel_bridge_manifest(&qqbot_manifest)
+        .expect("qqbot runtime-backed channel validation");
     assert_eq!(
-        missing_surface_validation.status,
-        ChannelPluginBridgeManifestStatus::MissingSetupSurface
+        qqbot_validation.status,
+        ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
     );
 }
 
@@ -495,10 +502,7 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         .plugin_bridge_discovery
         .as_ref()
         .expect("weixin managed discovery");
-    let qqbot_discovery = qqbot
-        .plugin_bridge_discovery
-        .as_ref()
-        .expect("qqbot managed discovery");
+    assert!(qqbot.plugin_bridge_discovery.is_none());
     let onebot_discovery = onebot
         .plugin_bridge_discovery
         .as_ref()
@@ -515,23 +519,6 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
     assert_eq!(
         weixin_discovery.plugins[0].status,
         ChannelDiscoveredPluginBridgeStatus::CompatibleReady
-    );
-
-    assert_eq!(
-        qqbot_discovery.status,
-        ChannelPluginBridgeDiscoveryStatus::MatchesFound
-    );
-    assert_eq!(qqbot_discovery.compatible_plugins, 0);
-    assert_eq!(qqbot_discovery.incomplete_plugins, 1);
-    assert_eq!(qqbot_discovery.incompatible_plugins, 0);
-    assert_eq!(qqbot_discovery.plugins.len(), 1);
-    assert_eq!(
-        qqbot_discovery.plugins[0].status,
-        ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract
-    );
-    assert_eq!(
-        qqbot_discovery.plugins[0].missing_fields,
-        vec!["metadata.transport_family".to_owned()]
     );
 
     assert_eq!(

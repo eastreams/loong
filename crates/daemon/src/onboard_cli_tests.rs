@@ -960,7 +960,7 @@ fn build_onboarding_success_summary_does_not_echo_invalid_credential_env_value()
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.api_key_env = Some(secret.to_owned());
 
-    let summary = build_onboarding_success_summary(Path::new("/tmp/loongclaw.toml"), &config, None);
+    let summary = build_onboarding_success_summary(Path::new("/tmp/loong.toml"), &config, None);
     let credential = summary
         .credential
         .expect("summary should still describe the configured credential lane");
@@ -1395,7 +1395,7 @@ fn explicit_web_search_provider_override_prefers_cli_option_over_env() {
         skip_model_probe: false,
     };
     let mut env = ScopedEnv::new();
-    env.set("LOONGCLAW_WEB_SEARCH_PROVIDER", "tavily");
+    env.set("LOONG_WEB_SEARCH_PROVIDER", "tavily");
 
     let recommendation = explicit_web_search_provider_override(&options)
         .expect("cli override should parse")
@@ -2674,11 +2674,11 @@ fn prompt_onboard_shortcut_choice_uses_select_widget() {
 #[test]
 fn resolve_write_plan_uses_select_widget_for_existing_config() {
     let temp_dir = std::env::temp_dir().join(format!(
-        "loongclaw-onboard-write-plan-{}",
+        "loong-onboard-write-plan-{}",
         OffsetDateTime::now_utc().unix_timestamp_nanos()
     ));
     fs::create_dir_all(&temp_dir).expect("create temp dir");
-    let output_path = temp_dir.join("loongclaw.toml");
+    let output_path = temp_dir.join("loong.toml");
     fs::write(&output_path, "provider = 'openai'\n").expect("seed existing config");
     let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
     let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -3080,7 +3080,7 @@ fn interactive_starting_point_screen_omits_static_options_when_selection_widget_
 fn interactive_existing_config_write_screen_omits_static_options_when_selection_widget_handles_choices()
  {
     let lines = render_existing_config_write_header_lines_with_style(
-        "/tmp/loongclaw-config.toml",
+        "/tmp/loong-config.toml",
         80,
         false,
     );
@@ -3409,7 +3409,7 @@ fn entry_screen_footer_mentions_escape_cancel() {
 
 #[test]
 fn write_confirmation_screen_footer_mentions_escape_cancel() {
-    let lines = render_write_confirmation_screen_lines("/tmp/loongclaw.toml", false, 80);
+    let lines = render_write_confirmation_screen_lines("/tmp/loong.toml", false, 80);
 
     assert!(
         lines
@@ -3516,7 +3516,7 @@ fn format_backup_timestamp_at_matches_existing_filename_shape() {
 
 #[test]
 fn resolve_backup_path_at_uses_formatted_timestamp() {
-    let original = Path::new("/tmp/loongclaw.toml");
+    let original = Path::new("/tmp/loong.toml");
     let timestamp = time::macros::datetime!(2026-03-14 01:23:45 +08:00);
 
     let path = match resolve_backup_path_at(original, timestamp) {
@@ -3526,14 +3526,14 @@ fn resolve_backup_path_at_uses_formatted_timestamp() {
 
     assert_eq!(
         path,
-        PathBuf::from("/tmp/loongclaw.toml.bak-20260314-012345")
+        PathBuf::from("/tmp/loong.toml.bak-20260314-012345")
     );
 }
 
 #[test]
 fn rollback_removes_partial_first_write_config() {
     let output_path = std::env::temp_dir().join(format!(
-        "loongclaw-first-write-rollback-{}.toml",
+        "loong-first-write-rollback-{}.toml",
         std::process::id()
     ));
     fs::write(&output_path, "partial = true\n").expect("write partial config");

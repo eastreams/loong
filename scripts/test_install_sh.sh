@@ -6,7 +6,7 @@ SCRIPT_UNDER_TEST="$REPO_ROOT/scripts/install.sh"
 . "$REPO_ROOT/scripts/release_artifact_lib.sh"
 PACKAGE_NAME="loong"
 PRIMARY_BIN_NAME="loong"
-LEGACY_BIN_NAME="loongclaw"
+LEGACY_BIN_NAME="loong"
 
 assert_contains() {
   local file="$1"
@@ -654,7 +654,7 @@ run_release_install_removes_stale_legacy_binary_test() {
   )
 
   assert_installed_binary "$install_dir" "fixture-binary"
-  assert_contains "$output_file" "Removed legacy loongclaw compatibility command from"
+  assert_contains "$output_file" "Removed legacy loong compatibility command from"
 }
 
 run_release_install_keeps_legacy_directory_collision_test() {
@@ -675,7 +675,7 @@ run_release_install_keeps_legacy_directory_collision_test() {
 
   assert_installed_binary "$install_dir" "fixture-binary"
   [[ -d "$stale_legacy_directory" ]]
-  assert_not_contains "$output_file" "Removed legacy loongclaw compatibility command from"
+  assert_not_contains "$output_file" "Removed legacy loong compatibility command from"
 }
 
 run_release_install_adds_path_to_bashrc_and_prints_source_hint_test() {

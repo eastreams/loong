@@ -22,7 +22,7 @@ guides, channel guides, rollout recipes, or the deeper
 | several explicit provider lanes in one file | [Multi-Profile Provider Config](#multi-profile-provider-config) |
 | one service-channel account that should own a reply loop | [Single-Account Channel Shape](#single-account-channel-shape) |
 | several channel accounts with stable selector ids | [Multi-Account Channel Shape](#multi-account-channel-shape) |
-| `gateway run` or `multi-channel-serve` selectors | [Gateway Selector Rule](#gateway-selector-rule) |
+| `gateway run` or `gateway run` selectors | [Gateway Selector Rule](#gateway-selector-rule) |
 | managed skill install, exposure, and persisted download policy | [Managed Skills](/use-loong/managed-skills) |
 | built-in web or browser private-host and domain rules | [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) |
 | outbound sends to a private bridge or self-hosted HTTP endpoint | [Outbound HTTP Trust Toggle](#outbound-http-trust-toggle) |
@@ -40,7 +40,7 @@ Loong keeps the top-level operator config explicit:
 - `tools.browser`, `tools.web`, and `tools.browser_companion` keep browser
   session limits, trust boundaries, and companion policy explicit instead of
   hiding them in helper scripts
-- `memory.profile` stays operator-visible instead of hiding behind prompt logic
+- `memory.profile` stays operator-visible as the continuity choice instead of exposing multiple public memory forms or hiding behind prompt logic
 - top-level runtime toggles such as `outbound_http` stay explicit
 
 Example:
@@ -66,7 +66,7 @@ app_secret = { env = "LARK_APP_SECRET" }
 allowed_chat_ids = ["oc_ops_room"]
 ```
 
-This is the public pattern: one provider lane, one explicit memory profile, and
+This is the public pattern: one provider lane, one session-memory model, one explicit continuity profile, and
 one channel family that stays visible in config instead of being hidden behind a
 launcher.
 

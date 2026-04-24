@@ -231,7 +231,7 @@ fn create_process_output_temp_file(
     accessible_output_root: Option<&Path>,
 ) -> Result<(PathBuf, File), String> {
     let output_dir = accessible_output_root
-        .map(|root| root.join(".loongclaw/tool-output"))
+        .map(|root| root.join(".loong/tool-output"))
         .unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(output_dir.as_path()).map_err(|error| {
         let display_path = output_dir.display();
@@ -247,7 +247,7 @@ fn create_process_output_temp_file(
     for attempt in 0..8_u8 {
         let sequence = NEXT_PROCESS_OUTPUT_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = output_dir.join(format!(
-            "loongclaw-process-output-{stream_name}-{process_id}-{timestamp_nanos:x}-{sequence:x}-{attempt}.log"
+            "loong-process-output-{stream_name}-{process_id}-{timestamp_nanos:x}-{sequence:x}-{attempt}.log"
         ));
         let file_result = std::fs::OpenOptions::new()
             .write(true)

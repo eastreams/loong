@@ -4,6 +4,9 @@ import { ApiRequestError } from "../../../lib/api/client";
 import { resolveTokenHintEnv, resolveTokenHintPath } from "../../../lib/auth/tokenHint";
 import {
   chatApi,
+  isInternalAssistantRecordContent,
+  looksLikeInternalAssistantRecordContent,
+  stripInternalAssistantRecordPrefix,
   type ChatMessage,
   type ChatSessionSummary,
   type ChatTurnStreamEvent,
@@ -15,7 +18,7 @@ function upsertRecentTool(
   tool: {
     toolId: string;
     label: string;
-    status: "ok" | "error";
+    status: "ok" | "error" | "pending";
     detail?: string;
   },
 ): SessionViewState["recentTools"] {
@@ -31,6 +34,20 @@ function upsertRecentTool(
     nextItem,
     ...current.recentTools.filter((item) => item.toolId !== tool.toolId),
   ].slice(0, 6);
+}
+
+function resolveToolCompletionStatus(
+  event: Extract<ChatTurnStreamEvent, { type: "tool.finished" }>,
+): "ok" | "error" | "pending" {
+  if (event.state === "needs_approval" || event.outcome === "needs_approval") {
+    return "pending";
+  }
+
+  if (event.outcome === "ok" || event.state === "completed") {
+    return "ok";
+  }
+
+  return "error";
 }
 
 function extractErrorHost(message: string): string | null {
@@ -132,6 +149,7 @@ export function useChatStream({
 }: UseChatStreamParams) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const internalContentBuffersRef = useRef<Map<string, string>>(new Map());
 
   const stopStream = useCallback(() => {
     if (abortControllerRef.current) {
@@ -164,7 +182,33 @@ export function useChatStream({
             streamPhase: "streaming",
             messages: current.messages.map((message) =>
               message.id === placeholderId
-                ? { ...message, content: `${message.content}${event.delta}` }
+                ? (() => {
+                    const bufferedInternalContent =
+                      internalContentBuffersRef.current.get(placeholderId);
+                    const nextContent = bufferedInternalContent
+                      ? `${bufferedInternalContent}${event.delta}`
+                      : `${message.content}${event.delta}`;
+                    if (
+                      ((message.content.trim().length === 0 ||
+                        bufferedInternalContent) &&
+                        looksLikeInternalAssistantRecordContent(event.delta)) ||
+                      bufferedInternalContent ||
+                      isInternalAssistantRecordContent(nextContent)
+                    ) {
+                      const visibleContent =
+                        stripInternalAssistantRecordPrefix(nextContent);
+                      if (visibleContent) {
+                        internalContentBuffersRef.current.delete(placeholderId);
+                        return { ...message, content: visibleContent };
+                      }
+                      internalContentBuffersRef.current.set(placeholderId, nextContent);
+                      return {
+                        ...message,
+                        content: "",
+                      };
+                    }
+                    return { ...message, content: nextContent };
+                  })()
                 : message,
             ),
           }));
@@ -198,30 +242,68 @@ export function useChatStream({
           });
           break;
         case "tool.finished":
-          updateSessionViewState(targetSessionId, (current) => ({
-            ...current,
-            activeTools: current.activeTools.map((item) =>
-              item.toolId === event.toolId
-                ? {
-                    ...item,
-                    label: event.label,
-                    status: event.outcome === "ok" ? ("ok" as const) : ("error" as const),
-                  }
-                : item,
-            ),
-            recentTools: upsertRecentTool(current, {
-              toolId: event.toolId,
-              label: event.label,
-              status: event.outcome === "ok" ? "ok" : "error",
-              detail:
-                event.detail ??
-                (event.outcome === "ok"
-                  ? t("chat.recentTools.detail.ok")
-                  : t("chat.recentTools.detail.error")),
-            }),
-          }));
+          updateSessionViewState(targetSessionId, (current) => {
+            const status = resolveToolCompletionStatus(event);
+            return {
+              ...current,
+              activeTools: current.activeTools.map((item) =>
+                item.toolId === event.toolId
+                  ? {
+                      ...item,
+                      label: event.label,
+                      status,
+                    }
+                  : item,
+              ),
+              recentTools: upsertRecentTool(current, {
+                toolId: event.toolId,
+                label: event.label,
+                status,
+                detail:
+                  event.detail ??
+                  (status === "ok"
+                    ? t("chat.recentTools.detail.ok")
+                    : status === "pending"
+                      ? t("chat.recentTools.detail.pending", {
+                          defaultValue: "Waiting for approval",
+                        })
+                      : t("chat.recentTools.detail.error")),
+              }),
+            };
+          });
           break;
         case "turn.completed":
+          internalContentBuffersRef.current.delete(placeholderId);
+          if (
+            event.message.role === "assistant" &&
+            isInternalAssistantRecordContent(event.message.content)
+          ) {
+            const visibleContent = stripInternalAssistantRecordPrefix(
+              event.message.content,
+            );
+            if (visibleContent) {
+              updateSessionViewState(targetSessionId, (current) => ({
+                messages: current.messages.map((message) =>
+                  message.id === placeholderId
+                    ? { ...event.message, content: visibleContent }
+                    : message,
+                ),
+                activeTools: [],
+                recentTools: current.recentTools,
+                pendingAssistantId: null,
+                streamPhase: "idle",
+              }));
+              break;
+            }
+            updateSessionViewState(targetSessionId, (current) => ({
+              ...current,
+              messages: current.messages.filter((message) => message.id !== placeholderId),
+              activeTools: [],
+              pendingAssistantId: null,
+              streamPhase: "idle",
+            }));
+            break;
+          }
           updateSessionViewState(targetSessionId, (current) => ({
             messages: current.messages.map((message) =>
               message.id === placeholderId ? event.message : message,
@@ -233,6 +315,7 @@ export function useChatStream({
           }));
           break;
         case "turn.failed":
+          internalContentBuffersRef.current.delete(placeholderId);
           updateSessionViewState(targetSessionId, (current) => ({
             messages: current.messages.filter((message) => message.id !== placeholderId),
             activeTools: [],

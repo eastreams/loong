@@ -149,11 +149,15 @@ pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntim
     let render_width = detect_cli_chat_render_width();
 
     #[cfg(feature = "memory-sqlite")]
+    let limit = runtime.config.memory.sliding_window;
+
+    #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_production_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics_with_limit(
             &runtime.config,
             &runtime.session_id,
+            limit,
             runtime.conversation_binding(),
         )
         .await
@@ -199,11 +203,15 @@ async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
     let render_width = detect_cli_chat_render_width();
 
     #[cfg(feature = "memory-sqlite")]
+    let limit = runtime.config.memory.sliding_window;
+
+    #[cfg(feature = "memory-sqlite")]
     match runtime
         .turn_coordinator
-        .load_production_turn_checkpoint_diagnostics(
+        .load_production_turn_checkpoint_diagnostics_with_limit(
             &runtime.config,
             &runtime.session_id,
+            limit,
             runtime.conversation_binding(),
         )
         .await
@@ -1082,7 +1090,7 @@ pub(super) async fn load_history_lines(
         return Ok(format_window_history_lines(&turns));
     }
 
-    let entries = memory::load_prompt_context(session_id, memory_config)
+    let entries = crate::session::store::load_session_prompt_context(session_id, memory_config)
         .map_err(|error| format!("load history failed: {error}"))?;
     Ok(format_prompt_context_history_lines(&entries))
 }

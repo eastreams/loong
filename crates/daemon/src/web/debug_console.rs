@@ -22,10 +22,8 @@ pub(super) async fn dashboard_debug_console(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardDebugConsolePayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
-        &snapshot.config,
-        None,
-    );
+    let tool_runtime =
+        mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&snapshot.config, None);
     let debug_state = snapshot_debug_state(state.as_ref());
     Ok(Json(ApiEnvelope {
         ok: true,

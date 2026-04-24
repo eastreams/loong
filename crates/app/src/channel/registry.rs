@@ -15,21 +15,21 @@ use crate::config::{
     LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongConfig, MATRIX_ACCESS_TOKEN_ENV,
     MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV,
     NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV, NOSTR_RELAY_URLS_ENV,
-    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
-    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
-    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
-    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV,
-    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
-    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
-    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, TWITCH_ACCESS_TOKEN_ENV,
-    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
-    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
-    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat, parse_email_smtp_endpoint,
-    parse_irc_server_endpoint,
+    QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
+    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
+    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
+    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
+    SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
+    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
+    TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV,
+    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
+    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
+    parse_email_smtp_endpoint, parse_irc_server_endpoint,
 };
 
 use self::descriptors::CHANNEL_REGISTRY;
@@ -43,8 +43,7 @@ use super::{
 };
 #[allow(unused_imports)]
 pub use bridge::{
-    ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
 };
 
 #[path = "registry_bridge.rs"]
@@ -73,14 +72,15 @@ pub use super::catalog::{
     ChannelDoctorCheckTrigger, ChannelDoctorOperationSpec, ChannelOnboardingDescriptor,
     ChannelOnboardingStrategy, ChannelOperationDescriptor, ChannelRuntimeCommandDescriptor,
     FEISHU_RUNTIME_COMMAND_DESCRIPTOR, LINE_RUNTIME_COMMAND_DESCRIPTOR,
-    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
-    WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
-    WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, list_channel_catalog,
-    normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    MATRIX_RUNTIME_COMMAND_DESCRIPTOR, QQBOT_RUNTIME_COMMAND_DESCRIPTOR,
+    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
+    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+    catalog_only_channel_entries, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub(crate) use super::catalog::{
     catalog_only_channel_entries_from, resolve_channel_selection_order,
@@ -267,7 +267,7 @@ pub(crate) struct ChannelRegistryDescriptor {
 const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "telegram-send",
+    command: "channels send telegram",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TELEGRAM_SEND_REQUIREMENTS,
@@ -278,7 +278,7 @@ const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
 const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "reply loop",
-    command: "telegram-serve",
+    command: "channels serve telegram",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: TELEGRAM_SERVE_REQUIREMENTS,
@@ -402,7 +402,7 @@ const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboa
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "feishu-send",
+    command: "feishu send",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: FEISHU_SEND_REQUIREMENTS,
@@ -416,7 +416,7 @@ const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "inbound reply service",
-    command: "feishu-serve",
+    command: "feishu serve",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: FEISHU_SERVE_REQUIREMENTS,
@@ -577,10 +577,144 @@ const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
     repair_command: Some("loong feishu onboard"),
 };
 
+const QQBOT_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
+pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "qqbot",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: QQBOT_SEND_OPERATION,
+        serve: QQBOT_SERVE_OPERATION,
+    };
+pub const QQBOT_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: QQBOT_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const QQBOT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["qqbot.enabled", "qqbot.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const QQBOT_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_id",
+        label: "qq bot app id",
+        config_paths: &["qqbot.app_id", "qqbot.accounts.<account>.app_id"],
+        env_pointer_paths: &["qqbot.app_id_env", "qqbot.accounts.<account>.app_id_env"],
+        default_env_var: Some(QQBOT_APP_ID_ENV),
+    };
+
+const QQBOT_CLIENT_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "client_secret",
+        label: "qq bot client secret",
+        config_paths: &[
+            "qqbot.client_secret",
+            "qqbot.accounts.<account>.client_secret",
+        ],
+        env_pointer_paths: &[
+            "qqbot.client_secret_env",
+            "qqbot.accounts.<account>.client_secret_env",
+        ],
+        default_env_var: Some(QQBOT_CLIENT_SECRET_ENV),
+    };
+
+const QQBOT_ALLOWED_PEER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_peer_ids",
+        label: "allowed peer ids",
+        config_paths: &[
+            "qqbot.allowed_peer_ids",
+            "qqbot.accounts.<account>.allowed_peer_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const QQBOT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    QQBOT_ENABLED_REQUIREMENT,
+    QQBOT_APP_ID_REQUIREMENT,
+    QQBOT_CLIENT_SECRET_REQUIREMENT,
+];
+
+const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    QQBOT_ENABLED_REQUIREMENT,
+    QQBOT_APP_ID_REQUIREMENT,
+    QQBOT_CLIENT_SECRET_REQUIREMENT,
+    QQBOT_ALLOWED_PEER_IDS_REQUIREMENT,
+];
+
+const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "gateway send",
+    command: "qqbot-send",
+    availability: ChannelCatalogOperationAvailability::Implemented,
+    tracks_runtime: false,
+    requirements: QQBOT_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "gateway reply loop",
+    command: "qqbot-serve",
+    availability: ChannelCatalogOperationAvailability::Implemented,
+    tracks_runtime: true,
+    requirements: QQBOT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "qqbot channel",
+    trigger: ChannelDoctorCheckTrigger::OperationHealth,
+}];
+
+const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "qqbot channel",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "qqbot serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+
+const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: QQBOT_SEND_OPERATION,
+        doctor_checks: QQBOT_SEND_DOCTOR_CHECKS,
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: QQBOT_SERVE_OPERATION,
+        doctor_checks: QQBOT_SERVE_DOCTOR_CHECKS,
+    },
+];
+
+const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure qqbot app_id, client_secret, and allowed_peer_ids under qqbot or qqbot.accounts.<account> in loong.toml before serving the runtime channel",
+    status_command: "loong doctor",
+    repair_command: None,
+};
+
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "matrix-send",
+    command: "channels send matrix",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: MATRIX_SEND_REQUIREMENTS,
@@ -591,7 +725,7 @@ const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const MATRIX_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "sync reply loop",
-    command: "matrix-serve",
+    command: "channels serve matrix",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: MATRIX_SERVE_REQUIREMENTS,
@@ -616,7 +750,7 @@ pub const MATRIX_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
 const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "proactive send",
-    command: "wecom-send",
+    command: "channels send wecom",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WECOM_SEND_REQUIREMENTS,
@@ -627,7 +761,7 @@ const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "long connection reply loop",
-    command: "wecom-serve",
+    command: "channels serve wecom",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WECOM_SERVE_REQUIREMENTS,
@@ -852,7 +986,7 @@ const DISCORD_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct send",
-    command: "discord-send",
+    command: "channels send discord",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DISCORD_SEND_REQUIREMENTS,
@@ -1055,7 +1189,7 @@ const LINE_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const LINE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "push send",
-    command: "line-send",
+    command: "channels send line",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: LINE_SEND_REQUIREMENTS,
@@ -1065,7 +1199,7 @@ const LINE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "webhook reply loop",
-    command: "line-serve",
+    command: "channels serve line",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: LINE_SERVE_REQUIREMENTS,
@@ -1287,7 +1421,7 @@ const DINGTALK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const DINGTALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "custom robot send",
-    command: "dingtalk-send",
+    command: "channels send dingtalk",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DINGTALK_SEND_REQUIREMENTS,
@@ -1407,7 +1541,7 @@ const WHATSAPP_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "business send",
-    command: "whatsapp-send",
+    command: "channels send whatsapp",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WHATSAPP_SEND_REQUIREMENTS,
@@ -1417,7 +1551,7 @@ const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
 const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "cloud webhook service",
-    command: "whatsapp-serve",
+    command: "channels serve whatsapp",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
@@ -1578,7 +1712,7 @@ const EMAIL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const EMAIL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "smtp send",
-    command: "email-send",
+    command: "channels send email",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: EMAIL_SEND_REQUIREMENTS,
@@ -1666,7 +1800,7 @@ const WEBHOOK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "http post send",
-    command: "webhook-send",
+    command: "channels send webhook",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WEBHOOK_SEND_REQUIREMENTS,
@@ -1676,7 +1810,7 @@ const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
 const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "inbound webhook service",
-    command: "webhook-serve",
+    command: "channels serve webhook",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WEBHOOK_SERVE_REQUIREMENTS,
@@ -1769,7 +1903,7 @@ const GOOGLE_CHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const GOOGLE_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "incoming webhook send",
-    command: "google-chat-send",
+    command: "channels send google-chat",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: GOOGLE_CHAT_SEND_REQUIREMENTS,
@@ -1869,7 +2003,7 @@ const SIGNAL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const SIGNAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "direct message send",
-    command: "signal-send",
+    command: "channels send signal",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SIGNAL_SEND_REQUIREMENTS,
@@ -1985,7 +2119,7 @@ const TEAMS_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const TEAMS_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "incoming webhook send",
-    command: "teams-send",
+    command: "channels send teams",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TEAMS_SEND_REQUIREMENTS,
@@ -2090,7 +2224,7 @@ const MATTERMOST_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const MATTERMOST_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "channel send",
-    command: "mattermost-send",
+    command: "channels send mattermost",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: MATTERMOST_SEND_REQUIREMENTS,
@@ -2183,7 +2317,7 @@ const NEXTCLOUD_TALK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
 const NEXTCLOUD_TALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "room send",
-    command: "nextcloud-talk-send",
+    command: "channels send nextcloud-talk",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: NEXTCLOUD_TALK_SEND_REQUIREMENTS,
@@ -2288,7 +2422,7 @@ const SYNOLOGY_CHAT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = 
 const SYNOLOGY_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "chat send",
-    command: "synology-chat-send",
+    command: "channels send synology-chat",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SYNOLOGY_CHAT_SEND_REQUIREMENTS,
@@ -2376,7 +2510,7 @@ const IRC_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const IRC_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "message send",
-    command: "irc-send",
+    command: "channels send irc",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IRC_SEND_REQUIREMENTS,
@@ -2478,7 +2612,7 @@ const IMESSAGE_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 const IMESSAGE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
     label: "chat send",
-    command: "imessage-send",
+    command: "channels send imessage",
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IMESSAGE_SEND_REQUIREMENTS,
@@ -5712,6 +5846,222 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn build_qqbot_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = cfg!(feature = "channel-qqbot");
+    let default_selection = config.qqbot.default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+    config
+        .qqbot
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            match config
+                .qqbot
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_qqbot_snapshot_for_account(
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                    runtime_dir,
+                    now_ms,
+                ),
+                Err(error) => build_invalid_qqbot_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_qqbot_snapshot_for_account(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: crate::config::ResolvedQqbotChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+    if resolved.app_id().is_none() {
+        send_issues.push("app_id is missing".to_owned());
+    }
+    if resolved.client_secret().is_none() {
+        send_issues.push("client_secret is missing".to_owned());
+    }
+
+    let mut serve_issues = send_issues.clone();
+    let has_allowed_peer_ids = resolved
+        .allowed_peer_ids
+        .iter()
+        .any(|value: &String| !value.trim().is_empty());
+    if !has_allowed_peer_ids {
+        serve_issues.push("allowed_peer_ids is empty".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SEND_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            QQBOT_SEND_OPERATION,
+            "disabled by qqbot account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(QQBOT_SEND_OPERATION, send_issues)
+    } else {
+        ready_operation(QQBOT_SEND_OPERATION)
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SERVE_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            QQBOT_SERVE_OPERATION,
+            "disabled by qqbot account configuration".to_owned(),
+        )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(QQBOT_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(QQBOT_SERVE_OPERATION)
+    };
+
+    let send_operation = attach_runtime(
+        ChannelPlatform::Qqbot,
+        QQBOT_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+    let serve_operation = attach_runtime(
+        ChannelPlatform::Qqbot,
+        QQBOT_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+    ];
+    if !resolved.allowed_peer_ids.is_empty() {
+        let allowed_peer_ids = resolved
+            .allowed_peer_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        notes.push(format!("allowed_peer_ids={allowed_peer_ids}"));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: Some("https://api.sgroup.qq.com".to_owned()),
+        notes,
+        reserved_runtime_fields: Vec::new(),
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_qqbot_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SEND_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(QQBOT_SEND_OPERATION, vec![error.clone()])
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            QQBOT_SERVE_OPERATION,
+            "binary built without feature `channel-qqbot`".to_owned(),
+        )
+    } else {
+        misconfigured_operation(QQBOT_SERVE_OPERATION, vec![error.clone()])
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: true,
+        api_base_url: None,
+        notes,
+        reserved_runtime_fields: Vec::new(),
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
 mod tlon_support;
 
 #[cfg(test)]
@@ -5776,7 +6126,7 @@ mod tests {
                 .map(|descriptor| descriptor.id)
                 .collect::<Vec<_>>(),
             vec![
-                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook"
+                "telegram", "feishu", "matrix", "wecom", "qqbot", "line", "whatsapp", "webhook"
             ]
         );
         assert!(
@@ -5836,9 +6186,9 @@ mod tests {
 
         assert_eq!(matrix.channel_id, "matrix");
         assert_eq!(matrix.send.id, CHANNEL_OPERATION_SEND_ID);
-        assert_eq!(matrix.send.command, "matrix-send");
+        assert_eq!(matrix.send.command, "channels send matrix");
         assert_eq!(matrix.serve.id, CHANNEL_OPERATION_SERVE_ID);
-        assert_eq!(matrix.serve.command, "matrix-serve");
+        assert_eq!(matrix.serve.command, "channels serve matrix");
         assert_eq!(
             matrix.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
@@ -5852,9 +6202,9 @@ mod tests {
 
         assert_eq!(wecom.channel_id, "wecom");
         assert_eq!(wecom.send.id, CHANNEL_OPERATION_SEND_ID);
-        assert_eq!(wecom.send.command, "wecom-send");
+        assert_eq!(wecom.send.command, "channels send wecom");
         assert_eq!(wecom.serve.id, CHANNEL_OPERATION_SERVE_ID);
-        assert_eq!(wecom.serve.command, "wecom-serve");
+        assert_eq!(wecom.serve.command, "channels serve wecom");
         assert_eq!(
             wecom.default_send_target_kind,
             ChannelCatalogTargetKind::Conversation
@@ -5884,9 +6234,9 @@ mod tests {
         assert_eq!(telegram.runtime.platform, ChannelPlatform::Telegram);
         assert_eq!(telegram.catalog, telegram_catalog);
         assert_eq!(telegram.catalog.send.id, CHANNEL_OPERATION_SEND_ID);
-        assert_eq!(telegram.catalog.send.command, "telegram-send");
+        assert_eq!(telegram.catalog.send.command, "channels send telegram");
         assert_eq!(telegram.catalog.serve.id, CHANNEL_OPERATION_SERVE_ID);
-        assert_eq!(telegram.catalog.serve.command, "telegram-serve");
+        assert_eq!(telegram.catalog.serve.command, "channels serve telegram");
         assert_eq!(
             telegram.catalog.send.default_target_kind(),
             Some(telegram.catalog.default_send_target_kind)
@@ -5895,8 +6245,8 @@ mod tests {
         assert_eq!(lark.runtime.channel_id, "feishu");
         assert_eq!(lark.runtime.platform, ChannelPlatform::Feishu);
         assert_eq!(lark.catalog, lark_catalog);
-        assert_eq!(lark.catalog.send.command, "feishu-send");
-        assert_eq!(lark.catalog.serve.command, "feishu-serve");
+        assert_eq!(lark.catalog.send.command, "feishu send");
+        assert_eq!(lark.catalog.serve.command, "feishu serve");
         assert_eq!(
             lark.catalog.send.default_target_kind(),
             Some(lark.catalog.default_send_target_kind)
@@ -5913,7 +6263,7 @@ mod tests {
     fn resolve_channel_operation_descriptor_combines_catalog_and_doctor_metadata() {
         let lark_serve = resolve_channel_operation_descriptor("lark", CHANNEL_OPERATION_SERVE_ID)
             .expect("lark serve descriptor");
-        assert_eq!(lark_serve.operation.command, "feishu-serve");
+        assert_eq!(lark_serve.operation.command, "feishu serve");
         assert_eq!(
             lark_serve
                 .doctor
@@ -5928,7 +6278,7 @@ mod tests {
         let discord_send =
             resolve_channel_operation_descriptor("discord-bot", CHANNEL_OPERATION_SEND_ID)
                 .expect("discord send descriptor");
-        assert_eq!(discord_send.operation.command, "discord-send");
+        assert_eq!(discord_send.operation.command, "channels send discord");
         assert_eq!(discord_send.doctor, None);
 
         assert_eq!(
@@ -5951,7 +6301,7 @@ mod tests {
             ChannelCatalogImplementationStatus::ConfigBacked
         );
         assert_eq!(discord.transport, "discord_http_api");
-        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[0].command, "channels send discord");
         assert_eq!(discord.operations[1].command, "discord-serve");
         assert_eq!(
             encoded
@@ -6027,10 +6377,35 @@ mod tests {
         assert_eq!(weixin.onboarding.repair_command, None);
         assert!(weixin.onboarding.setup_hint.contains("ClawBot"));
 
-        assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
+        assert_eq!(qqbot.onboarding.strategy.as_str(), "manual_config");
         assert_eq!(qqbot.onboarding.status_command, "loong doctor");
         assert_eq!(qqbot.onboarding.repair_command, None);
-        assert!(qqbot.onboarding.setup_hint.contains("QQ Bot"));
+        assert!(qqbot.onboarding.setup_hint.contains("qqbot"));
+        assert!(qqbot.onboarding.setup_hint.contains("client_secret"));
+        assert!(qqbot.onboarding.setup_hint.contains("allowed_peer_ids"));
+
+        let qqbot_send_requirements = qqbot
+            .operation(CHANNEL_OPERATION_SEND_ID)
+            .expect("qqbot send operation")
+            .requirements
+            .iter()
+            .map(|requirement| requirement.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qqbot_send_requirements,
+            vec!["enabled", "app_id", "client_secret"]
+        );
+        let qqbot_serve_requirements = qqbot
+            .operation(CHANNEL_OPERATION_SERVE_ID)
+            .expect("qqbot serve operation")
+            .requirements
+            .iter()
+            .map(|requirement| requirement.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qqbot_serve_requirements,
+            vec!["enabled", "app_id", "client_secret", "allowed_peer_ids"]
+        );
 
         assert_eq!(onebot.onboarding.strategy.as_str(), "plugin_bridge");
         assert_eq!(onebot.onboarding.status_command, "loong doctor");
@@ -6125,12 +6500,9 @@ mod tests {
         assert_eq!(
             qqbot_serve_checks,
             vec![
+                ("qqbot channel", ChannelDoctorCheckTrigger::OperationHealth,),
                 (
-                    "qqbot bridge serve contract",
-                    ChannelDoctorCheckTrigger::PluginBridgeHealth,
-                ),
-                (
-                    "qqbot bridge serve runtime",
+                    "qqbot serve runtime",
                     ChannelDoctorCheckTrigger::ReadyRuntime,
                 ),
             ]
@@ -6173,8 +6545,8 @@ mod tests {
         );
         assert_eq!(feishu.aliases, vec!["lark"]);
         assert_eq!(feishu.operations.len(), 2);
-        assert_eq!(feishu.operations[0].command, "feishu-send");
-        assert_eq!(feishu.operations[1].command, "feishu-serve");
+        assert_eq!(feishu.operations[0].command, "feishu send");
+        assert_eq!(feishu.operations[1].command, "feishu serve");
         assert_eq!(
             encoded
                 .get("operations")
@@ -6214,8 +6586,8 @@ mod tests {
         let slack_json = serde_json::to_value(slack).expect("serialize slack entry");
 
         assert_eq!(telegram.operations.len(), 2);
-        assert_eq!(telegram.operations[0].command, "telegram-send");
-        assert_eq!(telegram.operations[1].command, "telegram-serve");
+        assert_eq!(telegram.operations[0].command, "channels send telegram");
+        assert_eq!(telegram.operations[1].command, "channels serve telegram");
         assert_eq!(
             matrix.implementation_status,
             ChannelCatalogImplementationStatus::RuntimeBacked
@@ -6223,8 +6595,8 @@ mod tests {
         assert_eq!(matrix.transport, "matrix_client_server_sync");
         assert!(matrix.aliases.is_empty());
         assert_eq!(matrix.operations.len(), 2);
-        assert_eq!(matrix.operations[0].command, "matrix-send");
-        assert_eq!(matrix.operations[1].command, "matrix-serve");
+        assert_eq!(matrix.operations[0].command, "channels send matrix");
+        assert_eq!(matrix.operations[1].command, "channels serve matrix");
         assert_eq!(
             discord.implementation_status,
             ChannelCatalogImplementationStatus::ConfigBacked
@@ -6234,7 +6606,7 @@ mod tests {
         assert_eq!(discord.selection_order, 40);
         assert_eq!(discord.selection_label, "community server bot");
         assert_eq!(discord.operations.len(), 2);
-        assert_eq!(discord.operations[0].command, "discord-send");
+        assert_eq!(discord.operations[0].command, "channels send discord");
         assert_eq!(discord.operations[1].command, "discord-serve");
 
         assert_eq!(
@@ -7060,7 +7432,7 @@ mod tests {
         assert_eq!(irc.selection_order, 170);
         assert_eq!(irc.transport, "irc_socket");
         assert_eq!(irc.aliases, Vec::<&str>::new());
-        assert_eq!(irc.operations[0].command, "irc-send");
+        assert_eq!(irc.operations[0].command, "channels send irc");
         assert_eq!(irc.operations[1].command, "irc-serve");
         assert_eq!(
             irc.operations[0]
@@ -7133,8 +7505,8 @@ mod tests {
                 "feishu",
                 "matrix",
                 "wecom",
-                "weixin",
                 "qqbot",
+                "weixin",
                 "onebot",
                 "discord",
                 "slack",
@@ -7175,8 +7547,8 @@ mod tests {
                 "feishu",
                 "matrix",
                 "wecom",
-                "weixin",
                 "qqbot",
+                "weixin",
                 "onebot",
                 "discord",
                 "slack",
@@ -7226,7 +7598,7 @@ mod tests {
             dingtalk.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Endpoint]
         );
-        assert_eq!(dingtalk.operations[0].command, "dingtalk-send");
+        assert_eq!(dingtalk.operations[0].command, "channels send dingtalk");
         assert_eq!(dingtalk.operations[1].command, "dingtalk-serve");
         assert_eq!(
             dingtalk.operations[0].availability,
@@ -7248,7 +7620,10 @@ mod tests {
             google_chat.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Endpoint]
         );
-        assert_eq!(google_chat.operations[0].command, "google-chat-send");
+        assert_eq!(
+            google_chat.operations[0].command,
+            "channels send google-chat"
+        );
         assert_eq!(google_chat.operations[1].command, "google-chat-serve");
         assert_eq!(
             google_chat.operations[0].availability,
@@ -7279,7 +7654,7 @@ mod tests {
             email.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Address]
         );
-        assert_eq!(email.operations[0].command, "email-send");
+        assert_eq!(email.operations[0].command, "channels send email");
         assert_eq!(email.operations[1].command, "email-serve");
         assert_eq!(
             email.operations[0].availability,
@@ -7314,7 +7689,10 @@ mod tests {
             nextcloud_talk.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Conversation]
         );
-        assert_eq!(nextcloud_talk.operations[0].command, "nextcloud-talk-send");
+        assert_eq!(
+            nextcloud_talk.operations[0].command,
+            "channels send nextcloud-talk"
+        );
         assert_eq!(nextcloud_talk.operations[1].command, "nextcloud-talk-serve");
         assert_eq!(
             nextcloud_talk.operations[0].availability,
@@ -7339,7 +7717,10 @@ mod tests {
             synology_chat.supported_target_kinds,
             vec![ChannelCatalogTargetKind::Address]
         );
-        assert_eq!(synology_chat.operations[0].command, "synology-chat-send");
+        assert_eq!(
+            synology_chat.operations[0].command,
+            "channels send synology-chat"
+        );
         assert_eq!(synology_chat.operations[1].command, "synology-chat-serve");
         assert_eq!(
             synology_chat.operations[0].availability,
@@ -7592,8 +7973,8 @@ mod tests {
                 "feishu",
                 "matrix",
                 "wecom",
-                "weixin",
                 "qqbot",
+                "weixin",
                 "onebot",
                 "discord",
                 "slack",
@@ -7698,7 +8079,7 @@ mod tests {
             .expect("qqbot surface");
         assert_eq!(
             qqbot.catalog.implementation_status,
-            ChannelCatalogImplementationStatus::PluginBacked
+            ChannelCatalogImplementationStatus::RuntimeBacked
         );
         assert_eq!(qqbot.configured_accounts.len(), 1);
         assert_eq!(
@@ -7865,7 +8246,7 @@ mod tests {
                     ChannelCatalogOperation {
                         id: "send",
                         label: "direct send",
-                        command: "telegram-send",
+                        command: "channels send telegram",
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: false,
                         requirements: &[],
@@ -7875,7 +8256,7 @@ mod tests {
                     ChannelCatalogOperation {
                         id: "serve",
                         label: "reply loop",
-                        command: "telegram-serve",
+                        command: "channels serve telegram",
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: true,
                         requirements: &[],
@@ -7901,7 +8282,7 @@ mod tests {
                     ChannelCatalogOperation {
                         id: "send",
                         label: "direct send",
-                        command: "discord-send",
+                        command: "channels send discord",
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: false,
                         requirements: &[],
@@ -7938,7 +8319,7 @@ mod tests {
             operations: vec![ChannelOperationStatus {
                 id: "serve",
                 label: "reply loop",
-                command: "telegram-serve",
+                command: "channels serve telegram",
                 health: ChannelOperationHealth::Disabled,
                 detail: "disabled".to_owned(),
                 issues: vec![],
@@ -7954,7 +8335,10 @@ mod tests {
             catalog_only[0].implementation_status,
             ChannelCatalogImplementationStatus::ConfigBacked
         );
-        assert_eq!(catalog_only[0].operations[0].command, "discord-send");
+        assert_eq!(
+            catalog_only[0].operations[0].command,
+            "channels send discord"
+        );
     }
 
     #[test]

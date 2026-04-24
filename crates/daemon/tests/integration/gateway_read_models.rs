@@ -484,6 +484,10 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         encoded["tools"]["tool_calling"]["structured_tool_schema_enabled"],
         true
     );
+    assert!(encoded["provider"]["transport_runtime"]["failover_total_events"].is_number());
+    assert!(encoded["provider"]["transport_runtime"]["failover_by_reason"].is_object());
+    assert!(encoded["provider"]["transport_runtime"]["failover_by_stage"].is_object());
+    assert!(encoded["provider"]["transport_runtime"]["failover_by_provider"].is_object());
     assert!(encoded["tools"]["web_access"]["ordinary_network_access_enabled"].is_boolean());
     assert!(encoded["tools"]["web_access"]["query_search_enabled"].is_boolean());
     assert!(encoded["tools"]["web_access"]["query_search_default_provider"].is_string());
@@ -543,6 +547,11 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
             approved_device_count: 0,
             last_activity_ms: None,
         },
+        gateway::read_models::GatewayOperatorNodesSummaryReadModel {
+            paired_device_count: 0,
+            managed_bridge_count: 0,
+            total_count: 0,
+        },
     );
     let encoded = serde_json::to_value(&summary).expect("serialize operator summary read model");
 
@@ -600,6 +609,9 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         summary.channels.surfaces.len(),
         inventory.channel_surfaces.len()
     );
+    assert_eq!(summary.nodes.paired_device_count, 0);
+    assert_eq!(summary.nodes.managed_bridge_count, 0);
+    assert_eq!(summary.nodes.total_count, 0);
     assert_eq!(
         summary.runtime.visible_tool_count,
         runtime_snapshot.tools.visible_tool_count

@@ -14,7 +14,7 @@ const FALLBACK_DESCRIPTOR: mvp::config::ChannelDescriptor = mvp::config::Channel
     surface_label: "webhook channel",
     runtime_kind: mvp::config::ChannelRuntimeKind::RuntimeBacked,
     operational_model: mvp::config::ChannelOperationalModel::StandaloneRuntime,
-    serve_subcommand: Some("webhook-serve"),
+    serve_subcommand: Some("channels serve webhook"),
 };
 
 pub(super) fn collect_preview(

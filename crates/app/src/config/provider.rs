@@ -56,6 +56,8 @@ pub struct ProviderCatalogEntry {
     pub default_base_url: String,
     pub default_chat_path: String,
     pub default_models_path: Option<String>,
+    pub default_model: Option<String>,
+    pub recommended_onboarding_model: Option<String>,
     pub auth_scheme: String,
     pub protocol_family: String,
     pub feature_family: String,
@@ -2882,6 +2884,8 @@ impl ProviderKind {
             default_base_url: profile.base_url.to_owned(),
             default_chat_path: profile.chat_completions_path.to_owned(),
             default_models_path: default_models_path_for_kind(self),
+            default_model: self.default_model().map(str::to_owned),
+            recommended_onboarding_model: self.recommended_onboarding_model().map(str::to_owned),
             auth_scheme: self.auth_scheme().as_str().to_owned(),
             protocol_family: self.protocol_family().as_str().to_owned(),
             feature_family: self.feature_family().as_str().to_owned(),
@@ -3100,6 +3104,8 @@ impl ProviderKind {
             Some("deepseek-chat")
         } else if matches!(self, ProviderKind::Minimax) {
             Some("MiniMax-M2.7")
+        } else if matches!(self, ProviderKind::VolcengineCoding) {
+            Some("ark-code-latest")
         } else if matches!(self, ProviderKind::Xiaomi) {
             Some("mimo-v2-pro")
         } else {

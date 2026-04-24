@@ -261,11 +261,13 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
     let mut attempt_index = 0usize;
 
     while attempt_index < retry_attempts {
-        match read_tool_lease_secret_file_detail(secret_path) {
-            Ok(Some(existing_secret)) => return Ok(existing_secret),
-            Ok(None) => {}
-            Err(error) if error.is_retryable_publication_state() => {}
-            Err(error) => return Err(error.render(secret_path)),
+        let existing_secret = match read_tool_lease_secret_file(secret_path) {
+            Ok(existing_secret) => existing_secret,
+            Err(error) if tool_lease_secret_publication_error_is_retryable(error.as_str()) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(existing_secret) = existing_secret {
+            return Ok(existing_secret);
         }
 
         attempt_index += 1;
@@ -283,6 +285,12 @@ fn read_tool_lease_secret_after_competitor_publish(secret_path: &Path) -> Result
         secret_path.display()
     );
     Err(message)
+}
+
+fn tool_lease_secret_publication_error_is_retryable(error: &str) -> bool {
+    error.contains(" is empty")
+        || error.contains(" is not valid hex")
+        || (error.contains(" has ") && error.contains(" bytes; expected "))
 }
 
 fn ensure_tool_lease_secret_parent_dir(secret_path: &Path) -> Result<(), String> {
@@ -338,6 +346,7 @@ enum ReadToolLeaseSecretFileError {
 }
 
 impl ReadToolLeaseSecretFileError {
+    #[allow(dead_code)]
     fn is_retryable_publication_state(&self) -> bool {
         matches!(
             self,

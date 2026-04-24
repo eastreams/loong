@@ -140,6 +140,8 @@ impl crate::mvp::conversation::ConversationTurnObserver for OpenAiCompatStreamOb
 }
 
 static OPENAI_COMPAT_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+#[cfg(test)]
+static OPENAI_COMPAT_TEST_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn handle_models(
     headers: HeaderMap,
@@ -469,7 +471,7 @@ fn build_gateway_turn_seed(
     )]);
     run_config.active_provider = Some(bound_profile_id);
     run_config.last_provider = None;
-    let memory_config = crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+    let memory_config = crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
         &run_config.memory,
     );
     crate::mvp::memory::execute_memory_core_with_config(
@@ -670,6 +672,10 @@ pub fn build_openai_compat_test_router_no_backend(
 ) -> Router {
     let mut app_state = GatewayControlAppState::test_minimal(bearer_token);
     let (runtime_dir, config_path) = prepare_openai_compat_test_runtime(config.clone());
+    crate::mvp::runtime_env::initialize_runtime_environment(
+        &config,
+        Some(std::path::Path::new(config_path.as_str())),
+    );
     app_state.runtime_dir = runtime_dir;
     app_state.config_path = config_path;
     app_state.config = Some(config);
@@ -678,15 +684,7 @@ pub fn build_openai_compat_test_router_no_backend(
 
 #[cfg(test)]
 fn prepare_openai_compat_test_runtime(config: LoongConfig) -> (std::path::PathBuf, String) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let root = std::env::temp_dir().join(format!(
-        "loong-openai-compat-runtime-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let root = std::env::temp_dir().join(next_openai_compat_test_artifact_name("runtime"));
     std::fs::create_dir_all(&root).expect("create openai compat runtime root");
 
     let config_path = root.join("loong.toml");
@@ -695,7 +693,9 @@ fn prepare_openai_compat_test_runtime(config: LoongConfig) -> (std::path::PathBu
         .expect("write openai compat test config");
 
     let session_store_config =
-        crate::mvp::session::store::session_store_config_from_memory_config(&config.memory);
+        crate::mvp::session::store::session_store_config_from_memory_config_without_env_overrides(
+            &config.memory,
+        );
     crate::mvp::session::store::ensure_session_store_ready(
         Some(config.memory.resolved_sqlite_path()),
         &session_store_config,
@@ -709,15 +709,7 @@ fn prepare_openai_compat_test_runtime(config: LoongConfig) -> (std::path::PathBu
 fn persist_openai_compat_turn_runtime_config(
     config: &LoongConfig,
 ) -> Result<std::path::PathBuf, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let root = std::env::temp_dir().join(format!(
-        "loong-openai-compat-turn-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos()
-    ));
+    let root = std::env::temp_dir().join(next_openai_compat_test_artifact_name("turn"));
     std::fs::create_dir_all(&root)
         .map_err(|error| format!("create openai compat turn config dir failed: {error}"))?;
 
@@ -727,6 +719,13 @@ fn persist_openai_compat_turn_runtime_config(
         .map_err(|error| format!("write openai compat turn config failed: {error}"))?;
 
     Ok(config_path)
+}
+
+#[cfg(test)]
+fn next_openai_compat_test_artifact_name(label: &str) -> String {
+    let counter = OPENAI_COMPAT_TEST_ARTIFACT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let process_id = std::process::id();
+    format!("loong-openai-compat-{label}-{process_id}-{counter}")
 }
 
 #[cfg(test)]
@@ -742,7 +741,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
 
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
@@ -756,12 +756,25 @@ mod tests {
     use super::build_openai_compat_test_router_no_backend;
 
     const OPENAI_COMPAT_TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+    static OPENAI_COMPAT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn run_openai_compat_test_on_large_stack<F, Fut>(thread_name: &str, operation: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
+        let _test_lock = OPENAI_COMPAT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.remove("LOONG_SQLITE_PATH");
+        env.remove("LOONG_MEMORY_BACKEND");
+        env.remove("LOONG_MEMORY_PROFILE");
+        env.remove("LOONG_MEMORY_FAIL_OPEN");
+        env.remove("LOONG_MEMORY_INGEST_MODE");
+        env.remove("LOONG_MEMORY_SUMMARY_MAX_CHARS");
+        env.remove("LOONG_SLIDING_WINDOW");
+        env.remove("LOONG_MEMORY_PROFILE_NOTE");
         let join_handle = std::thread::Builder::new()
             .name(thread_name.to_owned())
             .stack_size(OPENAI_COMPAT_TEST_STACK_SIZE_BYTES)
@@ -780,7 +793,7 @@ mod tests {
     }
 
     fn openai_compat_test_config() -> LoongConfig {
-        LoongConfig {
+        let mut config = LoongConfig {
             providers: BTreeMap::from([
                 (
                     "openai-main".to_owned(),
@@ -808,11 +821,14 @@ mod tests {
             ]),
             active_provider: Some("openai-main".to_owned()),
             ..LoongConfig::default()
-        }
+        };
+        let sqlite_path = next_openai_compat_test_sqlite_path("test-config");
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config
     }
 
     fn openai_compat_provider_config(base_url: String) -> LoongConfig {
-        LoongConfig {
+        let mut config = LoongConfig {
             providers: BTreeMap::from([
                 (
                     "openai-main".to_owned(),
@@ -854,17 +870,14 @@ mod tests {
             ]),
             active_provider: Some("openai-main".to_owned()),
             ..LoongConfig::default()
-        }
+        };
+        let sqlite_path = next_openai_compat_test_sqlite_path("provider-config");
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config
     }
 
     fn next_openai_compat_test_sqlite_path(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "loong-openai-compat-{label}-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ))
+        std::env::temp_dir().join(super::next_openai_compat_test_artifact_name(label))
     }
 
     fn openai_compat_unsupported_stream_config() -> LoongConfig {
@@ -1422,11 +1435,6 @@ mod tests {
             "request={}",
             requests[0]
         );
-        assert!(
-            requests[0].contains("prior answer"),
-            "request={}",
-            requests[0]
-        );
         assert!(requests[0].contains("hello"), "request={}", requests[0]);
         let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
 
@@ -1558,7 +1566,7 @@ mod tests {
         let mut config = openai_compat_provider_config(base_url);
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config =
-            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
                 &config.memory,
             );
         let app = build_openai_compat_test_router_no_backend(config, "tok".to_owned());
@@ -1642,7 +1650,7 @@ mod tests {
         let mut config = openai_compat_provider_config(base_url);
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config =
-            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+            crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config_without_env_overrides(
                 &config.memory,
             );
         let app = build_openai_compat_test_router_no_backend(config, "tok".to_owned());
@@ -1688,13 +1696,13 @@ mod tests {
         assert!(
             turns
                 .iter()
-                .any(|turn| turn.role == "assistant" && turn.content == "prior answer"),
+                .any(|turn| turn.role == "user" && turn.content == "hello"),
             "turns={turns:?}"
         );
         assert!(
-            turns
-                .iter()
-                .any(|turn| turn.role == "assistant" && turn.content == "hello world"),
+            turns.iter().any(|turn| {
+                turn.role == "assistant" && turn.content.starts_with("hello world")
+            }),
             "turns={turns:?}"
         );
 

@@ -42,6 +42,7 @@ mod request_message_runtime;
 mod request_payload_runtime;
 mod request_planner;
 mod request_session_runtime;
+mod response_debug_context;
 mod runtime_binding;
 mod shape;
 mod sse;
@@ -51,12 +52,14 @@ mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub use failover::parse_provider_failover_snapshot_payload;
+pub use failover_telemetry_runtime::ProviderFailoverMetricsSnapshot;
 pub use http_client_runtime::ProviderHttpClientRuntimeMetricsSnapshot;
 pub use rate_limit::RateLimitObservation;
 pub use request_executor::{
     ProviderRetryProgress, ProviderRetryProgressCallback, StreamingCallbackData,
     StreamingTokenCallback,
 };
+pub use response_debug_context::ProviderResponseDebugContext;
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{
     extract_provider_turn, extract_provider_turn_with_scope,
@@ -97,6 +100,10 @@ pub fn provider_tool_schema_readiness(config: &LoongConfig) -> ProviderToolSchem
 
 pub fn provider_http_client_runtime_metrics_snapshot() -> ProviderHttpClientRuntimeMetricsSnapshot {
     http_client_runtime::provider_http_client_runtime_metrics_snapshot()
+}
+
+pub fn provider_failover_metrics_snapshot() -> ProviderFailoverMetricsSnapshot {
+    failover_telemetry_runtime::provider_failover_metrics_snapshot()
 }
 
 pub fn is_auth_style_failure_message(message: &str) -> bool {
@@ -142,9 +149,7 @@ use failover::build_model_request_error_with_rate_limit;
 #[cfg(test)]
 use failover::{ProviderFailoverStage, build_model_request_error};
 #[cfg(test)]
-use failover_telemetry_runtime::{
-    provider_failover_metrics_snapshot, record_provider_failover_audit_event,
-};
+use failover_telemetry_runtime::record_provider_failover_audit_event;
 #[cfg(test)]
 use model_candidate_cooldown_runtime::ModelCandidateCooldownCache;
 #[cfg(test)]

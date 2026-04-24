@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+API_PORT="${API_PORT:-4317}"
+DEV_PORT="${DEV_PORT:-4173}"
 RUN_ROOT="${HOME}/.loong/run"
 API_PID_FILE="${RUN_ROOT}/web-api.pid"
 DEV_PID_FILE="${RUN_ROOT}/web-dev.pid"
@@ -28,7 +30,7 @@ kill_port() {
 
 kill_pid_file "${API_PID_FILE}"
 kill_pid_file "${DEV_PID_FILE}"
-kill_port 4317
-kill_port 4173
+kill_port "${API_PORT}"
+kill_port "${DEV_PORT}"
 
-echo "Stopped web dev processes on ports 4317 and 4173."
+echo "Stopped web dev processes on ports ${API_PORT} and ${DEV_PORT}."

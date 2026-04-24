@@ -4,6 +4,8 @@
   defaultBaseUrl: string;
   defaultChatPath: string;
   defaultModelsPath: string | null;
+  defaultModel: string | null;
+  recommendedOnboardingModel: string | null;
   authScheme: string;
   featureFamily: string;
   isCodingVariant: boolean;

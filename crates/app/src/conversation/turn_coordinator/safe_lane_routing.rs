@@ -298,11 +298,10 @@ pub(super) fn collect_semantic_anchors(tool_intents: &[ToolIntent]) -> BTreeSet<
 fn collect_value_anchors(parent_key: Option<&str>, value: &Value, anchors: &mut BTreeSet<String>) {
     #[allow(clippy::wildcard_enum_match_arm)]
     match value {
-        Value::String(text) => {
-            if parent_key.map(is_anchor_key_allowed).unwrap_or(false) {
-                push_anchor_candidate(text.as_str(), anchors);
-            }
+        Value::String(text) if parent_key.map(is_anchor_key_allowed).unwrap_or(false) => {
+            push_anchor_candidate(text.as_str(), anchors);
         }
+        Value::String(_) => {}
         Value::Array(items) => {
             for item in items {
                 collect_value_anchors(parent_key, item, anchors);

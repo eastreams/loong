@@ -1,9 +1,10 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ChoiceField } from "../../../components/inputs/ChoiceField";
 import { Panel } from "../../../components/surfaces/Panel";
 import { useWebConnection } from "../../../hooks/useWebConnection";
+import { ApiRequestError } from "../../../lib/api/client";
 import { useDashboardData } from "../hooks/useDashboardData";
 import {
   MEMORY_PROFILE_OPTIONS,
@@ -21,8 +22,8 @@ import {
   dashboardApi,
   type DashboardConnectivity,
   type DashboardToolItem,
-  type DashboardTools,
 } from "../api";
+import { abilitiesApi, type SkillsSnapshot } from "../../abilities/api";
 
 type SettingsModalPhase = "pending" | "success" | "error";
 
@@ -329,9 +330,10 @@ function buildConnectivityCopy(
 export default function DashboardPage() {
   const { t } = useTranslation();
   const connection = useWebConnection();
-  const { canAccessProtectedApi } = connection;
+  const { canAccessProtectedApi, authRevision, markUnauthorized } = connection;
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogItem[]>([]);
   const [providerCatalogLoadFailed, setProviderCatalogLoadFailed] = useState(false);
+  const [skillsSnapshot, setSkillsSnapshot] = useState<SkillsSnapshot | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,6 +365,34 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, [canAccessProtectedApi]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!canAccessProtectedApi) {
+      setSkillsSnapshot(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void abilitiesApi
+      .loadSkills()
+      .then((snapshot) => {
+        if (!cancelled) {
+          setSkillsSnapshot(snapshot);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled && error instanceof ApiRequestError && error.status === 401) {
+          markUnauthorized();
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authRevision, canAccessProtectedApi, markUnauthorized]);
 
   // These forms depend on initial data but manage their own state
   const providerForm = useProviderConfigForm({
@@ -426,6 +456,13 @@ export default function DashboardPage() {
   const personalityDisplay = formatPersonality(config?.personality, t);
   const memoryProfileDisplay = formatMemoryProfile(config?.memoryProfile, t);
   const connectivityCopy = buildConnectivityCopy(connectivity, t);
+  const browserCompanionStatus = !skillsSnapshot
+    ? t("dashboard.values.notSet")
+    : skillsSnapshot.browserCompanion.ready
+      ? t("dashboard.values.enabled")
+      : skillsSnapshot.browserCompanion.enabled
+        ? t("dashboard.values.pending")
+        : t("dashboard.values.disabled");
 
   const toolItems: DashboardToolItem[] = tools?.items ?? [];
   const approvalItems = approvals?.items ?? [];
@@ -443,7 +480,7 @@ export default function DashboardPage() {
     },
   ];
   const debugConsoleCommand =
-    debugConsole?.command ?? "$ loongclaw web debug --readonly";
+    debugConsole?.command ?? "$ loong web debug --readonly";
 
   return (
     <div className="page page-dashboard">
@@ -901,6 +938,74 @@ export default function DashboardPage() {
               <div className="dashboard-kv-row">
                 <span>{t("dashboard.fields.enabledTools")}</span>
                 <strong>{enabledTools}</strong>
+              </div>
+            </div>
+
+            <div className="dashboard-sidebar-divider" />
+
+            <div className="dashboard-stacked-section">
+              <div className="dashboard-section-heading">
+                {t("dashboard.sections.runtimeTruthLabel", {
+                  defaultValue: "Runtime truth",
+                })}
+              </div>
+              <div className="dashboard-kv-list">
+                <div className="dashboard-kv-row">
+                  <span>
+                    {t("dashboard.fields.visibleRuntimeTools", {
+                      defaultValue: "Visible tools",
+                    })}
+                  </span>
+                  <strong>{skillsSnapshot?.visibleRuntimeToolCount ?? t("dashboard.values.notSet")}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>
+                    {t("dashboard.fields.visibleDirectTools", {
+                      defaultValue: "Direct tools",
+                    })}
+                  </span>
+                  <strong>
+                    {skillsSnapshot?.visibleRuntimeDirectToolCount ?? t("dashboard.values.notSet")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>
+                    {t("dashboard.fields.hiddenToolSurfaces", {
+                      defaultValue: "Hidden surfaces",
+                    })}
+                  </span>
+                  <strong>{skillsSnapshot?.hiddenToolCount ?? t("dashboard.values.notSet")}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>
+                    {t("dashboard.fields.browserCompanion", {
+                      defaultValue: "Browser companion",
+                    })}
+                  </span>
+                  <strong>{browserCompanionStatus}</strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>
+                    {t("dashboard.fields.browserExecutionTier", {
+                      defaultValue: "Browser tier",
+                    })}
+                  </span>
+                  <strong>
+                    {skillsSnapshot?.browserCompanion.executionTier ??
+                      t("dashboard.values.notSet")}
+                  </strong>
+                </div>
+                <div className="dashboard-kv-row">
+                  <span>
+                    {t("dashboard.fields.browserExpectedVersion", {
+                      defaultValue: "Expected version",
+                    })}
+                  </span>
+                  <strong>
+                    {skillsSnapshot?.browserCompanion.expectedVersion ??
+                      t("dashboard.values.notSet")}
+                  </strong>
+                </div>
               </div>
             </div>
 

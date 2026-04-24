@@ -5,7 +5,7 @@ description: Configure the Telegram channel surface in Loong.
 
 # Telegram
 
-This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `multi-channel-serve` or `gateway run`.
+This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `gateway run` or `gateway run`.
 
 ## At A Glance
 
@@ -30,16 +30,16 @@ allowed_chat_ids = [123456789]
 ## Smoke Test
 
 ```bash
-loong telegram-send --target "123456789" --text "hello from loong"
-loong telegram-serve
+loong channels send telegram --target "123456789" --text "hello from loong"
+loong channels serve telegram
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| direct send | `telegram-send` | Usage: loong telegram-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
-| reply loop | `telegram-serve` | Usage: loong telegram-serve [OPTIONS] |
+| direct send | `channels send telegram` | Usage: loong channels send telegram [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| reply loop | `channels serve telegram` | Usage: loong channels serve telegram [OPTIONS] |
 
 ## Required Fields For Send
 
@@ -58,7 +58,7 @@ loong telegram-serve
 
 ## Gateway And Ownership
 
-This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `multi-channel-serve` and `gateway run`.
+This surface can run directly through its own `*-serve` command, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) through `gateway run` and `gateway run`.
 
 ## Operator Notes
 

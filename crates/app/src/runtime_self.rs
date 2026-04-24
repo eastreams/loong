@@ -65,7 +65,8 @@ pub(crate) struct RuntimeSelfModel {
 impl RuntimeSelfModel {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tool_usage_policy.is_empty()
+        self.standing_instructions.is_empty()
+            && self.tool_usage_policy.is_empty()
             && self.soul_guidance.is_empty()
             && self.identity_context.is_empty()
             && self.user_context.is_empty()
@@ -98,7 +99,7 @@ pub(crate) fn load_runtime_self_model_with_budget(
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     remaining_total_chars: &mut usize,
 ) -> RuntimeSelfModel {
-    let source_candidates = runtime_self_source_candidates(workspace_root);
+    let source_candidates = runtime_self_source_candidates(workspace_root, tool_runtime_config);
     let mut loaded_paths = BTreeSet::new();
     let mut model = RuntimeSelfModel::default();
 
@@ -153,6 +154,7 @@ pub(crate) fn render_runtime_self_section(model: &RuntimeSelfModel) -> Option<St
 
 pub(crate) fn runtime_self_source_candidates(
     workspace_root: &Path,
+    _tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Vec<(PathBuf, RuntimeSelfLane)> {
     let candidate_roots = candidate_workspace_roots(workspace_root);
     let mut source_candidates = Vec::new();
@@ -177,7 +179,9 @@ fn read_runtime_self_source(
     path: &Path,
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Option<String> {
-    let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path)?;
+    let read_runtime_config =
+        tool_runtime_config.with_file_root_override(workspace_root.to_path_buf());
+    let request_path = runtime_self_source_request_path(workspace_root, path)?;
     let request = ToolCoreRequest {
         tool_name: "file.read".to_owned(),
         payload: json!({
@@ -185,7 +189,7 @@ fn read_runtime_self_source(
         }),
     };
 
-    let outcome = tools::execute_tool_core_with_config(request, tool_runtime_config).ok()?;
+    let outcome = tools::execute_tool_core_with_config(request, &read_runtime_config).ok()?;
     let payload_content = outcome.payload.get("content")?;
     let content = payload_content.as_str()?;
     let trimmed = content.trim();
@@ -198,12 +202,31 @@ fn read_runtime_self_source(
 
 #[cfg(test)]
 pub(crate) fn should_attempt_runtime_self_source_read(workspace_root: &Path, path: &Path) -> bool {
-    let request_path = workspace_guidance::workspace_source_request_path(workspace_root, path);
+    let request_path = runtime_self_source_request_path(workspace_root, path);
     request_path.is_some()
 }
 
+pub(crate) fn runtime_self_source_request_path(
+    workspace_root: &Path,
+    path: &Path,
+) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+
+    let canonical_workspace_root = workspace_root.canonicalize().ok()?;
+    let canonical_path = path.canonicalize().ok()?;
+    if !canonical_path.starts_with(canonical_workspace_root) {
+        return None;
+    }
+
+    let relative_path = path.strip_prefix(workspace_root).ok()?;
+    Some(relative_path.to_string_lossy().to_string())
+}
+
 pub(crate) fn normalized_path_key(path: &Path) -> String {
-    workspace_guidance::normalized_workspace_source_path_key(path)
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    canonical_path.display().to_string()
 }
 
 pub(crate) fn ingest_runtime_self_source(

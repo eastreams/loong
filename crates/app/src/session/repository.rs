@@ -12,6 +12,11 @@ use crate::search_text::{build_search_index_text, normalize_search_text};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 pub(crate) const SESSION_TRAJECTORY_TRANSCRIPT_PAGE_SIZE: usize = 200;
+pub(crate) const ACTIVE_SESSION_HEAD_NAME: &str = "active";
+
+fn session_root_node_id(session_id: &str) -> String {
+    format!("session-root:{session_id}")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
@@ -43,6 +48,139 @@ pub enum SessionState {
     Completed,
     Failed,
     TimedOut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionNodeKind {
+    Root,
+    UserTurn,
+    AssistantTurn,
+    Artifact,
+}
+
+impl SessionNodeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::UserTurn => "user_turn",
+            Self::AssistantTurn => "assistant_turn",
+            Self::Artifact => "artifact",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "root" => Ok(Self::Root),
+            "user_turn" => Ok(Self::UserTurn),
+            "assistant_turn" => Ok(Self::AssistantTurn),
+            "artifact" => Ok(Self::Artifact),
+            _ => Err(format!("unknown session node kind `{value}`")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionHeadMode {
+    Live,
+    Pinned,
+}
+
+impl SessionHeadMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Pinned => "pinned",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "live" => Ok(Self::Live),
+            "pinned" => Ok(Self::Pinned),
+            _ => Err(format!("unknown session head mode `{value}`")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionNodeRecord {
+    pub node_id: String,
+    pub session_id: String,
+    pub parent_node_id: Option<String>,
+    pub kind: SessionNodeKind,
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub session_turn_index: Option<i64>,
+    pub metadata_json: Value,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionHeadRecord {
+    pub session_id: String,
+    pub head_name: String,
+    pub node_id: String,
+    pub mode: SessionHeadMode,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionArtifactKind {
+    Checkpoint,
+    BranchSummary,
+    CompactionSummary,
+    Handoff,
+    Note,
+}
+
+impl SessionArtifactKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Checkpoint => "checkpoint",
+            Self::BranchSummary => "branch_summary",
+            Self::CompactionSummary => "compaction_summary",
+            Self::Handoff => "handoff",
+            Self::Note => "note",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, String> {
+        match value {
+            "checkpoint" => Ok(Self::Checkpoint),
+            "branch_summary" => Ok(Self::BranchSummary),
+            "compaction_summary" => Ok(Self::CompactionSummary),
+            "handoff" => Ok(Self::Handoff),
+            "note" => Ok(Self::Note),
+            _ => Err(format!("unknown session artifact kind `{value}`")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionArtifactRecord {
+    pub artifact_id: String,
+    pub session_id: String,
+    pub kind: SessionArtifactKind,
+    pub head_name: Option<String>,
+    pub anchor_node_id: Option<String>,
+    pub source_start_node_id: Option<String>,
+    pub source_end_node_id: Option<String>,
+    pub payload_json: Value,
+    pub summary_text: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewSessionArtifactRecord {
+    pub artifact_id: String,
+    pub session_id: String,
+    pub kind: SessionArtifactKind,
+    pub head_name: Option<String>,
+    pub anchor_node_id: Option<String>,
+    pub source_start_node_id: Option<String>,
+    pub source_end_node_id: Option<String>,
+    pub payload_json: Value,
+    pub summary_text: Option<String>,
 }
 
 impl SessionState {
@@ -495,8 +633,11 @@ impl SessionRepository {
         let parent_session_id = normalize_optional_text(record.parent_session_id);
         let label = normalize_optional_text(record.label);
         let ts = unix_ts_now();
-        let conn = self.open_connection()?;
-        conn.execute(
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session create transaction failed: {error}"))?;
+        tx.execute(
             "INSERT INTO sessions(
                 session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
@@ -511,6 +652,9 @@ impl SessionRepository {
             ],
         )
         .map_err(|error| format!("insert session row failed: {error}"))?;
+        seed_session_tree_for_new_session(&tx, &session_id, ts)?;
+        tx.commit()
+            .map_err(|error| format!("commit session create transaction failed: {error}"))?;
 
         self.load_session(&session_id)?
             .ok_or_else(|| format!("session row `{session_id}` disappeared after insert"))
@@ -631,6 +775,493 @@ impl SessionRepository {
             .optional()
             .map_err(|error| format!("load session row failed: {error}"))?;
         raw.map(SessionRecord::try_from_raw).transpose()
+    }
+
+    fn load_session_node_with_conn(
+        conn: &Connection,
+        node_id: &str,
+    ) -> Result<Option<SessionNodeRecord>, String> {
+        let raw = conn
+            .query_row(
+                "SELECT
+                    node_id,
+                    session_id,
+                    parent_node_id,
+                    node_kind,
+                    role,
+                    content,
+                    session_turn_index,
+                    metadata_json,
+                    created_at
+                 FROM session_nodes
+                 WHERE node_id = ?1",
+                params![node_id],
+                |row| {
+                    Ok(RawSessionNodeRecord {
+                        node_id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        parent_node_id: row.get(2)?,
+                        node_kind: row.get(3)?,
+                        role: row.get(4)?,
+                        content: row.get(5)?,
+                        session_turn_index: row.get(6)?,
+                        metadata_json: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| format!("load session node failed: {error}"))?;
+        raw.map(SessionNodeRecord::try_from_raw).transpose()
+    }
+
+    fn load_session_head_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        head_name: &str,
+    ) -> Result<Option<SessionHeadRecord>, String> {
+        let raw = conn
+            .query_row(
+                "SELECT session_id, head_name, node_id, head_mode, updated_at
+                 FROM session_heads
+                 WHERE session_id = ?1 AND head_name = ?2",
+                params![session_id, head_name],
+                |row| {
+                    Ok(RawSessionHeadRecord {
+                        session_id: row.get(0)?,
+                        head_name: row.get(1)?,
+                        node_id: row.get(2)?,
+                        head_mode: row.get(3)?,
+                        updated_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| format!("load session head failed: {error}"))?;
+        raw.map(SessionHeadRecord::from_raw).transpose()
+    }
+
+    pub(crate) fn list_session_heads_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Vec<SessionHeadRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, head_name, node_id, head_mode, updated_at
+                 FROM session_heads
+                 WHERE session_id = ?1
+                 ORDER BY head_name ASC",
+            )
+            .map_err(|error| format!("prepare session heads query failed: {error}"))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(RawSessionHeadRecord {
+                    session_id: row.get(0)?,
+                    head_name: row.get(1)?,
+                    node_id: row.get(2)?,
+                    head_mode: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            })
+            .map_err(|error| format!("query session heads failed: {error}"))?;
+
+        let mut heads = Vec::new();
+        for row in rows {
+            let raw = row.map_err(|error| format!("decode session head row failed: {error}"))?;
+            let head = SessionHeadRecord::from_raw(raw)?;
+            heads.push(head);
+        }
+        Ok(heads)
+    }
+
+    fn list_session_node_children_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        parent_node_id: &str,
+    ) -> Result<Vec<SessionNodeRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    node_id,
+                    session_id,
+                    parent_node_id,
+                    node_kind,
+                    role,
+                    content,
+                    session_turn_index,
+                    metadata_json,
+                    created_at
+                 FROM session_nodes
+                 WHERE session_id = ?1 AND parent_node_id = ?2
+                 ORDER BY created_at ASC, node_id ASC",
+            )
+            .map_err(|error| format!("prepare session node children query failed: {error}"))?;
+        let rows = stmt
+            .query_map(params![session_id, parent_node_id], |row| {
+                Ok(RawSessionNodeRecord {
+                    node_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    parent_node_id: row.get(2)?,
+                    node_kind: row.get(3)?,
+                    role: row.get(4)?,
+                    content: row.get(5)?,
+                    session_turn_index: row.get(6)?,
+                    metadata_json: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })
+            .map_err(|error| format!("query session node children failed: {error}"))?;
+
+        let mut nodes = Vec::new();
+        for row in rows {
+            let raw =
+                row.map_err(|error| format!("decode session node child row failed: {error}"))?;
+            nodes.push(SessionNodeRecord::try_from_raw(raw)?);
+        }
+        Ok(nodes)
+    }
+
+    pub(crate) fn load_session_path_for_head_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        head_name: &str,
+    ) -> Result<Vec<SessionNodeRecord>, String> {
+        let Some(head) = Self::load_session_head_with_conn(conn, session_id, head_name)? else {
+            return Ok(Vec::new());
+        };
+
+        let mut path = Vec::new();
+        let mut current_node_id = Some(head.node_id);
+        while let Some(node_id) = current_node_id {
+            let Some(node) = Self::load_session_node_with_conn(conn, &node_id)? else {
+                break;
+            };
+            current_node_id = node.parent_node_id.clone();
+            path.push(node);
+        }
+        path.reverse();
+        Ok(path)
+    }
+
+    pub(crate) fn list_session_nodes_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Vec<SessionNodeRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    node_id,
+                    session_id,
+                    parent_node_id,
+                    node_kind,
+                    role,
+                    content,
+                    session_turn_index,
+                    metadata_json,
+                    created_at
+                 FROM session_nodes
+                 WHERE session_id = ?1
+                 ORDER BY created_at ASC, node_id ASC",
+            )
+            .map_err(|error| format!("prepare session nodes query failed: {error}"))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(RawSessionNodeRecord {
+                    node_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    parent_node_id: row.get(2)?,
+                    node_kind: row.get(3)?,
+                    role: row.get(4)?,
+                    content: row.get(5)?,
+                    session_turn_index: row.get(6)?,
+                    metadata_json: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            })
+            .map_err(|error| format!("query session nodes failed: {error}"))?;
+
+        let mut nodes = Vec::new();
+        for row in rows {
+            let raw = row.map_err(|error| format!("decode session node row failed: {error}"))?;
+            nodes.push(SessionNodeRecord::try_from_raw(raw)?);
+        }
+        Ok(nodes)
+    }
+
+    pub(crate) fn list_session_artifacts_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Vec<SessionArtifactRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    artifact_id,
+                    session_id,
+                    artifact_type,
+                    head_name,
+                    anchor_node_id,
+                    source_start_node_id,
+                    source_end_node_id,
+                    payload_json,
+                    summary_text,
+                    created_at
+                 FROM session_artifacts
+                 WHERE session_id = ?1
+                 ORDER BY created_at ASC, artifact_id ASC",
+            )
+            .map_err(|error| format!("prepare session artifacts query failed: {error}"))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok(RawSessionArtifactRecord {
+                    artifact_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    artifact_type: row.get(2)?,
+                    head_name: row.get(3)?,
+                    anchor_node_id: row.get(4)?,
+                    source_start_node_id: row.get(5)?,
+                    source_end_node_id: row.get(6)?,
+                    payload_json: row.get(7)?,
+                    summary_text: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            })
+            .map_err(|error| format!("query session artifacts failed: {error}"))?;
+
+        let mut artifacts = Vec::new();
+        for row in rows {
+            let raw =
+                row.map_err(|error| format!("decode session artifact row failed: {error}"))?;
+            artifacts.push(SessionArtifactRecord::try_from_raw(raw)?);
+        }
+        Ok(artifacts)
+    }
+
+    pub fn load_session_node(&self, node_id: &str) -> Result<Option<SessionNodeRecord>, String> {
+        let node_id = normalize_required_text(node_id, "node_id")?;
+        let conn = self.open_connection()?;
+        Self::load_session_node_with_conn(&conn, &node_id)
+    }
+
+    pub fn load_session_head(
+        &self,
+        session_id: &str,
+        head_name: &str,
+    ) -> Result<Option<SessionHeadRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let head_name = normalize_required_text(head_name, "head_name")?;
+        let conn = self.open_connection()?;
+        Self::load_session_head_with_conn(&conn, &session_id, &head_name)
+    }
+
+    pub fn list_session_heads(&self, session_id: &str) -> Result<Vec<SessionHeadRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::list_session_heads_with_conn(&conn, &session_id)
+    }
+
+    pub fn list_session_node_children(
+        &self,
+        session_id: &str,
+        parent_node_id: &str,
+    ) -> Result<Vec<SessionNodeRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let parent_node_id = normalize_required_text(parent_node_id, "parent_node_id")?;
+        let conn = self.open_connection()?;
+        Self::list_session_node_children_with_conn(&conn, &session_id, &parent_node_id)
+    }
+
+    pub fn load_session_path_for_head(
+        &self,
+        session_id: &str,
+        head_name: &str,
+    ) -> Result<Vec<SessionNodeRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let head_name = normalize_required_text(head_name, "head_name")?;
+        let conn = self.open_connection()?;
+        Self::load_session_path_for_head_with_conn(&conn, &session_id, &head_name)
+    }
+
+    pub fn load_active_session_path(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionNodeRecord>, String> {
+        self.load_session_path_for_head(session_id, ACTIVE_SESSION_HEAD_NAME)
+    }
+
+    pub fn set_session_head(
+        &self,
+        session_id: &str,
+        head_name: &str,
+        node_id: &str,
+    ) -> Result<SessionHeadRecord, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let head_name = normalize_required_text(head_name, "head_name")?;
+        let node_id = normalize_required_text(node_id, "node_id")?;
+        let ts = unix_ts_now();
+
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session head transaction failed: {error}"))?;
+        let node = Self::load_session_node_with_conn(&tx, &node_id)?
+            .ok_or_else(|| format!("session node `{node_id}` not found"))?;
+        if node.session_id != session_id {
+            return Err(format!(
+                "session node `{node_id}` belongs to `{}`, not `{session_id}`",
+                node.session_id
+            ));
+        }
+        let existing_head = Self::load_session_head_with_conn(&tx, &session_id, &head_name)?;
+        let default_mode = SessionHeadMode::Live;
+        let mut head_mode = existing_head.map(|head| head.mode).unwrap_or(default_mode);
+        if head_name == ACTIVE_SESSION_HEAD_NAME {
+            head_mode = SessionHeadMode::Live;
+        }
+        upsert_session_head_with_conn(&tx, &session_id, &head_name, &node_id, head_mode, ts)?;
+        tx.commit()
+            .map_err(|error| format!("commit session head transaction failed: {error}"))?;
+        Self::load_session_head_with_conn(&self.open_connection()?, &session_id, &head_name)?
+            .ok_or_else(|| format!("session head `{head_name}` missing after update"))
+    }
+
+    pub fn set_session_head_mode(
+        &self,
+        session_id: &str,
+        head_name: &str,
+        mode: SessionHeadMode,
+    ) -> Result<SessionHeadRecord, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let head_name = normalize_required_text(head_name, "head_name")?;
+        if head_name == ACTIVE_SESSION_HEAD_NAME && mode == SessionHeadMode::Pinned {
+            return Err("active session head cannot be pinned".to_owned());
+        }
+
+        let ts = unix_ts_now();
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session head mode transaction failed: {error}"))?;
+        Self::load_session_head_with_conn(&tx, &session_id, &head_name)?
+            .ok_or_else(|| format!("session head `{head_name}` not found"))?;
+        tx.execute(
+            "UPDATE session_heads
+             SET head_mode = ?3, updated_at = ?4
+             WHERE session_id = ?1 AND head_name = ?2",
+            params![session_id, head_name, mode.as_str(), ts],
+        )
+        .map_err(|error| format!("update session head mode failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit session head mode transaction failed: {error}"))?;
+        Self::load_session_head_with_conn(&self.open_connection()?, &session_id, &head_name)?
+            .ok_or_else(|| format!("session head `{head_name}` missing after mode update"))
+    }
+
+    pub fn fork_session_head(
+        &self,
+        session_id: &str,
+        source_node_id: &str,
+        head_name: &str,
+    ) -> Result<SessionHeadRecord, String> {
+        self.set_session_head(session_id, head_name, source_node_id)
+    }
+
+    pub fn list_session_nodes(&self, session_id: &str) -> Result<Vec<SessionNodeRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::list_session_nodes_with_conn(&conn, &session_id)
+    }
+
+    pub fn create_session_artifact(
+        &self,
+        record: NewSessionArtifactRecord,
+    ) -> Result<SessionArtifactRecord, String> {
+        let artifact_id = normalize_required_text(&record.artifact_id, "artifact_id")?;
+        let session_id = normalize_required_text(&record.session_id, "session_id")?;
+        let head_name = normalize_optional_text(record.head_name);
+        let anchor_node_id = normalize_optional_text(record.anchor_node_id);
+        let source_start_node_id = normalize_optional_text(record.source_start_node_id);
+        let source_end_node_id = normalize_optional_text(record.source_end_node_id);
+        let summary_text = normalize_optional_text(record.summary_text);
+        let payload_json = record.payload_json;
+        let payload_text = serde_json::to_string(&payload_json)
+            .map_err(|error| format!("encode session artifact payload failed: {error}"))?;
+        let ts = unix_ts_now();
+
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session artifact transaction failed: {error}"))?;
+        let session = Self::load_session_with_conn(&tx, &session_id)?
+            .ok_or_else(|| format!("session `{session_id}` not found"))?;
+        let _ = session;
+
+        for maybe_node_id in [
+            anchor_node_id.as_deref(),
+            source_start_node_id.as_deref(),
+            source_end_node_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let node = Self::load_session_node_with_conn(&tx, maybe_node_id)?
+                .ok_or_else(|| format!("session node `{maybe_node_id}` not found"))?;
+            if node.session_id != session_id {
+                return Err(format!(
+                    "session node `{maybe_node_id}` belongs to `{}`, not `{session_id}`",
+                    node.session_id
+                ));
+            }
+        }
+
+        if let Some(head_name) = head_name.as_deref() {
+            let head = Self::load_session_head_with_conn(&tx, &session_id, head_name)?
+                .ok_or_else(|| format!("session head `{head_name}` not found"))?;
+            let _ = head;
+        }
+
+        tx.execute(
+            "INSERT INTO session_artifacts(
+                artifact_id,
+                session_id,
+                artifact_type,
+                head_name,
+                anchor_node_id,
+                source_start_node_id,
+                source_end_node_id,
+                payload_json,
+                summary_text,
+                created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                artifact_id,
+                session_id,
+                record.kind.as_str(),
+                head_name.as_deref(),
+                anchor_node_id.as_deref(),
+                source_start_node_id.as_deref(),
+                source_end_node_id.as_deref(),
+                payload_text,
+                summary_text.as_deref(),
+                ts
+            ],
+        )
+        .map_err(|error| format!("insert session artifact failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit session artifact transaction failed: {error}"))?;
+
+        self.list_session_artifacts(&session_id)?
+            .into_iter()
+            .find(|artifact| artifact.artifact_id == artifact_id)
+            .ok_or_else(|| format!("session artifact `{artifact_id}` missing after insert"))
+    }
+
+    pub fn list_session_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionArtifactRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        Self::list_session_artifacts_with_conn(&conn, &session_id)
     }
 
     pub fn load_session_summary(
@@ -2746,6 +3377,7 @@ impl SessionRepository {
             ],
         )
         .map_err(|error| format!("insert session row failed: {error}"))?;
+        seed_session_tree_for_new_session(tx, &session_id, ts)?;
         tx.execute(
             "INSERT INTO session_events(
                 session_id, event_kind, actor_session_id, payload_json, search_text, ts
@@ -3113,7 +3745,7 @@ impl SessionRepository {
         Ok(events)
     }
 
-    fn list_delegate_lifecycle_events_with_conn(
+    pub(crate) fn list_delegate_lifecycle_events_with_conn(
         conn: &Connection,
         session_id: &str,
     ) -> Result<Vec<SessionEventRecord>, String> {
@@ -3336,7 +3968,7 @@ impl SessionRepository {
         Ok(events)
     }
 
-    fn load_session_observation_with_conn(
+    pub(crate) fn load_session_observation_with_conn(
         conn: &Connection,
         session_id: &str,
         recent_event_limit: usize,
@@ -3455,6 +4087,42 @@ struct RawSessionEventRecord {
     actor_session_id: Option<String>,
     payload_json: String,
     ts: i64,
+}
+
+#[derive(Debug)]
+struct RawSessionNodeRecord {
+    node_id: String,
+    session_id: String,
+    parent_node_id: Option<String>,
+    node_kind: String,
+    role: Option<String>,
+    content: Option<String>,
+    session_turn_index: Option<i64>,
+    metadata_json: String,
+    created_at: i64,
+}
+
+#[derive(Debug)]
+struct RawSessionHeadRecord {
+    session_id: String,
+    head_name: String,
+    node_id: String,
+    head_mode: String,
+    updated_at: i64,
+}
+
+#[derive(Debug)]
+struct RawSessionArtifactRecord {
+    artifact_id: String,
+    session_id: String,
+    artifact_type: String,
+    head_name: Option<String>,
+    anchor_node_id: Option<String>,
+    source_start_node_id: Option<String>,
+    source_end_node_id: Option<String>,
+    payload_json: String,
+    summary_text: Option<String>,
+    created_at: i64,
 }
 
 #[derive(Debug)]
@@ -3602,6 +4270,53 @@ impl SessionEventRecord {
             payload_json: serde_json::from_str(&raw.payload_json)
                 .map_err(|error| format!("decode session event payload failed: {error}"))?,
             ts: raw.ts,
+        })
+    }
+}
+
+impl SessionNodeRecord {
+    fn try_from_raw(raw: RawSessionNodeRecord) -> Result<Self, String> {
+        Ok(Self {
+            node_id: raw.node_id,
+            session_id: raw.session_id,
+            parent_node_id: raw.parent_node_id,
+            kind: SessionNodeKind::from_db(&raw.node_kind)?,
+            role: raw.role,
+            content: raw.content,
+            session_turn_index: raw.session_turn_index,
+            metadata_json: serde_json::from_str(&raw.metadata_json)
+                .map_err(|error| format!("decode session node metadata failed: {error}"))?,
+            created_at: raw.created_at,
+        })
+    }
+}
+
+impl SessionHeadRecord {
+    fn from_raw(raw: RawSessionHeadRecord) -> Result<Self, String> {
+        Ok(Self {
+            session_id: raw.session_id,
+            head_name: raw.head_name,
+            node_id: raw.node_id,
+            mode: SessionHeadMode::from_db(&raw.head_mode)?,
+            updated_at: raw.updated_at,
+        })
+    }
+}
+
+impl SessionArtifactRecord {
+    fn try_from_raw(raw: RawSessionArtifactRecord) -> Result<Self, String> {
+        Ok(Self {
+            artifact_id: raw.artifact_id,
+            session_id: raw.session_id,
+            kind: SessionArtifactKind::from_db(&raw.artifact_type)?,
+            head_name: raw.head_name,
+            anchor_node_id: raw.anchor_node_id,
+            source_start_node_id: raw.source_start_node_id,
+            source_end_node_id: raw.source_end_node_id,
+            payload_json: serde_json::from_str(&raw.payload_json)
+                .map_err(|error| format!("decode session artifact payload failed: {error}"))?,
+            summary_text: raw.summary_text,
+            created_at: raw.created_at,
         })
     }
 }
@@ -3796,6 +4511,65 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
     })
 }
 
+fn seed_session_tree_for_new_session(
+    conn: &Connection,
+    session_id: &str,
+    ts: i64,
+) -> Result<(), String> {
+    let root_node_id = session_root_node_id(session_id);
+    conn.execute(
+        "INSERT OR IGNORE INTO session_nodes(
+            node_id,
+            session_id,
+            parent_node_id,
+            node_kind,
+            role,
+            content,
+            session_turn_index,
+            metadata_json,
+            created_at
+         ) VALUES (?1, ?2, NULL, 'root', NULL, NULL, NULL, '{}', ?3)",
+        params![root_node_id, session_id, ts],
+    )
+    .map_err(|error| format!("seed session root node failed: {error}"))?;
+    upsert_session_head_with_conn(
+        conn,
+        session_id,
+        ACTIVE_SESSION_HEAD_NAME,
+        &root_node_id,
+        SessionHeadMode::Live,
+        ts,
+    )?;
+    Ok(())
+}
+
+fn upsert_session_head_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    head_name: &str,
+    node_id: &str,
+    head_mode: SessionHeadMode,
+    updated_at: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO session_heads(session_id, head_name, node_id, head_mode, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(session_id, head_name) DO UPDATE SET
+            node_id = excluded.node_id,
+            head_mode = excluded.head_mode,
+            updated_at = excluded.updated_at",
+        params![
+            session_id,
+            head_name,
+            node_id,
+            head_mode.as_str(),
+            updated_at
+        ],
+    )
+    .map(|_| ())
+    .map_err(|error| format!("upsert session head failed: {error}"))
+}
+
 fn normalize_tool_id_list(tool_ids: Vec<String>) -> Vec<String> {
     let mut normalized = BTreeSet::new();
     for tool_id in tool_ids {
@@ -3885,7 +4659,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 
@@ -3986,6 +4760,313 @@ mod tests {
         assert_eq!(loaded.session_id, "root-session");
         assert_eq!(loaded.label.as_deref(), Some("Root"));
         assert_eq!(loaded.parent_session_id, None);
+    }
+
+    #[test]
+    fn create_session_seeds_root_node_and_active_head() {
+        let config = isolated_memory_config("seed-root-node");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create session");
+
+        let root_node = repo
+            .load_session_node("session-root:root-session")
+            .expect("load root node")
+            .expect("root node");
+        let active_head = repo
+            .load_session_head("root-session", ACTIVE_SESSION_HEAD_NAME)
+            .expect("load active head")
+            .expect("active head");
+
+        assert_eq!(root_node.kind, SessionNodeKind::Root);
+        assert_eq!(root_node.parent_node_id, None);
+        assert_eq!(active_head.node_id, root_node.node_id);
+        assert_eq!(active_head.mode, SessionHeadMode::Live);
+    }
+
+    #[test]
+    fn append_turn_dual_writes_linear_active_session_path() {
+        let config = isolated_memory_config("append-turn-tree");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+        append_session_turn(&config, "root-session", "assistant", "world");
+
+        let path = repo
+            .load_active_session_path("root-session")
+            .expect("load active path");
+
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0].kind, SessionNodeKind::Root);
+        assert_eq!(path[1].kind, SessionNodeKind::UserTurn);
+        assert_eq!(path[1].content.as_deref(), Some("hello"));
+        assert_eq!(path[2].kind, SessionNodeKind::AssistantTurn);
+        assert_eq!(path[2].content.as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn fork_session_head_preserves_active_head_and_creates_named_head() {
+        let config = isolated_memory_config("fork-head");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+        append_session_turn(&config, "root-session", "assistant", "world");
+
+        let active_path = repo
+            .load_active_session_path("root-session")
+            .expect("load active path");
+        let source_node_id = active_path[1].node_id.clone();
+        let active_head_before = repo
+            .load_session_head("root-session", ACTIVE_SESSION_HEAD_NAME)
+            .expect("load active head")
+            .expect("active head");
+
+        let fork_head = repo
+            .fork_session_head("root-session", &source_node_id, "thread/alpha")
+            .expect("fork session head");
+        let active_head_after = repo
+            .load_session_head("root-session", ACTIVE_SESSION_HEAD_NAME)
+            .expect("load active head")
+            .expect("active head");
+        let fork_path = repo
+            .load_session_path_for_head("root-session", "thread/alpha")
+            .expect("load fork path");
+
+        assert_eq!(fork_head.node_id, source_node_id);
+        assert_eq!(fork_head.mode, SessionHeadMode::Live);
+        assert_eq!(active_head_before.node_id, active_head_after.node_id);
+        assert_eq!(fork_path.len(), 2);
+        assert_eq!(fork_path[1].content.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn set_session_head_mode_pins_checkpoint_like_heads_without_touching_active() {
+        let config = isolated_memory_config("session-head-mode");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:1",
+            "thread/alpha",
+        )
+        .expect("fork session head");
+
+        let pinned_head = repo
+            .set_session_head_mode("root-session", "thread/alpha", SessionHeadMode::Pinned)
+            .expect("pin session head");
+        let unpinned_head = repo
+            .set_session_head_mode("root-session", "thread/alpha", SessionHeadMode::Live)
+            .expect("unpin session head");
+        let active_error = repo
+            .set_session_head_mode(
+                "root-session",
+                ACTIVE_SESSION_HEAD_NAME,
+                SessionHeadMode::Pinned,
+            )
+            .expect_err("active head should refuse pinning");
+
+        assert_eq!(pinned_head.mode, SessionHeadMode::Pinned);
+        assert_eq!(unpinned_head.mode, SessionHeadMode::Live);
+        assert!(
+            active_error.contains("cannot be pinned"),
+            "unexpected error: {active_error}"
+        );
+    }
+
+    #[test]
+    fn replace_turns_rebuilds_linear_session_tree_path() {
+        let config = isolated_memory_config("replace-turns-tree");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+        append_session_turn(&config, "root-session", "assistant", "world");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "replaced-user".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "replaced-assistant".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace session turns");
+
+        let path = repo
+            .load_active_session_path("root-session")
+            .expect("load active path");
+
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[1].content.as_deref(), Some("replaced-user"));
+        assert_eq!(path[2].content.as_deref(), Some("replaced-assistant"));
+    }
+
+    #[test]
+    fn create_session_artifact_persists_and_lists_checkpoint_metadata() {
+        let config = isolated_memory_config("session-artifact");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+
+        let active_path = repo
+            .load_active_session_path("root-session")
+            .expect("load active path");
+        let anchor_node_id = active_path
+            .last()
+            .expect("active path node")
+            .node_id
+            .clone();
+
+        let artifact = repo
+            .create_session_artifact(NewSessionArtifactRecord {
+                artifact_id: "artifact-1".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: SessionArtifactKind::Checkpoint,
+                head_name: Some(ACTIVE_SESSION_HEAD_NAME.to_owned()),
+                anchor_node_id: Some(anchor_node_id.clone()),
+                source_start_node_id: Some(anchor_node_id.clone()),
+                source_end_node_id: Some(anchor_node_id),
+                payload_json: json!({"label": "checkpoint-a"}),
+                summary_text: Some("Checkpoint A".to_owned()),
+            })
+            .expect("create session artifact");
+
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts");
+
+        assert_eq!(artifact.kind, SessionArtifactKind::Checkpoint);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].summary_text.as_deref(), Some("Checkpoint A"));
+        assert_eq!(artifacts[0].payload_json["label"], "checkpoint-a");
+    }
+
+    #[test]
+    fn create_session_artifact_persists_and_lists_branch_summary_metadata() {
+        let config = isolated_memory_config("session-branch-summary-artifact");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+
+        let artifact = repo
+            .create_session_artifact(NewSessionArtifactRecord {
+                artifact_id: "artifact-branch-summary-1".to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: SessionArtifactKind::BranchSummary,
+                head_name: Some(ACTIVE_SESSION_HEAD_NAME.to_owned()),
+                anchor_node_id: Some("session-root:root-session".to_owned()),
+                source_start_node_id: Some("session-turn:root-session:1".to_owned()),
+                source_end_node_id: Some("session-turn:root-session:1".to_owned()),
+                payload_json: json!({
+                    "head_name": "active",
+                    "exclusive_node_count": 1
+                }),
+                summary_text: Some("Branch Summary A".to_owned()),
+            })
+            .expect("create branch summary artifact");
+
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts");
+
+        assert_eq!(artifact.kind, SessionArtifactKind::BranchSummary);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].head_name.as_deref(), Some("active"));
+        assert_eq!(
+            artifacts[0].summary_text.as_deref(),
+            Some("Branch Summary A")
+        );
+        assert_eq!(artifacts[0].payload_json["exclusive_node_count"], 1);
+    }
+
+    #[test]
+    fn replace_turns_preserves_named_heads_and_artifacts_across_rewrites() {
+        let config = isolated_memory_config("replace-turns-preserves-tree-metadata");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+        append_session_turn(&config, "root-session", "assistant", "world");
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:1",
+            "thread/alpha",
+        )
+        .expect("fork thread head");
+        repo.create_session_artifact(NewSessionArtifactRecord {
+            artifact_id: "artifact-branch-summary-1".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: SessionArtifactKind::BranchSummary,
+            head_name: Some("thread/alpha".to_owned()),
+            anchor_node_id: Some("session-root:root-session".to_owned()),
+            source_start_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_end_node_id: Some("session-turn:root-session:1".to_owned()),
+            payload_json: json!({
+                "head_name": "thread/alpha",
+                "exclusive_node_count": 1
+            }),
+            summary_text: Some("Branch Summary A".to_owned()),
+        })
+        .expect("create branch summary artifact");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "rewritten-user".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "rewritten-assistant".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace session turns");
+
+        let heads = repo
+            .list_session_heads("root-session")
+            .expect("list session heads");
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list session artifacts");
+        let active_path = repo
+            .load_active_session_path("root-session")
+            .expect("load active session path");
+
+        assert_eq!(heads.len(), 2);
+        assert!(
+            heads
+                .iter()
+                .any(|head| head.head_name == ACTIVE_SESSION_HEAD_NAME)
+        );
+        assert!(heads.iter().any(|head| head.head_name == "thread/alpha"));
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].head_name.as_deref(), Some("thread/alpha"));
+        assert_eq!(active_path.len(), 3);
+        assert_eq!(active_path[1].content.as_deref(), Some("rewritten-user"));
+        assert_eq!(
+            active_path[2].content.as_deref(),
+            Some("rewritten-assistant")
+        );
     }
 
     #[test]

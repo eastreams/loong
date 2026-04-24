@@ -1,3 +1,7 @@
+param(
+  [int]$Port = 4318
+)
+
 $ErrorActionPreference = "Stop"
 
 function Get-PortProcessIds {
@@ -17,10 +21,29 @@ function Get-PortProcessIds {
   return $ids | Sort-Object -Unique
 }
 
-$port = 4318
-$ids = Get-PortProcessIds -Port $port
+function Stop-PidFileProcess {
+  param([string]$PidFile)
+
+  if (-not (Test-Path $PidFile)) {
+    return
+  }
+
+  $rawPid = (Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($rawPid -match "^\d+$") {
+    Stop-Process -Id ([int]$rawPid) -Force -ErrorAction SilentlyContinue
+  }
+
+  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}
+
+$runRoot = Join-Path $env:USERPROFILE ".loong\run"
+$uiPidFile = Join-Path $runRoot "web-same-origin.pid"
+
+Stop-PidFileProcess -PidFile $uiPidFile
+
+$ids = Get-PortProcessIds -Port $Port
 if ($ids.Count -gt 0) {
   Stop-Process -Id $ids -Force -ErrorAction SilentlyContinue
 }
 
-Write-Output "Stopped same-origin Web process on port $port."
+Write-Output "Stopped same-origin Web process on port $Port."

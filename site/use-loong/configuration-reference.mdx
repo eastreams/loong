@@ -18,7 +18,7 @@ The default configuration file is located at:
 - **Linux/macOS**: `~/.loong/config.toml`
 - **Windows**: `%USERPROFILE%\.loong\config.toml`
 
-Existing legacy `~/.loongclaw/` homes are still discovered when `~/.loong/`
+Existing legacy `~/.loong/` homes are still discovered when `~/.loong/`
 has not been created yet, but the public path and examples in this reference
 use the current `~/.loong/` home.
 
@@ -357,8 +357,8 @@ Configuration for conversation memory and history management.
 | Field | Type | Default | Valid Values | Description |
 |-------|------|---------|--------------|-------------|
 | `backend` | string | `"sqlite"` | `"sqlite"` | Storage backend |
-| `profile` | string | `"window_only"` | `"window_only"`, `"window_plus_summary"`, `"profile_plus_window"` | Memory mode profile |
-| `system` | string | `"builtin"` | `"builtin"` | Memory system implementation |
+| `profile` | string | `"window_only"` | `"window_only"`, `"window_plus_summary"`, `"profile_plus_window"` | Public session-memory continuity profile |
+| `system` | string | `"builtin"` | `"builtin"`, `"workspace_recall"`, `"recall_first"` | Advanced runtime memory strategy override |
 | `fail_open` | boolean | `true` | `true`, `false` | Allow fallback on memory errors |
 | `ingest_mode` | string | `"sync_minimal"` | `"sync_minimal"`, `"async_background"` | Message ingestion mode |
 | `sqlite_path` | string | `~/.loong/memory.sqlite3` | Path | SQLite database location |
@@ -367,6 +367,15 @@ Configuration for conversation memory and history management.
 | `profile_note` | string? | `null` | Text | Optional profile description |
 
 Note: `memory.summary_max_chars` values below `256` are accepted but normalized to an effective minimum of `256` at runtime.
+
+Memory system notes:
+
+- Normal operator-facing memory selection should stay on `memory.profile`.
+  `memory.system` is an advanced/runtime-facing override, not the main public
+  memory form.
+- `builtin`: canonical SQLite-backed memory with structured retrieval planning and planner diagnostics.
+- `workspace_recall`: workspace-document recall path optimized for retrieved references and rank-stage reordering.
+- `recall_first`: provenance-aware recall path that suppresses summary context when retrieved memory is available.
 
 ### Memory Profiles
 
@@ -655,7 +664,7 @@ Channel configuration uses top-level TOML tables such as `[cli]`, `[telegram]`, 
 |-------|------|---------|--------------|-------------|
 | `enabled` | boolean | `true` | `true`, `false` | Enable CLI channel |
 | `system_prompt` | string | Default prompt | Prompt text | System prompt template |
-| `prompt_pack_id` | string? | `"loongclaw-core-v1"` | Pack ID | Prompt pack ID |
+| `prompt_pack_id` | string? | `"loong-core-v1"` | Pack ID | Prompt pack ID |
 | `personality` | string? | `"calm_engineering"` | `"calm_engineering"`, `"friendly_collab"`, `"autonomous_executor"` | Personality preset |
 | `system_prompt_addendum` | string? | `null` | Prompt text | Additional prompt text |
 | `exit_commands` | string[] | `["/exit", "/quit"]` | Commands | Commands to exit chat |

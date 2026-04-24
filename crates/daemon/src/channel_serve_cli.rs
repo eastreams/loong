@@ -25,6 +25,11 @@ pub const WEBHOOK_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     run: run_webhook_serve_cli_impl,
 };
 
+pub const QQBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_qqbot_serve_cli_impl,
+};
+
 fn run_callback_serve_cli_impl<'a, F, Fut>(
     args: ChannelServeCliArgs<'a>,
     run_channel: F,
@@ -71,4 +76,10 @@ pub(crate) fn run_webhook_serve_cli_impl(
     args: ChannelServeCliArgs<'_>,
 ) -> ChannelCliCommandFuture<'_> {
     run_callback_serve_cli_impl(args, mvp::channel::run_webhook_channel)
+}
+
+pub(crate) fn run_qqbot_serve_cli_impl(
+    args: ChannelServeCliArgs<'_>,
+) -> ChannelCliCommandFuture<'_> {
+    run_callback_serve_cli_impl(args, mvp::channel::run_qqbot_channel)
 }

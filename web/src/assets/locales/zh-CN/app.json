@@ -1,5 +1,5 @@
-﻿{
-    "appName":  "LoongClaw Web",
+{
+    "appName":  "Loong Web",
     "nav":  {
                 "chat":  "对话",
                 "dashboard":  "状态",
@@ -165,7 +165,7 @@
                    },
     "chrome":  {
                    "eyebrow":  "Web Console",
-                   "title":  "LoongClaw 的本地控制台",
-                   "subtitle":  "英文优先、中英双语，并与 LoongClaw 官网视觉体系保持一致。"
+                   "title":  "Loong 的本地控制台",
+                   "subtitle":  "英文优先、中英双语，并与 Loong 官网视觉体系保持一致。"
                }
 }

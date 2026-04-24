@@ -10,6 +10,7 @@ pub(super) use send::{ChannelSendCommandSpec, run_channel_send_command};
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"

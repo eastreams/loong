@@ -40,17 +40,17 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
 
     assert_eq!(telegram.channel_id, "telegram");
     assert_eq!(telegram.send.id, CHANNEL_OPERATION_SEND_ID);
-    assert_eq!(telegram.send.command, "telegram-send");
+    assert_eq!(telegram.send.command, "channels send telegram");
     assert_eq!(telegram.serve.id, CHANNEL_OPERATION_SERVE_ID);
-    assert_eq!(telegram.serve.command, "telegram-serve");
+    assert_eq!(telegram.serve.command, "channels serve telegram");
     assert_eq!(
         telegram.default_send_target_kind,
         ChannelCatalogTargetKind::Conversation
     );
 
     assert_eq!(lark.channel_id, "feishu");
-    assert_eq!(lark.send.command, "feishu-send");
-    assert_eq!(lark.serve.command, "feishu-serve");
+    assert_eq!(lark.send.command, "feishu send");
+    assert_eq!(lark.serve.command, "feishu serve");
     assert_eq!(
         lark.default_send_target_kind,
         ChannelCatalogTargetKind::ReceiveId
@@ -65,7 +65,7 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
     );
 
     assert_eq!(google_chat.channel_id, "google-chat");
-    assert_eq!(google_chat.send.command, "google-chat-send");
+    assert_eq!(google_chat.send.command, "channels send google-chat");
     assert_eq!(google_chat.serve.command, "google-chat-serve");
     assert_eq!(
         google_chat.default_send_target_kind,
@@ -73,7 +73,7 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
     );
 
     assert_eq!(synology_chat.channel_id, "synology-chat");
-    assert_eq!(synology_chat.send.command, "synology-chat-send");
+    assert_eq!(synology_chat.send.command, "channels send synology-chat");
     assert_eq!(synology_chat.serve.command, "synology-chat-serve");
     assert_eq!(
         synology_chat.default_send_target_kind,
@@ -81,7 +81,7 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
     );
 
     assert_eq!(irc.channel_id, "irc");
-    assert_eq!(irc.send.command, "irc-send");
+    assert_eq!(irc.send.command, "channels send irc");
     assert_eq!(irc.serve.command, "irc-serve");
     assert_eq!(
         irc.default_send_target_kind,
@@ -89,7 +89,7 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
     );
 
     assert_eq!(imessage.channel_id, "imessage");
-    assert_eq!(imessage.send.command, "imessage-send");
+    assert_eq!(imessage.send.command, "channels send imessage");
     assert_eq!(imessage.serve.command, "imessage-serve");
     assert_eq!(
         imessage.default_send_target_kind,
@@ -97,7 +97,7 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
     );
 
     assert_eq!(tlon.channel_id, "tlon");
-    assert_eq!(tlon.send.command, "tlon-send");
+    assert_eq!(tlon.send.command, "channels send tlon");
     assert_eq!(tlon.serve.command, "tlon-serve");
     assert_eq!(
         tlon.default_send_target_kind,
@@ -141,7 +141,7 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
         signal.supported_target_kinds,
         vec![ChannelCatalogTargetKind::Address]
     );
-    assert_eq!(signal.operations[0].command, "signal-send");
+    assert_eq!(signal.operations[0].command, "channels send signal");
     assert_eq!(signal.operations[1].command, "signal-serve");
 
     assert_eq!(
@@ -160,7 +160,7 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
         twitch.supported_target_kinds,
         vec![ChannelCatalogTargetKind::Conversation]
     );
-    assert_eq!(twitch.operations[0].command, "twitch-send");
+    assert_eq!(twitch.operations[0].command, "channels send twitch");
     assert_eq!(twitch.operations[1].command, "twitch-serve");
     assert_eq!(
         twitch.operations[0].availability,
@@ -185,7 +185,7 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
             ChannelCatalogTargetKind::Conversation,
         ]
     );
-    assert_eq!(teams.operations[0].command, "teams-send");
+    assert_eq!(teams.operations[0].command, "channels send teams");
     assert_eq!(teams.operations[1].command, "teams-serve");
     assert_eq!(
         teams.operations[0].availability,
@@ -210,7 +210,10 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
         synology_chat.supported_target_kinds,
         vec![ChannelCatalogTargetKind::Address]
     );
-    assert_eq!(synology_chat.operations[0].command, "synology-chat-send");
+    assert_eq!(
+        synology_chat.operations[0].command,
+        "channels send synology-chat"
+    );
     assert_eq!(synology_chat.operations[1].command, "synology-chat-serve");
     assert_eq!(
         synology_chat.operations[0].availability,
@@ -233,7 +236,7 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
         imessage.supported_target_kinds,
         vec![ChannelCatalogTargetKind::Conversation]
     );
-    assert_eq!(imessage.operations[0].command, "imessage-send");
+    assert_eq!(imessage.operations[0].command, "channels send imessage");
     assert_eq!(imessage.operations[1].command, "imessage-serve");
     assert_eq!(
         imessage.operations[0].availability,
@@ -255,7 +258,7 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
         tlon.supported_target_kinds,
         vec![ChannelCatalogTargetKind::Conversation]
     );
-    assert_eq!(tlon.operations[0].command, "tlon-send");
+    assert_eq!(tlon.operations[0].command, "channels send tlon");
     assert_eq!(tlon.operations[1].command, "tlon-serve");
     assert_eq!(
         tlon.operations[0].availability,
@@ -297,8 +300,8 @@ fn channel_inventory_combines_runtime_and_catalog_surfaces() {
             "feishu",
             "matrix",
             "wecom",
-            "weixin",
             "qqbot",
+            "weixin",
             "onebot",
             "discord",
             "slack",
@@ -339,8 +342,8 @@ fn channel_inventory_combines_runtime_and_catalog_surfaces() {
             "feishu",
             "matrix",
             "wecom",
-            "weixin",
             "qqbot",
+            "weixin",
             "onebot",
             "discord",
             "slack",
@@ -411,8 +414,8 @@ fn channel_inventory_exposes_grouped_channel_surfaces() {
             "feishu",
             "matrix",
             "wecom",
-            "weixin",
             "qqbot",
+            "weixin",
             "onebot",
             "discord",
             "slack",

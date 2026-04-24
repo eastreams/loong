@@ -61,6 +61,13 @@ pub const WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
         serve_bootstrap_agent_id: "channel-webhook",
     };
 
+pub const QQBOT_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "qqbot",
+        platform: ChannelPlatform::Qqbot,
+        serve_bootstrap_agent_id: "channel-qqbot",
+    };
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelCommandFamilyDescriptor {
     pub runtime: ChannelRuntimeCommandDescriptor,
@@ -256,7 +263,7 @@ mod tests {
         let operation = ChannelCatalogOperation {
             id: CHANNEL_OPERATION_SEND_ID,
             label: "direct send",
-            command: "feishu-send",
+            command: "feishu send",
             availability: ChannelCatalogOperationAvailability::Implemented,
             tracks_runtime: false,
             requirements: &[],

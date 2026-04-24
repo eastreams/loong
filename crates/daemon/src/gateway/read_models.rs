@@ -398,6 +398,58 @@ pub struct GatewayOperatorPairingSummaryReadModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayNodeInventorySummaryReadModel {
+    pub paired_device_count: usize,
+    pub managed_bridge_count: usize,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorNodesSummaryReadModel {
+    pub paired_device_count: usize,
+    pub managed_bridge_count: usize,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayPairedDeviceNodeReadModel {
+    pub node_id: String,
+    pub node_kind: String,
+    pub trust_state: String,
+    pub role: String,
+    pub public_key: String,
+    pub approved_scopes: Vec<String>,
+    pub issued_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayManagedBridgeNodeReadModel {
+    pub node_id: String,
+    pub node_kind: String,
+    pub trust_state: String,
+    pub channel_id: String,
+    pub implementation_status: String,
+    pub configured_account_count: usize,
+    pub enabled_account_count: usize,
+    pub configured_plugin_id: Option<String>,
+    pub selected_plugin_id: Option<String>,
+    pub discovery_status: Option<String>,
+    pub selection_status: Option<String>,
+    pub compatible_plugins: usize,
+    pub incomplete_plugins: usize,
+    pub incompatible_plugins: usize,
+    pub account_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayNodeInventoryReadModel {
+    pub config: String,
+    pub summary: GatewayNodeInventorySummaryReadModel,
+    pub paired_devices: Vec<GatewayPairedDeviceNodeReadModel>,
+    pub managed_bridges: Vec<GatewayManagedBridgeNodeReadModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayToolCallingReadModel {
     pub availability: String,
     pub structured_tool_schema_enabled: bool,
@@ -413,6 +465,7 @@ pub struct GatewayOperatorSummaryReadModel {
     pub channels: GatewayOperatorChannelsSummaryReadModel,
     pub runtime: GatewayOperatorRuntimeSummaryReadModel,
     pub pairing: GatewayOperatorPairingSummaryReadModel,
+    pub nodes: GatewayOperatorNodesSummaryReadModel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -716,6 +769,7 @@ pub fn build_operator_summary_read_model(
     channel_inventory: &GatewayChannelInventoryReadModel,
     runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
     pairing: GatewayOperatorPairingSummaryReadModel,
+    nodes: GatewayOperatorNodesSummaryReadModel,
 ) -> GatewayOperatorSummaryReadModel {
     let owner = owner_status.clone();
     let control_surface = build_operator_control_surface_read_model(owner_status);
@@ -728,6 +782,39 @@ pub fn build_operator_summary_read_model(
         channels,
         runtime,
         pairing,
+        nodes,
+    }
+}
+
+pub fn build_node_inventory_read_model(
+    config_path: &str,
+    channel_inventory: &GatewayChannelInventoryReadModel,
+    paired_devices: &[mvp::control_plane::ControlPlaneApprovedDeviceSummary],
+) -> GatewayNodeInventoryReadModel {
+    let config = config_path.to_owned();
+    let paired_devices = build_paired_device_nodes_read_model(paired_devices);
+    let managed_bridges = build_managed_bridge_nodes_read_model(channel_inventory);
+    let summary = GatewayNodeInventorySummaryReadModel {
+        paired_device_count: paired_devices.len(),
+        managed_bridge_count: managed_bridges.len(),
+        total_count: paired_devices.len() + managed_bridges.len(),
+    };
+
+    GatewayNodeInventoryReadModel {
+        config,
+        summary,
+        paired_devices,
+        managed_bridges,
+    }
+}
+
+pub fn build_operator_nodes_summary_read_model(
+    inventory: &GatewayNodeInventoryReadModel,
+) -> GatewayOperatorNodesSummaryReadModel {
+    GatewayOperatorNodesSummaryReadModel {
+        paired_device_count: inventory.summary.paired_device_count,
+        managed_bridge_count: inventory.summary.managed_bridge_count,
+        total_count: inventory.summary.total_count,
     }
 }
 
@@ -1449,6 +1536,103 @@ fn build_operator_runtime_summary_read_model(
     }
 }
 
+fn build_paired_device_nodes_read_model(
+    paired_devices: &[mvp::control_plane::ControlPlaneApprovedDeviceSummary],
+) -> Vec<GatewayPairedDeviceNodeReadModel> {
+    paired_devices
+        .iter()
+        .map(|device| GatewayPairedDeviceNodeReadModel {
+            node_id: device.device_id.clone(),
+            node_kind: paired_device_node_kind(device.role.as_str()).to_owned(),
+            trust_state: "paired".to_owned(),
+            role: device.role.clone(),
+            public_key: device.public_key.clone(),
+            approved_scopes: device.approved_scopes.iter().cloned().collect(),
+            issued_at_ms: device.issued_at_ms,
+        })
+        .collect()
+}
+
+fn build_managed_bridge_nodes_read_model(
+    channel_inventory: &GatewayChannelInventoryReadModel,
+) -> Vec<GatewayManagedBridgeNodeReadModel> {
+    let mut nodes = channel_inventory
+        .channel_surfaces
+        .iter()
+        .filter_map(|surface| {
+            let discovery = surface.surface.plugin_bridge_discovery.as_ref()?;
+            let enabled_account_count = surface
+                .surface
+                .configured_accounts
+                .iter()
+                .filter(|snapshot| snapshot.enabled)
+                .count();
+            let has_operator_relevant_surface = enabled_account_count > 0
+                || discovery.selected_plugin_id.is_some()
+                || discovery.configured_plugin_id.is_some()
+                || discovery.compatible_plugins > 0;
+            if !has_operator_relevant_surface {
+                return None;
+            }
+            Some(GatewayManagedBridgeNodeReadModel {
+                node_id: format!("managed_bridge:{}", surface.surface.catalog.id),
+                node_kind: "managed_bridge".to_owned(),
+                trust_state: managed_bridge_trust_state(discovery).to_owned(),
+                channel_id: surface.surface.catalog.id.to_owned(),
+                implementation_status: surface
+                    .surface
+                    .catalog
+                    .implementation_status
+                    .as_str()
+                    .to_owned(),
+                configured_account_count: surface.surface.configured_accounts.len(),
+                enabled_account_count,
+                configured_plugin_id: discovery.configured_plugin_id.clone(),
+                selected_plugin_id: discovery.selected_plugin_id.clone(),
+                discovery_status: Some(discovery.status.as_str().to_owned()),
+                selection_status: discovery
+                    .selection_status
+                    .map(|status| status.as_str().to_owned()),
+                compatible_plugins: discovery.compatible_plugins,
+                incomplete_plugins: discovery.incomplete_plugins,
+                incompatible_plugins: discovery.incompatible_plugins,
+                account_summary: surface.plugin_bridge_account_summary.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| left.channel_id.cmp(&right.channel_id));
+    nodes
+}
+
+fn paired_device_node_kind(role: &str) -> &'static str {
+    match role {
+        "operator" => "operator_ui",
+        _ => "node_client",
+    }
+}
+
+fn managed_bridge_trust_state(
+    discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
+) -> &'static str {
+    use mvp::channel::ChannelPluginBridgeDiscoveryStatus as DiscoveryStatus;
+
+    match discovery.status {
+        DiscoveryStatus::NotConfigured => "not_configured",
+        DiscoveryStatus::ScanFailed => "scan_failed",
+        DiscoveryStatus::NoMatches => "unresolved",
+        DiscoveryStatus::MatchesFound => {
+            if discovery
+                .selection_status
+                .is_some_and(|status| status.selects_ready_plugin())
+            {
+                "ready"
+            } else {
+                "review_required"
+            }
+        }
+    }
+}
+
 fn build_web_access_read_model(
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
 ) -> GatewayWebAccessReadModel {
@@ -1706,7 +1890,7 @@ fn collect_channel_surface_recent_runtime_incidents(
         .flatten()
         .collect::<Vec<_>>();
 
-    incidents.sort_by(|left, right| right.at_ms.cmp(&left.at_ms));
+    incidents.sort_by_key(|incident| std::cmp::Reverse(incident.at_ms));
     incidents.truncate(5);
     incidents
 }
@@ -2159,7 +2343,7 @@ mod tests {
     #[test]
     fn operator_runtime_summary_includes_hidden_surface_ids() {
         let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
-            config: "/tmp/loongclaw.toml".to_owned(),
+            config: "/tmp/loong.toml".to_owned(),
             schema: GatewayRuntimeSnapshotSchema {
                 version: 1,
                 surface: "runtime_snapshot",
@@ -2179,7 +2363,7 @@ mod tests {
                 enabled_plugin_backed_channel_ids: vec![],
                 enabled_outbound_only_channel_ids: vec![],
                 inventory: GatewayChannelInventoryReadModel {
-                    config: "/tmp/loongclaw.toml".to_owned(),
+                    config: "/tmp/loong.toml".to_owned(),
                     schema: GatewayChannelInventorySchema {
                         version: 1,
                         primary_channel_view: "channel_surfaces",

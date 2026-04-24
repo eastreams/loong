@@ -1,6 +1,7 @@
 param(
   [string]$Bind = "127.0.0.1:4318",
-  [switch]$Build
+  [switch]$Build,
+  [switch]$BuildDaemon
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,56 +33,97 @@ function Stop-PortProcesses {
   }
 }
 
+function Stop-PidFileProcess {
+  param([string]$PidFile)
+
+  if (-not (Test-Path $PidFile)) {
+    return
+  }
+
+  $rawPid = (Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($rawPid -match "^\d+$") {
+    Stop-Process -Id ([int]$rawPid) -Force -ErrorAction SilentlyContinue
+  }
+
+  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}
+
+function Resolve-DaemonExePath {
+  param([string]$RepoRoot)
+
+  $primaryDaemonExe = Join-Path $RepoRoot "target\debug\loong.exe"
+  if (Test-Path $primaryDaemonExe) {
+    return $primaryDaemonExe
+  }
+
+  $legacyDaemonExe = Join-Path $RepoRoot "target\debug\loong.exe"
+  if (Test-Path $legacyDaemonExe) {
+    return $legacyDaemonExe
+  }
+
+  return $primaryDaemonExe
+}
+
+function Resolve-DaemonExe {
+  param(
+    [string]$RepoRoot,
+    [switch]$BuildDaemon
+  )
+
+  $daemonExe = Resolve-DaemonExePath -RepoRoot $RepoRoot
+  $shouldBuild = $BuildDaemon -or (-not (Test-Path $daemonExe))
+
+  if ($shouldBuild) {
+    Push-Location $RepoRoot
+    try {
+      cargo build --bin loong
+      if ($LASTEXITCODE -ne 0) {
+        throw "Failed to build daemon binary with cargo build --bin loong"
+      }
+    } finally {
+      Pop-Location
+    }
+
+    $daemonExe = Resolve-DaemonExePath -RepoRoot $RepoRoot
+  }
+
+  if (-not (Test-Path $daemonExe)) {
+    throw "Missing daemon binary: $daemonExe`nRun with -BuildDaemon or build loong manually."
+  }
+
+  return $daemonExe
+}
+
 $scriptRoot = (Resolve-Path $PSScriptRoot).Path
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot "..\..")).Path
 $webRoot = Join-Path $repoRoot "web"
 $distRoot = Join-Path $webRoot "dist"
 $runtimeRoot = Join-Path $env:USERPROFILE ".loong"
 $logRoot = Join-Path $runtimeRoot "logs"
+$runRoot = Join-Path $runtimeRoot "run"
 
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 
 $uiLog = Join-Path $logRoot "web-same-origin.log"
 $uiErr = Join-Path $logRoot "web-same-origin.err.log"
+$uiPidFile = Join-Path $runRoot "web-same-origin.pid"
 
 $bindParts = $Bind.Split(":")
 if ($bindParts.Length -lt 2) {
   throw "Bind must look like host:port, got: $Bind"
 }
 $port = [int]$bindParts[-1]
+
+Stop-PidFileProcess -PidFile $uiPidFile
 Stop-PortProcesses -Port $port
 
-function Resolve-DaemonExe {
-  param([string]$RepoRoot)
-
-  Push-Location $RepoRoot
-  try {
-    cargo build --bin loong
-    if ($LASTEXITCODE -ne 0) {
-      throw "Failed to build daemon binary with cargo build --bin loong"
-    }
-  } finally {
-    Pop-Location
-  }
-
-  $builtDaemonExe = Join-Path $RepoRoot "target\debug\loong.exe"
-  if (-not (Test-Path $builtDaemonExe)) {
-    $legacyDaemonExe = Join-Path $RepoRoot "target\debug\loongclaw.exe"
-    if (Test-Path $legacyDaemonExe) {
-      return $legacyDaemonExe
-    }
-    throw "Missing daemon binary after build: $builtDaemonExe"
-  }
-
-  return $builtDaemonExe
-}
-
-$daemonExe = Resolve-DaemonExe -RepoRoot $repoRoot
+$daemonExe = Resolve-DaemonExe -RepoRoot $repoRoot -BuildDaemon:$BuildDaemon
 
 if ($Build) {
   Push-Location $webRoot
   try {
-    npm.cmd run build | Out-Null
+    npm.cmd run build
     if ($LASTEXITCODE -ne 0) {
       throw "Web build failed. Fix the build first, then rerun this script."
     }
@@ -103,6 +145,8 @@ $uiProc = Start-Process `
   -RedirectStandardError $uiErr `
   -WindowStyle Hidden `
   -PassThru
+
+Set-Content -Path $uiPidFile -Value $uiProc.Id -NoNewline
 
 $uiReady = $false
 for ($i = 0; $i -lt 20; $i++) {

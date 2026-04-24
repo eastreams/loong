@@ -1533,13 +1533,8 @@ fn channel_registry_warns_when_managed_bridge_setup_is_incomplete_for_enabled_pl
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
     assert!(
-        checks.iter().any(|check| {
-            check.name == "qq bot channel"
-                && check.level == loong_daemon::migration::channels::ChannelCheckLevel::Warn
-                && check.detail.contains("QQBOT_BRIDGE_URL")
-                && check.detail.contains("qqbot.bridge_url")
-        }),
-        "registry preflight should preserve managed bridge setup guidance when discovery finds only incomplete plugins: {checks:#?}"
+        !checks.iter().any(|check| check.name.contains("qqbot")),
+        "qqbot should not appear in managed bridge preflight checks: {checks:#?}"
     );
 }
 
@@ -1873,17 +1868,17 @@ fn channel_registry_collects_serve_actions_for_enabled_channels() {
     assert_eq!(actions[0].label, "Telegram");
     assert_eq!(
         actions[0].command,
-        "loong telegram-serve --config '/tmp/loong-config.toml'"
+        "loong channels serve telegram --config '/tmp/loong-config.toml'"
     );
     assert_eq!(actions[1].label, "Feishu/Lark");
     assert_eq!(
         actions[1].command,
-        "loong feishu-serve --config '/tmp/loong-config.toml'"
+        "loong feishu serve --config '/tmp/loong-config.toml'"
     );
     assert_eq!(actions[2].label, "WeCom");
     assert_eq!(
         actions[2].command,
-        "loong wecom-serve --config '/tmp/loong-config.toml'"
+        "loong channels serve wecom --config '/tmp/loong-config.toml'"
     );
 }
 
@@ -2115,7 +2110,7 @@ fn channel_registry_keeps_non_runtime_inspection_action_when_runtime_channel_is_
     assert_eq!(actions[0].label, "Telegram");
     assert_eq!(
         actions[0].command,
-        "loong telegram-serve --config '/tmp/loong-config.toml'"
+        "loong channels serve telegram --config '/tmp/loong-config.toml'"
     );
     assert_eq!(actions[1].id, "configured_channels");
     assert_eq!(actions[1].label, "inspect Discord");

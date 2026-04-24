@@ -2,6 +2,8 @@ use clap::Args;
 use clap::Subcommand;
 use loong_spec::CliResult;
 
+const RUNTIME_TRAJECTORY_RUNTIME_COMMAND: &str = "runtime trajectory runtime";
+
 pub const ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT: usize = 200;
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
@@ -69,11 +71,15 @@ pub fn run_runtime_trajectory_cli(
     as_json: bool,
 ) -> CliResult<()> {
     if matches!(turn_limit, Some(0)) {
-        return Err("runtime-trajectory turn_limit must be >= 1 when provided".to_owned());
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} --turn-limit must be >= 1 when provided"
+        ));
     }
 
     if event_page_limit == 0 {
-        return Err("runtime-trajectory event_page_limit must be >= 1".to_owned());
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} --event-page-limit must be >= 1"
+        ));
     }
 
     validate_runtime_trajectory_arguments(session, artifact, output, turn_limit, event_page_limit)?;
@@ -91,18 +97,22 @@ pub fn run_runtime_trajectory_cli(
             let session_id = session
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| "runtime-trajectory requires --session or --artifact".to_owned())?;
+                .ok_or_else(|| {
+                    format!("{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} requires --session or --artifact")
+                })?;
             let memory_config =
                 crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
                     &config.memory,
                 );
+            let session_store_config =
+                crate::mvp::session::store::SessionStoreConfig::from(&memory_config);
             let export_options = crate::mvp::session::trajectory::SessionTrajectoryExportOptions {
                 turn_limit,
                 event_page_limit,
             };
             crate::mvp::session::trajectory::export_session_trajectory(
                 session_id,
-                &memory_config,
+                &session_store_config,
                 &export_options,
             )
             .map_err(|error| format!("export session trajectory failed: {error}"))?
@@ -144,7 +154,9 @@ pub fn run_runtime_trajectory_cli(
             event_page_limit,
             as_json,
         );
-        Err("runtime-trajectory requires memory-sqlite feature".to_owned())
+        Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} requires memory-sqlite feature"
+        ))
     }
 }
 
@@ -164,25 +176,33 @@ fn validate_runtime_trajectory_arguments(
     let output = output.map(str::trim).filter(|value| !value.is_empty());
 
     if session.is_none() && artifact.is_none() {
-        return Err("runtime-trajectory requires --session or --artifact".to_owned());
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} requires --session or --artifact"
+        ));
     }
 
     if session.is_some() && artifact.is_some() {
-        return Err("runtime-trajectory cannot combine --session with --artifact".to_owned());
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} cannot combine --session with --artifact"
+        ));
     }
 
     if artifact.is_some() && output.is_some() {
-        return Err("runtime-trajectory cannot combine --artifact with --output".to_owned());
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} cannot combine --artifact with --output"
+        ));
     }
 
     if artifact.is_some() && turn_limit.is_some() {
-        return Err("runtime-trajectory cannot combine --artifact with --turn-limit".to_owned());
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} cannot combine --artifact with --turn-limit"
+        ));
     }
 
     if artifact.is_some() && event_page_limit != ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT {
-        return Err(
-            "runtime-trajectory cannot combine --artifact with --event-page-limit".to_owned(),
-        );
+        return Err(format!(
+            "{RUNTIME_TRAJECTORY_RUNTIME_COMMAND} cannot combine --artifact with --event-page-limit"
+        ));
     }
 
     Ok(())
@@ -320,4 +340,40 @@ pub fn format_runtime_trajectory_summary(
     rendered.push('\n');
 
     rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_trajectory_runtime_errors_use_grouped_namespace() {
+        let turn_limit_error = run_runtime_trajectory_cli(
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+            ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT,
+            false,
+        )
+        .expect_err("zero turn limit should fail before feature-specific logic");
+        assert_eq!(
+            turn_limit_error,
+            "runtime trajectory runtime --turn-limit must be >= 1 when provided"
+        );
+
+        let missing_selector_error = validate_runtime_trajectory_arguments(
+            None,
+            None,
+            None,
+            None,
+            ARTIFACT_MODE_EVENT_PAGE_LIMIT_DEFAULT,
+        )
+        .expect_err("missing selector should fail");
+        assert_eq!(
+            missing_selector_error,
+            "runtime trajectory runtime requires --session or --artifact"
+        );
+    }
 }

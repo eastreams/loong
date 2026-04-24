@@ -48,6 +48,52 @@ pub enum SessionsCommands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Show named heads for one visible session tree
+    Heads { session_id: String },
+    /// Show one visible session tree path for a head
+    Path {
+        session_id: String,
+        #[arg(long)]
+        head_name: Option<String>,
+    },
+    /// Show tree artifacts for one visible session
+    Artifacts { session_id: String },
+    /// Create a named head from one visible session node
+    ForkHead {
+        session_id: String,
+        node_id: String,
+        head_name: String,
+    },
+    /// Mark a named head as pinned metadata for one visible session
+    PinHead {
+        session_id: String,
+        head_name: String,
+    },
+    /// Switch the active head for one visible session
+    SetActiveHead {
+        session_id: String,
+        head_name: String,
+    },
+    /// Mark a named head as live metadata for one visible session
+    UnpinHead {
+        session_id: String,
+        head_name: String,
+    },
+    /// Create a checkpoint artifact/head for one visible session
+    Checkpoint {
+        session_id: String,
+        label: String,
+        #[arg(long)]
+        node_id: Option<String>,
+    },
+    /// Create a branch summary artifact for one visible session head
+    BranchSummary {
+        session_id: String,
+        head_name: String,
+        summary_text: String,
+        #[arg(long)]
+        anchor_node_id: Option<String>,
+    },
     /// Cancel one visible session
     Cancel {
         session_id: String,
@@ -66,6 +112,12 @@ pub enum SessionsCommands {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Plan or apply bounded self-heal actions for one visible session
+    Heal {
+        session_id: String,
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +133,32 @@ pub struct SessionsCommandExecution {
     pub resolved_config_path: String,
     pub current_session_id: String,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionHealApplyStrategy {
+    SessionRecover,
+    TurnCheckpointRepair,
+    ObserveOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionHealAction {
+    id: String,
+    kind: String,
+    source: String,
+    tool_name: String,
+    description: String,
+    command: String,
+    can_apply: bool,
+    requires_mutation: bool,
+    apply_strategy: SessionHealApplyStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionHealPlan {
+    actions: Vec<SessionHealAction>,
+    attention_hints: Vec<String>,
 }
 
 pub async fn run_sessions_cli(options: SessionsCommandOptions) -> CliResult<()> {
@@ -185,6 +263,137 @@ pub async fn execute_sessions_command(
             &session_id,
             limit,
         )?,
+        SessionsCommands::Heads { session_id } => execute_tree_query_command(
+            "heads",
+            "session_heads",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({ "session_id": session_id }),
+        )?,
+        SessionsCommands::Path {
+            session_id,
+            head_name,
+        } => execute_tree_query_command(
+            "path",
+            "session_path",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::Artifacts { session_id } => execute_tree_query_command(
+            "artifacts",
+            "session_artifacts",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({ "session_id": session_id }),
+        )?,
+        SessionsCommands::ForkHead {
+            session_id,
+            node_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "fork-head",
+            "session_fork_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "node_id": node_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::PinHead {
+            session_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "pin-head",
+            "session_pin_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::SetActiveHead {
+            session_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "set-active-head",
+            "session_set_active_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::UnpinHead {
+            session_id,
+            head_name,
+        } => execute_tree_tool_command(
+            "unpin-head",
+            "session_unpin_head",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+            }),
+        )?,
+        SessionsCommands::Checkpoint {
+            session_id,
+            label,
+            node_id,
+        } => execute_tree_tool_command(
+            "checkpoint",
+            "session_create_checkpoint",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "label": label,
+                "node_id": node_id,
+            }),
+        )?,
+        SessionsCommands::BranchSummary {
+            session_id,
+            head_name,
+            summary_text,
+            anchor_node_id,
+        } => execute_tree_tool_command(
+            "branch-summary",
+            "session_create_branch_summary",
+            &resolved_config_path,
+            &current_session_id,
+            &memory_config,
+            tool_config,
+            json!({
+                "session_id": session_id,
+                "head_name": head_name,
+                "summary_text": summary_text,
+                "anchor_node_id": anchor_node_id,
+            }),
+        )?,
         SessionsCommands::Cancel {
             session_id,
             dry_run,
@@ -227,6 +436,18 @@ pub async fn execute_sessions_command(
             &session_id,
             dry_run,
         )?,
+        SessionsCommands::Heal { session_id, apply } => {
+            execute_heal_command(
+                &resolved_config_path,
+                &config,
+                &current_session_id,
+                &memory_config,
+                tool_config,
+                &session_id,
+                apply,
+            )
+            .await?
+        }
     };
 
     Ok(SessionsCommandExecution {
@@ -421,10 +642,11 @@ async fn execute_wait_command(
         "after_id": after_id,
         "timeout_ms": bounded_timeout_ms,
     });
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let outcome = mvp::tools::wait_for_session_with_config(
         payload,
         current_session_id,
-        memory_config,
+        &session_store_config,
         tool_config,
     )
     .await?;
@@ -477,6 +699,598 @@ fn execute_history_command(
     }))
 }
 
+async fn execute_heal_command(
+    resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
+    current_session_id: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    session_id: &str,
+    apply: bool,
+) -> CliResult<Value> {
+    let detail_before = load_session_status_payload_with_runtime_summaries(
+        memory_config,
+        tool_config,
+        current_session_id,
+        session_id,
+    )
+    .await?;
+    let plan = build_session_heal_plan(
+        resolved_config_path,
+        current_session_id,
+        session_id,
+        &detail_before,
+    )?;
+    let applied_actions = if apply {
+        execute_session_heal_plan(
+            resolved_config_path,
+            config,
+            current_session_id,
+            memory_config,
+            tool_config,
+            session_id,
+            &plan,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    let detail_after = if apply {
+        load_session_status_payload_with_runtime_summaries(
+            memory_config,
+            tool_config,
+            current_session_id,
+            session_id,
+        )
+        .await?
+    } else {
+        detail_before.clone()
+    };
+    let recipes =
+        build_session_heal_recipes(resolved_config_path, current_session_id, session_id, &plan);
+    let next_steps = build_session_heal_next_steps(
+        resolved_config_path,
+        current_session_id,
+        session_id,
+        &plan,
+        apply,
+        applied_actions.as_slice(),
+    );
+    let plan_payload = session_heal_plan_json(&plan);
+
+    Ok(json!({
+        "command": "heal",
+        "config": resolved_config_path,
+        "current_session_id": current_session_id,
+        "session_id": session_id,
+        "apply": apply,
+        "detail": detail_after,
+        "plan": plan_payload,
+        "applied_actions": applied_actions,
+        "recipes": recipes,
+        "next_steps": next_steps,
+    }))
+}
+
+async fn execute_session_heal_plan(
+    resolved_config_path: &str,
+    config: &mvp::config::LoongConfig,
+    current_session_id: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    session_id: &str,
+    plan: &SessionHealPlan,
+) -> CliResult<Vec<Value>> {
+    let mut applied_actions = Vec::new();
+
+    for action in &plan.actions {
+        if !action.can_apply {
+            continue;
+        }
+
+        let applied_action = match action.apply_strategy {
+            SessionHealApplyStrategy::SessionRecover => {
+                let payload = execute_mutation_command(
+                    "recover",
+                    "session_recover",
+                    "recovery_action",
+                    resolved_config_path,
+                    current_session_id,
+                    memory_config,
+                    tool_config,
+                    session_id,
+                    false,
+                )?;
+                json!({
+                    "id": action.id,
+                    "kind": action.kind,
+                    "tool_name": action.tool_name,
+                    "status": "applied",
+                    "result": payload,
+                })
+            }
+            SessionHealApplyStrategy::TurnCheckpointRepair => {
+                let payload = execute_turn_checkpoint_heal_action(config, session_id).await?;
+                let status = payload
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                json!({
+                    "id": action.id,
+                    "kind": action.kind,
+                    "tool_name": action.tool_name,
+                    "status": status,
+                    "result": payload,
+                })
+            }
+            SessionHealApplyStrategy::ObserveOnly => {
+                continue;
+            }
+        };
+
+        applied_actions.push(applied_action);
+    }
+
+    Ok(applied_actions)
+}
+
+async fn execute_turn_checkpoint_heal_action(
+    config: &mvp::config::LoongConfig,
+    session_id: &str,
+) -> CliResult<Value> {
+    let runtime_kernel = bootstrap_sessions_runtime_kernel(config)?;
+    let binding = runtime_kernel.conversation_binding();
+    let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
+    let outcome = coordinator
+        .repair_production_turn_checkpoint_tail(config, session_id, binding)
+        .await?;
+    let source = outcome.source().map(|value| value.as_str()).unwrap_or("-");
+    let after_turn_status = outcome.after_turn_status().unwrap_or("-");
+    let compaction_status = outcome.compaction_status().unwrap_or("-");
+
+    Ok(json!({
+        "status": outcome.status().as_str(),
+        "action": outcome.action().as_str(),
+        "source": source,
+        "reason": outcome.reason().as_str(),
+        "session_state": outcome.session_state().as_str(),
+        "checkpoint_events": outcome.checkpoint_events(),
+        "after_turn_status": after_turn_status,
+        "compaction_status": compaction_status,
+    }))
+}
+
+fn bootstrap_sessions_runtime_kernel(
+    config: &mvp::config::LoongConfig,
+) -> CliResult<mvp::runtime_bridge::RuntimeKernelOwner> {
+    let agent_id = "cli-sessions-heal";
+    let runtime_kernel = mvp::runtime_bridge::RuntimeKernelOwner::bootstrap(agent_id, config)?;
+    Ok(runtime_kernel)
+}
+
+fn build_session_heal_plan(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    session_id: &str,
+    detail: &Value,
+) -> CliResult<SessionHealPlan> {
+    let diagnostics = detail.get("diagnostics").cloned().unwrap_or(Value::Null);
+    let attention_hints = diagnostics
+        .get("attention_hints")
+        .and_then(Value::as_array)
+        .map(|hints| {
+            hints
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut actions = Vec::new();
+
+    if let Some(recommended_action) = diagnostics.get("recommended_action") {
+        let mapped_action = map_recommended_action_to_session_heal_action(
+            resolved_config_path,
+            current_session_id,
+            session_id,
+            recommended_action,
+            detail,
+        )?;
+        if let Some(mapped_action) = mapped_action {
+            actions.push(mapped_action);
+        }
+    }
+
+    let checkpoint_action = maybe_build_turn_checkpoint_heal_action(
+        resolved_config_path,
+        current_session_id,
+        session_id,
+        detail,
+    );
+    if let Some(checkpoint_action) = checkpoint_action {
+        actions.push(checkpoint_action);
+    }
+
+    Ok(SessionHealPlan {
+        actions,
+        attention_hints,
+    })
+}
+
+fn map_recommended_action_to_session_heal_action(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    session_id: &str,
+    action: &Value,
+    detail: &Value,
+) -> CliResult<Option<SessionHealAction>> {
+    let tool_name = action
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if tool_name.is_empty() {
+        return Ok(None);
+    }
+
+    let kind = action
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let source = action
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    let note = action
+        .get("note")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let requires_mutation = action
+        .get("requires_mutation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let target_session_id = action
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(session_id);
+    let target_task_id = action
+        .get("task_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            detail
+                .get("task_progress")
+                .and_then(|task_progress| task_progress.get("task_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        });
+    let command = build_session_heal_action_command(
+        resolved_config_path,
+        current_session_id,
+        target_session_id,
+        target_task_id,
+        &tool_name,
+    )?;
+    let description = build_session_heal_action_description(
+        &tool_name,
+        &kind,
+        note.as_deref(),
+        requires_mutation,
+    );
+    let apply_strategy = session_heal_apply_strategy(tool_name.as_str(), source.as_str());
+    let can_apply = !matches!(apply_strategy, SessionHealApplyStrategy::ObserveOnly);
+    let action_id = format!("recommended:{tool_name}");
+
+    Ok(Some(SessionHealAction {
+        id: action_id,
+        kind,
+        source,
+        tool_name,
+        description,
+        command,
+        can_apply,
+        requires_mutation,
+        apply_strategy,
+    }))
+}
+
+fn maybe_build_turn_checkpoint_heal_action(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    session_id: &str,
+    detail: &Value,
+) -> Option<SessionHealAction> {
+    let summary_value = detail.pointer("/turn_checkpoint/summary")?;
+    let summary = parse_turn_checkpoint_summary(summary_value)?;
+    let repair_plan = mvp::conversation::build_turn_checkpoint_repair_plan(&summary);
+    let action = repair_plan.action();
+    if matches!(
+        action,
+        mvp::conversation::TurnCheckpointRecoveryAction::None
+    ) {
+        return None;
+    }
+
+    let command_name = crate::active_cli_command_name();
+    let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
+    let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
+    let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
+    let manual_reason = repair_plan
+        .manual_reason()
+        .map(|reason| reason.as_str().to_owned());
+
+    match action {
+        mvp::conversation::TurnCheckpointRecoveryAction::RunAfterTurn
+        | mvp::conversation::TurnCheckpointRecoveryAction::RunCompaction
+        | mvp::conversation::TurnCheckpointRecoveryAction::RunAfterTurnAndCompaction => {
+            let command = format!(
+                "{command_name} sessions heal --config {config_arg} --session {session_arg} {target_arg} --apply"
+            );
+            let action_kind = action.as_str().to_owned();
+            let action_description = format!(
+                "Run production turn-checkpoint repair for `{}`.",
+                action.as_str()
+            );
+
+            Some(SessionHealAction {
+                id: "checkpoint:repair".to_owned(),
+                kind: action_kind,
+                source: "turn_checkpoint_summary".to_owned(),
+                tool_name: "turn_checkpoint_repair".to_owned(),
+                description: action_description,
+                command,
+                can_apply: true,
+                requires_mutation: true,
+                apply_strategy: SessionHealApplyStrategy::TurnCheckpointRepair,
+            })
+        }
+        mvp::conversation::TurnCheckpointRecoveryAction::InspectManually => {
+            let command = format!(
+                "{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}"
+            );
+            let reason_text = manual_reason
+                .unwrap_or_else(|| "checkpoint_state_requires_manual_inspection".to_owned());
+            let description =
+                format!("Inspect turn-checkpoint recovery manually because `{reason_text}`.");
+
+            Some(SessionHealAction {
+                id: "checkpoint:manual".to_owned(),
+                kind: "turn_checkpoint_manual_review".to_owned(),
+                source: "turn_checkpoint_summary".to_owned(),
+                tool_name: "session_status".to_owned(),
+                description,
+                command,
+                can_apply: false,
+                requires_mutation: false,
+                apply_strategy: SessionHealApplyStrategy::ObserveOnly,
+            })
+        }
+        mvp::conversation::TurnCheckpointRecoveryAction::None => None,
+    }
+}
+
+fn parse_turn_checkpoint_summary(
+    summary_value: &Value,
+) -> Option<mvp::conversation::TurnCheckpointEventSummary> {
+    let default_summary = mvp::conversation::TurnCheckpointEventSummary::default();
+    let mut merged_summary_value = serde_json::to_value(default_summary).ok()?;
+    let merged_summary_object = merged_summary_value.as_object_mut()?;
+    let summary_object = summary_value.as_object()?;
+
+    for (key, value) in summary_object {
+        merged_summary_object.insert(key.clone(), value.clone());
+    }
+
+    serde_json::from_value(merged_summary_value).ok()
+}
+
+fn build_session_heal_action_command(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    session_id: &str,
+    task_id: Option<&str>,
+    tool_name: &str,
+) -> CliResult<String> {
+    let command_name = crate::active_cli_command_name();
+    let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
+    let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
+    let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
+
+    match tool_name {
+        "session_recover" => Ok(format!(
+            "{command_name} sessions recover --config {config_arg} --session {session_arg} {target_arg}"
+        )),
+        "session_wait" => Ok(format!(
+            "{command_name} sessions wait --config {config_arg} --session {session_arg} {target_arg}"
+        )),
+        "session_status" => Ok(format!(
+            "{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}"
+        )),
+        "task_status" | "task_wait" | "task_events" | "task_history" => {
+            let task_id = task_id.ok_or_else(|| {
+                format!("sessions heal missing task_id for recommended tool `{tool_name}`")
+            })?;
+            let task_arg = crate::cli_handoff::shell_quote_argument(task_id);
+            let task_command = match tool_name {
+                "task_status" => "status",
+                "task_wait" => "wait",
+                "task_events" | "task_history" => "events",
+                other => {
+                    return Err(format!(
+                        "sessions heal does not support task command rendering for `{other}`"
+                    ));
+                }
+            };
+            Ok(format!(
+                "{command_name} tasks {task_command} --config {config_arg} --session {session_arg} {task_arg}"
+            ))
+        }
+        _ => Ok(format!(
+            "{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}"
+        )),
+    }
+}
+
+fn build_session_heal_action_description(
+    tool_name: &str,
+    kind: &str,
+    note: Option<&str>,
+    requires_mutation: bool,
+) -> String {
+    if let Some(note) = note {
+        let trimmed_note = note.trim();
+        if !trimmed_note.is_empty() {
+            return trimmed_note.to_owned();
+        }
+    }
+
+    match (tool_name, requires_mutation) {
+        ("session_recover", true) => {
+            "Apply the existing overdue async delegate recovery path.".to_owned()
+        }
+        ("session_wait", false) => {
+            "Wait for the current session to reach a newer durable state.".to_owned()
+        }
+        ("session_status", false) => {
+            "Re-read the current session status before choosing a mutation.".to_owned()
+        }
+        ("task_status", false) => {
+            "Inspect durable task progress before choosing a session mutation.".to_owned()
+        }
+        ("task_wait", false) => {
+            "Wait for the current background task to reach a newer durable state.".to_owned()
+        }
+        _ => {
+            format!("Follow the recommended `{tool_name}` action for `{kind}`.")
+        }
+    }
+}
+
+fn session_heal_apply_strategy(tool_name: &str, source: &str) -> SessionHealApplyStrategy {
+    if tool_name == "session_recover" && source == "session_recover_plan" {
+        return SessionHealApplyStrategy::SessionRecover;
+    }
+
+    SessionHealApplyStrategy::ObserveOnly
+}
+
+fn session_heal_plan_json(plan: &SessionHealPlan) -> Value {
+    let applyable_count = plan
+        .actions
+        .iter()
+        .filter(|action| action.can_apply)
+        .count();
+    let action_count = plan.actions.len();
+    let attention_count = plan.attention_hints.len();
+    let actions = plan
+        .actions
+        .iter()
+        .map(session_heal_action_json)
+        .collect::<Vec<_>>();
+
+    json!({
+        "action_count": action_count,
+        "applyable_count": applyable_count,
+        "attention_count": attention_count,
+        "attention_hints": plan.attention_hints,
+        "actions": actions,
+    })
+}
+
+fn session_heal_action_json(action: &SessionHealAction) -> Value {
+    json!({
+        "id": action.id,
+        "kind": action.kind,
+        "source": action.source,
+        "tool_name": action.tool_name,
+        "description": action.description,
+        "command": action.command,
+        "can_apply": action.can_apply,
+        "requires_mutation": action.requires_mutation,
+    })
+}
+
+fn build_session_heal_recipes(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    session_id: &str,
+    plan: &SessionHealPlan,
+) -> Vec<String> {
+    let command_name = crate::active_cli_command_name();
+    let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
+    let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
+    let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
+    let plan_recipe = format!(
+        "{command_name} sessions heal --config {config_arg} --session {session_arg} {target_arg}"
+    );
+    let apply_recipe = format!(
+        "{command_name} sessions heal --config {config_arg} --session {session_arg} {target_arg} --apply"
+    );
+    let mut recipes = vec![plan_recipe, apply_recipe];
+
+    for action in &plan.actions {
+        recipes.push(action.command.clone());
+    }
+
+    recipes
+}
+
+fn build_session_heal_next_steps(
+    resolved_config_path: &str,
+    current_session_id: &str,
+    session_id: &str,
+    plan: &SessionHealPlan,
+    apply: bool,
+    applied_actions: &[Value],
+) -> Vec<String> {
+    let mut next_steps = Vec::new();
+    let applyable_action_exists = plan.actions.iter().any(|action| action.can_apply);
+
+    if !apply && applyable_action_exists {
+        let command_name = crate::active_cli_command_name();
+        let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
+        let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
+        let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
+        next_steps.push(format!(
+            "Run `{command_name} sessions heal --config {config_arg} --session {session_arg} {target_arg} --apply` to execute the bounded self-heal actions."
+        ));
+    }
+
+    if !apply && !applyable_action_exists && !plan.actions.is_empty() {
+        let first_action = plan.actions.first();
+        if let Some(first_action) = first_action {
+            next_steps.push(format!(
+                "Follow the recommended command for the first action: `{}`.",
+                first_action.command
+            ));
+        }
+    }
+
+    if plan.actions.is_empty() {
+        next_steps.push(
+            "No bounded self-heal action is currently available; inspect `sessions status`, `sessions events`, and `sessions wait` for more evidence."
+                .to_owned(),
+        );
+    }
+
+    if apply && !applied_actions.is_empty() {
+        let command_name = crate::active_cli_command_name();
+        let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
+        let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
+        let target_arg = crate::cli_handoff::shell_quote_argument(session_id);
+        next_steps.push(format!(
+            "Re-run `{command_name} sessions status --config {config_arg} --session {session_arg} {target_arg}` to confirm the refreshed durable state."
+        ));
+    }
+
+    next_steps
+}
+
 fn execute_mutation_command(
     command_name: &str,
     tool_name: &str,
@@ -525,6 +1339,99 @@ fn execute_mutation_command(
     }))
 }
 
+fn execute_tree_query_command(
+    command_name: &str,
+    tool_name: &str,
+    resolved_config_path: &str,
+    current_session_id: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    payload: Value,
+) -> CliResult<Value> {
+    let session_id = payload
+        .get("session_id")
+        .cloned()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .ok_or_else(|| format!("{command_name} payload missing session_id"))?;
+    let outcome = execute_app_tool_request(
+        memory_config,
+        tool_config,
+        current_session_id,
+        tool_name,
+        payload,
+    )?;
+
+    let detail = normalize_session_tree_detail_payload(outcome.payload);
+
+    Ok(json!({
+        "command": command_name,
+        "config": resolved_config_path,
+        "current_session_id": current_session_id,
+        "session_id": session_id,
+        "detail": detail,
+    }))
+}
+
+fn execute_tree_tool_command(
+    command_name: &str,
+    tool_name: &str,
+    resolved_config_path: &str,
+    current_session_id: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    payload: Value,
+) -> CliResult<Value> {
+    let outcome = execute_app_tool_request(
+        memory_config,
+        tool_config,
+        current_session_id,
+        tool_name,
+        payload,
+    )?;
+    let detail = normalize_session_tree_detail_payload(outcome.payload);
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+
+    Ok(json!({
+        "command": command_name,
+        "config": resolved_config_path,
+        "current_session_id": current_session_id,
+        "session_id": session_id,
+        "detail": detail,
+    }))
+}
+
+fn normalize_session_tree_detail_payload(mut payload: Value) -> Value {
+    if let Some(heads) = payload.get_mut("heads").and_then(Value::as_array_mut) {
+        for head in heads {
+            normalize_session_head_value(head);
+        }
+    }
+
+    if let Some(head) = payload.get_mut("head") {
+        normalize_session_head_value(head);
+    }
+
+    if let Some(active_head) = payload.get_mut("active_head") {
+        normalize_session_head_value(active_head);
+    }
+
+    payload
+}
+
+fn normalize_session_head_value(value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+
+    let mode_missing = object.get("mode").is_none();
+    if mode_missing && let Some(head_mode) = object.get("head_mode").cloned() {
+        object.insert("mode".to_owned(), head_mode);
+    }
+}
+
 fn execute_app_tool_request(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
     tool_config: &mvp::config::ToolConfig,
@@ -536,10 +1443,11 @@ fn execute_app_tool_request(
         tool_name: tool_name.to_owned(),
         payload,
     };
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let outcome = mvp::tools::execute_app_tool_with_config(
         request,
         current_session_id,
-        memory_config,
+        &session_store_config,
         tool_config,
     )?;
     Ok(outcome)
@@ -637,9 +1545,15 @@ pub fn render_sessions_cli_text(execution: &SessionsCommandExecution) -> CliResu
     let rendered = match command {
         "list" => render_sessions_list_text(&execution.payload)?,
         "status" => render_sessions_status_text(&execution.payload)?,
+        "heal" => render_sessions_heal_text(&execution.payload)?,
         "events" => render_sessions_events_text(&execution.payload)?,
         "wait" => render_sessions_wait_text(&execution.payload)?,
         "history" => render_sessions_history_text(&execution.payload)?,
+        "heads" => render_sessions_heads_text(&execution.payload)?,
+        "path" => render_sessions_path_text(&execution.payload)?,
+        "artifacts" => render_sessions_artifacts_text(&execution.payload)?,
+        "fork-head" | "pin-head" | "set-active-head" | "unpin-head" | "checkpoint"
+        | "branch-summary" => render_sessions_tree_mutation_text(&execution.payload)?,
         "cancel" | "recover" | "archive" => render_sessions_mutation_text(&execution.payload)?,
         other => {
             return Err(format!("unknown sessions CLI render command `{other}`"));
@@ -762,6 +1676,151 @@ fn render_sessions_status_text(payload: &Value) -> CliResult<String> {
         sections,
         footer_lines,
     ))
+}
+
+fn render_sessions_heal_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions heal payload missing detail".to_owned())?;
+    let plan = payload
+        .get("plan")
+        .ok_or_else(|| "sessions heal payload missing plan".to_owned())?;
+    let recipes = payload
+        .get("recipes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heal payload missing recipes".to_owned())?;
+    let next_steps = payload
+        .get("next_steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heal payload missing next_steps".to_owned())?;
+    let applied_actions = payload
+        .get("applied_actions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heal payload missing applied_actions".to_owned())?;
+
+    let detail_lines = render_session_inspection_lines(detail)?;
+    let plan_lines = render_session_heal_plan_lines(plan)?;
+    let mut sections = vec![
+        ("self-heal plan", plan_lines),
+        ("session detail", detail_lines),
+    ];
+
+    if !applied_actions.is_empty() {
+        let applied_lines = render_session_heal_applied_lines(applied_actions);
+        sections.insert(1, ("applied actions", applied_lines));
+    }
+
+    let mut recipes_lines = Vec::new();
+    for recipe in recipes {
+        let raw_recipe = recipe.as_str().unwrap_or("");
+        let sanitized_recipe = sanitize_terminal_text(raw_recipe);
+        recipes_lines.push(format!("- {sanitized_recipe}"));
+    }
+    if !recipes_lines.is_empty() {
+        sections.push(("recipes", recipes_lines));
+    }
+
+    let mut next_lines = Vec::new();
+    for step in next_steps {
+        let raw_step = step.as_str().unwrap_or("");
+        let sanitized_step = sanitize_terminal_text(raw_step);
+        next_lines.push(format!("- {sanitized_step}"));
+    }
+    if !next_lines.is_empty() {
+        sections.insert(0, ("next steps", next_lines));
+    }
+
+    Ok(render_sessions_surface(
+        "session self-heal",
+        "session shell",
+        Vec::new(),
+        sections,
+        vec!["Use `sessions heal --apply` only when the surfaced actions match the desired bounded recovery path.".to_owned()],
+    ))
+}
+
+fn render_session_heal_plan_lines(plan: &Value) -> CliResult<Vec<String>> {
+    let action_count = plan
+        .get("action_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let applyable_count = plan
+        .get("applyable_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let attention_count = plan
+        .get("attention_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let actions = plan
+        .get("actions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heal plan missing actions".to_owned())?;
+    let attention_hints = plan
+        .get("attention_hints")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heal plan missing attention_hints".to_owned())?;
+
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "actions={action_count} applyable={applyable_count} attention_hints={attention_count}"
+    ));
+
+    for action in actions {
+        let rendered_action = render_session_heal_action_line(action);
+        lines.push(format!("- {rendered_action}"));
+    }
+
+    for hint in attention_hints {
+        let rendered_hint = hint.as_str().unwrap_or("-");
+        let sanitized_hint = sanitize_terminal_text(rendered_hint);
+        lines.push(format!("- hint {sanitized_hint}"));
+    }
+
+    if actions.is_empty() && attention_hints.is_empty() {
+        lines.push("No bounded self-heal action is currently available.".to_owned());
+    }
+
+    Ok(lines)
+}
+
+fn render_session_heal_action_line(action: &Value) -> String {
+    let id = action.get("id").and_then(Value::as_str).unwrap_or("-");
+    let tool_name = action
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let kind = action.get("kind").and_then(Value::as_str).unwrap_or("-");
+    let source = action.get("source").and_then(Value::as_str).unwrap_or("-");
+    let can_apply = action
+        .get("can_apply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let apply_flag = if can_apply { "yes" } else { "no" };
+
+    format!("{id} tool={tool_name} kind={kind} source={source} apply={apply_flag}")
+}
+
+fn render_session_heal_applied_lines(applied_actions: &[Value]) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    for applied_action in applied_actions {
+        let id = applied_action
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let tool_name = applied_action
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let status = applied_action
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        lines.push(format!("- {id} tool={tool_name} status={status}"));
+    }
+
+    lines
 }
 
 fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
@@ -907,6 +1966,243 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("history", lines)],
         vec!["Use `sessions status` to compare transcript turns with workflow state and lifecycle metadata.".to_owned()],
+    ))
+}
+
+fn render_sessions_heads_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions heads payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let heads = detail
+        .get("heads")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions heads detail missing heads array".to_owned())?;
+
+    let mut lines = vec![format!(
+        "heads for `{}` ({})",
+        sanitize_terminal_text(session_id),
+        heads.len()
+    )];
+    if heads.is_empty() {
+        lines.push("No session heads.".to_owned());
+    } else {
+        for head in heads {
+            let head_name = head
+                .get("head_name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let node_id = head.get("node_id").and_then(Value::as_str).unwrap_or("-");
+            let mode = head.get("mode").and_then(Value::as_str).unwrap_or("live");
+            lines.push(format!(
+                "- {} -> {} mode={}",
+                sanitize_terminal_text(head_name),
+                sanitize_terminal_text(node_id),
+                sanitize_terminal_text(mode)
+            ));
+        }
+    }
+
+    Ok(render_sessions_surface(
+        "session heads",
+        "session shell",
+        Vec::new(),
+        vec![("heads", lines)],
+        vec!["Use `sessions path <id> --head-name <name>` to inspect one branch path.".to_owned()],
+    ))
+}
+
+fn render_sessions_path_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions path payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let head_name = detail
+        .get("head_name")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let path = detail
+        .get("path")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions path detail missing path array".to_owned())?;
+
+    let mut lines = vec![format!(
+        "path for `{}` head `{}` ({})",
+        sanitize_terminal_text(session_id),
+        sanitize_terminal_text(head_name),
+        path.len()
+    )];
+    for node in path {
+        let node_id = node.get("node_id").and_then(Value::as_str).unwrap_or("-");
+        let kind = node
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let role = node.get("role").and_then(Value::as_str).unwrap_or("-");
+        let content = node.get("content").and_then(Value::as_str).unwrap_or("-");
+        lines.push(format!(
+            "- {} kind={} role={} content={}",
+            sanitize_terminal_text(node_id),
+            kind,
+            role,
+            sanitize_terminal_text(content)
+        ));
+    }
+
+    Ok(render_sessions_surface(
+        "session path",
+        "session shell",
+        Vec::new(),
+        vec![("path", lines)],
+        vec!["Use `sessions heads <id>` to list other branches for the same session.".to_owned()],
+    ))
+}
+
+fn render_sessions_artifacts_text(payload: &Value) -> CliResult<String> {
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions artifacts payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let artifacts = detail
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "sessions artifacts detail missing artifacts array".to_owned())?;
+
+    let mut lines = vec![format!(
+        "artifacts for `{}` ({})",
+        sanitize_terminal_text(session_id),
+        artifacts.len()
+    )];
+    if artifacts.is_empty() {
+        lines.push("No session artifacts.".to_owned());
+    } else {
+        for artifact in artifacts {
+            let artifact_id = artifact
+                .get("artifact_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let kind = artifact
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let head_name = artifact
+                .get("head_name")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let summary_text = artifact
+                .get("summary_text")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            lines.push(format!(
+                "- {} kind={} head={} summary={}",
+                sanitize_terminal_text(artifact_id),
+                kind,
+                sanitize_terminal_text(head_name),
+                sanitize_terminal_text(summary_text)
+            ));
+        }
+    }
+
+    Ok(render_sessions_surface(
+        "session artifacts",
+        "session shell",
+        Vec::new(),
+        vec![("artifacts", lines)],
+        vec![
+            "Use `sessions status <id>` to correlate artifacts with the active tree summary."
+                .to_owned(),
+        ],
+    ))
+}
+
+fn render_sessions_tree_mutation_text(payload: &Value) -> CliResult<String> {
+    let command = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("tree-mutation");
+    let detail = payload
+        .get("detail")
+        .ok_or_else(|| "sessions tree mutation payload missing detail".to_owned())?;
+    let session_id = detail
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let mut lines = vec![format!(
+        "{} for `{}`",
+        sanitize_terminal_text(command),
+        sanitize_terminal_text(session_id)
+    )];
+
+    if let Some(head) = detail.get("head") {
+        let head_name = head.get("head_name").and_then(Value::as_str).unwrap_or("-");
+        let node_id = head.get("node_id").and_then(Value::as_str).unwrap_or("-");
+        let mode = head.get("mode").and_then(Value::as_str).unwrap_or("live");
+        lines.push(format!(
+            "head: {} -> {} mode={}",
+            sanitize_terminal_text(head_name),
+            sanitize_terminal_text(node_id),
+            sanitize_terminal_text(mode)
+        ));
+    }
+    if let Some(active_head) = detail.get("active_head") {
+        let head_name = active_head
+            .get("head_name")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let node_id = active_head
+            .get("node_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let mode = active_head
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("live");
+        lines.push(format!(
+            "active_head: {} -> {} mode={}",
+            sanitize_terminal_text(head_name),
+            sanitize_terminal_text(node_id),
+            sanitize_terminal_text(mode)
+        ));
+    }
+    if let Some(artifact) = detail.get("artifact") {
+        let kind = artifact
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let artifact_id = artifact
+            .get("artifact_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let summary_text = artifact
+            .get("summary_text")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        lines.push(format!(
+            "artifact: {} kind={} summary={}",
+            sanitize_terminal_text(artifact_id),
+            kind,
+            sanitize_terminal_text(summary_text)
+        ));
+    }
+
+    Ok(render_sessions_surface(
+        "session tree mutation",
+        "session shell",
+        Vec::new(),
+        vec![("result", lines)],
+        vec![
+            "Use `sessions status <id>` or `sessions path <id>` to inspect the updated tree."
+                .to_owned(),
+        ],
     ))
 }
 
@@ -1122,6 +2418,16 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         detail.get("turn_checkpoint"),
     );
     let turn_checkpoint_summary = sanitize_terminal_text(turn_checkpoint_summary.as_str());
+    let diagnostics = detail.get("diagnostics").cloned().unwrap_or(Value::Null);
+    let diagnostics_latest_provider_failover = render_session_latest_provider_failover_summary(
+        diagnostics.get("latest_provider_failover"),
+    );
+    let diagnostics_latest_provider_failover =
+        sanitize_terminal_text(diagnostics_latest_provider_failover.as_str());
+    let diagnostics_recommended_action =
+        render_session_recommended_action_summary(diagnostics.get("recommended_action"));
+    let diagnostics_recommended_action =
+        sanitize_terminal_text(diagnostics_recommended_action.as_str());
     let delegate_mode = detail
         .get("delegate_lifecycle")
         .and_then(|value| value.get("mode"))
@@ -1157,6 +2463,50 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         .and_then(Value::as_array)
         .map(|value| value.len())
         .unwrap_or(0);
+    let tree = detail.get("tree").cloned().unwrap_or(Value::Null);
+    let tree_head_count = tree
+        .get("head_count")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_active_path_count = tree
+        .get("active_path_count")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_artifact_count = tree
+        .get("artifact_count")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_checkpoint_count = tree
+        .get("artifact_counts")
+        .and_then(|value| value.get("checkpoint"))
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_branch_summary_count = tree
+        .get("artifact_counts")
+        .and_then(|value| value.get("branch_summary"))
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let tree_active_head_name = tree
+        .get("active_head_name")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let tree_head_names = tree
+        .get("heads")
+        .and_then(Value::as_array)
+        .map(|heads| {
+            heads
+                .iter()
+                .filter_map(|head| head.get("head_name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_owned());
     let sanitized_session_id = sanitize_terminal_text(session_id.as_str());
     let sanitized_parent_session_id = sanitize_terminal_text(parent_session_id);
     let sanitized_label = sanitize_terminal_text(label);
@@ -1169,6 +2519,8 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     let sanitized_workflow_workspace_root = sanitize_terminal_text(workflow_workspace_root);
     let sanitized_lineage_root_session_id = sanitize_terminal_text(lineage_root_session_id);
     let sanitized_last_error = sanitize_terminal_text(last_error);
+    let sanitized_tree_active_head_name = sanitize_terminal_text(tree_active_head_name);
+    let sanitized_tree_head_names = sanitize_terminal_text(tree_head_names.as_str());
 
     let mut lines = Vec::new();
     lines.push(format!("session_id: {sanitized_session_id}"));
@@ -1208,7 +2560,24 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("prompt_frame: {prompt_frame_summary}"));
     lines.push(format!("safe_lane: {safe_lane_summary}"));
     lines.push(format!("turn_checkpoint: {turn_checkpoint_summary}"));
+    lines.push(format!(
+        "latest_provider_failover: {diagnostics_latest_provider_failover}"
+    ));
+    lines.push(format!(
+        "recommended_action: {diagnostics_recommended_action}"
+    ));
     lines.push(format!("turn_count: {turn_count}"));
+    lines.push(format!("tree_head_count: {tree_head_count}"));
+    lines.push(format!(
+        "tree_active_head: {sanitized_tree_active_head_name}"
+    ));
+    lines.push(format!("tree_head_names: {sanitized_tree_head_names}"));
+    lines.push(format!("tree_active_path_count: {tree_active_path_count}"));
+    lines.push(format!("tree_artifact_count: {tree_artifact_count}"));
+    lines.push(format!("tree_checkpoint_count: {tree_checkpoint_count}"));
+    lines.push(format!(
+        "tree_branch_summary_count: {tree_branch_summary_count}"
+    ));
     lines.push(format!("last_turn_at: {last_turn_at}"));
     lines.push(format!("last_error: {sanitized_last_error}"));
     lines.push(format!("delegate_mode: {delegate_mode}"));
@@ -1219,6 +2588,46 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     lines.push(format!("recovery_kind: {recovery_kind}"));
     lines.push(format!("recent_events: {recent_events}"));
     Ok(lines)
+}
+
+fn render_session_latest_provider_failover_summary(diagnostic: Option<&Value>) -> String {
+    let Some(diagnostic) = diagnostic else {
+        return "-".to_owned();
+    };
+
+    let reason = diagnostic
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let model = diagnostic
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let stage = diagnostic
+        .get("stage")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let request_id = diagnostic
+        .get("request_id")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+
+    format!("reason={reason} model={model} stage={stage} request_id={request_id}")
+}
+
+fn render_session_recommended_action_summary(action: Option<&Value>) -> String {
+    let Some(action) = action else {
+        return "-".to_owned();
+    };
+
+    let tool_name = action
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let kind = action.get("kind").and_then(Value::as_str).unwrap_or("-");
+    let source = action.get("source").and_then(Value::as_str).unwrap_or("-");
+
+    format!("tool={tool_name} kind={kind} source={source}")
 }
 
 fn render_runtime_self_continuity_summary(runtime_self_continuity: Option<&Value>) -> String {
@@ -1246,4 +2655,339 @@ fn render_runtime_self_continuity_summary(runtime_self_continuity: Option<&Value
         "present resolved_identity={} session_profile_projection={}",
         resolved_identity_present, session_profile_projection_present
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        SessionsCommandExecution, build_session_heal_plan, render_session_heal_plan_lines,
+        render_session_inspection_lines, render_sessions_cli_text,
+    };
+
+    #[test]
+    fn render_session_inspection_lines_includes_diagnostics_summaries() {
+        let detail = json!({
+            "session": {
+                "session_id": "session-1",
+                "kind": "root",
+                "state": "running",
+                "parent_session_id": null,
+                "label": "Root",
+                "turn_count": 3,
+                "last_turn_at": 123,
+                "last_error": "rate_limited"
+            },
+            "workflow": {},
+            "terminal_outcome_state": "not_terminal",
+            "terminal_outcome": null,
+            "recovery": null,
+            "recent_events": [],
+            "diagnostics": {
+                "latest_provider_failover": {
+                    "reason": "rate_limited",
+                    "model": "gpt-4o",
+                    "stage": "status_failure",
+                    "request_id": "req-123"
+                },
+                "recommended_action": {
+                    "tool_name": "session_wait",
+                    "kind": "follow_resume_recipe",
+                    "source": "task_progress_resume_recipe"
+                }
+            }
+        });
+
+        let lines = render_session_inspection_lines(&detail).expect("render lines");
+
+        assert!(
+            lines.iter().any(|line| {
+                line == "latest_provider_failover: reason=rate_limited model=gpt-4o stage=status_failure request_id=req-123"
+            }),
+            "expected latest_provider_failover summary, got: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| {
+                line == "recommended_action: tool=session_wait kind=follow_resume_recipe source=task_progress_resume_recipe"
+            }),
+            "expected recommended_action summary, got: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn build_session_heal_plan_marks_manual_checkpoint_recovery_as_observe_only() {
+        let detail = json!({
+            "diagnostics": {
+                "attention_hints": ["checkpoint attention"]
+            },
+            "turn_checkpoint": {
+                "summary": {
+                    "requires_recovery": true
+                }
+            }
+        });
+
+        let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+            .expect("build heal plan");
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].tool_name, "session_status");
+        assert!(!plan.actions[0].can_apply);
+        assert_eq!(plan.actions[0].kind, "turn_checkpoint_manual_review");
+        assert_eq!(
+            plan.attention_hints,
+            vec!["checkpoint attention".to_owned()]
+        );
+    }
+
+    #[test]
+    fn build_session_heal_plan_adds_turn_checkpoint_repair_action_when_runtime_repair_is_possible()
+    {
+        let detail = json!({
+            "diagnostics": {
+                "attention_hints": ["checkpoint attention"]
+            },
+            "turn_checkpoint": {
+                "summary": {
+                    "requires_recovery": true,
+                    "latest_identity_present": true,
+                    "latest_runs_after_turn": true,
+                    "latest_attempts_context_compaction": true,
+                    "latest_after_turn": "completed",
+                    "latest_compaction": "failed",
+                    "session_state": "finalization_failed",
+                    "checkpoint_durable": true,
+                    "reply_durable": true
+                }
+            }
+        });
+
+        let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+            .expect("build heal plan");
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].tool_name, "turn_checkpoint_repair");
+        assert!(plan.actions[0].can_apply);
+        assert_eq!(plan.actions[0].kind, "run_compaction");
+    }
+
+    #[test]
+    fn build_session_heal_plan_preserves_task_surface_commands_for_resume_recipes() {
+        let detail = json!({
+            "task_progress": {
+                "task_id": "task-123"
+            },
+            "diagnostics": {
+                "recommended_action": {
+                    "tool_name": "task_status",
+                    "kind": "follow_resume_recipe",
+                    "source": "task_progress_resume_recipe",
+                    "session_id": "task-owner",
+                    "requires_mutation": false
+                },
+                "attention_hints": []
+            }
+        });
+
+        let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+            .expect("build heal plan");
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].tool_name, "task_status");
+        assert_eq!(
+            plan.actions[0].command,
+            "loong tasks status --config '/tmp/loong.toml' --session 'ops-root' 'task-123'"
+        );
+        assert!(!plan.actions[0].can_apply);
+    }
+
+    #[test]
+    fn render_session_heal_plan_lines_surface_actions_and_hints() {
+        let plan = json!({
+            "action_count": 1,
+            "applyable_count": 1,
+            "attention_count": 1,
+            "actions": [{
+                "id": "recommended:session_recover",
+                "tool_name": "session_recover",
+                "kind": "queued_async_overdue_marked_failed",
+                "source": "session_recover_plan",
+                "can_apply": true
+            }],
+            "attention_hints": ["provider_failover_present reason=rate_limited"]
+        });
+
+        let lines = render_session_heal_plan_lines(&plan).expect("render heal plan lines");
+
+        assert!(
+            lines.iter().any(|line| {
+                line.contains("actions=1")
+                    && line.contains("applyable=1")
+                    && line.contains("attention_hints=1")
+            }),
+            "expected heal plan summary, got: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| {
+                line.contains("recommended:session_recover")
+                    && line.contains("tool=session_recover")
+                    && line.contains("apply=yes")
+            }),
+            "expected action line, got: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| { line.contains("hint provider_failover_present") }),
+            "expected attention hint line, got: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_session_inspection_lines_includes_tree_summary() {
+        let detail = json!({
+            "session": {
+                "session_id": "root-session",
+                "kind": "root",
+                "parent_session_id": null,
+                "label": "Root",
+                "state": "ready",
+                "turn_count": 2,
+                "last_turn_at": 123,
+                "last_error": null,
+            },
+            "workflow": {
+                "workflow_id": "root-session",
+            },
+            "tree": {
+                "head_count": 2,
+                "active_path_count": 3,
+                "artifact_count": 2,
+                "active_head_name": "active",
+                "artifact_counts": {
+                    "checkpoint": 1,
+                    "branch_summary": 1,
+                },
+                "heads": [
+                    {"head_name": "active"},
+                    {"head_name": "thread/alpha"},
+                ],
+            },
+            "recent_events": [],
+        });
+
+        let lines = render_session_inspection_lines(&detail).expect("render session inspection");
+
+        assert!(lines.iter().any(|line| line == "tree_head_count: 2"));
+        assert!(lines.iter().any(|line| line == "tree_active_head: active"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "tree_head_names: active, thread/alpha")
+        );
+        assert!(lines.iter().any(|line| line == "tree_artifact_count: 2"));
+    }
+
+    #[test]
+    fn render_session_inspection_lines_includes_branch_summary_counts() {
+        let detail = json!({
+            "session": {
+                "session_id": "root-session",
+                "kind": "root",
+                "parent_session_id": null,
+                "label": "Root",
+                "state": "ready",
+                "turn_count": 1,
+                "last_turn_at": null,
+                "last_error": null,
+            },
+            "workflow": {
+                "workflow_id": "root-session",
+            },
+            "tree": {
+                "head_count": 1,
+                "active_path_count": 2,
+                "artifact_count": 3,
+                "active_head_name": "active",
+                "artifact_counts": {
+                    "checkpoint": 1,
+                    "branch_summary": 2,
+                },
+                "heads": [
+                    {"head_name": "active"},
+                ],
+            },
+            "recent_events": [],
+        });
+
+        let lines = render_session_inspection_lines(&detail).expect("render session inspection");
+
+        assert!(lines.iter().any(|line| line == "tree_checkpoint_count: 1"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "tree_branch_summary_count: 2")
+        );
+    }
+
+    #[test]
+    fn render_sessions_path_text_includes_head_and_nodes() {
+        let execution = SessionsCommandExecution {
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
+            current_session_id: "root-session".to_owned(),
+            payload: json!({
+                "command": "path",
+                "detail": {
+                    "session_id": "root-session",
+                    "head_name": "thread/alpha",
+                    "path": [
+                        {
+                            "node_id": "session-root:root-session",
+                            "kind": "root",
+                            "role": null,
+                            "content": null,
+                        },
+                        {
+                            "node_id": "session-turn:root-session:1",
+                            "kind": "user_turn",
+                            "role": "user",
+                            "content": "hello",
+                        }
+                    ]
+                }
+            }),
+        };
+
+        let rendered = render_sessions_cli_text(&execution).expect("rendered path");
+
+        assert!(rendered.contains("path for `root-session` head `thread/alpha` (2)"));
+        assert!(rendered.contains("session-turn:root-session:1"));
+        assert!(rendered.contains("content=hello"));
+    }
+
+    #[test]
+    fn render_sessions_tree_mutation_text_includes_artifact_summary() {
+        let execution = SessionsCommandExecution {
+            resolved_config_path: "/tmp/loong.toml".to_owned(),
+            current_session_id: "root-session".to_owned(),
+            payload: json!({
+                "command": "branch-summary",
+                "detail": {
+                    "session_id": "root-session",
+                    "artifact": {
+                        "artifact_id": "branch-summary:root-session:1:thread_alpha",
+                        "kind": "branch_summary",
+                        "summary_text": "alpha summary"
+                    }
+                }
+            }),
+        };
+
+        let rendered = render_sessions_cli_text(&execution).expect("rendered mutation");
+
+        assert!(rendered.contains("branch-summary for `root-session`"));
+        assert!(rendered.contains("kind=branch_summary"));
+        assert!(rendered.contains("summary=alpha summary"));
+    }
 }

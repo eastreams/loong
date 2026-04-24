@@ -1830,6 +1830,8 @@ impl ChatSessionSurface {
             CommandPaletteAction::Exit => return Ok(SurfaceLoopAction::Exit),
         }
         state.command_palette = None;
+        drop(state);
+        self.render()?;
         Ok(SurfaceLoopAction::Continue)
     }
 
@@ -2239,7 +2241,7 @@ impl ChatSessionSurface {
                                             let outcome = self
                                                 .runtime
                                                 .turn_coordinator
-                                                .repair_turn_checkpoint_tail(
+                                                .repair_production_turn_checkpoint_tail(
                                                     &self.runtime.config,
                                                     &self.runtime.session_id,
                                                     self.runtime.conversation_binding(),
@@ -2644,31 +2646,32 @@ impl ChatSessionSurface {
         self.render()?;
 
         let observer = build_surface_live_observer(self.state.clone(), self.term.clone());
-        let assistant_text = crate::agent_runtime::AgentRuntime::new()
-            .run_turn_with_runtime_and_observer(
-                &self.runtime,
-                &crate::agent_runtime::AgentTurnRequest {
-                    message: trimmed.to_owned(),
-                    turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-                    channel_id: self.runtime.session_address.channel_id.clone(),
-                    account_id: self.runtime.session_address.account_id.clone(),
-                    conversation_id: self.runtime.session_address.conversation_id.clone(),
-                    participant_id: self.runtime.session_address.participant_id.clone(),
-                    thread_id: self.runtime.session_address.thread_id.clone(),
-                    metadata: std::collections::BTreeMap::new(),
-                    acp: self.runtime.explicit_acp_request,
-                    acp_event_stream: false,
-                    acp_bootstrap_mcp_servers: self.runtime.effective_bootstrap_mcp_servers.clone(),
-                    acp_cwd: self
-                        .runtime
-                        .effective_working_directory
-                        .as_ref()
-                        .map(|path| path.display().to_string()),
-                    live_surface_enabled: true,
-                },
-                None,
-                Some(observer),
-            )
+        let turn_request = crate::agent_runtime::AgentTurnRequest {
+            message: trimmed.to_owned(),
+            turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+            channel_id: self.runtime.session_address.channel_id.clone(),
+            account_id: self.runtime.session_address.account_id.clone(),
+            conversation_id: self.runtime.session_address.conversation_id.clone(),
+            participant_id: self.runtime.session_address.participant_id.clone(),
+            thread_id: self.runtime.session_address.thread_id.clone(),
+            metadata: std::collections::BTreeMap::new(),
+            acp: self.runtime.explicit_acp_request,
+            acp_event_stream: false,
+            acp_bootstrap_mcp_servers: self.runtime.effective_bootstrap_mcp_servers.clone(),
+            acp_cwd: self
+                .runtime
+                .effective_working_directory
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            live_surface_enabled: true,
+        };
+        let turn_options = crate::agent_runtime::TurnExecutionOptions {
+            observer: Some(observer),
+            ..Default::default()
+        };
+        let turn_service = crate::agent_runtime::RuntimeTurnExecutionService::new(&self.runtime);
+        let assistant_text = turn_service
+            .execute(&turn_request, turn_options)
             .await?
             .output_text;
 

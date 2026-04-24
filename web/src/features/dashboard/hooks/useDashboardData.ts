@@ -229,7 +229,7 @@ export function useDashboardData({
             ? t("auth.sessionInvalidBody")
             : t("auth.invalidBody", {
                 tokenPath: tokenPath ?? "",
-                tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                tokenEnv: tokenEnv ?? "LOONG_WEB_TOKEN",
               })
           : t("auth.requiredBody"),
       );

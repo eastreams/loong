@@ -58,7 +58,8 @@ export type ChatTurnStreamEvent =
       turnId: string;
       toolId: string;
       label: string;
-      outcome: "ok" | "error" | string;
+      outcome: "ok" | "error" | "needs_approval" | "denied" | string;
+      state?: "completed" | "needs_approval" | "denied" | "failed" | "interrupted" | string;
       detail?: string;
     }
   | {
@@ -96,6 +97,74 @@ interface StreamHandlers {
   onEvent: (event: ChatTurnStreamEvent) => void;
 }
 
+export function isInternalAssistantRecordContent(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith("[tool_result]")) {
+    return true;
+  }
+  if (isInternalAssistantControlText(trimmed)) {
+    return true;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const markedInternal = parsed._loong_internal === true;
+    const internalType =
+      parsed.type === "conversation_event" ||
+      parsed.type === "tool_decision" ||
+      parsed.type === "tool_outcome";
+    return (
+      markedInternal ||
+      internalType
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isInternalAssistantControlText(trimmedContent: string): boolean {
+  return [
+    "[tool_request]",
+    "[tool_failure]",
+    "[tool_recovery]",
+    "[tool_loop_guard]",
+    "[tool_loop_warning]",
+    "[tool_discovery_runtime]",
+  ].some((prefix) => trimmedContent.startsWith(prefix));
+}
+
+export function stripInternalAssistantRecordPrefix(content: string): string {
+  let remaining = content.trimStart();
+  if (!remaining.startsWith("[tool_result]")) {
+    return content;
+  }
+
+  while (remaining.startsWith("[tool_result]")) {
+    const nextSeparator = remaining.indexOf("\n\n");
+    if (nextSeparator < 0) {
+      return "";
+    }
+    remaining = remaining.slice(nextSeparator).trimStart();
+  }
+
+  return remaining;
+}
+
+export function looksLikeInternalAssistantRecordContent(content: string): boolean {
+  const trimmed = content.trimStart();
+  return (
+    trimmed.startsWith('{"_loong_internal"') ||
+    trimmed.startsWith('{"type":"conversation_event"') ||
+    trimmed.startsWith('{"type":"tool_decision"') ||
+    trimmed.startsWith('{"type":"tool_outcome"') ||
+    trimmed.startsWith("[tool_result]") ||
+    isInternalAssistantControlText(trimmed)
+  );
+}
+
 function withDefaultTimeout(
   request: ApiRequestOptions | undefined,
   timeoutMs: number,
@@ -128,7 +197,22 @@ export const chatApi = {
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/history`,
       withDefaultTimeout(request, CHAT_READ_TIMEOUT_MS),
     );
-    return response.messages;
+    return response.messages
+      .map((message) =>
+        message.role === "assistant"
+          ? {
+              ...message,
+              content: stripInternalAssistantRecordPrefix(message.content),
+            }
+          : message,
+      )
+      .filter(
+        (message) =>
+          !(
+            message.role === "assistant" &&
+            isInternalAssistantRecordContent(message.content)
+          ),
+      );
   },
 
   async createSession(title?: string, request?: ApiRequestOptions): Promise<string> {
@@ -201,4 +285,5 @@ export const chatApi = {
       withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
     );
   },
+
 };

@@ -272,7 +272,7 @@ fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-capability-snapshot-skills");
+    let root = unique_temp_dir("loong-tool-capability-snapshot-skills");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(
         &root,
@@ -369,16 +369,27 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         "external_skills.policy",
         "provider.switch",
         "session_archive",
+        "session_artifacts",
         "session_cancel",
+        "session_children",
         "session_continue",
+        "session_create_branch_summary",
+        "session_create_checkpoint",
         "session_events",
+        "session_fork_head",
+        "session_heads",
+        "session_pin_head",
+        "session_path",
         "session_recover",
         "session_search",
+        "session_set_active_head",
         "session_status",
         "session_tool_policy_clear",
         "session_tool_policy_set",
         "session_tool_policy_status",
+        "session_unpin_head",
         "session_wait",
+        "task_events",
         "task_history",
         "task_status",
         "task_wait",
@@ -414,16 +425,27 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websea
         "external_skills.policy",
         "provider.switch",
         "session_archive",
+        "session_artifacts",
         "session_cancel",
+        "session_children",
         "session_continue",
+        "session_create_branch_summary",
+        "session_create_checkpoint",
         "session_events",
+        "session_fork_head",
+        "session_heads",
+        "session_pin_head",
+        "session_path",
         "session_recover",
         "session_search",
+        "session_set_active_head",
         "session_status",
         "session_tool_policy_clear",
         "session_tool_policy_set",
         "session_tool_policy_status",
+        "session_unpin_head",
         "session_wait",
+        "task_events",
         "task_history",
         "task_status",
         "task_wait",
@@ -452,11 +474,17 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"session_archive".to_owned()));
+    assert!(names.contains(&"session_create_checkpoint".to_owned()));
+    assert!(names.contains(&"session_create_branch_summary".to_owned()));
     assert!(names.contains(&"session_cancel".to_owned()));
     assert!(names.contains(&"session_continue".to_owned()));
+    assert!(names.contains(&"session_fork_head".to_owned()));
+    assert!(names.contains(&"session_pin_head".to_owned()));
     assert!(names.contains(&"session_recover".to_owned()));
+    assert!(names.contains(&"session_set_active_head".to_owned()));
     assert!(names.contains(&"session_tool_policy_set".to_owned()));
     assert!(names.contains(&"session_tool_policy_clear".to_owned()));
+    assert!(names.contains(&"session_unpin_head".to_owned()));
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -504,11 +532,16 @@ fn runtime_tool_view_hides_session_mutation_tools_when_explicitly_disabled() {
         "approval_requests_list",
         "delegate",
         "delegate_async",
+        "session_artifacts",
+        "session_children",
         "session_events",
+        "session_heads",
+        "session_path",
         "session_tool_policy_status",
         "session_search",
         "session_status",
         "session_wait",
+        "task_events",
         "task_history",
         "task_status",
         "task_wait",
@@ -530,7 +563,13 @@ fn runtime_tool_view_hides_session_mutation_tools_when_explicitly_disabled() {
         "session_archive",
         "session_cancel",
         "session_continue",
+        "session_create_branch_summary",
+        "session_create_checkpoint",
+        "session_fork_head",
+        "session_pin_head",
         "session_recover",
+        "session_set_active_head",
+        "session_unpin_head",
     ] {
         assert!(
             !view.contains(tool_name),
@@ -558,9 +597,15 @@ fn runtime_tool_view_re_exposes_session_mutation_tools_when_enabled() {
     assert!(view.contains("session_archive"));
     assert!(view.contains("session_cancel"));
     assert!(view.contains("session_continue"));
+    assert!(view.contains("session_create_branch_summary"));
+    assert!(view.contains("session_create_checkpoint"));
+    assert!(view.contains("session_fork_head"));
+    assert!(view.contains("session_pin_head"));
     assert!(view.contains("session_recover"));
+    assert!(view.contains("session_set_active_head"));
     assert!(view.contains("session_tool_policy_set"));
     assert!(view.contains("session_tool_policy_clear"));
+    assert!(view.contains("session_unpin_head"));
 }
 
 #[test]
@@ -1165,7 +1210,7 @@ fn canonical_tool_name_maps_known_aliases() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn runtime_tool_view_hides_memory_tools_when_memory_corpus_is_empty() {
-    let root = unique_tool_temp_dir("loongclaw-memory-tool-view-empty");
+    let root = unique_tool_temp_dir("loong-memory-tool-view-empty");
 
     std::fs::create_dir_all(&root).expect("create root dir");
 
@@ -1179,7 +1224,7 @@ fn runtime_tool_view_hides_memory_tools_when_memory_corpus_is_empty() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn runtime_tool_view_includes_memory_tools_when_memory_corpus_exists() {
-    let root = unique_tool_temp_dir("loongclaw-memory-tool-view-visible");
+    let root = unique_tool_temp_dir("loong-memory-tool-view-visible");
     let memory_path = root.join("MEMORY.md");
 
     std::fs::create_dir_all(&root).expect("create root dir");
@@ -1206,7 +1251,7 @@ fn tool_search_returns_direct_results_for_common_file_queries() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-tool-search-{nanos}"));
+    let root = std::env::temp_dir().join(format!("loong-tool-search-{nanos}"));
     fs::create_dir_all(&root).expect("create fixture root");
     fs::write(root.join("README.md"), "hello tool search").expect("write fixture");
 
@@ -1245,7 +1290,7 @@ fn tool_search_returns_direct_results_for_common_file_queries() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_surfaces_memory_tools_when_memory_corpus_is_available() {
-    let root = unique_tool_temp_dir("loongclaw-memory-tool-search");
+    let root = unique_tool_temp_dir("loong-memory-tool-search");
     let memory_dir = root.join("memory");
 
     std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -1278,7 +1323,7 @@ fn tool_search_surfaces_memory_tools_when_memory_corpus_is_available() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_hides_memory_tools_when_memory_corpus_is_empty() {
-    let root = unique_tool_temp_dir("loongclaw-memory-tool-search-empty");
+    let root = unique_tool_temp_dir("loong-memory-tool-search-empty");
 
     std::fs::create_dir_all(&root).expect("create root dir");
 
@@ -1308,7 +1353,7 @@ fn tool_search_hides_memory_tools_when_memory_corpus_is_empty() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
-    let root = unique_tool_temp_dir("loongclaw-memory-search");
+    let root = unique_tool_temp_dir("loong-memory-search");
     let memory_dir = root.join("memory");
 
     std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -1385,7 +1430,7 @@ fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_get_tool_returns_bounded_line_window_from_memory_file() {
-    let root = unique_tool_temp_dir("loongclaw-memory-get");
+    let root = unique_tool_temp_dir("loong-memory-get");
     let memory_path = root.join("MEMORY.md");
 
     std::fs::create_dir_all(&root).expect("create root dir");
@@ -1430,7 +1475,7 @@ fn memory_get_tool_returns_bounded_line_window_from_memory_file() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_get_tool_uses_selected_memory_system_id_in_provenance() {
-    let root = unique_tool_temp_dir("loongclaw-memory-get-selected-system");
+    let root = unique_tool_temp_dir("loong-memory-get-selected-system");
     let memory_path = root.join("MEMORY.md");
 
     std::fs::create_dir_all(&root).expect("create root dir");
@@ -1461,7 +1506,7 @@ fn memory_get_tool_uses_selected_memory_system_id_in_provenance() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_get_tool_reads_requested_window_without_loading_invalid_tail() {
-    let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-tail");
+    let root = unique_tool_temp_dir("loong-memory-get-invalid-tail");
     let memory_path = root.join("MEMORY.md");
     let mut bytes = b"line one\nline two\n".to_vec();
 
@@ -1494,7 +1539,7 @@ fn memory_get_tool_reads_requested_window_without_loading_invalid_tail() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_search_tool_rejects_invalid_max_results_values() {
-    let root = unique_tool_temp_dir("loongclaw-memory-search-invalid-max-results");
+    let root = unique_tool_temp_dir("loong-memory-search-invalid-max-results");
 
     std::fs::create_dir_all(&root).expect("create root dir");
     std::fs::write(root.join("MEMORY.md"), "deploy freeze window\n").expect("write memory");
@@ -1530,7 +1575,7 @@ fn memory_search_tool_rejects_invalid_max_results_values() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_get_tool_rejects_invalid_window_arguments() {
-    let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-window");
+    let root = unique_tool_temp_dir("loong-memory-get-invalid-window");
 
     std::fs::create_dir_all(&root).expect("create root dir");
     std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
@@ -1566,7 +1611,7 @@ fn memory_get_tool_rejects_invalid_window_arguments() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn memory_get_tool_hides_non_corpus_file_existence() {
-    let root = unique_tool_temp_dir("loongclaw-memory-get-corpus-boundary");
+    let root = unique_tool_temp_dir("loong-memory-get-corpus-boundary");
 
     std::fs::create_dir_all(&root).expect("create root dir");
     std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
@@ -1605,7 +1650,7 @@ mod search_and_shell;
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn tool_search_result_includes_search_hint_and_schema_preview() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-card-metadata");
+    let root = unique_tool_temp_dir("loong-tool-search-card-metadata");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -1636,7 +1681,7 @@ fn tool_search_result_includes_search_hint_and_schema_preview() {
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
 fn tool_search_accepts_keywords_array_payloads() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-array");
+    let root = unique_tool_temp_dir("loong-tool-search-keywords-array");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -1664,7 +1709,7 @@ fn tool_search_accepts_keywords_array_payloads() {
 #[cfg(all(feature = "tool-file", feature = "tool-webfetch"))]
 #[test]
 fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-schema-derived");
+    let root = unique_tool_temp_dir("loong-tool-search-schema-derived");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -1692,7 +1737,7 @@ fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
 #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
 #[test]
 fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-surface-prompts");
+    let root = unique_tool_temp_dir("loong-tool-search-surface-prompts");
     let memory_dir = root.join("memory");
 
     std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -1747,7 +1792,7 @@ fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-missing-query");
+    let root = unique_tool_temp_dir("loong-tool-search-missing-query");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -1785,7 +1830,7 @@ fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn direct_write_routes_exact_edit_blocks_to_file_edit() {
-    let root = unique_tool_temp_dir("loongclaw-direct-write-edit-blocks");
+    let root = unique_tool_temp_dir("loong-direct-write-edit-blocks");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let target = root.join("notes.txt");
     std::fs::write(&target, "alpha\nbeta\ngamma\n").expect("seed target file");
@@ -1817,7 +1862,7 @@ fn direct_write_routes_exact_edit_blocks_to_file_edit() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_prefers_direct_write_for_write_queries() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-write-query");
+    let root = unique_tool_temp_dir("loong-tool-search-write-query");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -1846,7 +1891,7 @@ fn tool_search_prefers_direct_write_for_write_queries() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_accepts_keywords_array_queries() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-keywords-query");
+    let root = unique_tool_temp_dir("loong-tool-search-keywords-query");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -2029,7 +2074,7 @@ fn direct_browser_routes_managed_browser_actions_through_browser_surface() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn tool_search_returns_coarse_fallback_for_zero_match_queries() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-coarse-fallback");
+    let root = unique_tool_temp_dir("loong-tool-search-coarse-fallback");
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -2066,7 +2111,7 @@ fn tool_search_returns_coarse_fallback_for_zero_match_queries() {
 #[test]
 fn browser_companion_tool_search_returns_runtime_ready_companion_entries() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-browser-companion-{}",
+        "loong-tool-search-browser-companion-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2121,7 +2166,7 @@ fn browser_companion_tools_split_read_and_write_execution_kinds() {
 #[test]
 fn browser_companion_protocol_start_issues_managed_session_id_and_records_request() {
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
-    let root = unique_tool_temp_dir("loongclaw-browser-companion-start");
+    let root = unique_tool_temp_dir("loong-browser-companion-start");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let log_path = root.join("request.json");
     let script_path = write_browser_companion_script(
@@ -2154,7 +2199,7 @@ fn browser_companion_protocol_start_issues_managed_session_id_and_records_reques
         .expect("session id should be text");
     assert!(
         session_id.starts_with("browser-companion-"),
-        "session id should be issued by LoongClaw: {session_id}"
+        "session id should be issued by Loong: {session_id}"
     );
     assert_eq!(outcome.payload["result"]["page_url"], "https://example.com");
 
@@ -2174,7 +2219,7 @@ fn browser_companion_protocol_start_issues_managed_session_id_and_records_reques
 #[cfg(feature = "tool-browser")]
 #[test]
 fn browser_companion_protocol_rejects_unknown_session_for_read_tools() {
-    let root = unique_tool_temp_dir("loongclaw-browser-companion-unknown-session");
+    let root = unique_tool_temp_dir("loong-browser-companion-unknown-session");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let log_path = root.join("request.json");
     let script_path = write_browser_companion_script(
@@ -2209,7 +2254,7 @@ fn browser_companion_protocol_rejects_unknown_session_for_read_tools() {
 #[test]
 fn browser_companion_protocol_surfaces_invalid_json_from_command() {
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
-    let root = unique_tool_temp_dir("loongclaw-browser-companion-invalid-json");
+    let root = unique_tool_temp_dir("loong-browser-companion-invalid-json");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let log_path = root.join("request.json");
     let script_path = write_browser_companion_script(
@@ -2268,8 +2313,9 @@ fn browser_companion_protocol_times_out_stalled_command() {
 #[cfg(feature = "tool-browser")]
 #[test]
 fn browser_companion_app_tool_click_uses_current_session_scope() {
+    let mut env = ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
-    let root = unique_tool_temp_dir("loongclaw-browser-companion-app-click");
+    let root = unique_tool_temp_dir("loong-browser-companion-app-click");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let log_path = root.join("request.json");
     let script_path = write_browser_companion_script(
@@ -2295,7 +2341,6 @@ fn browser_companion_app_tool_click_uses_current_session_scope() {
         .expect("session id should exist")
         .to_owned();
 
-    let mut env = ScopedEnv::new();
     env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
     let mut tool_config = crate::config::ToolConfig::default();
@@ -2311,7 +2356,7 @@ fn browser_companion_app_tool_click_uses_current_session_scope() {
             }),
         },
         "root-session",
-        &crate::memory::runtime_config::MemoryRuntimeConfig::default(),
+        &crate::session::store::SessionStoreConfig::default(),
         &tool_config,
     )
     .expect("browser companion click should succeed");
@@ -2355,7 +2400,7 @@ fn tool_search_reports_no_required_field_groups_for_bundled_skill_install() {
 #[test]
 fn tool_search_respects_visible_tool_ids_from_runtime_context() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-visible-filter-{}",
+        "loong-tool-search-visible-filter-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2414,7 +2459,7 @@ fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surfac
 #[test]
 fn tool_search_rejects_forged_visible_tool_ids_from_untrusted_payload() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-search-visible-forged-{}",
+        "loong-tool-search-visible-forged-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2448,7 +2493,7 @@ fn tool_search_rejects_forged_visible_tool_ids_from_untrusted_payload() {
 #[test]
 fn web_fetch_respects_runtime_narrowing_from_trusted_internal_payload() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-web-fetch-runtime-narrowing-{}",
+        "loong-web-fetch-runtime-narrowing-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2484,7 +2529,7 @@ fn web_fetch_respects_runtime_narrowing_from_trusted_internal_payload() {
 #[test]
 fn web_fetch_denies_disjoint_allowlists_when_runtime_narrowing_intersection_is_empty() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-web-fetch-runtime-narrowing-disjoint-{}",
+        "loong-web-fetch-runtime-narrowing-disjoint-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2524,7 +2569,7 @@ fn web_fetch_denies_disjoint_allowlists_when_runtime_narrowing_intersection_is_e
 #[test]
 fn web_fetch_fail_closes_malformed_trusted_runtime_narrowing() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-web-fetch-runtime-narrowing-malformed-{}",
+        "loong-web-fetch-runtime-narrowing-malformed-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2556,7 +2601,7 @@ fn web_fetch_fail_closes_malformed_trusted_runtime_narrowing() {
 #[test]
 fn web_fetch_rejects_forged_runtime_narrowing_from_untrusted_payload() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-web-fetch-runtime-narrowing-forged-{}",
+        "loong-web-fetch-runtime-narrowing-forged-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2707,7 +2752,7 @@ fn tool_invoke_dispatches_a_discovered_tool_with_a_valid_lease() {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-tool-invoke-{nanos}"));
+    let root = std::env::temp_dir().join(format!("loong-tool-invoke-{nanos}"));
     fs::create_dir_all(&root).expect("create fixture root");
     fs::write(root.join("README.md"), "tool invoke fixture").expect("write fixture");
 
@@ -2754,7 +2799,7 @@ fn tool_invoke_dispatches_a_discovered_tool_with_a_valid_lease() {
 #[cfg(feature = "tool-file")]
 #[test]
 fn discovered_tool_lease_uses_current_catalog_digest() {
-    let root = unique_tool_temp_dir("loongclaw-tool-lease-digest");
+    let root = unique_tool_temp_dir("loong-tool-lease-digest");
     let config = test_tool_runtime_config(root.clone());
     let search = execute_tool_core_with_config(
         ToolCoreRequest {
@@ -2883,7 +2928,7 @@ fn tool_invoke_rejects_non_string_outer_lease_field() {
 #[test]
 fn tool_invoke_rejects_leases_replayed_in_another_turn() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-invoke-replay-{}",
+        "loong-tool-invoke-replay-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2935,7 +2980,7 @@ fn tool_invoke_rejects_leases_replayed_in_another_turn() {
 #[test]
 fn tool_invoke_preserves_trusted_runtime_narrowing_for_inner_execution() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-invoke-runtime-narrowing-{}",
+        "loong-tool-invoke-runtime-narrowing-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create fixture root");
@@ -2981,7 +3026,7 @@ fn tool_invoke_preserves_trusted_runtime_narrowing_for_inner_execution() {
 #[test]
 fn tool_invoke_rejects_forged_reserved_internal_context_inside_arguments() {
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-tool-invoke-inner-context-forged-{}",
+        "loong-tool-invoke-inner-context-forged-{}",
         std::process::id()
     ));
     let fixture_path = root.join("README.md");
@@ -3064,7 +3109,7 @@ fn tool_search_hides_app_only_discoverables_from_provider_visible_results() {
 fn tool_search_exact_skill_id_returns_skills_surface_with_run_guidance() {
     use std::fs;
 
-    let root = unique_temp_dir("loongclaw-tool-search-skill-exact");
+    let root = unique_temp_dir("loong-tool-search-skill-exact");
     fs::create_dir_all(&root).expect("create fixture root");
     let skill_root = root.join("skills").join("agent-browser");
     fs::create_dir_all(&skill_root).expect("create skill root");
@@ -3122,7 +3167,7 @@ fn tool_search_exact_skill_id_returns_skills_surface_with_run_guidance() {
 fn tool_invoke_skills_surface_requires_operation_when_skill_id_is_present() {
     use std::fs;
 
-    let root = unique_temp_dir("loongclaw-tool-search-skill-operation");
+    let root = unique_temp_dir("loong-tool-search-skill-operation");
     fs::create_dir_all(&root).expect("create fixture root");
     let skill_root = root.join("skills").join("agent-browser");
     fs::create_dir_all(&skill_root).expect("create skill root");
@@ -3192,7 +3237,7 @@ fn tool_search_hides_tools_exceeding_granted_capabilities() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock should be after epoch");
     let nanos = duration.as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-tool-search-cap-filter-{nanos}"));
+    let root = std::env::temp_dir().join(format!("loong-tool-search-cap-filter-{nanos}"));
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let config = test_tool_runtime_config(root.clone());
@@ -3231,7 +3276,7 @@ fn tool_search_hides_bash_exec_without_side_effect_capabilities() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock should be after epoch");
     let nanos = duration.as_nanos();
-    let root = std::env::temp_dir().join(format!("loongclaw-tool-search-bash-cap-filter-{nanos}"));
+    let root = std::env::temp_dir().join(format!("loong-tool-search-bash-cap-filter-{nanos}"));
     std::fs::create_dir_all(&root).expect("create fixture root");
 
     let mut config = test_tool_runtime_config(root.clone());
@@ -3429,7 +3474,7 @@ fn feishu_tool_metadata_catalog_is_self_consistent() {
 #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
 #[test]
 fn tool_search_creates_tool_lease_secret_under_scoped_runtime_home() {
-    let root = unique_tool_temp_dir("loongclaw-tool-search-home-override");
+    let root = unique_tool_temp_dir("loong-tool-search-home-override");
     let memory_dir = root.join("memory");
 
     std::fs::create_dir_all(&memory_dir).expect("create memory dir");
@@ -4114,7 +4159,7 @@ fn unique_feishu_tool_temp_dir(label: &str) -> std::path::PathBuf {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     std::env::temp_dir().join(format!(
-        "loongclaw-tool-feishu-{label}-{}",
+        "loong-tool-feishu-{label}-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -4250,7 +4295,7 @@ async fn feishu_doc_read_tool_uses_selected_grant_and_user_token() {
 
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "loongclaw-tool-feishu-{label}-{}",
+            "loong-tool-feishu-{label}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("clock")
@@ -12219,9 +12264,9 @@ fn provider_switch_tool_updates_target_config_and_reports_active_profile() {
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 
-    let root = unique_temp_dir("loongclaw-tool-provider-switch");
+    let root = unique_temp_dir("loong-tool-provider-switch");
     fs::create_dir_all(&root).expect("create fixture root");
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
 
     let mut config = crate::config::LoongConfig::default();
     let mut openai =
@@ -12264,7 +12309,7 @@ fn provider_switch_tool_updates_target_config_and_reports_active_profile() {
             tool_name: "provider.switch".to_owned(),
             payload: json!({
                 "selector": "deepseek",
-                "config_path": "loongclaw.toml"
+                "config_path": "loong.toml"
             }),
         },
         &runtime_config,
@@ -12300,9 +12345,9 @@ fn provider_switch_tool_accepts_unique_model_selector() {
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 
-    let root = unique_temp_dir("loongclaw-tool-provider-switch-model");
+    let root = unique_temp_dir("loong-tool-provider-switch-model");
     fs::create_dir_all(&root).expect("create fixture root");
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
 
     let mut config = crate::config::LoongConfig::default();
     let mut openai =
@@ -12379,9 +12424,9 @@ fn provider_switch_without_selector_reports_current_provider_state() {
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 
-    let root = unique_temp_dir("loongclaw-tool-provider-switch-inspect");
+    let root = unique_temp_dir("loong-tool-provider-switch-inspect");
     fs::create_dir_all(&root).expect("create fixture root");
-    let config_path = root.join("loongclaw.toml");
+    let config_path = root.join("loong.toml");
 
     let mut config = crate::config::LoongConfig::default();
     let mut openai =
@@ -12470,7 +12515,7 @@ fn config_import_plan_mode_returns_nativeized_preview() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-plan");
+    let root = unique_temp_dir("loong-tool-import-plan");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(
         &root,
@@ -12553,7 +12598,7 @@ fn config_import_apply_mode_writes_target_config() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-apply");
+    let root = unique_temp_dir("loong-tool-import-apply");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(
         &root,
@@ -12566,7 +12611,7 @@ fn config_import_apply_mode_writes_target_config() {
         "# Identity\n\n- Motto: your nanobot agent for deploys\n",
     );
 
-    let output_path = root.join("generated").join("loongclaw.toml");
+    let output_path = root.join("generated").join("loong.toml");
     let config = runtime_config::ToolRuntimeConfig {
         file_root: Some(root.clone()),
         ..runtime_config::ToolRuntimeConfig::default()
@@ -12581,7 +12626,7 @@ fn config_import_apply_mode_writes_target_config() {
                     "mode": "apply",
                     "source": "nanobot",
                     "input_path": ".",
-                    "output_path": "generated/loongclaw.toml",
+                    "output_path": "generated/loong.toml",
                     "force": true
                 }),
             },
@@ -12643,7 +12688,7 @@ fn config_import_discover_mode_returns_detected_sources() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-discover");
+    let root = unique_temp_dir("loong-tool-import-discover");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -12706,7 +12751,7 @@ fn config_import_plan_many_mode_returns_source_summaries_and_recommendation() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-plan-many");
+    let root = unique_temp_dir("loong-tool-import-plan-many");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -12778,7 +12823,7 @@ fn config_import_merge_profiles_mode_preserves_prompt_owner() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-merge-profiles");
+    let root = unique_temp_dir("loong-tool-import-merge-profiles");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -12858,7 +12903,7 @@ fn config_import_map_external_skills_mode_returns_mapping_plan() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-map-external-skills");
+    let root = unique_temp_dir("loong-tool-import-map-external-skills");
     fs::create_dir_all(&root).expect("create fixture root");
     write_file(&root, "SKILLS.md", "# Skills\n\n- custom/skill-a\n");
     fs::create_dir_all(root.join(".codex/skills")).expect("create codex skills dir");
@@ -12924,7 +12969,7 @@ fn config_import_apply_selected_mode_writes_manifest_and_backup() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-apply-selected");
+    let root = unique_temp_dir("loong-tool-import-apply-selected");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -12940,7 +12985,7 @@ fn config_import_apply_selected_mode_writes_manifest_and_backup() {
         "# Identity\n\n- role: release copilot\n- tone: steady\n",
     );
 
-    let output_path = root.join("loongclaw.toml");
+    let output_path = root.join("loong.toml");
     let original_body = crate::config::render(&crate::config::LoongConfig::default())
         .expect("render default config");
     fs::write(&output_path, &original_body).expect("write original config");
@@ -12955,7 +13000,7 @@ fn config_import_apply_selected_mode_writes_manifest_and_backup() {
             payload: json!({
                 "mode": "apply_selected",
                 "input_path": ".",
-                "output_path": "loongclaw.toml",
+                "output_path": "loong.toml",
                 "source_id": "openclaw"
             }),
         },
@@ -13009,7 +13054,7 @@ fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-apply-selected-external");
+    let root = unique_temp_dir("loong-tool-import-apply-selected-external");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -13031,7 +13076,7 @@ fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
         "# Release Guard\n\nUse this skill when release discipline matters.\n",
     );
 
-    let output_path = root.join("loongclaw.toml");
+    let output_path = root.join("loong.toml");
 
     let config = runtime_config::ToolRuntimeConfig {
         file_root: Some(root.clone()),
@@ -13043,7 +13088,7 @@ fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
             payload: json!({
                 "mode": "apply_selected",
                 "input_path": ".",
-                "output_path": "loongclaw.toml",
+                "output_path": "loong.toml",
                 "source_id": "openclaw",
                 "apply_external_skills_plan": true
             }),
@@ -13112,7 +13157,7 @@ fn config_import_rollback_last_apply_restores_original_config() {
         fs::write(path, content).expect("write fixture");
     }
 
-    let root = unique_temp_dir("loongclaw-tool-import-rollback-selected");
+    let root = unique_temp_dir("loong-tool-import-rollback-selected");
     fs::create_dir_all(&root).expect("create fixture root");
 
     let openclaw_root = root.join("openclaw-workspace");
@@ -13128,7 +13173,7 @@ fn config_import_rollback_last_apply_restores_original_config() {
         "# Identity\n\n- role: release copilot\n- tone: steady\n",
     );
 
-    let output_path = root.join("loongclaw.toml");
+    let output_path = root.join("loong.toml");
     let original_body = crate::config::render(&crate::config::LoongConfig::default())
         .expect("render default config");
     fs::write(&output_path, &original_body).expect("write original config");
@@ -13143,7 +13188,7 @@ fn config_import_rollback_last_apply_restores_original_config() {
             payload: json!({
                 "mode": "apply_selected",
                 "input_path": ".",
-                "output_path": "loongclaw.toml",
+                "output_path": "loong.toml",
                 "source_id": "openclaw"
             }),
         },
@@ -13156,7 +13201,7 @@ fn config_import_rollback_last_apply_restores_original_config() {
             tool_name: "config.import".to_owned(),
             payload: json!({
                 "mode": "rollback_last_apply",
-                "output_path": "loongclaw.toml"
+                "output_path": "loong.toml"
             }),
         },
         &config,

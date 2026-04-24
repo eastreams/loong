@@ -21,6 +21,7 @@ use crate::CliResult;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -71,6 +72,7 @@ impl ChannelServeStopHandle {
         feature = "channel-feishu",
         feature = "channel-line",
         feature = "channel-matrix",
+        feature = "channel-qqbot",
         feature = "channel-wecom",
         feature = "channel-whatsapp",
         feature = "channel-webhook"
@@ -94,6 +96,7 @@ impl ChannelServeStopHandle {
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -111,6 +114,7 @@ pub fn channel_runtime_now_ms() -> u64 {
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -166,6 +170,7 @@ pub fn ensure_channel_operation_runtime_slot_available_in_dir(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -350,6 +355,7 @@ fn render_runtime_owner_pid_list(owner_pids: &[u32]) -> String {
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -382,6 +388,7 @@ where
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -408,6 +415,7 @@ where
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]

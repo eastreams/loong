@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use serde_json::Value;
@@ -106,29 +107,46 @@ impl AcpConversationTurnEntryDecision {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ExecutedAcpConversationTurn {
-    pub prepared: PreparedAcpConversationTurn,
-    pub backend_selection: AcpBackendSelection,
+pub(crate) enum FinalizedAcpConversationTurn {
+    Succeeded(FinalizedAcpConversationTurnSuccess),
+    Failed(FinalizedAcpConversationTurnFailure),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FinalizedAcpConversationTurnSuccess {
     pub persistence_context: PersistedAcpRuntimeEventContext,
-    pub outcome: AcpConversationTurnExecutionOutcome,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum AcpConversationTurnExecutionOutcome {
-    Succeeded(AcpConversationTurnSuccess),
-    Failed(AcpConversationTurnFailure),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct AcpConversationTurnSuccess {
     pub result: AcpTurnResult,
     pub runtime_events: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AcpConversationTurnFailure {
+pub(crate) struct FinalizedAcpConversationTurnFailure {
+    pub persistence_context: PersistedAcpRuntimeEventContext,
     pub error: String,
     pub runtime_events: Vec<Value>,
+}
+
+pub(crate) async fn consume_finalized_acp_conversation_turn<
+    T,
+    SuccessFuture,
+    FailureFuture,
+    OnSuccess,
+    OnFailure,
+>(
+    finalized: FinalizedAcpConversationTurn,
+    on_success: OnSuccess,
+    on_failure: OnFailure,
+) -> CliResult<T>
+where
+    SuccessFuture: Future<Output = CliResult<T>>,
+    FailureFuture: Future<Output = CliResult<T>>,
+    OnSuccess: FnOnce(FinalizedAcpConversationTurnSuccess) -> SuccessFuture,
+    OnFailure: FnOnce(FinalizedAcpConversationTurnFailure) -> FailureFuture,
+{
+    match finalized {
+        FinalizedAcpConversationTurn::Succeeded(success) => on_success(success).await,
+        FinalizedAcpConversationTurn::Failed(failure) => on_failure(failure).await,
+    }
 }
 
 static ACP_SESSION_MANAGER_REGISTRY: OnceLock<RwLock<BTreeMap<String, Arc<AcpSessionManager>>>> =
@@ -395,26 +413,27 @@ pub fn evaluate_acp_conversation_turn_entry_for_address(
     }
 }
 
+fn resolve_acp_turn_execution_manager(
+    config: &LoongConfig,
+    manager: Option<Arc<AcpSessionManager>>,
+) -> CliResult<Arc<AcpSessionManager>> {
+    match manager {
+        Some(manager) => Ok(manager),
+        None => shared_acp_session_manager(config),
+    }
+}
+
 pub(crate) async fn execute_acp_conversation_turn_for_address(
     config: &LoongConfig,
     address: &ConversationSessionAddress,
     user_input: &str,
     options: &AcpConversationTurnOptions<'_>,
-) -> CliResult<ExecutedAcpConversationTurn> {
+    manager: Option<Arc<AcpSessionManager>>,
+) -> CliResult<FinalizedAcpConversationTurn> {
     let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
-    let manager = shared_acp_session_manager(config)?;
-    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
-}
+    let effective_manager = resolve_acp_turn_execution_manager(config, manager)?;
 
-pub(crate) async fn execute_acp_conversation_turn_for_address_with_manager(
-    config: &LoongConfig,
-    address: &ConversationSessionAddress,
-    user_input: &str,
-    options: &AcpConversationTurnOptions<'_>,
-    manager: Arc<AcpSessionManager>,
-) -> CliResult<ExecutedAcpConversationTurn> {
-    let prepared = prepare_acp_conversation_turn_for_address(config, address, user_input, options)?;
-    execute_prepared_acp_conversation_turn(config, prepared, options, manager).await
+    execute_prepared_acp_conversation_turn(config, prepared, options, effective_manager).await
 }
 
 async fn execute_prepared_acp_conversation_turn(
@@ -422,7 +441,7 @@ async fn execute_prepared_acp_conversation_turn(
     prepared: PreparedAcpConversationTurn,
     options: &AcpConversationTurnOptions<'_>,
     manager: Arc<AcpSessionManager>,
-) -> CliResult<ExecutedAcpConversationTurn> {
+) -> CliResult<FinalizedAcpConversationTurn> {
     let backend_selection = resolve_acp_backend_selection(config);
     let persistence_event_sink = config
         .acp
@@ -471,7 +490,16 @@ async fn execute_prepared_acp_conversation_turn(
         }
     };
 
-    let outcome = match turn_result {
+    let persistence_context = PersistedAcpRuntimeEventContext {
+        backend_id: backend_selection.id.clone(),
+        agent_id: prepared.route.agent_id.clone(),
+        session_key: prepared.request.session_key.clone(),
+        conversation_id: Some(prepared.route.conversation_id.clone()),
+        binding: prepared.route.binding.clone(),
+        request_metadata: prepared.request.metadata.clone(),
+    };
+
+    let finalized = match turn_result {
         Ok(result) => {
             let runtime_events = if let Some(persistence_sink) = persistence_event_sink.as_ref() {
                 let streamed_events = persistence_sink.snapshot()?;
@@ -479,7 +507,8 @@ async fn execute_prepared_acp_conversation_turn(
             } else {
                 result.events.clone()
             };
-            AcpConversationTurnExecutionOutcome::Succeeded(AcpConversationTurnSuccess {
+            FinalizedAcpConversationTurn::Succeeded(FinalizedAcpConversationTurnSuccess {
+                persistence_context,
                 result,
                 runtime_events,
             })
@@ -490,28 +519,15 @@ async fn execute_prepared_acp_conversation_turn(
                 .map(BufferedAcpTurnEventSink::snapshot)
                 .transpose()?
                 .unwrap_or_default();
-            AcpConversationTurnExecutionOutcome::Failed(AcpConversationTurnFailure {
+            FinalizedAcpConversationTurn::Failed(FinalizedAcpConversationTurnFailure {
+                persistence_context,
                 error,
                 runtime_events,
             })
         }
     };
 
-    let persistence_context = PersistedAcpRuntimeEventContext {
-        backend_id: backend_selection.id.clone(),
-        agent_id: prepared.route.agent_id.clone(),
-        session_key: prepared.request.session_key.clone(),
-        conversation_id: Some(prepared.route.conversation_id.clone()),
-        binding: prepared.route.binding.clone(),
-        request_metadata: prepared.request.metadata.clone(),
-    };
-
-    Ok(ExecutedAcpConversationTurn {
-        prepared,
-        backend_selection,
-        persistence_context,
-        outcome,
-    })
+    Ok(finalized)
 }
 
 pub fn derive_automatic_acp_routing_origin_for_address(

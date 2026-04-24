@@ -1,7 +1,4 @@
-use super::bridge::{
-    ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
-    WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
-};
+use super::bridge::{ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR};
 use super::nostr_impl::{NOSTR_ONBOARDING_DESCRIPTOR, NOSTR_OPERATIONS, build_nostr_snapshots};
 use super::planned::{
     WEBCHAT_CHANNEL_REGISTRY_DESCRIPTOR, ZALO_CHANNEL_REGISTRY_DESCRIPTOR,
@@ -374,6 +371,25 @@ const NOSTR_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegi
     onboarding: NOSTR_ONBOARDING_DESCRIPTOR,
     operations: NOSTR_OPERATIONS,
 };
+
+pub(crate) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "qqbot",
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: QQBOT_COMMAND_FAMILY_DESCRIPTOR,
+        }),
+        snapshot_builder: Some(build_qqbot_snapshots),
+        selection_order: 36,
+        selection_label: "qq gateway bot",
+        blurb: "Shipped QQBot official gateway surface with WebSocket ingress and C2C message reply-loop runtime support.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: QQBOT_CAPABILITIES,
+        label: "QQ Bot",
+        aliases: &["qq", "qq-bot", "tencent-qq"],
+        transport: "qq_official_bot_gateway",
+        onboarding: QQBOT_ONBOARDING_DESCRIPTOR,
+        operations: QQBOT_OPERATIONS,
+    };
 
 pub(super) const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR,

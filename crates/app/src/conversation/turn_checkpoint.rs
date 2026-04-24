@@ -18,7 +18,8 @@ use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_coordinator::SafeLaneFailureRoute;
 use super::turn_engine::TurnResult;
 use super::turn_shared::{
-    ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenFollowupKind, ToolDrivenReplyPhase,
+    ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenContinuationState, ToolDrivenFollowupKind,
+    ToolDrivenReplyPhase,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,13 +400,23 @@ pub(super) enum TurnCheckpointResultKind {
 pub(super) struct TurnReplyCheckpoint {
     pub(super) decision: ReplyResolutionMode,
     pub(super) followup_kind: Option<ToolDrivenFollowupKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) continuation_state: Option<ToolDrivenContinuationState>,
 }
 
 impl TurnReplyCheckpoint {
     pub(super) fn from_phase(phase: &ToolDrivenReplyPhase) -> Self {
+        Self::from_phase_with_continuation_state(phase, None)
+    }
+
+    pub(super) fn from_phase_with_continuation_state(
+        phase: &ToolDrivenReplyPhase,
+        continuation_state: Option<ToolDrivenContinuationState>,
+    ) -> Self {
         Self {
             decision: phase.resolution_mode(),
             followup_kind: phase.followup_kind(),
+            continuation_state,
         }
     }
 }
