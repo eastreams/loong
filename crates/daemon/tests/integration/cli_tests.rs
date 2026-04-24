@@ -293,8 +293,6 @@ fn grouped_channels_serve_accepts_a_canonical_shape() {
 
 #[test]
 fn grouped_channels_serve_accepts_bridge_backed_shapes() {
-    // QQBot is now a native runtime channel (RuntimeBacked), not a managed bridge.
-    // Only weixin and onebot remain as PluginBacked managed bridge channels.
     for channel in ["onebot", "weixin"] {
         let _cli = parse_first_candidate(&[
             &["loong", "channels", "serve", channel, "--stop"],
@@ -335,7 +333,9 @@ fn grouped_channels_serve_bridge_surfaces_fail_with_managed_runtime_errors() {
     let config_path = write_empty_config("loong-cli-bridge-serve-empty");
     let config_path_text = config_path.to_str().expect("config path should be utf-8");
 
-    for channel in ["qqbot", "onebot", "weixin"] {
+    // QQBot is now a native runtime channel (RuntimeBacked), not a managed bridge.
+    // Only weixin and onebot remain as PluginBacked managed bridge channels.
+    for channel in ["onebot", "weixin"] {
         let output = Command::new(env!("CARGO_BIN_EXE_loong"))
             .arg("channels")
             .arg("serve")
