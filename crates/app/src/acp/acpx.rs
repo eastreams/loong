@@ -1179,7 +1179,7 @@ mod tests {
         );
         assert_eq!(
             report.diagnostics.get("mcp_runtime_proxy"),
-            Some(&"available_but_disabled_by_policy".to_owned())
+            Some(&"embedded_node_proxy".to_owned())
         );
 
         let _ = std::fs::remove_file(&script_path);

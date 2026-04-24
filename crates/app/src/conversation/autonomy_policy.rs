@@ -396,7 +396,18 @@ mod tests {
 
     #[test]
     fn autonomy_policy_decision_enforces_capability_budget() {
-        let snapshot = AutonomyPolicySnapshot::from_profile(AutonomyProfile::BoundedAutonomous);
+        let snapshot = AutonomyPolicySnapshot {
+            profile: AutonomyProfile::GuidedAcquisition,
+            capability_acquisition_mode: AutonomyOperationMode::Allow,
+            provider_switch_mode: AutonomyOperationMode::Deny,
+            topology_mutation_mode: AutonomyOperationMode::Deny,
+            requires_kernel_binding: false,
+            budget: crate::tools::runtime_config::AutonomyBudgetPolicy {
+                max_capability_acquisitions_per_turn: 2,
+                max_provider_switches_per_turn: 0,
+                max_topology_mutations_per_turn: 0,
+            },
+        };
         let budget = AutonomyTurnBudgetState {
             capability_acquisitions_used: 2,
             provider_switches_used: 0,

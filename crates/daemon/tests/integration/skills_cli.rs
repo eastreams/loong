@@ -43,6 +43,7 @@ fn write_external_skills_config_with_cli(root: &Path, enabled: bool, cli_enabled
     config.cli.enabled = cli_enabled;
     config.tools.file_root = Some(root.display().to_string());
     config.external_skills.enabled = enabled;
+    config.external_skills.auto_expose_installed = enabled;
     config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
@@ -889,6 +890,8 @@ fn execute_skills_command_enable_browser_preview_rolls_back_skill_on_config_pers
     let config_path = root.join("loong.toml");
     let mut config = mvp::config::LoongConfig::default();
     config.tools.file_root = Some(root.display().to_string());
+    config.external_skills.enabled = false;
+    config.external_skills.auto_expose_installed = false;
     config.external_skills.install_root = Some(install_root.display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
@@ -2130,7 +2133,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
     .expect("policy reset should succeed");
     assert_eq!(reset.outcome.payload["persisted"], true);
     assert_eq!(reset.outcome.payload["config_updated"], true);
-    assert_eq!(reset.outcome.payload["policy"]["enabled"], false);
+    assert_eq!(reset.outcome.payload["policy"]["enabled"], true);
     assert_eq!(
         reset.outcome.payload["policy"]["require_download_approval"],
         false
@@ -2154,7 +2157,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
         },
     )
     .expect("policy get after reset should succeed");
-    assert_eq!(final_get.outcome.payload["policy"]["enabled"], false);
+    assert_eq!(final_get.outcome.payload["policy"]["enabled"], true);
     assert_eq!(
         final_get.outcome.payload["policy"]["require_download_approval"],
         false
@@ -2170,7 +2173,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
 
     let (_, reloaded_after_reset) = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
         .expect("reload reset config");
-    assert!(!reloaded_after_reset.external_skills.enabled);
+    assert!(reloaded_after_reset.external_skills.enabled);
     assert!(
         !reloaded_after_reset
             .external_skills
@@ -2192,7 +2195,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
         reloaded_after_reset.external_skills.install_root.as_deref(),
         Some(install_root.as_str())
     );
-    assert!(!reloaded_after_reset.external_skills.auto_expose_installed);
+    assert!(reloaded_after_reset.external_skills.auto_expose_installed);
 
     fs::remove_dir_all(&root).ok();
 }

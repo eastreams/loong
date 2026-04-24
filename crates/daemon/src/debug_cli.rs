@@ -26,42 +26,58 @@ const DEBUG_WATCH_TAIL_LIMIT_DEFAULT: usize = 8;
 pub enum DebugCommands {
     /// Build one developer-facing debug bundle over runtime, provider, ACP, session, and audit signals
     Bundle {
+        /// Session id to inspect; defaults to the global `--session` selector
         #[arg(long)]
         session_id: Option<String>,
+        /// Artifact path to write; omit to use Loong's default debug artifact location
         #[arg(long)]
         output: Option<String>,
+        /// Maximum retained audit entries to include in the bundle
         #[arg(long, default_value_t = 12)]
         audit_limit: usize,
+        /// Maximum session lifecycle events to include in the bundle
         #[arg(long, default_value_t = 20)]
         session_event_limit: usize,
+        /// Maximum transcript history turns to include when history capture is enabled
         #[arg(long, default_value_t = 20)]
         history_limit: usize,
+        /// Maximum ACP events to include in the bundle
         #[arg(long, default_value_t = 200)]
         acp_event_limit: usize,
+        /// Include bounded transcript history for tool-call and provider follow-up debugging
         #[arg(long, default_value_t = false)]
         include_history: bool,
     },
     /// Show one persisted debug bundle artifact in text or JSON form
     Show {
+        /// Debug bundle artifact path produced by `loong debug bundle`
         #[arg(long)]
         artifact: String,
     },
     /// Stream a continuously refreshed developer observability view
     Watch {
+        /// Session id to inspect; defaults to the global `--session` selector
         #[arg(long)]
         session_id: Option<String>,
+        /// Refresh interval in milliseconds; values are clamped to the supported watch range
         #[arg(long, default_value_t = DEBUG_WATCH_REFRESH_MS_DEFAULT)]
         refresh_ms: u64,
+        /// Maximum retained audit entries to show per frame
         #[arg(long, default_value_t = 12)]
         audit_limit: usize,
+        /// Maximum session lifecycle events to show per frame
         #[arg(long, default_value_t = 20)]
         session_event_limit: usize,
+        /// Maximum ACP events to inspect per frame
         #[arg(long, default_value_t = 200)]
         acp_event_limit: usize,
+        /// Number of tail rows to show for bounded event sections
         #[arg(long, default_value_t = DEBUG_WATCH_TAIL_LIMIT_DEFAULT)]
         tail_limit: usize,
+        /// Do not clear the terminal between frames; useful for captured E2E logs
         #[arg(long, default_value_t = false)]
         no_clear: bool,
+        /// Stop after this many rendered frames; useful for scripts and tests
         #[arg(long)]
         max_frames: Option<usize>,
     },

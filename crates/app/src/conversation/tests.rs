@@ -38,9 +38,9 @@ use crate::memory::{
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
-    NewSessionToolPolicyRecord, SessionEventRecord, SessionKind, SessionRepository, SessionState,
-    TransitionApprovalRequestIfCurrentRequest,
+    ApprovalRequestStatus, FinalizeSessionTerminalRequest, NewApprovalGrantRecord, NewSessionEvent,
+    NewSessionRecord, NewSessionToolPolicyRecord, SessionEventRecord, SessionKind,
+    SessionRepository, SessionState, TransitionApprovalRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::store::SessionStoreConfig;
@@ -8084,10 +8084,203 @@ async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provide
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.starts_with("[tool_loop_warning]\nconsecutive_same_tool:")
+                        content.starts_with("[tool_loop_warning]\nconsecutive_same_tool_call:")
                     })
         }),
         "third provider turn should receive the repeated-tool warning in coordinator followup context: {requested_turn_messages:?}"
+    );
+}
+
+fn provider_turn_request_contains_loop_warning(
+    requested_turn_messages: &[Vec<Value>],
+    request_index: usize,
+    warning_prefix: &str,
+) -> bool {
+    let Some(messages) = requested_turn_messages.get(request_index) else {
+        return false;
+    };
+
+    messages.iter().any(|message| {
+        let role = message.get("role").and_then(Value::as_str);
+        if role != Some("assistant") {
+            return false;
+        }
+
+        let Some(content) = message.get("content").and_then(Value::as_str) else {
+            return false;
+        };
+
+        content.starts_with(warning_prefix)
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_includes_no_progress_warning_in_followup_provider_round() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for the right tool first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-no-progress-warning",
+                    "turn-tool-no-progress-warning",
+                    "call-tool-no-progress-warning-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "The first result did not resolve it; I will search again."
+                    .to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "read note.md", "limit": 3}),
+                    "session-tool-no-progress-warning",
+                    "turn-tool-no-progress-warning",
+                    "call-tool-no-progress-warning-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I should stop and ask before continuing.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_repeated_tool_call_rounds = 1;
+    config.conversation.turn_loop.max_consecutive_same_tool = 100;
+    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-no-progress-warning",
+            "search for the right tool, then read and summarize note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("no-progress warning path should still return a reply");
+
+    assert_eq!(reply, "I should stop and ask before continuing.");
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    let warning_prefix = "[tool_loop_warning]\nrepeated_tool_call_no_progress";
+    assert_eq!(requested_turn_messages.len(), 3);
+    assert!(
+        provider_turn_request_contains_loop_warning(&requested_turn_messages, 2, warning_prefix),
+        "third provider turn should receive the no-progress warning in coordinator followup context: {requested_turn_messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_includes_ping_pong_warning_in_followup_provider_round() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Let me search for alpha first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "alpha note", "limit": 3}),
+                    "session-tool-ping-pong-warning",
+                    "turn-tool-ping-pong-warning",
+                    "call-tool-ping-pong-warning-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Now I will search for beta.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "beta note", "limit": 3}),
+                    "session-tool-ping-pong-warning",
+                    "turn-tool-ping-pong-warning",
+                    "call-tool-ping-pong-warning-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I need alpha again.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "alpha note", "limit": 3}),
+                    "session-tool-ping-pong-warning",
+                    "turn-tool-ping-pong-warning",
+                    "call-tool-ping-pong-warning-3",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I need beta again.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "tool.search",
+                    json!({"query": "beta note", "limit": 3}),
+                    "session-tool-ping-pong-warning",
+                    "turn-tool-ping-pong-warning",
+                    "call-tool-ping-pong-warning-4",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I should stop and ask before continuing.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let mut config = test_config();
+    config.conversation.turn_loop.max_repeated_tool_call_rounds = 100;
+    config.conversation.turn_loop.max_ping_pong_cycles = 2;
+    config.conversation.turn_loop.max_consecutive_same_tool = 100;
+    config.conversation.turn_loop.max_discovery_followup_rounds = 6;
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-tool-ping-pong-warning",
+            "search for the right tool, then read and summarize note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("ping-pong warning path should still return a reply");
+
+    assert_eq!(reply, "I should stop and ask before continuing.");
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    let warning_prefix = "[tool_loop_warning]\nping_pong_tool_patterns";
+    assert_eq!(requested_turn_messages.len(), 5);
+    assert!(
+        provider_turn_request_contains_loop_warning(&requested_turn_messages, 4, warning_prefix),
+        "fifth provider turn should receive the ping-pong warning in coordinator followup context: {requested_turn_messages:?}"
     );
 }
 
@@ -8458,6 +8651,146 @@ async fn handle_turn_with_runtime_provider_shape_tool_search_followup_openai_cha
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     assert_discovery_first_followup_summary(&persisted, false, "read", None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_provider_shape_continues_empty_content_openai_tool_calls() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let alpha_contents = "OPENAI_EMPTY_CONTENT_ALPHA";
+    let bravo_contents = "OPENAI_EMPTY_CONTENT_BRAVO";
+    let alpha_path = harness.temp_dir.join("alpha.txt");
+    let bravo_path = harness.temp_dir.join("bravo.txt");
+    std::fs::write(&alpha_path, alpha_contents).expect("seed alpha file");
+    std::fs::write(&bravo_path, bravo_contents).expect("seed bravo file");
+
+    let first_tool_call_body = json!({
+        "choices": [{
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-openai-empty-alpha",
+                    "type": "function",
+                    "function": {
+                        "name": "file_read",
+                        "arguments": "{\"path\":\"alpha.txt\"}"
+                    }
+                }]
+            }
+        }]
+    });
+    let second_tool_call_body = json!({
+        "choices": [{
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-openai-empty-bravo",
+                    "type": "function",
+                    "function": {
+                        "name": "file_read",
+                        "arguments": "{\"path\":\"bravo.txt\"}"
+                    }
+                }]
+            }
+        }]
+    });
+    let final_reply_body = json!({
+        "choices": [{
+            "message": {
+                "content": "Done with empty-content OpenAI tool-call chain."
+            }
+        }]
+    });
+    let turn_bodies = vec![
+        Ok(first_tool_call_body),
+        Ok(second_tool_call_body),
+        Ok(final_reply_body),
+    ];
+    let runtime = FakeRuntime::with_turn_bodies_and_completions(vec![], turn_bodies, vec![]);
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config_with_file_root(&harness.temp_dir);
+    config.conversation.turn_loop.max_discovery_followup_rounds = 4;
+    config.conversation.turn_loop.max_consecutive_same_tool = 2;
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-openai-empty-content-chain",
+            "read alpha.txt, then read bravo.txt, then summarize both",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+        )
+        .await
+        .expect("empty-content OpenAI tool-call chain should succeed");
+
+    assert_eq!(reply, "Done with empty-content OpenAI tool-call chain.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 3);
+    let second_turn_messages = &requested_turn_messages[1];
+    let second_turn_has_alpha_result =
+        provider_messages_include_tool_result(second_turn_messages, alpha_contents);
+    assert!(
+        second_turn_has_alpha_result,
+        "second provider turn should receive alpha tool result context: {requested_turn_messages:?}"
+    );
+
+    let third_turn_messages = &requested_turn_messages[2];
+    let third_turn_has_bravo_result =
+        provider_messages_include_tool_result(third_turn_messages, bravo_contents);
+    assert!(
+        third_turn_has_bravo_result,
+        "third provider turn should receive bravo tool result context: {requested_turn_messages:?}"
+    );
+}
+
+fn provider_messages_include_tool_result(messages: &[Value], expected_contents: &str) -> bool {
+    messages
+        .iter()
+        .any(|message| provider_message_includes_tool_result(message, expected_contents))
+}
+
+fn provider_message_includes_tool_result(message: &Value, expected_contents: &str) -> bool {
+    let Some(role_value) = message.get("role") else {
+        return false;
+    };
+
+    let Some(role) = role_value.as_str() else {
+        return false;
+    };
+
+    if role != "assistant" {
+        return false;
+    }
+
+    let Some(content_value) = message.get("content") else {
+        return false;
+    };
+
+    let Some(content) = content_value.as_str() else {
+        return false;
+    };
+
+    let has_tool_result_marker = content.starts_with("[tool_result]\n");
+    if !has_tool_result_marker {
+        return false;
+    }
+
+    content.contains(expected_contents)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -16002,13 +16335,15 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_allows_capability_instal
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "memory-sqlite")]
-async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budget() {
+async fn autonomy_policy_turn_engine_bounded_autonomous_allows_multiple_capability_installs() {
     use crate::conversation::turn_engine::{
         DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
     };
 
-    let workspace_root_name =
-        unique_acp_test_id("conversation-autonomy-policy", "bounded-install-budget");
+    let workspace_root_name = unique_acp_test_id(
+        "conversation-autonomy-policy",
+        "bounded-install-multi-allow",
+    );
     let workspace_root = std::env::temp_dir().join(workspace_root_name);
     let _ = std::fs::remove_dir_all(&workspace_root);
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
@@ -16022,7 +16357,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
     write_test_external_skill(&workspace_root, skill_three_path);
 
     let mut config = test_config();
-    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-budget");
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-multi-allow");
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.external_skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
@@ -16030,12 +16365,12 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
     let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-        "autonomy-bounded-install-budget",
+        "autonomy-bounded-install-multi-allow",
         60,
         &config,
     )
     .expect("bootstrap kernel context");
-    let session_id = "session-autonomy-bounded-install-budget";
+    let session_id = "session-autonomy-bounded-install-multi-allow";
     let session_context = autonomy_runtime_session_context(session_id, &config);
 
     let first_intent = provider_tool_intent(
@@ -16044,8 +16379,8 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
             "path": skill_one_path
         }),
         session_id,
-        "turn-autonomy-bounded-install-budget",
-        "call-autonomy-bounded-install-budget-1",
+        "turn-autonomy-bounded-install-multi-allow",
+        "call-autonomy-bounded-install-multi-allow-1",
     );
     let second_intent = provider_tool_intent(
         "external_skills.install",
@@ -16053,8 +16388,8 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
             "path": skill_two_path
         }),
         session_id,
-        "turn-autonomy-bounded-install-budget",
-        "call-autonomy-bounded-install-budget-2",
+        "turn-autonomy-bounded-install-multi-allow",
+        "call-autonomy-bounded-install-multi-allow-2",
     );
     let third_intent = provider_tool_intent(
         "external_skills.install",
@@ -16062,8 +16397,8 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
             "path": skill_three_path
         }),
         session_id,
-        "turn-autonomy-bounded-install-budget",
-        "call-autonomy-bounded-install-budget-3",
+        "turn-autonomy-bounded-install-multi-allow",
+        "call-autonomy-bounded-install-multi-allow-3",
     );
     let turn = ProviderTurn {
         assistant_text: String::new(),
@@ -16077,25 +16412,20 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
         .await;
 
     match result {
-        TurnResult::ToolDenied(failure) => {
-            assert_eq!(
-                failure.code,
-                "autonomy_policy_capability_acquisition_budget_exceeded"
-            );
-            assert!(
-                failure
-                    .reason
-                    .contains("capability acquisition budget exceeded"),
-                "unexpected denial reason: {failure:?}"
-            );
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
+            let ok_lines = text
+                .lines()
+                .filter(|line| line.starts_with("[ok] "))
+                .count();
+            assert_eq!(ok_lines, 3, "expected all installs to run: {text}");
         }
-        other @ TurnResult::FinalText(_)
-        | other @ TurnResult::StreamingText(_)
-        | other @ TurnResult::StreamingDone(_)
-        | other @ TurnResult::NeedsApproval(_)
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
-            panic!("expected ToolDenied, got {other:?}");
+            panic!("expected successful tool execution, got {other:?}");
         }
     }
 
@@ -16105,37 +16435,36 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
     let installed_three = installed_skill_root.join("demo-skill-3").join("SKILL.md");
 
     assert!(
-        !installed_one.exists(),
-        "budget denial should abort execution before the first install runs"
+        installed_one.exists(),
+        "bounded_autonomous should install the first skill"
     );
     assert!(
-        !installed_two.exists(),
-        "budget denial should abort execution before the second install runs"
+        installed_two.exists(),
+        "bounded_autonomous should install the second skill"
     );
     assert!(
-        !installed_three.exists(),
-        "budget denial should abort execution before the third install runs"
+        installed_three.exists(),
+        "bounded_autonomous should install the third skill"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "memory-sqlite")]
-async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_provider_switch() {
+async fn autonomy_policy_turn_engine_bounded_autonomous_allows_provider_switch_execution() {
     use crate::conversation::turn_engine::{
         DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
     };
 
     let workspace_root_name = unique_acp_test_id(
         "conversation-autonomy-policy",
-        "bounded-provider-switch-approval",
+        "bounded-provider-switch-allow",
     );
     let workspace_root = std::env::temp_dir().join(workspace_root_name);
     let _ = std::fs::remove_dir_all(&workspace_root);
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
 
     let mut config = test_config();
-    config.memory.sqlite_path =
-        unique_memory_sqlite_path("autonomy-bounded-provider-switch-approval");
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-provider-switch-allow");
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
@@ -16170,7 +16499,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_pr
     let repo = SessionRepository::new(&memory_config).expect("session repository");
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-        "autonomy-bounded-provider-switch-approval",
+        "autonomy-bounded-provider-switch-allow",
         60,
         &config,
     )
@@ -16198,58 +16527,40 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_pr
         .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
         .await;
 
-    let approval_request_id = match result {
-        TurnResult::NeedsApproval(requirement) => {
-            assert_eq!(requirement.tool_name.as_deref(), Some("provider.switch"));
-            assert_eq!(
-                requirement.approval_key.as_deref(),
-                Some("tool:provider.switch")
-            );
-            requirement
-                .approval_request_id
-                .expect("approval request id should be persisted")
+    match result {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+            assert_eq!(envelope["tool"], "provider.switch");
         }
-        other @ TurnResult::FinalText(_)
-        | other @ TurnResult::StreamingText(_)
-        | other @ TurnResult::StreamingDone(_)
+        other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
-            panic!("expected NeedsApproval, got {other:?}");
+            panic!("expected successful provider switch, got {other:?}");
         }
-    };
+    }
 
-    let stored_request = repo
-        .load_approval_request(&approval_request_id)
-        .expect("load approval request")
-        .expect("approval request should exist");
-    let governance_snapshot = stored_request.governance_snapshot_json;
     let (_, reloaded_config) =
         crate::config::load(Some(config_path.to_str().expect("utf8 config path")))
             .expect("reload provider switch config");
-    assert_eq!(stored_request.tool_name, "provider.switch");
-    assert_eq!(stored_request.approval_key, "tool:provider.switch");
     assert_eq!(
         reloaded_config.active_provider_id(),
-        Some("openai-gpt-5"),
-        "provider should remain unchanged before approval is granted"
+        Some("deepseek-chat"),
+        "bounded_autonomous should switch providers without an approval pause"
     );
-    assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
-    assert_eq!(
-        governance_snapshot["autonomy_profile"],
-        "bounded_autonomous"
-    );
-    assert_eq!(
-        governance_snapshot["capability_action_class"],
-        "runtime_switch"
-    );
-    assert_eq!(
-        governance_snapshot["rule_id"],
-        "autonomy_policy_provider_switch_requires_approval"
-    );
-    assert_eq!(
-        governance_snapshot["reason_code"],
-        "autonomy_policy_provider_switch_requires_approval"
+    let approval_requests = repo
+        .list_approval_requests_for_session(session_id, None)
+        .expect("list approval requests");
+    assert!(
+        approval_requests.is_empty(),
+        "bounded_autonomous provider switch should not persist approval requests"
     );
 }
 
@@ -16406,26 +16717,62 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_po
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "memory-sqlite")]
-async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_session_mutation() {
+async fn autonomy_policy_turn_engine_bounded_autonomous_allows_session_mutation_execution() {
     use crate::conversation::turn_engine::{
         DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
     };
 
     let mut config = test_config();
     config.memory.sqlite_path =
-        unique_memory_sqlite_path("autonomy-bounded-session-mutation-denied");
+        unique_memory_sqlite_path("autonomy-bounded-session-mutation-allow");
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
     config.tools.sessions.allow_mutation = true;
 
     let memory_config = session_store_config_from_config(&config);
     let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-        "autonomy-bounded-session-mutation-denied",
+        "autonomy-bounded-session-mutation-allow",
         60,
         &config,
     )
     .expect("bootstrap kernel context");
     let session_id = "session-autonomy-bounded-session-mutation";
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some(session_id.to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    })
+    .expect("create child session");
+    repo.finalize_session_terminal(
+        "child-session",
+        FinalizeSessionTerminalRequest {
+            state: SessionState::Completed,
+            last_error: None,
+            event_kind: "delegate_completed".to_owned(),
+            actor_session_id: Some(session_id.to_owned()),
+            event_payload_json: json!({
+                "result": "ok"
+            }),
+            outcome_status: "ok".to_owned(),
+            outcome_payload_json: json!({
+                "child_session_id": "child-session",
+                "result": "ok"
+            }),
+            frozen_result: None,
+        },
+    )
+    .expect("finalize child session");
     let session_context = autonomy_runtime_session_context(session_id, &config);
     let tool_intent = provider_tool_intent(
         "session_archive",
@@ -16447,53 +16794,47 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_se
         .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
         .await;
 
-    let approval_request_id = match result {
-        TurnResult::NeedsApproval(requirement) => {
-            assert_eq!(requirement.tool_name.as_deref(), Some("session_archive"));
-            assert_eq!(
-                requirement.approval_key.as_deref(),
-                Some("tool:session_archive")
-            );
-            requirement
-                .approval_request_id
-                .expect("approval request id should be persisted")
+    match result {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+            assert_eq!(envelope["tool"], "session_archive");
+            assert_eq!(envelope["status"], "ok");
         }
-        other @ TurnResult::FinalText(_)
-        | other @ TurnResult::StreamingText(_)
-        | other @ TurnResult::StreamingDone(_)
+        other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
-            panic!("expected NeedsApproval, got {other:?}");
+            panic!("expected successful session mutation, got {other:?}");
         }
-    };
+    }
 
-    let repo = SessionRepository::new(&memory_config).expect("session repository");
-    let stored_request = repo
-        .load_approval_request(&approval_request_id)
-        .expect("load approval request")
-        .expect("approval request should exist");
-    let governance_snapshot = stored_request.governance_snapshot_json;
-    assert_eq!(stored_request.tool_name, "session_archive");
-    assert_eq!(stored_request.approval_key, "tool:session_archive");
-    assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
-    assert_eq!(
-        governance_snapshot["capability_action_class"],
-        "session_mutation"
+    let archived_child = repo
+        .load_session_summary_with_legacy_fallback("child-session")
+        .expect("load archived child")
+        .expect("archived child should exist");
+    assert!(
+        archived_child.archived_at.is_some(),
+        "bounded_autonomous should archive the child session without an approval pause"
     );
-    assert_eq!(
-        governance_snapshot["rule_id"],
-        "autonomy_policy_session_mutation_requires_approval"
-    );
-    assert_eq!(
-        governance_snapshot["reason_code"],
-        "autonomy_policy_session_mutation_requires_approval"
+    let approval_requests = repo
+        .list_approval_requests_for_session(session_id, None)
+        .expect("list approval requests");
+    assert!(
+        approval_requests.is_empty(),
+        "bounded_autonomous session mutation should not persist approval requests"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "memory-sqlite")]
-async fn autonomy_policy_turn_engine_advisory_binding_denies_session_mutation_before_persisting_approval_request()
+async fn autonomy_policy_turn_engine_guided_acquisition_denies_direct_session_mutation_before_persisting_approval_request()
  {
     use crate::conversation::turn_engine::{
         DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
@@ -16501,8 +16842,8 @@ async fn autonomy_policy_turn_engine_advisory_binding_denies_session_mutation_be
 
     let mut config = test_config();
     config.memory.sqlite_path =
-        unique_memory_sqlite_path("autonomy-advisory-session-mutation-denied");
-    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+        unique_memory_sqlite_path("autonomy-guided-direct-session-mutation-denied");
+    config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
     config.tools.sessions.allow_mutation = true;
 
     let memory_config = session_store_config_from_config(&config);

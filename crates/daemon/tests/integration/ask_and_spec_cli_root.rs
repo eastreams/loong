@@ -94,8 +94,81 @@ fn cli_ask_help_mentions_one_shot_assistant_usage() {
         "ask help should require an inline message input: {help}"
     );
     assert!(
+        help.contains("Path to the Loong config file"),
+        "ask help should explain config discovery and overrides: {help}"
+    );
+    assert!(
+        help.contains("Stream ACP turn events"),
+        "ask help should explain ACP event streaming for runtime debugging: {help}"
+    );
+    assert!(
         help.contains("loong chat"),
         "ask help should point users to chat for the interactive path: {help}"
+    );
+}
+
+#[test]
+fn cli_root_help_exposes_unified_turn_runtime_namespace() {
+    let help = render_cli_help([]);
+
+    assert!(
+        help.lines()
+            .any(|line| line.trim_start().starts_with("turn ")),
+        "root help should expose the canonical turn runtime namespace: {help}"
+    );
+    assert!(
+        help.contains("unified runtime"),
+        "root help should describe turn as the unified runtime entry surface: {help}"
+    );
+}
+
+#[test]
+fn cli_turn_run_help_explains_runtime_debugging_options() {
+    let help = render_cli_help(["turn", "run"]);
+
+    assert!(
+        help.contains("canonical one-shot turn entrypoint"),
+        "turn run help should identify the canonical runtime path: {help}"
+    );
+    assert!(
+        help.contains("Path to the Loong config file"),
+        "turn run help should explain config discovery and overrides: {help}"
+    );
+    assert!(
+        help.contains("Session id or selector"),
+        "turn run help should explain session selection: {help}"
+    );
+    assert!(
+        help.contains("Stream ACP turn events"),
+        "turn run help should explain ACP event streaming for runtime debugging: {help}"
+    );
+}
+
+#[test]
+fn cli_debug_help_explains_bundle_and_watch_options() {
+    let bundle_help = render_cli_help(["debug", "bundle"]);
+    let watch_help = render_cli_help(["debug", "watch"]);
+    let show_help = render_cli_help(["debug", "show"]);
+
+    assert!(
+        bundle_help.contains("tool-call and provider follow-up debugging"),
+        "debug bundle help should explain why history can be captured: {bundle_help}"
+    );
+    assert!(
+        bundle_help.contains("Maximum retained audit entries"),
+        "debug bundle help should explain audit limits: {bundle_help}"
+    );
+    assert!(
+        watch_help.contains("captured E2E logs"),
+        "debug watch help should explain no-clear scripting usage: {watch_help}"
+    );
+    assert!(
+        watch_help.contains("Stop after this many rendered frames"),
+        "debug watch help should explain bounded script mode: {watch_help}"
+    );
+    assert!(
+        show_help.contains("Debug bundle artifact path"),
+        "debug show help should explain the artifact input: {show_help}"
     );
 }
 
@@ -143,6 +216,49 @@ fn ask_cli_accepts_message_session_and_acp_flags() {
         }) => {
             assert_eq!(message, "Summarize this repository");
             assert_eq!(session.as_deref(), Some("telegram:42"));
+            assert!(acp);
+            assert!(acp_event_stream);
+            assert_eq!(acp_bootstrap_mcp_server, vec!["filesystem".to_owned()]);
+            assert_eq!(acp_cwd.as_deref(), Some("/workspace/project"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn turn_run_cli_accepts_message_session_and_acp_flags() {
+    let cli = try_parse_cli([
+        "loong",
+        "turn",
+        "run",
+        "--message",
+        "Exercise the canonical turn runtime",
+        "--session",
+        "direct-e2e",
+        "--acp",
+        "--acp-event-stream",
+        "--acp-bootstrap-mcp-server",
+        "filesystem",
+        "--acp-cwd",
+        "/workspace/project",
+    ])
+    .expect("turn run CLI should parse canonical one-shot flags");
+
+    match cli.command {
+        Some(Commands::Turn {
+            command:
+                TurnCommands::Run {
+                    message,
+                    session,
+                    acp,
+                    acp_event_stream,
+                    acp_bootstrap_mcp_server,
+                    acp_cwd,
+                    ..
+                },
+        }) => {
+            assert_eq!(message, "Exercise the canonical turn runtime");
+            assert_eq!(session.as_deref(), Some("direct-e2e"));
             assert!(acp);
             assert!(acp_event_stream);
             assert_eq!(acp_bootstrap_mcp_server, vec!["filesystem".to_owned()]);

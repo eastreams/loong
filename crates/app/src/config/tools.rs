@@ -109,9 +109,9 @@ pub const AUTONOMY_PROFILE_VALID_VALUES: &str =
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomyProfile {
-    #[default]
     DiscoveryOnly,
     GuidedAcquisition,
+    #[default]
     BoundedAutonomous,
 }
 
@@ -511,7 +511,7 @@ fn default_external_skills_blocked_domains() -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalSkillsConfig {
-    #[serde(default)]
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default = "default_require_download_approval")]
     pub require_download_approval: bool,
@@ -655,7 +655,7 @@ impl Default for BrowserToolConfig {
 impl Default for ExternalSkillsConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_enabled(),
             require_download_approval: default_require_download_approval(),
             allowed_domains: Vec::new(),
             blocked_domains: default_external_skills_blocked_domains(),
@@ -1413,7 +1413,7 @@ const fn default_require_download_approval() -> bool {
 }
 
 const fn default_auto_expose_installed() -> bool {
-    false
+    true
 }
 
 fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
@@ -1438,7 +1438,7 @@ mod tests {
         assert!(config.shell_allow.is_empty());
         assert!(config.shell_deny.is_empty());
         assert_eq!(config.shell_default_mode, "allow");
-        assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(config.autonomy_profile, AutonomyProfile::BoundedAutonomous);
         assert_eq!(config.consent.default_mode, ToolConsentMode::Full);
         assert_eq!(config.approval.mode, GovernedToolApprovalMode::Disabled);
         assert!(config.approval.approved_calls.is_empty());
@@ -2179,14 +2179,14 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn external_skills_defaults_to_yolo_off_mode() {
+    fn external_skills_defaults_to_yolo_on_mode() {
         let config = ExternalSkillsConfig::default();
-        assert!(!config.enabled);
+        assert!(config.enabled);
         assert!(!config.require_download_approval);
         assert!(config.allowed_domains.is_empty());
         assert!(config.blocked_domains.is_empty());
         assert!(config.install_root.is_none());
-        assert!(!config.auto_expose_installed);
+        assert!(config.auto_expose_installed);
     }
 
     #[test]
