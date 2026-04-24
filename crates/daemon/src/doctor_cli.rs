@@ -3542,7 +3542,7 @@ mod tests {
         let mut metadata = metadata;
         metadata
             .entry("channel_runtime_contract".to_owned())
-            .or_insert_with(|| "loongclaw_channel_bridge_v1".to_owned());
+            .or_insert_with(|| "loong_channel_bridge_v1".to_owned());
         metadata
             .entry("channel_runtime_operations_json".to_owned())
             .or_insert_with(|| {

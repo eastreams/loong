@@ -1,7 +1,7 @@
 {
   "eyebrow": "Web Chat",
   "title": "对话界面",
-  "subtitle": "通过浏览器优先的界面复用现有 LoongClaw runtime。",
+  "subtitle": "通过浏览器优先的界面复用现有 Loong runtime。",
   "newSession": "新建会话",
   "deleteSession": "删除会话",
   "deleting": "删除中...",
@@ -12,7 +12,7 @@
   "noHistory": "暂无历史",
   "emptyState": "新建一段对话，或打开已有会话。",
   "loadingHistory": "加载历史中...",
-  "inputPlaceholder": "向 LoongClaw 询问 runtime、工具或工作流...",
+  "inputPlaceholder": "向 Loong 询问 runtime、工具或工作流...",
   "send": "发送",
   "panels": {
     "sessions": "会话",
@@ -55,17 +55,17 @@
     "streamEndedUnexpectedly": "这次流式连接在到达终态之前就结束了。页面已经尝试从本地历史恢复，如果这一轮还没有显示完整结果，请再刷新一次会话。"
   },
   "loading": {
-    "connectingA": "LoongClaw 正在接入航线",
-    "connectingB": "LoongClaw 正在确认路线",
-    "connectingC": "LoongClaw 正在寻找稳定气流",
-    "thinkingA": "LoongClaw 正在思考",
-    "thinkingB": "LoongClaw 正在盘旋",
-    "thinkingC": "LoongClaw 正在整理想法",
-    "streamingA": "LoongClaw 正在落字",
-    "streamingB": "LoongClaw 正在展开回答",
-    "streamingC": "LoongClaw 正在继续飞行",
+    "connectingA": "Loong 正在接入航线",
+    "connectingB": "Loong 正在确认路线",
+    "connectingC": "Loong 正在寻找稳定气流",
+    "thinkingA": "Loong 正在思考",
+    "thinkingB": "Loong 正在盘旋",
+    "thinkingC": "Loong 正在整理想法",
+    "streamingA": "Loong 正在落字",
+    "streamingB": "Loong 正在展开回答",
+    "streamingC": "Loong 正在继续飞行",
     "hintConnecting": "还在连接 provider，只要还没有报错，这一轮就还有机会完成。",
-    "hintThinking": "请求已经发出，LoongClaw 还在等待或组织回答。",
+    "hintThinking": "请求已经发出，Loong 还在等待或组织回答。",
     "hintStreaming": "已经收到增量文本，这一轮仍在继续生成。"
   }
 }

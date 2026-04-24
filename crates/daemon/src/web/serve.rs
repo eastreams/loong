@@ -127,11 +127,11 @@ pub(super) async fn run_web_serve(
         .await
         .map_err(|error| format!("bind web api on {bind} failed: {error}"))?;
 
-    println!("loongclaw web api listening on http://{address}");
-    println!("loongclaw web api local token path: {token_path_display}");
+    println!("loong web api listening on http://{address}");
+    println!("loong web api local token path: {token_path_display}");
     if let Some(static_root) = resolved_static_root.as_ref() {
         println!(
-            "loongclaw web ui same-origin static root: {}",
+            "loong web ui same-origin static root: {}",
             static_root.display()
         );
     }
@@ -204,7 +204,7 @@ fn with_cors_headers(mut response: Response, allowed_origin: Option<&str>) -> Re
     );
     response.headers_mut().insert(
         ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("content-type, authorization, x-loongclaw-token"),
+        HeaderValue::from_static("content-type, authorization, x-loong-token"),
     );
     response
 }

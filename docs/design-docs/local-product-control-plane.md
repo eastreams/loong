@@ -59,7 +59,7 @@ The gateway front door is the stable localhost control surface.
 Bootstrap precedence:
 
 1. explicit CLI `--port`
-2. `LOONGCLAW_GATEWAY_PORT`
+2. `LOONG_GATEWAY_PORT`
 3. config `[gateway].port`
 4. built-in default `127.0.0.1:26306`
 

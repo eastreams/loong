@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ChoiceField } from "../../../components/inputs/ChoiceField";
@@ -480,7 +480,7 @@ export default function DashboardPage() {
     },
   ];
   const debugConsoleCommand =
-    debugConsole?.command ?? "$ loongclaw web debug --readonly";
+    debugConsole?.command ?? "$ loong web debug --readonly";
 
   return (
     <div className="page page-dashboard">

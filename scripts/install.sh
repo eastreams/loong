@@ -207,7 +207,7 @@ release_base_url="${LOONG_INSTALL_RELEASE_BASE_URL:-${LOONG_INSTALL_RELEASE_BASE
 target_libc="${LOONG_INSTALL_TARGET_LIBC:-${LOONG_INSTALL_TARGET_LIBC:-auto}}"
 package_name="loong"
 bin_name="loong"
-legacy_bin_name="loongclaw"
+legacy_bin_name="loong"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -366,7 +366,7 @@ remove_legacy_binary_if_present() {
 
   if [[ -L "${legacy_output_path}" ]]; then
     rm -f "${legacy_output_path}"
-    printf '==> Removed legacy loongclaw compatibility command from %s\n' "${legacy_output_path}"
+    printf '==> Removed legacy loong compatibility command from %s\n' "${legacy_output_path}"
     return 0
   fi
 
@@ -375,7 +375,7 @@ remove_legacy_binary_if_present() {
   fi
 
   rm -f "${legacy_output_path}"
-  printf '==> Removed legacy loongclaw compatibility command from %s\n' "${legacy_output_path}"
+  printf '==> Removed legacy loong compatibility command from %s\n' "${legacy_output_path}"
 }
 
 install_web_search_provider_display_name() {

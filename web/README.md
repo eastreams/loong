@@ -1,6 +1,6 @@
-# LoongClaw Web
+# Loong Web
 
-LoongClaw 的本地优先 Web Console。
+Loong 的本地优先 Web Console。
 
 > 安装与启动说明见 [INSTALL.md](INSTALL.md)。
 
@@ -19,7 +19,7 @@ LoongClaw 的本地优先 Web Console。
 - `Chat` 已支持多会话、可见消息历史、流式输出、会话级临时视图态缓存，以及更准确的“生成中”状态提示
 - `Chat` 已消费后端 `turn.phase` 事件，并结合 `tool.started / tool.finished` 映射出更真实的前端流式状态
 - `Dashboard` 已支持 provider 最小写入、runtime/config/connectivity 读取、工具姿态摘要、审批队列和只读 Debug Console
-- `Abilities` 已支持 `Personalization / Channels / Skills / Mascot`
+- `Abilities` 已支持 `Personalization / Channels / Skills`
 - `Skills` 面板已从前端静态映射，收敛到以后端 runtime/catalog 真值为主
 - onboarding 已支持 provider catalog、默认 route 回填、原子 apply-and-validate，以及 kind-route 错配拒绝保存
 - 已支持中英文切换与明暗主题切换
@@ -30,7 +30,7 @@ LoongClaw 的本地优先 Web Console。
 
 适合直接使用已经构建好的 Web Console。
 
-1. 构建 daemon：`cargo build --bin loongclaw`
+1. 构建 daemon：`cargo build --bin loong`
 2. 在 `web/` 目录下安装并构建前端：
 
 ```bash
@@ -41,13 +41,13 @@ npm run build
 3. 安装前端产物：
 
 ```bash
-loongclaw web install --source ./dist
+loong web install --source ./dist
 ```
 
 4. 启动服务：
 
 ```bash
-loongclaw web serve
+loong web serve
 ```
 
 默认地址：`http://127.0.0.1:4317/`
@@ -55,15 +55,15 @@ loongclaw web serve
 管理命令：
 
 ```bash
-loongclaw web status
-loongclaw web remove
+loong web status
+loong web remove
 ```
 
 ### 方式二：开发态分离运行
 
 适合前端开发与热更新联调。
 
-1. 构建 daemon：`cargo build --bin loongclaw`
+1. 构建 daemon：`cargo build --bin loong`
 2. 在 `web/` 目录下安装依赖：`npm install`
 3. 启动前端 dev server 与本地 API：
    - Windows：`powershell -File scripts/web/start-dev.ps1`
@@ -79,7 +79,7 @@ loongclaw web remove
 
 适合验证更接近产品态的本地体验。
 
-1. 构建 daemon：`cargo build --bin loongclaw`
+1. 构建 daemon：`cargo build --bin loong`
 2. 在 `web/` 目录下安装依赖：`npm install`
 3. 构建前端：`npm run build`
 4. 启动同源服务：

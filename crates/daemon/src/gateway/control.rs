@@ -70,7 +70,7 @@ const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
 const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 const GATEWAY_ACP_SESSION_LIST_DEFAULT_LIMIT: usize = 50;
 const GATEWAY_ACP_SESSION_LIST_MAX_LIMIT: usize = 200;
-const GATEWAY_CONTROL_PORT_ENV: &str = "LOONGCLAW_GATEWAY_PORT";
+const GATEWAY_CONTROL_PORT_ENV: &str = "LOONG_GATEWAY_PORT";
 const GATEWAY_PAIRING_CHALLENGE_MAX_FUTURE_SKEW_MS: u64 = 30_000;
 
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
@@ -1544,7 +1544,7 @@ fn extract_gateway_pairing_session_token(headers: &HeaderMap) -> Option<String> 
         .map(ToOwned::to_owned)
         .or_else(|| {
             headers
-                .get("x-loongclaw-pairing-session-token")
+                .get("x-loong-pairing-session-token")
                 .and_then(|value| value.to_str().ok())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())

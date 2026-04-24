@@ -1,7 +1,7 @@
 import { useEffect, useState, type PropsWithChildren } from "react";
 import { ThemeContext, THEMES, type Theme } from "./ThemeContextValue";
 
-const STORAGE_KEY = "loongclaw-web-theme";
+const STORAGE_KEY = "loong-web-theme";
 
 function getInitialTheme(): Theme {
   try {

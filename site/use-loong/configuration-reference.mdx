@@ -18,7 +18,7 @@ The default configuration file is located at:
 - **Linux/macOS**: `~/.loong/config.toml`
 - **Windows**: `%USERPROFILE%\.loong\config.toml`
 
-Existing legacy `~/.loongclaw/` homes are still discovered when `~/.loong/`
+Existing legacy `~/.loong/` homes are still discovered when `~/.loong/`
 has not been created yet, but the public path and examples in this reference
 use the current `~/.loong/` home.
 
@@ -664,7 +664,7 @@ Channel configuration uses top-level TOML tables such as `[cli]`, `[telegram]`, 
 |-------|------|---------|--------------|-------------|
 | `enabled` | boolean | `true` | `true`, `false` | Enable CLI channel |
 | `system_prompt` | string | Default prompt | Prompt text | System prompt template |
-| `prompt_pack_id` | string? | `"loongclaw-core-v1"` | Pack ID | Prompt pack ID |
+| `prompt_pack_id` | string? | `"loong-core-v1"` | Pack ID | Prompt pack ID |
 | `personality` | string? | `"calm_engineering"` | `"calm_engineering"`, `"friendly_collab"`, `"autonomous_executor"` | Personality preset |
 | `system_prompt_addendum` | string? | `null` | Prompt text | Additional prompt text |
 | `exit_commands` | string[] | `["/exit", "/quit"]` | Commands | Commands to exit chat |

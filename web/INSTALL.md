@@ -1,4 +1,4 @@
-# LoongClaw Web Installation Guide
+# Loong Web Installation Guide
 
 ## 1. 前置条件
 
@@ -6,7 +6,7 @@
 
 - Rust 工具链
 - Node.js + npm
-- 已在仓库根目录构建 `loongclaw` daemon：`cargo build --bin loongclaw`
+- 已在仓库根目录构建 `loong` daemon：`cargo build --bin loong`
 
 ## 2. 安装前端依赖
 
@@ -27,13 +27,13 @@ npm install
 npm run build
 
 # 安装到 ~/.loong/web/（Windows 为 %USERPROFILE%\.loong\web\）
-loongclaw web install --source ./dist
+loong web install --source ./dist
 ```
 
 ### 启动
 
 ```bash
-loongclaw web serve
+loong web serve
 ```
 
 `web serve` 会自动检测已安装的前端，无需额外传参。
@@ -47,22 +47,22 @@ loongclaw web serve
 ```bash
 # 在 web/ 目录内
 npm run build
-loongclaw web install --source ./dist
+loong web install --source ./dist
 ```
 
-然后重启 `loongclaw web serve` 生效。
+然后重启 `loong web serve` 生效。
 
 ### 管理
 
 ```bash
 # 查看安装状态（安装时间、来源路径、安装目录）
-loongclaw web status
+loong web status
 
 # 卸载前端（保留 daemon）
-loongclaw web remove
+loong web remove
 
 # 强制卸载（跳过确认）
-loongclaw web remove --force
+loong web remove --force
 ```
 
 安装目录：

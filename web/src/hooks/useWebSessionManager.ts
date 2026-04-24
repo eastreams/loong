@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isApiAbortError, isApiRequestError } from "../lib/api/client";
 import { getApiBaseUrl } from "../lib/config/env";
 import {
@@ -13,8 +13,8 @@ import {
 } from "../features/onboarding/api";
 import type { WebSessionContextValue } from "../contexts/WebSessionContext";
 
-const ONBOARDING_VALIDATION_STORAGE_KEY = "loongclaw.onboarding.validation-key";
-const ONBOARDING_ACK_STORAGE_KEY = "loongclaw.onboarding.ack-key";
+const ONBOARDING_VALIDATION_STORAGE_KEY = "loong.onboarding.validation-key";
+const ONBOARDING_ACK_STORAGE_KEY = "loong.onboarding.ack-key";
 
 function buildOnboardingValidationKey(status: OnboardingStatus | null): string | null {
   if (!status?.tokenPaired || !status.configLoadable || !status.providerConfigured) {

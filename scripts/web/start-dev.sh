@@ -62,8 +62,8 @@ wait_for_http() {
 
 resolve_daemon_exe() {
   local daemon_exe="${REPO_ROOT}/target/debug/loong"
-  if [[ ! -f "${daemon_exe}" && -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
-    daemon_exe="${REPO_ROOT}/target/debug/loongclaw"
+  if [[ ! -f "${daemon_exe}" && -f "${REPO_ROOT}/target/debug/loong" ]]; then
+    daemon_exe="${REPO_ROOT}/target/debug/loong"
   fi
 
   if [[ "${BUILD_DAEMON}" == "1" || ! -f "${daemon_exe}" ]]; then
@@ -91,7 +91,7 @@ stop_port_processes "${DEV_PORT}"
 
 if [[ "${BUILD_DAEMON}" == "1" ]]; then
   DAEMON_BUILD_MODE="forced"
-elif [[ -f "${REPO_ROOT}/target/debug/loong" || -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
+elif [[ -f "${REPO_ROOT}/target/debug/loong" || -f "${REPO_ROOT}/target/debug/loong" ]]; then
   DAEMON_BUILD_MODE="reused existing binary"
 else
   DAEMON_BUILD_MODE="built missing binary"

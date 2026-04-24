@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { createPortal } from "react-dom";
 
-const CHOICE_FIELD_OPEN_EVENT = "loongclaw:choice-field-open";
+const CHOICE_FIELD_OPEN_EVENT = "loong:choice-field-open";
 
 export interface ChoiceFieldOption {
   value: string;

@@ -322,8 +322,8 @@ impl QqbotWebsocketManager {
                 "intents": (1u64 << 25) | (1u64 << 30),
                 "properties": {
                     "$os": "linux",
-                    "$browser": "loongclaw",
-                    "$device": "loongclaw"
+                    "$browser": "loong",
+                    "$device": "loong"
                 }
             }
         });

@@ -7080,7 +7080,7 @@ mod tests {
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-session-event-search-storage-{}",
+            "loong-session-event-search-storage-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);
@@ -10419,7 +10419,7 @@ mod tests {
     #[test]
     fn canonical_memory_search_matches_segmented_chinese_queries() {
         let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-canonical-memory-chinese-search-{}",
+            "loong-canonical-memory-chinese-search-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&tmp);

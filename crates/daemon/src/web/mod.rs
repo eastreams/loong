@@ -84,7 +84,7 @@ pub enum WebCommand {
         #[arg(long)]
         static_root: Option<String>,
     },
-    /// Install the Web Console UI assets to ~/.loongclaw/web
+    /// Install the Web Console UI assets to ~/.loong/web
     Install {
         /// Path to the built frontend assets directory (e.g. web/dist)
         #[arg(long)]
@@ -107,10 +107,10 @@ struct WebInstallManifest {
     install_dir: String,
 }
 
-const WEB_API_TOKEN_ENV: &str = "LOONGCLAW_WEB_TOKEN";
+const WEB_API_TOKEN_ENV: &str = "LOONG_WEB_TOKEN";
 const WEB_API_TOKEN_FILE: &str = "web-api-token";
-const WEB_API_PAIRING_COOKIE: &str = "loongclaw-web-pair";
-const WEB_API_SESSION_COOKIE: &str = "loongclaw-web-session";
+const WEB_API_PAIRING_COOKIE: &str = "loong-web-pair";
+const WEB_API_SESSION_COOKIE: &str = "loong-web-session";
 
 #[derive(Debug)]
 struct WebApiState {
@@ -1295,11 +1295,11 @@ fn mask_secret(value: &str) -> String {
 }
 
 fn resolve_local_web_token() -> Result<(String, PathBuf), WebApiError> {
-    let loongclaw_home = mvp::config::default_loong_home();
-    fs::create_dir_all(&loongclaw_home)
-        .map_err(|error| WebApiError::internal(format!("create loongclaw home failed: {error}")))?;
+    let loong_home = mvp::config::default_loong_home();
+    fs::create_dir_all(&loong_home)
+        .map_err(|error| WebApiError::internal(format!("create loong home failed: {error}")))?;
 
-    let token_path = loongclaw_home.join(WEB_API_TOKEN_FILE);
+    let token_path = loong_home.join(WEB_API_TOKEN_FILE);
     if let Ok(raw_env_token) = env::var(WEB_API_TOKEN_ENV) {
         let token = raw_env_token.trim();
         if !token.is_empty() {
@@ -1362,11 +1362,7 @@ fn is_internal_structured_assistant_record(content: &str) -> bool {
         return false;
     };
 
-    let marked_internal = parsed
-        .get("_loong_internal")
-        .or_else(|| parsed.get("_loongclaw_internal"))
-        .and_then(Value::as_bool)
-        == Some(true);
+    let marked_internal = parsed.get("_loong_internal").and_then(Value::as_bool) == Some(true);
 
     let is_internal_type = matches!(
         parsed.get("type").and_then(Value::as_str),

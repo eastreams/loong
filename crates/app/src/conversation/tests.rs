@@ -21199,7 +21199,7 @@ async fn root_session_ignores_nonexistent_configured_file_root_for_workspace_sco
     let _ = std::fs::remove_file(&db_path);
 
     let missing_root = std::env::temp_dir().join(format!(
-        "loongclaw-missing-root-{}",
+        "loong-missing-root-{}",
         unique_acp_test_id("conversation-root-runtime", "missing-root-path")
     ));
     let _ = std::fs::remove_dir_all(&missing_root);

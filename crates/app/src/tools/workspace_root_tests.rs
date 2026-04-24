@@ -38,11 +38,11 @@ fn execute_tool_core_with_test_context(
 #[test]
 fn file_read_uses_runtime_workspace_root_from_runtime_config() {
     let outer_root = std::env::temp_dir().join(format!(
-        "loongclaw-file-read-runtime-workspace-root-outer-{}",
+        "loong-file-read-runtime-workspace-root-outer-{}",
         std::process::id()
     ));
     let runtime_root = std::env::temp_dir().join(format!(
-        "loongclaw-file-read-runtime-workspace-root-runtime-{}",
+        "loong-file-read-runtime-workspace-root-runtime-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&outer_root).expect("create outer root");

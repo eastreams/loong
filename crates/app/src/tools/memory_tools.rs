@@ -1048,7 +1048,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
     #[test]
     fn memory_search_tool_uses_indexed_workspace_memory_when_sqlite_is_available() {
-        let root = unique_temp_dir("loongclaw-memory-search-indexed-workspace");
+        let root = unique_temp_dir("loong-memory-search-indexed-workspace");
         let db_path = root.join("memory.sqlite3");
 
         std::fs::create_dir_all(&root).expect("create root dir");
@@ -1132,7 +1132,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
     #[test]
     fn memory_search_tool_refreshes_indexed_workspace_memory_after_file_changes() {
-        let root = unique_temp_dir("loongclaw-memory-search-index-refresh");
+        let root = unique_temp_dir("loong-memory-search-index-refresh");
         let db_path = root.join("memory.sqlite3");
         let memory_path = root.join("MEMORY.md");
 
@@ -1214,7 +1214,7 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
     #[test]
     fn memory_search_tool_drops_deleted_workspace_documents_from_index() {
-        let root = unique_temp_dir("loongclaw-memory-search-index-delete");
+        let root = unique_temp_dir("loong-memory-search-index-delete");
         let db_path = root.join("memory.sqlite3");
         let memory_path = root.join("MEMORY.md");
 
@@ -1318,7 +1318,7 @@ mod tests {
     #[cfg(feature = "tool-file")]
     #[test]
     fn memory_search_tool_matches_segmented_chinese_workspace_queries() {
-        let root = unique_temp_dir("loongclaw-memory-search-chinese-workspace");
+        let root = unique_temp_dir("loong-memory-search-chinese-workspace");
 
         std::fs::create_dir_all(&root).expect("create root dir");
         std::fs::write(root.join("MEMORY.md"), "中文分词用于数据库搜索。\n")

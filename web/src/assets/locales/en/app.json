@@ -1,5 +1,5 @@
-﻿{
-    "appName":  "LoongClaw Web",
+{
+    "appName":  "Loong Web",
     "nav":  {
                 "chat":  "Chat",
                 "dashboard":  "Status",
@@ -165,7 +165,7 @@
                    },
     "chrome":  {
                    "eyebrow":  "Web Console",
-                   "title":  "Local control surface for LoongClaw",
-                   "subtitle":  "English-first bilingual console aligned with the main LoongClaw website."
+                   "title":  "Local control surface for Loong",
+                   "subtitle":  "English-first bilingual console aligned with the main Loong website."
                }
 }

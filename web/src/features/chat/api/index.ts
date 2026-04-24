@@ -93,25 +93,6 @@ interface CreateTurnRequest {
   input: string;
 }
 
-export interface MascotBrowserThemeToggleResponse {
-  sessionId: string;
-  executionTier: string;
-  pageUrl: string | null;
-  title: string | null;
-  clicked: boolean;
-  snapshot: string;
-}
-
-export interface MascotBrowserSearchResponse {
-  query: string;
-  sessionId: string;
-  executionTier: string;
-  pageUrl: string | null;
-  title: string | null;
-  firstUrl: string | null;
-  snapshot: string;
-}
-
 interface StreamHandlers {
   onEvent: (event: ChatTurnStreamEvent) => void;
 }
@@ -130,8 +111,7 @@ export function isInternalAssistantRecordContent(content: string): boolean {
 
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    const markedInternal =
-      parsed._loong_internal === true || parsed._loongclaw_internal === true;
+    const markedInternal = parsed._loong_internal === true;
     const internalType =
       parsed.type === "conversation_event" ||
       parsed.type === "tool_decision" ||
@@ -177,7 +157,6 @@ export function looksLikeInternalAssistantRecordContent(content: string): boolea
   const trimmed = content.trimStart();
   return (
     trimmed.startsWith('{"_loong_internal"') ||
-    trimmed.startsWith('{"_loongclaw_internal"') ||
     trimmed.startsWith('{"type":"conversation_event"') ||
     trimmed.startsWith('{"type":"tool_decision"') ||
     trimmed.startsWith('{"type":"tool_outcome"') ||
@@ -307,25 +286,4 @@ export const chatApi = {
     );
   },
 
-  async mascotToggleThemeWithBrowserCompanion(
-    pageUrl: string,
-    request?: ApiRequestOptions,
-  ): Promise<MascotBrowserThemeToggleResponse> {
-    return apiPostData<MascotBrowserThemeToggleResponse, { pageUrl: string }>(
-      "/api/mascot/browser/theme-toggle",
-      { pageUrl },
-      withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
-    );
-  },
-
-  async mascotSearchWithBrowserCompanion(
-    query?: string,
-    request?: ApiRequestOptions,
-  ): Promise<MascotBrowserSearchResponse> {
-    return apiPostData<MascotBrowserSearchResponse, { query?: string }>(
-      "/api/mascot/browser/search",
-      query ? { query } : {},
-      withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
-    );
-  },
 };

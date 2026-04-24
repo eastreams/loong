@@ -27,13 +27,13 @@ fn isolated_home(prefix: &str) -> (ScopedEnv, PathBuf) {
     env.set("HOME", &home);
     env.remove("LOONG_HOME");
     env.remove("LOONG_CONFIG_PATH");
-    env.remove("LOONGCLAW_CONFIG_PATH");
+    env.remove("LOONG_CONFIG_PATH");
     (env, home)
 }
 
 #[test]
 fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
-    let (_env, _home) = isolated_home("loongclaw-default-entry-missing");
+    let (_env, _home) = isolated_home("loong-default-entry-missing");
 
     assert!(
         matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -43,8 +43,8 @@ fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
 
 #[test]
 fn resolve_default_entry_command_ignores_legacy_home_when_config_is_missing() {
-    let (_env, home) = isolated_home("loongclaw-default-entry-legacy-home");
-    let legacy_home = home.join(".loongclaw");
+    let (_env, home) = isolated_home("loong-default-entry-legacy-home");
+    let legacy_home = home.join(".loong");
     fs::create_dir_all(&legacy_home).expect("create legacy home");
 
     assert!(
@@ -55,7 +55,7 @@ fn resolve_default_entry_command_ignores_legacy_home_when_config_is_missing() {
 
 #[test]
 fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() {
-    let (_env, _home) = isolated_home("loongclaw-default-entry-present");
+    let (_env, _home) = isolated_home("loong-default-entry-present");
     let config_path = mvp::config::default_config_path();
     mvp::config::write(
         Some(config_path.to_str().expect("utf8 config path")),
@@ -71,9 +71,9 @@ fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() 
 }
 
 #[test]
-fn resolve_default_entry_command_ignores_loongclaw_config_path_without_compat_shim() {
+fn resolve_default_entry_command_ignores_loong_config_path_without_compat_shim() {
     let (mut env, _home) = isolated_home("loong-default-entry-legacy-env");
-    let config_path = unique_temp_dir("loongclaw-default-entry-env").join("custom-config.toml");
+    let config_path = unique_temp_dir("loong-default-entry-env").join("custom-config.toml");
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).expect("create config parent");
     }
@@ -83,7 +83,7 @@ fn resolve_default_entry_command_ignores_loongclaw_config_path_without_compat_sh
         true,
     )
     .expect("write explicit config");
-    env.set("LOONGCLAW_CONFIG_PATH", &config_path);
+    env.set("LOONG_CONFIG_PATH", &config_path);
 
     assert!(
         matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -201,7 +201,7 @@ fn resolve_welcome_config_path_honors_loong_config_path_override() {
 #[test]
 fn render_welcome_banner_includes_version_and_next_commands() {
     let config = mvp::config::LoongConfig::default();
-    let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
+    let rendered = render_welcome_banner(Path::new("/tmp/loong's config.toml"), &config);
 
     assert!(
         rendered.contains(env!("CARGO_PKG_VERSION")),
@@ -216,11 +216,11 @@ fn render_welcome_banner_includes_version_and_next_commands() {
         "welcome banner should lead with a start-here handoff: {rendered}"
     );
     assert!(
-        rendered.contains("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+        rendered.contains("loong ask --config '/tmp/loong'\"'\"'s config.toml'"),
         "welcome banner should include a quoted ask command: {rendered}"
     );
     assert!(
-        rendered.contains("loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+        rendered.contains("loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
         "welcome banner should include a quoted chat command: {rendered}"
     );
     assert!(

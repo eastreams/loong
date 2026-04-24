@@ -2343,7 +2343,7 @@ mod tests {
     #[test]
     fn operator_runtime_summary_includes_hidden_surface_ids() {
         let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
-            config: "/tmp/loongclaw.toml".to_owned(),
+            config: "/tmp/loong.toml".to_owned(),
             schema: GatewayRuntimeSnapshotSchema {
                 version: 1,
                 surface: "runtime_snapshot",
@@ -2363,7 +2363,7 @@ mod tests {
                 enabled_plugin_backed_channel_ids: vec![],
                 enabled_outbound_only_channel_ids: vec![],
                 inventory: GatewayChannelInventoryReadModel {
-                    config: "/tmp/loongclaw.toml".to_owned(),
+                    config: "/tmp/loong.toml".to_owned(),
                     schema: GatewayChannelInventorySchema {
                         version: 1,
                         primary_channel_view: "channel_surfaces",

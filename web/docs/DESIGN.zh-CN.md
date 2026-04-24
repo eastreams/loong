@@ -1,8 +1,8 @@
-# LoongClaw Web 设计进度
+# Loong Web 设计进度
 
 ## 1. 当前定位
 
-LoongClaw Web 现在是一个可实际使用的本地 Web Console，而不是单纯演示壳子。
+Loong Web 现在是一个可实际使用的本地 Web Console，而不是单纯演示壳子。
 
 当前它主要承担四件事：
 
@@ -154,14 +154,13 @@ Abilities 现在已经不是简单的信息页，而是第三个主要页面。
 - `Personalization`
 - `Channels`
 - `Skills`
-- `Mascot`
 
 当前重点变化：
 
 - `Skills` 已改为以后端 runtime/catalog 真值为主，不再主要依赖前端内置映射
 - 已能区分 visible tools、hidden surfaces、browser companion、external skills
 - 已补自治/审批/consent 等运行时姿态摘要
-- `Mascot` 目前是实验性开关入口，默认关闭
+- 小宠物实验已从 Web 前端移出，后续在独立 Qoong 项目继续推进
 
 ## 5. Debug / Runtime Console
 
@@ -187,7 +186,6 @@ Abilities 现在已经不是简单的信息页，而是第三个主要页面。
 - Dashboard 已补 approval queue
 - Dashboard 已补 autonomy / approval / consent / session mutation 等工具姿态
 - Abilities `Skills` 已切到 runtime truth
-- Abilities 已增加 `Mascot` 实验入口
 - Chat 已消费 `turn.phase`，流式状态更真实
 
 ## 7. 当前边界
@@ -199,10 +197,7 @@ Abilities 现在已经不是简单的信息页，而是第三个主要页面。
 - 更完整的 Dashboard 受控写入
 - 更接近真实 CLI 的连续输出流 Debug Console
 
-另外有两点需要明确：
-
-- 小宠物目前仍是前端实验能力，不是一个后端常驻 agent
-- Web 侧还没有把 browser companion、approval、页面操作等能力真正接成“小宠物 agent 行为”
+另外需要明确：小宠物相关体验已经迁出 Web 前端，Loong Web 继续聚焦 chat、dashboard、abilities、onboarding 这些本地控制台能力。
 
 ## 8. 当前优先级判断
 
@@ -210,6 +205,5 @@ Abilities 现在已经不是简单的信息页，而是第三个主要页面。
 
 1. 聊天流式 turn 生命周期和错误恢复
 2. Dashboard / Abilities 对 runtime truth 的可解释展示
-3. 小宠物的视觉、布局和聊天状态联动
 
 而不是先把 Web 做成完整配置后台。

@@ -23,27 +23,15 @@ import {
   type DashboardApprovals,
 } from "../../dashboard/api";
 import { abilitiesApi, type SkillsSnapshot } from "../../abilities/api";
-import { ChatMascot, type MascotActionReply } from "../components/ChatMascot";
-import { useMascotAgent } from "../hooks/useMascotAgent";
-import {
-  performMascotBrowserSearch,
-  performMascotPageAction,
-} from "../mascotPageActions";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { useChatStream } from "../hooks/useChatStream";
-import {
-  CHAT_MASCOT_TOGGLED_EVENT,
-  readChatMascotEnabled,
-} from "../mascotPreference";
-import { captureCurrentPageContext } from "../mascotPageContext";
 
 const MarkdownBlock = lazy(async () => {
   const module = await import("../components/MarkdownBlock");
   return { default: module.MarkdownBlock };
 });
 
-const CHAT_SESSION_TITLE_OVERRIDES_STORAGE_KEY = "loongclaw.web.chat.sessionTitleOverrides";
-const MASCOT_SEARCH_QUERY = "food";
+const CHAT_SESSION_TITLE_OVERRIDES_STORAGE_KEY = "loong.web.chat.sessionTitleOverrides";
 
 function readStoredSessionTitleOverrides(): Record<string, string> {
   if (typeof window === "undefined") {
@@ -60,15 +48,6 @@ function readStoredSessionTitleOverrides(): Record<string, string> {
     return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
   } catch {
     return {};
-  }
-}
-
-function shortUrlLabel(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`.slice(0, 64);
-  } catch {
-    return url.slice(0, 64);
   }
 }
 
@@ -93,7 +72,6 @@ export default function ChatPage() {
   );
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [showMascot, setShowMascot] = useState(() => readChatMascotEnabled());
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -136,11 +114,6 @@ export default function ChatPage() {
   });
 
   const { isSubmitting, sendMessage } = streamState;
-  const mascotAgent = useMascotAgent({
-    isChinese,
-    canAccessProtectedApi,
-    markUnauthorized,
-  });
 
   const refreshInspectorTruth = useCallback(async () => {
     if (!canAccessProtectedApi) {
@@ -258,25 +231,6 @@ export default function ChatPage() {
       JSON.stringify(sessionTitleOverrides),
     );
   }, [sessionTitleOverrides]);
-
-  useEffect(() => {
-    function handleStorage(event: StorageEvent) {
-      if (event.key) {
-        setShowMascot(readChatMascotEnabled());
-      }
-    }
-
-    function handleMascotToggled() {
-      setShowMascot(readChatMascotEnabled());
-    }
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(CHAT_MASCOT_TOGGLED_EVENT, handleMascotToggled);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(CHAT_MASCOT_TOGGLED_EVENT, handleMascotToggled);
-    };
-  }, []);
 
   useEffect(() => {
     if (sessions.length === 0) {
@@ -486,62 +440,6 @@ export default function ChatPage() {
       })
       .slice(0, 3);
   }, [inspectorApprovals?.items, selectedSessionId]);
-
-  const handleMascotReadPage = useCallback(async () => {
-    if (!canAccessProtectedApi) {
-      return isChinese ? "主会话还没接通。" : "the main session is not ready yet.";
-    }
-
-    const pageContext = captureCurrentPageContext();
-    const instruction = isChinese
-      ? "读取当前页面，优先根据可见的会话内容给我一点简短反馈：现在聊到哪、哪里可能卡住、下一步可以留意什么。不要像运行状态报告，也不要罗列页面控件。除非真的看到异常或待处理事项，否则不用特意说。默认不超过四句。"
-      : "Read the current page and respond mainly to the visible conversation content: where the discussion is, what may be stuck, and what to watch next. Do not sound like a runtime status report or list page controls. Only mention errors or pending items if they are actually visible. Keep it within four sentences.";
-
-    const reply = await mascotAgent.requestReply(instruction, { pageContext });
-    return (
-      reply?.content?.trim() ??
-      (isChinese ? "我看完了，但暂时没有新的结论。" : "I checked it, but I do not have anything new to add.")
-    );
-  }, [canAccessProtectedApi, isChinese, mascotAgent]);
-
-  const handleMascotToggleTheme = useCallback(async () => {
-    const result = await performMascotPageAction("toggle-theme");
-
-    if (!result.targetFound) {
-      return isChinese ? "我没找到开关。" : "I could not find the switch.";
-    }
-
-    if (!result.changed) {
-      return isChinese ? "灯没动，再试一次。" : "The lights did not move. Try again.";
-    }
-
-    if (result.nextTheme === "dark") {
-      return isChinese ? "关好了。" : "Lights off.";
-    }
-
-    return isChinese ? "开好了。" : "Lights on.";
-  }, [isChinese]);
-
-  const handleMascotSearchQoong = useCallback(async (): Promise<MascotActionReply | string> => {
-    if (!canAccessProtectedApi) {
-      return isChinese ? "主会话还没接通。" : "the main session is not ready yet.";
-    }
-
-    const result = await performMascotBrowserSearch(MASCOT_SEARCH_QUERY);
-    if (result.firstUrl) {
-      return {
-        text: isChinese
-          ? "我搜了美食，第一个网址在这里。"
-          : `I searched ${result.query}. Here is the first URL.`,
-        url: result.firstUrl,
-        linkLabel: shortUrlLabel(result.firstUrl),
-      };
-    }
-
-    return isChinese
-      ? "我搜了美食，但这次没拿到第一个网址。"
-      : `I searched ${result.query}, but did not get the first URL this time.`;
-  }, [canAccessProtectedApi, isChinese]);
 
   const selectedSession =
     sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -811,21 +709,6 @@ export default function ChatPage() {
             ) : null}
 
             <div className="chat-composer-dock">
-              {showMascot ? (
-                <ChatMascot
-                  isChinese={isChinese}
-                  streamPhase={streamPhase}
-                  activeToolCount={activeTools.length}
-                  isSubmitting={isSubmitting}
-                  onWake={() => {
-                    void mascotAgent.primeSession();
-                  }}
-                  onReadPage={handleMascotReadPage}
-                  onSearchQoong={handleMascotSearchQoong}
-                  onToggleTheme={handleMascotToggleTheme}
-                />
-              ) : null}
-
               <form
                 className="composer composer-inline"
                 onSubmit={(event) => {

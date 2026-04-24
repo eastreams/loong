@@ -1,4 +1,4 @@
-# LoongClaw Web API（当前状态）
+# Loong Web API（当前状态）
 
 本文档只记录当前 Web Console 已落地、且前端正在实际依赖的接口与调用约定。
 

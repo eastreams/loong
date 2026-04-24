@@ -103,7 +103,7 @@ function Install-Binary([string]$SourceBinary) {
 }
 
 function Remove-LegacyBinaryIfPresent {
-    $legacyBinaryName = "loongclaw.exe"
+    $legacyBinaryName = "loong.exe"
     $legacyBinary = Join-Path $Prefix $legacyBinaryName
     $legacyBinaryItem = Get-Item -LiteralPath $legacyBinary -Force -ErrorAction SilentlyContinue
     if ($null -eq $legacyBinaryItem) {
@@ -114,7 +114,7 @@ function Remove-LegacyBinaryIfPresent {
     }
 
     Remove-Item -LiteralPath $legacyBinary -Force
-    Write-Host "==> Removed legacy loongclaw compatibility command from $legacyBinary"
+    Write-Host "==> Removed legacy loong compatibility command from $legacyBinary"
 }
 
 function Install-FromSource {

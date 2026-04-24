@@ -515,7 +515,7 @@ mod tests {
 
         let isolated_id = NEXT_ISOLATED_MEMORY_ID.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "loongclaw-announce-{test_name}-{}-{isolated_id}",
+            "loong-announce-{test_name}-{}-{isolated_id}",
             std::process::id(),
         ));
         let _ = fs::create_dir_all(&base);

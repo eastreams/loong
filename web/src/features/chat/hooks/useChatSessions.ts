@@ -8,7 +8,6 @@ import {
   type ChatMessage,
   type ChatSessionSummary,
 } from "../api";
-import { CHAT_MASCOT_SESSION_ID } from "../mascotProfile";
 
 export type StreamPhase = "idle" | "connecting" | "thinking" | "streaming";
 
@@ -34,7 +33,8 @@ export interface SessionViewState {
   streamPhase: StreamPhase;
 }
 
-const CHAT_SELECTED_SESSION_STORAGE_KEY = "loongclaw.web.chat.selectedSessionId";
+const CHAT_SELECTED_SESSION_STORAGE_KEY = "loong.web.chat.selectedSessionId";
+const LEGACY_MASCOT_SESSION_ID = "mascot:qoong";
 
 function readStoredSelectedSessionId(): string | null {
   if (typeof window === "undefined") {
@@ -45,7 +45,7 @@ function readStoredSelectedSessionId(): string | null {
 }
 
 function filterVisibleSessions(sessions: ChatSessionSummary[]): ChatSessionSummary[] {
-  return sessions.filter((session) => session.id !== CHAT_MASCOT_SESSION_ID);
+  return sessions.filter((session) => session.id !== LEGACY_MASCOT_SESSION_ID);
 }
 
 export function useChatSessions(t: TFunction) {

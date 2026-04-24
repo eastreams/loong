@@ -1764,7 +1764,7 @@ mod tests {
 
     #[test]
     fn file_read_supports_line_window_pagination() {
-        let base = unique_temp_dir("loongclaw-file-read-window");
+        let base = unique_temp_dir("loong-file-read-window");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\ndelta").expect("write fixture");
@@ -1796,7 +1796,7 @@ mod tests {
 
     #[test]
     fn file_read_rejects_line_offset_beyond_end_of_file() {
-        let base = unique_temp_dir("loongclaw-file-read-window-bounds");
+        let base = unique_temp_dir("loong-file-read-window-bounds");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("notes.txt"), "alpha\nbeta").expect("write fixture");
@@ -2261,7 +2261,7 @@ mod tests {
 
     #[test]
     fn file_edit_exact_edit_blocks_apply_multiple_replacements() {
-        let base = unique_temp_dir("loongclaw-file-edit-blocks");
+        let base = unique_temp_dir("loong-file-edit-blocks");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");
@@ -2286,7 +2286,7 @@ mod tests {
 
     #[test]
     fn file_edit_exact_edit_blocks_reject_non_unique_matches() {
-        let base = unique_temp_dir("loongclaw-file-edit-blocks-non-unique");
+        let base = unique_temp_dir("loong-file-edit-blocks-non-unique");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("file.txt"), "dup\ndup\n").expect("write");
@@ -2306,7 +2306,7 @@ mod tests {
 
     #[test]
     fn file_edit_exact_edit_blocks_accept_camel_case_aliases() {
-        let base = unique_temp_dir("loongclaw-file-edit-blocks-camel");
+        let base = unique_temp_dir("loong-file-edit-blocks-camel");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
         let target = root.join("file.txt");

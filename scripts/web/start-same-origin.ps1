@@ -56,7 +56,7 @@ function Resolve-DaemonExePath {
     return $primaryDaemonExe
   }
 
-  $legacyDaemonExe = Join-Path $RepoRoot "target\debug\loongclaw.exe"
+  $legacyDaemonExe = Join-Path $RepoRoot "target\debug\loong.exe"
   if (Test-Path $legacyDaemonExe) {
     return $legacyDaemonExe
   }

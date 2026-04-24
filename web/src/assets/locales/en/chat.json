@@ -1,7 +1,7 @@
 {
   "eyebrow": "Web Chat",
   "title": "Conversation surface",
-  "subtitle": "Reuse the existing LoongClaw runtime through a browser-first shell.",
+  "subtitle": "Reuse the existing Loong runtime through a browser-first shell.",
   "newSession": "New session",
   "deleteSession": "Delete session",
   "deleting": "Deleting...",
@@ -12,7 +12,7 @@
   "noHistory": "No history",
   "emptyState": "Start a new conversation or open an existing session.",
   "loadingHistory": "Loading history...",
-  "inputPlaceholder": "Ask LoongClaw about runtime, tools, or workflow...",
+  "inputPlaceholder": "Ask Loong about runtime, tools, or workflow...",
   "send": "Send",
   "panels": {
     "sessions": "Sessions",
@@ -55,17 +55,17 @@
     "streamEndedUnexpectedly": "The live stream ended before the turn reported a final status. Web reloaded local history, but this turn may still need a manual refresh."
   },
   "loading": {
-    "connectingA": "LoongClaw is joining the flight path",
-    "connectingB": "LoongClaw is checking the route",
-    "connectingC": "LoongClaw is looking for stable air",
-    "thinkingA": "LoongClaw is thinking",
-    "thinkingB": "LoongClaw is circling",
-    "thinkingC": "LoongClaw is arranging its thoughts",
-    "streamingA": "LoongClaw is laying down words",
-    "streamingB": "LoongClaw is expanding the answer",
-    "streamingC": "LoongClaw is still in flight",
+    "connectingA": "Loong is joining the flight path",
+    "connectingB": "Loong is checking the route",
+    "connectingC": "Loong is looking for stable air",
+    "thinkingA": "Loong is thinking",
+    "thinkingB": "Loong is circling",
+    "thinkingC": "Loong is arranging its thoughts",
+    "streamingA": "Loong is laying down words",
+    "streamingB": "Loong is expanding the answer",
+    "streamingC": "Loong is still in flight",
     "hintConnecting": "The provider connection is still in progress. If there is no error yet, this turn still has a chance to complete.",
-    "hintThinking": "The request is already out. LoongClaw is waiting on or shaping the response.",
+    "hintThinking": "The request is already out. Loong is waiting on or shaping the response.",
     "hintStreaming": "Incremental text is already arriving. This turn is still actively generating."
   }
 }

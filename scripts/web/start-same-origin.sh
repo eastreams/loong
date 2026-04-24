@@ -59,8 +59,8 @@ wait_for_http() {
 
 resolve_daemon_exe() {
   local daemon_exe="${REPO_ROOT}/target/debug/loong"
-  if [[ ! -f "${daemon_exe}" && -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
-    daemon_exe="${REPO_ROOT}/target/debug/loongclaw"
+  if [[ ! -f "${daemon_exe}" && -f "${REPO_ROOT}/target/debug/loong" ]]; then
+    daemon_exe="${REPO_ROOT}/target/debug/loong"
   fi
 
   if [[ "${BUILD_DAEMON}" == "1" || ! -f "${daemon_exe}" ]]; then

@@ -61,7 +61,7 @@ pub(super) fn extract_request_token(headers: &HeaderMap) -> Option<String> {
     }
 
     headers
-        .get("x-loongclaw-token")
+        .get("x-loong-token")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
