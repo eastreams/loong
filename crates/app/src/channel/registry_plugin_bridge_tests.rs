@@ -271,7 +271,6 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         ]
     );
 
-    // QQBot is now a native runtime channel, not a managed bridge.
     assert_eq!(qqbot.plugin_bridge_contract, None);
     assert_eq!(
         qqbot
@@ -313,7 +312,6 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         .plugin_bridge_contract
         .as_ref()
         .expect("weixin plugin bridge contract");
-    // QQBot is now a native runtime channel, not a managed bridge.
     assert_eq!(qqbot.plugin_bridge_contract, None);
     let onebot_contract = onebot
         .plugin_bridge_contract
@@ -340,9 +338,6 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         ]
     );
     assert_eq!(weixin_contract.account_scope_note, None);
-
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // No plugin bridge contract stable_targets or account_scope_note.
 
     assert_eq!(
         onebot_contract
@@ -411,8 +406,6 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
         ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
     );
 
-    // QQBot is now a native runtime channel (RuntimeBacked), not PluginBacked.
-    // A plugin bridge manifest targeting qqbot should be rejected as unsupported surface.
     let qqbot_manifest = sample_channel_bridge_manifest(Some("qqbot"), None);
     let qqbot_validation = validate_plugin_channel_bridge_manifest(&qqbot_manifest)
         .expect("qqbot runtime-backed channel validation");
@@ -509,8 +502,6 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         .plugin_bridge_discovery
         .as_ref()
         .expect("weixin managed discovery");
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // It does not have plugin_bridge_discovery.
     assert!(qqbot.plugin_bridge_discovery.is_none());
     let onebot_discovery = onebot
         .plugin_bridge_discovery
@@ -529,9 +520,6 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         weixin_discovery.plugins[0].status,
         ChannelDiscoveredPluginBridgeStatus::CompatibleReady
     );
-
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // No plugin bridge discovery checks apply.
 
     assert_eq!(
         onebot_discovery.status,

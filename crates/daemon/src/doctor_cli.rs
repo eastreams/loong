@@ -4092,10 +4092,7 @@ mod tests {
 
         config.external_skills.install_root = Some(install_root.display().to_string());
 
-        let checks = check_channel_surfaces(&config);
-
-        // QQBot is now a native runtime channel, not a managed bridge.
-        // No bridge contract or managed bridge discovery checks are emitted.
+        let _ = check_channel_surfaces(&config);
     }
 
     #[test]
@@ -4135,10 +4132,7 @@ mod tests {
         write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
         config.external_skills.install_root = Some(install_root.display().to_string());
 
-        let checks = check_channel_surfaces(&config);
-
-        // QQBot is now a native runtime channel, not a managed bridge.
-        // No managed bridge discovery checks are emitted.
+        let _ = check_channel_surfaces(&config);
     }
 
     #[test]
@@ -5958,7 +5952,6 @@ mod tests {
             Some(std::ffi::OsStr::new("")),
         );
 
-        // Managed bridge with incomplete setup should produce guidance next steps for weixin.
         assert!(
             next_steps.iter().any(|step| { step.contains("weixin") }),
             "weixin should appear in managed bridge next steps: {next_steps:#?}"
