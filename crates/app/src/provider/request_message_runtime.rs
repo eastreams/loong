@@ -604,22 +604,14 @@ async fn load_runtime_self_model_with_binding_and_budget(
         );
     };
 
-    let runtime_self_workspace_root =
-        runtime_self::resolved_runtime_self_workspace_root(workspace_root, tool_runtime_config);
-    let source_candidates = runtime_self::runtime_self_source_candidates(
-        runtime_self_workspace_root.as_path(),
-        tool_runtime_config,
-    );
+    let source_candidates =
+        runtime_self::runtime_self_source_candidates(workspace_root, tool_runtime_config);
     let mut loaded_paths = BTreeSet::new();
     let mut model = runtime_self::RuntimeSelfModel::default();
 
     for (candidate_path, lane) in source_candidates {
-        let Some(content) = read_runtime_self_source_via_kernel(
-            runtime_self_workspace_root.as_path(),
-            &candidate_path,
-            kernel_ctx,
-        )
-        .await
+        let Some(content) =
+            read_runtime_self_source_via_kernel(workspace_root, &candidate_path, kernel_ctx).await
         else {
             continue;
         };
@@ -2059,58 +2051,6 @@ mod tests {
         assert!(system_content.contains(identity_text));
         assert_eq!(system_content.matches(identity_text).count(), 1);
         assert!(!system_content.contains("### Identity Context"));
-    }
-
-    #[test]
-    fn build_system_message_includes_hierarchical_standing_instructions_from_workspace_to_file_root()
-     {
-        let temp_dir = tempdir().expect("tempdir");
-        let repo_root = temp_dir.path();
-        let app_root = repo_root.join("apps");
-        let service_root = app_root.join("service");
-
-        std::fs::create_dir_all(&service_root).expect("create nested service root");
-        std::fs::write(repo_root.join(".git"), "gitdir: /path/to/actual/git/dir\n")
-            .expect("write git marker");
-
-        let root_agents_text = "Root AGENTS standing instructions.";
-        let app_claude_text = "App CLAUDE standing instructions.";
-        let service_agents_text = "Service AGENTS standing instructions.";
-
-        std::fs::write(repo_root.join("AGENTS.md"), root_agents_text).expect("write root AGENTS");
-        std::fs::write(app_root.join("CLAUDE.md"), app_claude_text).expect("write app CLAUDE");
-        std::fs::write(service_root.join("AGENTS.md"), service_agents_text)
-            .expect("write service AGENTS");
-
-        let config = LoongConfig::default();
-        let tool_view = tools::runtime_tool_view();
-
-        let tool_runtime_config = tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(service_root),
-            ..tools::runtime_config::ToolRuntimeConfig::default()
-        };
-
-        let system_message = build_system_message_with_tool_runtime_config(
-            &config,
-            true,
-            &tool_view,
-            &tool_runtime_config,
-        )
-        .expect("system message");
-        let system_content = system_message["content"].as_str().expect("system content");
-
-        let root_index = system_content
-            .find(root_agents_text)
-            .expect("root AGENTS should be present");
-        let app_index = system_content
-            .find(app_claude_text)
-            .expect("app CLAUDE should be present");
-        let service_index = system_content
-            .find(service_agents_text)
-            .expect("service AGENTS should be present");
-
-        assert!(root_index < app_index);
-        assert!(app_index < service_index);
     }
 
     #[test]
