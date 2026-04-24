@@ -116,11 +116,12 @@ const AGENT_BROWSER_EXECUTABLE_PATH = resolveEdgeExecutablePath();
 
 function quoteForCmd(arg) {
   const raw = String(arg);
-  if (/^[A-Za-z0-9_./\\:=?@~()-]+$/.test(raw)) {
-    return raw;
+  const escaped = raw.replace(/%/g, "^%");
+  if (/^[A-Za-z0-9_./\\:=?@~()-]+$/.test(escaped)) {
+    return escaped;
   }
 
-  return `"${raw.replace(/"/g, '""')}"`;
+  return `"${escaped.replace(/"/g, '""')}"`;
 }
 
 function runAgentBrowserCommand(commandArgs) {

@@ -614,7 +614,7 @@ export function ChatMascot({
     closeMenuAndTooltip();
     setIsSearchingQoong(true);
     setBubbleLink(null);
-    setBubbleText(isChinese ? "我去搜一个关键词。" : "let me search a keyword");
+    setBubbleText(isChinese ? "我去搜一下美食。" : "let me search food");
 
     try {
       const reply = await onSearchQoong();
@@ -746,7 +746,7 @@ export function ChatMascot({
                   }}
                   disabled={isBusyWithPageAction}
                 >
-                  <span>{isChinese ? "搜一个关键词" : "Search a keyword"}</span>
+                  <span>{isChinese ? "搜一下美食" : "Search food"}</span>
                 </button>
               ) : null}
               {onToggleTheme ? (
@@ -822,9 +822,9 @@ export function ChatMascot({
             themeActionTooltip
           ) : hoveredAction === "search_qoong" ? (
             isChinese ? (
-              "Qoong 会在受管浏览器里搜索关键词，再把第一个网址带回来。"
+              "Qoong 会在受管浏览器里搜索美食，再把第一个网址带回来。"
             ) : (
-              "Qoong searches a keyword in the managed browser and returns the first URL."
+              "Qoong searches food in the managed browser and returns the first URL."
             )
           ) : isChinese ? (
             "Qoong 会读取当前页面可见内容，再给你一个简短反馈。"

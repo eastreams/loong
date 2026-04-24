@@ -8,7 +8,7 @@ const MASCOT_BROWSER_SCOPE_ID: &str = "mascot:qoong:browser";
 const MASCOT_THEME_TOGGLE_SESSION_PREFIX: &str = "qoong-theme-toggle";
 const MASCOT_THEME_TOGGLE_SELECTOR: &str = r#"[data-mascot-action="toggle-theme"]"#;
 const MASCOT_SEARCH_SESSION_PREFIX: &str = "qoong-search-demo";
-const MASCOT_DEFAULT_SEARCH_QUERY: &str = "LoongClaw GitHub";
+const MASCOT_DEFAULT_SEARCH_QUERY: &str = "food";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,7 +154,7 @@ pub(super) async fn mascot_browser_search(
     let mut tool_runtime =
         mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&snapshot.config, None);
     tool_runtime.browser_companion.timeout_seconds =
-        tool_runtime.browser_companion.timeout_seconds.min(12);
+        tool_runtime.browser_companion.timeout_seconds.min(30);
     if !tool_runtime.browser_companion.is_runtime_ready() {
         return Err(WebApiError::bad_request(
             "browser companion is enabled but not ready",
@@ -248,10 +248,15 @@ fn normalize_search_query(raw: Option<&str>) -> String {
 }
 
 fn build_yahoo_search_url(query: &str) -> Result<String, WebApiError> {
-    let mut url = reqwest::Url::parse("https://search.yahoo.com/search")
-        .map_err(|error| WebApiError::internal(format!("yahoo url build failed: {error}")))?;
-    url.query_pairs_mut().append_pair("p", query);
-    Ok(url.to_string())
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(WebApiError::bad_request("search query must not be empty"));
+    }
+
+    // Keep the query readable for the browser companion. On Windows the companion
+    // invokes a .cmd shim, and percent-encoded non-ASCII queries can be mangled
+    // before they reach the browser.
+    Ok(format!("https://search.yahoo.com/search?p={query}"))
 }
 
 fn first_search_result_url(payload: &Value, snapshot: &str) -> Option<String> {
@@ -270,6 +275,12 @@ fn first_search_result_url(payload: &Value, snapshot: &str) -> Option<String> {
         let rest = &snapshot[start..];
         if let Some(end) = rest.find('"') {
             candidates.push(rest[..end].to_owned());
+        }
+    }
+    for line in snapshot.lines() {
+        if let Some((_, rest)) = line.split_once("url=") {
+            let end = rest.find(']').unwrap_or(rest.len());
+            candidates.push(rest[..end].trim().to_owned());
         }
     }
 
@@ -293,10 +304,10 @@ fn collect_url_candidates(value: &Value, output: &mut Vec<String>) {
         }
         Value::Object(object) => {
             for (key, item) in object {
-                if matches!(key.as_str(), "href" | "url") {
-                    if let Some(candidate) = item.as_str() {
-                        output.push(candidate.to_owned());
-                    }
+                if matches!(key.as_str(), "href" | "url")
+                    && let Some(candidate) = item.as_str()
+                {
+                    output.push(candidate.to_owned());
                 }
                 collect_url_candidates(item, output);
             }

@@ -43,7 +43,7 @@ const MarkdownBlock = lazy(async () => {
 });
 
 const CHAT_SESSION_TITLE_OVERRIDES_STORAGE_KEY = "loongclaw.web.chat.sessionTitleOverrides";
-const MASCOT_SEARCH_QUERY = "LoongClaw GitHub";
+const MASCOT_SEARCH_QUERY = "food";
 
 function readStoredSessionTitleOverrides(): Record<string, string> {
   if (typeof window === "undefined") {
@@ -531,7 +531,7 @@ export default function ChatPage() {
     if (result.firstUrl) {
       return {
         text: isChinese
-          ? `我搜了 ${result.query}，第一个网址在这里。`
+          ? "我搜了美食，第一个网址在这里。"
           : `I searched ${result.query}. Here is the first URL.`,
         url: result.firstUrl,
         linkLabel: shortUrlLabel(result.firstUrl),
@@ -539,7 +539,7 @@ export default function ChatPage() {
     }
 
     return isChinese
-      ? `我搜了 ${result.query}，但这次没拿到第一个网址。`
+      ? "我搜了美食，但这次没拿到第一个网址。"
       : `I searched ${result.query}, but did not get the first URL this time.`;
   }, [canAccessProtectedApi, isChinese]);
 
