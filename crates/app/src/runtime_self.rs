@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use loong_contracts::ToolCoreRequest;
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,6 @@ use crate::workspace_guidance::{self, WorkspaceGuidanceSearchScope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeSelfLane {
-    StandingInstructions,
     ToolUsagePolicy,
     SoulGuidance,
     IdentityContext,
@@ -52,8 +51,6 @@ const RUNTIME_SELF_SOURCE_SPECS: &[RuntimeSelfSourceSpec] = &[
         lane: RuntimeSelfLane::UserContext,
     },
 ];
-
-const STANDING_INSTRUCTIONS_FILENAMES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -102,19 +99,14 @@ pub(crate) fn load_runtime_self_model_with_budget(
     tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
     remaining_total_chars: &mut usize,
 ) -> RuntimeSelfModel {
-    let runtime_self_workspace_root =
-        resolved_runtime_self_workspace_root(workspace_root, tool_runtime_config);
-    let source_candidates =
-        runtime_self_source_candidates(runtime_self_workspace_root.as_path(), tool_runtime_config);
+    let source_candidates = runtime_self_source_candidates(workspace_root, tool_runtime_config);
     let mut loaded_paths = BTreeSet::new();
     let mut model = RuntimeSelfModel::default();
 
     for (candidate_path, lane) in source_candidates {
-        let Some(content) = read_runtime_self_source(
-            runtime_self_workspace_root.as_path(),
-            &candidate_path,
-            tool_runtime_config,
-        ) else {
+        let Some(content) =
+            read_runtime_self_source(workspace_root, &candidate_path, tool_runtime_config)
+        else {
             continue;
         };
 
@@ -138,8 +130,7 @@ pub(crate) fn load_runtime_self_model_with_budget(
 }
 
 pub(crate) fn render_runtime_self_section(model: &RuntimeSelfModel) -> Option<String> {
-    let has_renderable_content = !model.standing_instructions.is_empty()
-        || !model.tool_usage_policy.is_empty()
+    let has_renderable_content = !model.tool_usage_policy.is_empty()
         || !model.soul_guidance.is_empty()
         || !model.user_context.is_empty();
 
@@ -150,11 +141,6 @@ pub(crate) fn render_runtime_self_section(model: &RuntimeSelfModel) -> Option<St
     let mut sections = Vec::new();
     sections.push("## Runtime Self Context".to_owned());
 
-    push_rendered_lane(
-        &mut sections,
-        "### Standing Instructions",
-        &model.standing_instructions,
-    );
     push_rendered_lane(
         &mut sections,
         "### Tool Usage Policy",
@@ -168,11 +154,10 @@ pub(crate) fn render_runtime_self_section(model: &RuntimeSelfModel) -> Option<St
 
 pub(crate) fn runtime_self_source_candidates(
     workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+    _tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
 ) -> Vec<(PathBuf, RuntimeSelfLane)> {
-    let mut source_candidates =
-        standing_instruction_source_candidates(workspace_root, tool_runtime_config);
     let candidate_roots = candidate_workspace_roots(workspace_root);
+    let mut source_candidates = Vec::new();
 
     for root in candidate_roots {
         for spec in RUNTIME_SELF_SOURCE_SPECS {
@@ -182,141 +167,6 @@ pub(crate) fn runtime_self_source_candidates(
     }
 
     source_candidates
-}
-
-pub(crate) fn resolved_runtime_self_workspace_root(
-    workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> PathBuf {
-    if let Some(configured_workspace_root) = tool_runtime_config.workspace_root.as_deref()
-        && configured_workspace_root.is_dir()
-    {
-        return configured_workspace_root.to_path_buf();
-    }
-
-    if let Some(file_root) = tool_runtime_config.file_root.as_deref()
-        && file_root.is_dir()
-        && let Some(git_root) = discover_git_root(file_root)
-    {
-        return git_root;
-    }
-
-    workspace_root.to_path_buf()
-}
-
-fn standing_instruction_source_candidates(
-    workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Vec<(PathBuf, RuntimeSelfLane)> {
-    let instruction_dirs = standing_instruction_directories(workspace_root, tool_runtime_config);
-    let mut source_candidates = Vec::new();
-
-    for dir in instruction_dirs {
-        for filename in STANDING_INSTRUCTIONS_FILENAMES {
-            source_candidates.push((dir.join(filename), RuntimeSelfLane::StandingInstructions));
-        }
-    }
-
-    source_candidates
-}
-
-fn standing_instruction_directories(
-    workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> Vec<PathBuf> {
-    let mut directories = vec![workspace_root.to_path_buf()];
-    let leaf_root = resolved_standing_instruction_leaf_root(workspace_root, tool_runtime_config);
-    if leaf_root == workspace_root {
-        return directories;
-    }
-
-    let canonical_workspace_root = match workspace_root.canonicalize() {
-        Ok(path) => path,
-        Err(_) => {
-            directories.push(leaf_root);
-            return directories;
-        }
-    };
-    let canonical_leaf_root = match leaf_root.canonicalize() {
-        Ok(path) => path,
-        Err(_) => {
-            directories.push(leaf_root);
-            return directories;
-        }
-    };
-
-    let relative_leaf_path = match canonical_leaf_root.strip_prefix(&canonical_workspace_root) {
-        Ok(path) => path,
-        Err(_) => {
-            directories.push(leaf_root);
-            return directories;
-        }
-    };
-
-    let mut current_path = workspace_root.to_path_buf();
-    for component in relative_leaf_path.components() {
-        match component {
-            Component::Normal(segment) => {
-                current_path.push(segment);
-                if current_path.is_dir() {
-                    directories.push(current_path.clone());
-                }
-            }
-            Component::CurDir => {}
-            Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
-                return vec![workspace_root.to_path_buf()];
-            }
-        }
-    }
-
-    directories
-}
-
-fn resolved_standing_instruction_leaf_root(
-    workspace_root: &Path,
-    tool_runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
-) -> PathBuf {
-    let configured_file_root = tool_runtime_config.file_root.as_deref();
-    let nested_workspace_root = workspace_root.join("workspace");
-
-    if let Some(file_root) = configured_file_root
-        && file_root != workspace_root
-        && file_root.is_dir()
-        && path_within_workspace_root(workspace_root, file_root)
-    {
-        return file_root.to_path_buf();
-    }
-
-    if nested_workspace_root.is_dir() {
-        return nested_workspace_root;
-    }
-
-    workspace_root.to_path_buf()
-}
-
-fn discover_git_root(start: &Path) -> Option<PathBuf> {
-    let canonical_start = start.canonicalize().ok()?;
-    for ancestor in canonical_start.ancestors() {
-        let git_path = ancestor.join(".git");
-        if git_path.is_dir() || git_path.is_file() {
-            return Some(ancestor.to_path_buf());
-        }
-    }
-
-    None
-}
-
-fn path_within_workspace_root(workspace_root: &Path, candidate: &Path) -> bool {
-    let canonical_workspace_root = match workspace_root.canonicalize() {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
-    let canonical_candidate = match candidate.canonicalize() {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
-
-    canonical_candidate.starts_with(canonical_workspace_root)
 }
 
 pub(crate) fn candidate_workspace_roots(workspace_root: &Path) -> Vec<PathBuf> {
@@ -419,9 +269,6 @@ pub(crate) fn append_runtime_self_content(
     content: String,
 ) {
     match lane {
-        RuntimeSelfLane::StandingInstructions => {
-            model.standing_instructions.push(content);
-        }
         RuntimeSelfLane::ToolUsagePolicy => {
             model.tool_usage_policy.push(content);
         }
