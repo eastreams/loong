@@ -23,7 +23,8 @@ use metadata_support::{
 #[path = "catalog_core_definition_support.rs"]
 mod core_definition_support;
 use core_definition_support::{
-    direct_browser_definition, direct_exec_definition, direct_memory_definition,
+    direct_browser_definition, direct_edit_definition, direct_exec_definition,
+    direct_find_definition, direct_grep_definition, direct_memory_definition,
     direct_read_definition, direct_web_definition, direct_write_definition, tool_invoke_definition,
     tool_search_definition,
 };
@@ -273,6 +274,7 @@ pub enum ToolExposureClass {
     Direct,
     Gateway,
     Discoverable,
+    Internal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -312,7 +314,16 @@ pub struct ToolDescriptor {
 fn primary_surface_id(raw: &str) -> bool {
     matches!(
         raw,
-        "read" | "write" | "exec" | "web" | "browser" | "memory" | "agent" | "skills" | "channel"
+        "read"
+            | "edit"
+            | "write"
+            | "exec"
+            | "web"
+            | "browser"
+            | "memory"
+            | "agent"
+            | "skills"
+            | "channel"
     )
 }
 
@@ -332,14 +343,18 @@ impl ToolDescriptor {
             return false;
         }
 
-        let discovery_name = super::tool_surface::discovery_tool_name_for_tool_name(self.name);
-        if discovery_name == raw {
-            return true;
+        if self.is_discoverable() {
+            let discovery_name = super::tool_surface::discovery_tool_name_for_tool_name(self.name);
+            if discovery_name == raw {
+                return true;
+            }
+
+            return super::tool_surface::legacy_discovery_tool_names_for_tool_name(self.name)
+                .iter()
+                .any(|legacy_name| legacy_name == raw);
         }
 
-        super::tool_surface::legacy_discovery_tool_names_for_tool_name(self.name)
-            .iter()
-            .any(|legacy_name| legacy_name == raw)
+        false
     }
 
     pub fn provider_definition(&self) -> Value {
@@ -654,7 +669,8 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "browser.extract"
         | "web.fetch"
         | "web.search" => Some(ToolConcurrencyClass::ReadOnly),
-        "write"
+        "edit"
+        | "write"
         | "exec"
         | "browser"
         | "config.import"
@@ -750,10 +766,52 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: direct_read_definition,
         },
         ToolDescriptor {
+            name: "grep",
+            provider_name: "grep",
+            aliases: &[],
+            description: "Search workspace file contents by text",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_grep_definition,
+        },
+        ToolDescriptor {
+            name: "find",
+            provider_name: "find",
+            aliases: &[],
+            description: "List workspace paths that match a glob pattern",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_find_definition,
+        },
+        ToolDescriptor {
+            name: "edit",
+            provider_name: "edit",
+            aliases: &[],
+            description: "Apply exact replacement blocks to an existing workspace file",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Direct,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: direct_edit_definition,
+        },
+        ToolDescriptor {
             name: "write",
             provider_name: "write",
             aliases: &[],
-            description: "Write workspace files or apply one or more exact text edits",
+            description: "Create workspace files or replace whole-file contents",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Direct,
@@ -826,7 +884,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Import legacy agent workspace config, profile, and external-skills mapping state into native Loong settings",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -840,7 +898,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Download external skills artifacts with domain policy and approval guards",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityFetch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -854,7 +912,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Normalize an external skill reference into a source-aware candidate",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -868,7 +926,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Search the resolved external-skills inventory for active and shadowed matches",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -882,7 +940,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Recommend the best-fit resolved external skills for an operator goal",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -896,7 +954,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Search preferred external skill ecosystems and return normalized source-aware candidates",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -910,7 +968,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Read metadata for a resolved external skill across managed, user, and project scopes",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -924,7 +982,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Install a managed external skill from a local directory or archive",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityInstall,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -938,7 +996,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Load a resolved external skill into the conversation loop",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityLoad,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -952,7 +1010,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "List resolved external skills across managed, user, and project scopes",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -966,7 +1024,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Read/update external skills domain allow/block policy at runtime",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -980,7 +1038,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Remove an installed external skill from the managed runtime",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
@@ -994,7 +1052,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Inspect current provider state or switch the default provider profile for subsequent turns",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::RuntimeSwitch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -1008,7 +1066,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Resolve one visible governed tool approval request",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1022,7 +1080,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Inspect full detail for a visible governed tool approval request",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1036,7 +1094,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "List visible governed tool approval requests across the current session scope",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1050,7 +1108,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Delegate a focused subtask into a child session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Delegate,
             capability_action_class: CapabilityActionClass::TopologyExpand,
             policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
@@ -1064,7 +1122,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Delegate a focused subtask into a background child session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Delegate,
             capability_action_class: CapabilityActionClass::TopologyExpand,
             policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
@@ -1078,7 +1136,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Archive a visible terminal session from default session listings",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
@@ -1092,7 +1150,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Cancel a visible async delegate child session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
@@ -1106,7 +1164,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Continue a visible delegate child session with a follow-up task",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
@@ -1120,7 +1178,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Fetch session events for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1134,7 +1192,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Inspect the session-scoped tool policy for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1148,7 +1206,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Update the session-scoped tool policy for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -1162,7 +1220,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Clear the session-scoped tool policy for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
@@ -1176,7 +1234,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Search visible canonical session history across transcript turns and session events",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
@@ -1190,7 +1248,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Recover an overdue queued async delegate child session by marking it failed",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
@@ -1204,7 +1262,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Inspect the current status of a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1218,7 +1276,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Wait for a visible session to reach a terminal state",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1316,7 +1374,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Fetch transcript history for a visible session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
@@ -1330,7 +1388,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "List visible sessions and their high-level state",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
@@ -1344,7 +1402,7 @@ fn build_tool_catalog() -> ToolCatalog {
             description: "Send an outbound text message to a known channel-backed root session",
             execution_kind: ToolExecutionKind::App,
             availability: runtime_messaging_tool_availability(),
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::Internal,
             visibility_gate: ToolVisibilityGate::Messages,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,

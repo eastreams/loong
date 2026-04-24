@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use super::ToolView;
 
 pub(crate) const DIRECT_READ_TOOL_NAME: &str = "read";
+pub(crate) const DIRECT_GREP_TOOL_NAME: &str = "grep";
+pub(crate) const DIRECT_FIND_TOOL_NAME: &str = "find";
+pub(crate) const DIRECT_EDIT_TOOL_NAME: &str = "edit";
 pub(crate) const DIRECT_WRITE_TOOL_NAME: &str = "write";
 pub(crate) const DIRECT_EXEC_TOOL_NAME: &str = "exec";
 pub(crate) const DIRECT_WEB_TOOL_NAME: &str = "web";
@@ -139,9 +142,22 @@ const READ_GUIDELINES: &[&str] = &[
     "Use read for repo inspection before shelling out.",
     "Use `offset` and `limit` to page through large files instead of reading everything at once.",
 ];
+const EDIT_GUIDELINES: &[&str] = &[
+    "Use edit for precise changes to existing files.",
+    "Keep each exact replacement block as small as possible while still unique in the original file.",
+    "When one file needs multiple disjoint changes, prefer one edit call with multiple exact edit blocks.",
+];
+const GREP_GUIDELINES: &[&str] = &[
+    "Use grep for direct workspace content search by text.",
+    "Use root, glob, and case_sensitive to narrow searches before dropping to shell.",
+];
+const FIND_GUIDELINES: &[&str] = &[
+    "Use find for direct path matching by glob pattern.",
+    "Use include_directories only when directory matches matter.",
+];
 const WRITE_GUIDELINES: &[&str] = &[
     "Use write for new files or whole-file rewrites.",
-    "For surgical changes, use exact edit mode with `edits`, or legacy `old_string` and `new_string` when needed.",
+    "Prefer edit for surgical changes to existing files instead of whole-file rewrites.",
 ];
 const EXEC_GUIDELINES: &[&str] = &[
     "Use exec for normal command-line work.",
@@ -157,6 +173,7 @@ const BROWSER_GUIDELINES: &[&str] = &[
     "Use browser when page structure or interaction matters.",
     "Keep managed browser session work under `browser` instead of teaching a long tail of sub-tool names.",
     "Prefer `web` for simple URL fetches that do not need live page interaction.",
+    "Browser session_ids are short-lived runtime handles. If a browser session becomes unavailable, start a fresh browser session instead of reusing an older session_id.",
 ];
 const MEMORY_GUIDELINES: &[&str] = &[
     "Use memory for persisted notes and cross-session recall.",
@@ -167,8 +184,8 @@ const AGENT_GUIDELINES: &[&str] = &[
     "Prefer a direct tool first; reach for agent when the task is about runtime control rather than user data.",
 ];
 const SKILLS_GUIDELINES: &[&str] = &[
-    "Use skills when the task is about discovering, installing, or running external skills.",
-    "Keep capability-expansion work under skills instead of mixing it with normal repo editing or runtime control.",
+    "Use skills when the task is about discovering, inspecting, installing, listing, or running external skills.",
+    "Treat low-level skill source resolution, raw downloads, policy mutation, and removal as internal/operator plumbing instead of the default model path.",
 ];
 const CHANNEL_GUIDELINES: &[&str] = &[
     "Keep channel-specific work on the channel lane instead of folding it into core runtime surfaces.",
@@ -189,15 +206,32 @@ const READ_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("case_sensitive", "boolean"),
     ("include_directories", "boolean"),
 ];
+const EDIT_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
+    ("path", "string"),
+    ("edits", "array"),
+    ("old_string", "string"),
+    ("new_string", "string"),
+    ("replace_all", "boolean"),
+];
+const GREP_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
+    ("query", "string"),
+    ("root", "string"),
+    ("glob", "string"),
+    ("max_results", "integer"),
+    ("max_bytes_per_file", "integer"),
+    ("case_sensitive", "boolean"),
+];
+const FIND_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
+    ("pattern", "string"),
+    ("root", "string"),
+    ("max_results", "integer"),
+    ("include_directories", "boolean"),
+];
 const WRITE_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("path", "string"),
     ("content", "string"),
     ("create_dirs", "boolean"),
     ("overwrite", "boolean"),
-    ("edits", "array"),
-    ("old_string", "string"),
-    ("new_string", "string"),
-    ("replace_all", "boolean"),
 ];
 const EXEC_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("command", "string"),
@@ -234,8 +268,11 @@ const MEMORY_DIRECT_PARAMETER_TYPES: &[(&str, &str)] = &[
     ("lines", "integer"),
 ];
 
-const READ_COVERED_TOOL_NAMES: &[&str] = &["file.read", "glob.search", "content.search"];
-const WRITE_COVERED_TOOL_NAMES: &[&str] = &["file.write", "file.edit"];
+const READ_COVERED_TOOL_NAMES: &[&str] = &["file.read"];
+const GREP_COVERED_TOOL_NAMES: &[&str] = &["content.search"];
+const FIND_COVERED_TOOL_NAMES: &[&str] = &["glob.search"];
+const EDIT_COVERED_TOOL_NAMES: &[&str] = &["file.edit"];
+const WRITE_COVERED_TOOL_NAMES: &[&str] = &["file.write"];
 const EXEC_COVERED_TOOL_NAMES: &[&str] = &["shell.exec", "bash.exec"];
 const WEB_COVERED_TOOL_NAMES: &[&str] = &["web.fetch", "web.search", "http.request"];
 const BROWSER_COVERED_TOOL_NAMES: &[&str] = &["browser.open", "browser.extract", "browser.click"];
@@ -248,12 +285,35 @@ const READ_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadat
     required_fields: &[],
     tags: &["surface", "read", "file", "search"],
 };
-const WRITE_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
-    argument_hint: "path:string,content?:string,create_dirs?:boolean,overwrite?:boolean,edits?:array,old_string?:string,new_string?:string,replace_all?:boolean",
-    search_hint: "create a file or apply one or more exact text edits through one direct tool",
-    parameter_types: WRITE_DIRECT_PARAMETER_TYPES,
+
+const GREP_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
+    argument_hint: "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean",
+    search_hint: "search workspace file contents directly by text through one direct tool",
+    parameter_types: GREP_DIRECT_PARAMETER_TYPES,
+    required_fields: &["query"],
+    tags: &["surface", "grep", "search", "content", "filesystem"],
+};
+
+const FIND_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
+    argument_hint: "pattern:string,root?:string,max_results?:integer,include_directories?:boolean",
+    search_hint: "list workspace-relative paths that match a glob pattern through one direct tool",
+    parameter_types: FIND_DIRECT_PARAMETER_TYPES,
+    required_fields: &["pattern"],
+    tags: &["surface", "find", "glob", "search", "filesystem"],
+};
+const EDIT_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
+    argument_hint: "path:string,edits?:array,old_string?:string,new_string?:string,replace_all?:boolean",
+    search_hint: "edit an existing workspace file with exact replacement blocks through one direct tool",
+    parameter_types: EDIT_DIRECT_PARAMETER_TYPES,
     required_fields: &["path"],
-    tags: &["surface", "write", "file", "edit"],
+    tags: &["surface", "edit", "file", "replace"],
+};
+const WRITE_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
+    argument_hint: "path:string,content:string,create_dirs?:boolean,overwrite?:boolean",
+    search_hint: "create a file or replace one file's full contents through one direct tool",
+    parameter_types: WRITE_DIRECT_PARAMETER_TYPES,
+    required_fields: &["path", "content"],
+    tags: &["surface", "write", "file"],
 };
 const EXEC_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
     argument_hint: "command?:string,script?:string,args?:string[],timeout_ms?:integer,cwd?:string",
@@ -286,8 +346,8 @@ const MEMORY_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetad
 
 const READ_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     id: "read",
-    prompt_snippet: "read files, page through large files, search repo text, or list matching paths.",
-    prompt_guidance: "Use read for normal repo inspection and file pagination.",
+    prompt_snippet: "read files, page through large files, or list matching paths.",
+    prompt_guidance: "Use read for normal repo inspection, pagination, and path-oriented lookup.",
     prompt_guidelines: READ_GUIDELINES,
     direct_tool_name: Some(DIRECT_READ_TOOL_NAME),
     covered_tool_names: READ_COVERED_TOOL_NAMES,
@@ -296,10 +356,46 @@ const READ_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     hidden_search_argument_hint: None,
 };
 
+const EDIT_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
+    id: "edit",
+    prompt_snippet: "patch existing files with exact replacement blocks.",
+    prompt_guidance: "Use edit for surgical changes to files you have already inspected.",
+    prompt_guidelines: EDIT_GUIDELINES,
+    direct_tool_name: Some(DIRECT_EDIT_TOOL_NAME),
+    covered_tool_names: EDIT_COVERED_TOOL_NAMES,
+    direct_metadata: Some(EDIT_DIRECT_METADATA),
+    hidden_search_summary: None,
+    hidden_search_argument_hint: None,
+};
+
+const GREP_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
+    id: "grep",
+    prompt_snippet: "search workspace file contents by text.",
+    prompt_guidance: "Use grep for direct repo content search when you know you need text matching.",
+    prompt_guidelines: GREP_GUIDELINES,
+    direct_tool_name: Some(DIRECT_GREP_TOOL_NAME),
+    covered_tool_names: GREP_COVERED_TOOL_NAMES,
+    direct_metadata: Some(GREP_DIRECT_METADATA),
+    hidden_search_summary: None,
+    hidden_search_argument_hint: None,
+};
+
+const FIND_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
+    id: "find",
+    prompt_snippet: "list workspace paths that match a glob pattern.",
+    prompt_guidance: "Use find for direct path matching when you know the pattern you need.",
+    prompt_guidelines: FIND_GUIDELINES,
+    direct_tool_name: Some(DIRECT_FIND_TOOL_NAME),
+    covered_tool_names: FIND_COVERED_TOOL_NAMES,
+    direct_metadata: Some(FIND_DIRECT_METADATA),
+    hidden_search_summary: None,
+    hidden_search_argument_hint: None,
+};
+
 const WRITE_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     id: "write",
-    prompt_snippet: "create files or apply exact text edits.",
-    prompt_guidance: "Use write for normal patching and file creation.",
+    prompt_snippet: "create files or replace whole-file contents.",
+    prompt_guidance: "Use write for new files and full rewrites.",
     prompt_guidelines: WRITE_GUIDELINES,
     direct_tool_name: Some(DIRECT_WRITE_TOOL_NAME),
     covered_tool_names: WRITE_COVERED_TOOL_NAMES,
@@ -377,17 +473,17 @@ const AGENT_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
 
 const SKILLS_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
     id: "skills",
-    prompt_snippet: "search, inspect, install, run, or manage external skills.",
+    prompt_snippet: "search, inspect, install, list, or run external skills.",
     prompt_guidance: "Use this when the task is about capability expansion.",
     prompt_guidelines: SKILLS_GUIDELINES,
     direct_tool_name: None,
     covered_tool_names: &[],
     direct_metadata: None,
     hidden_search_summary: Some(
-        "Search, inspect, install, fetch, run, remove, or manage external skills through one hidden capability tool.",
+        "Search, inspect, install, list, or run external skills through one hidden capability tool.",
     ),
     hidden_search_argument_hint: Some(
-        "operation?:string,query?:string,skill_id?:string,reference?:string,url?:string,path?:string,limit?:integer",
+        "operation?:string,query?:string,skill_id?:string,path?:string,bundled_skill_id?:string,source_skill_id?:string,limit?:integer",
     ),
 };
 
@@ -411,6 +507,9 @@ const CHANNEL_SURFACE: ToolSurfaceDescriptor = ToolSurfaceDescriptor {
 
 const ALL_TOOL_SURFACES: &[ToolSurfaceDescriptor] = &[
     READ_SURFACE,
+    GREP_SURFACE,
+    FIND_SURFACE,
+    EDIT_SURFACE,
     WRITE_SURFACE,
     EXEC_SURFACE,
     WEB_SURFACE,
@@ -535,22 +634,16 @@ pub(crate) fn tool_surface_for_name(tool_name: &str) -> Option<&'static ToolSurf
         || tool_name == "delegate"
         || matches_surface_name(tool_name, "delegate_async")
         || matches_surface_name(tool_name, "provider.switch")
+        || matches_surface_name(tool_name, "external_skills.policy")
         || matches_surface_name(tool_name, "config.import")
     {
         &AGENT_SURFACE
     } else if tool_name == "skills"
-        || tool_name.starts_with("external_skills.")
-        || matches_surface_name(tool_name, "external_skills.fetch")
-        || matches_surface_name(tool_name, "external_skills.resolve")
         || matches_surface_name(tool_name, "external_skills.search")
-        || matches_surface_name(tool_name, "external_skills.recommend")
-        || matches_surface_name(tool_name, "external_skills.source_search")
         || matches_surface_name(tool_name, "external_skills.inspect")
         || matches_surface_name(tool_name, "external_skills.install")
         || matches_surface_name(tool_name, "external_skills.invoke")
         || matches_surface_name(tool_name, "external_skills.list")
-        || matches_surface_name(tool_name, "external_skills.policy")
-        || matches_surface_name(tool_name, "external_skills.remove")
     {
         &SKILLS_SURFACE
     } else if tool_name == "channel"
@@ -674,12 +767,20 @@ pub(crate) fn hidden_facade_tool_name_for_hidden_tool(tool_name: &str) -> Option
         || matches_surface_name(tool_name, "delegate")
         || matches_surface_name(tool_name, "delegate_async")
         || matches_surface_name(tool_name, "provider.switch")
+        || matches_surface_name(tool_name, "external_skills.policy")
         || matches_surface_name(tool_name, "config.import")
     {
         return Some("agent");
     }
 
-    if tool_name.starts_with("external_skills.") {
+    if matches!(
+        tool_name,
+        "external_skills.search"
+            | "external_skills.inspect"
+            | "external_skills.install"
+            | "external_skills.invoke"
+            | "external_skills.list"
+    ) {
         return Some("skills");
     }
 
@@ -815,6 +916,8 @@ mod tests {
     fn visible_direct_tool_states_follow_runtime_view() {
         let view = ToolView::from_tool_names([
             "file.read",
+            "content.search",
+            "glob.search",
             "file.write",
             "file.edit",
             "shell.exec",
@@ -828,7 +931,12 @@ mod tests {
             .map(|state| state.surface_id.as_str())
             .collect();
 
-        assert_eq!(state_ids, vec!["read", "write", "exec", "web", "memory"]);
+        assert_eq!(
+            state_ids,
+            vec![
+                "read", "grep", "find", "edit", "write", "exec", "web", "memory"
+            ]
+        );
     }
 
     #[test]
@@ -854,6 +962,7 @@ mod tests {
             "browser.open",
             "browser.companion.snapshot",
             "http.request",
+            "content.search",
         ]);
 
         assert!(hidden_tool_is_covered_by_visible_direct_tool(
@@ -876,6 +985,10 @@ mod tests {
             "http.request",
             &view
         ));
+        assert!(hidden_tool_is_covered_by_visible_direct_tool(
+            "content.search",
+            &view
+        ));
     }
 
     #[test]
@@ -885,6 +998,10 @@ mod tests {
         assert!(exec_parameter_types.contains(&("script", "string")));
         assert_eq!(
             direct_tool_required_fields(DIRECT_WRITE_TOOL_NAME),
+            Some(["path", "content"].as_slice())
+        );
+        assert_eq!(
+            direct_tool_required_fields(DIRECT_EDIT_TOOL_NAME),
             Some(["path"].as_slice())
         );
         assert_eq!(
@@ -900,6 +1017,24 @@ mod tests {
             direct_tool_argument_hint(DIRECT_READ_TOOL_NAME)
                 .expect("read argument hint")
                 .contains("offset?:integer")
+        );
+        assert_eq!(
+            direct_tool_required_fields(DIRECT_GREP_TOOL_NAME),
+            Some(["query"].as_slice())
+        );
+        assert_eq!(
+            direct_tool_required_fields(DIRECT_FIND_TOOL_NAME),
+            Some(["pattern"].as_slice())
+        );
+        assert!(
+            direct_tool_search_hint(DIRECT_GREP_TOOL_NAME)
+                .expect("grep search hint")
+                .contains("workspace file contents")
+        );
+        assert!(
+            direct_tool_search_hint(DIRECT_FIND_TOOL_NAME)
+                .expect("find search hint")
+                .contains("glob pattern")
         );
         assert!(
             direct_tool_search_hint(DIRECT_BROWSER_TOOL_NAME)
@@ -929,8 +1064,24 @@ mod tests {
             DIRECT_BROWSER_TOOL_NAME
         );
         assert_eq!(
+            discovery_tool_name_for_tool_name("file.edit"),
+            DIRECT_EDIT_TOOL_NAME
+        );
+        assert_eq!(
+            discovery_tool_name_for_tool_name("content.search"),
+            DIRECT_GREP_TOOL_NAME
+        );
+        assert_eq!(
+            discovery_tool_name_for_tool_name("glob.search"),
+            DIRECT_FIND_TOOL_NAME
+        );
+        assert_eq!(
             discovery_tool_name_for_tool_name("external_skills.install"),
             "skills"
+        );
+        assert_eq!(
+            discovery_tool_name_for_tool_name("external_skills.policy"),
+            "agent"
         );
         assert_eq!(
             discovery_tool_name_for_tool_name("provider.switch"),
@@ -958,6 +1109,32 @@ mod tests {
         assert!(tool_surface_visible_in_view("agent", &view));
         assert!(tool_surface_visible_in_view("channel", &view));
         assert!(!tool_surface_visible_in_view("skills", &view));
+    }
+
+    #[test]
+    fn external_skills_policy_routes_through_agent_surface() {
+        assert_eq!(
+            tool_surface_id_for_name("external_skills.policy"),
+            Some("agent")
+        );
+        assert_eq!(
+            hidden_facade_tool_name_for_hidden_tool("external_skills.policy"),
+            Some("agent")
+        );
+    }
+
+    #[test]
+    fn internal_external_skills_plumbing_has_no_model_surface_id() {
+        for tool_name in [
+            "external_skills.fetch",
+            "external_skills.resolve",
+            "external_skills.recommend",
+            "external_skills.source_search",
+            "external_skills.remove",
+        ] {
+            assert_eq!(tool_surface_id_for_name(tool_name), None);
+            assert_eq!(hidden_facade_tool_name_for_hidden_tool(tool_name), None);
+        }
     }
 
     #[test]

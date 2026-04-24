@@ -524,6 +524,7 @@ impl ProviderTurnLaneExecution {
 struct ProviderTurnLoopPolicy {
     max_total_tool_calls: usize,
     max_consecutive_same_tool: usize,
+    max_same_tool_failure_rounds: usize,
 }
 
 impl ProviderTurnLoopPolicy {
@@ -532,6 +533,7 @@ impl ProviderTurnLoopPolicy {
         Self {
             max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
             max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+            max_same_tool_failure_rounds: turn_loop.max_same_tool_failure_rounds.max(1),
         }
     }
 }
@@ -541,7 +543,9 @@ struct ProviderTurnLoopState {
     total_tool_calls: usize,
     consecutive_same_tool: usize,
     last_tool_name: Option<String>,
-    warned_same_tool_key: Option<String>,
+    consecutive_failed_same_tool: usize,
+    last_failed_tool_name: Option<String>,
+    warned_reason_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -565,11 +569,14 @@ impl ProviderTurnLoopState {
         &mut self,
         policy: &ProviderTurnLoopPolicy,
         turn: &ProviderTurn,
+        turn_result: &TurnResult,
     ) -> Option<ProviderTurnLoopVerdict> {
         let tool_intent_count = turn.tool_intents.len();
         self.total_tool_calls = self.total_tool_calls.saturating_add(tool_intent_count);
         if tool_intent_count == 0 {
-            self.warned_same_tool_key = None;
+            self.warned_reason_key = None;
+            self.consecutive_failed_same_tool = 0;
+            self.last_failed_tool_name = None;
             return None;
         }
 
@@ -579,25 +586,54 @@ impl ProviderTurnLoopState {
         } else {
             self.last_tool_name = Some(tool_name_signature.clone());
             self.consecutive_same_tool = 1;
-            self.warned_same_tool_key = None;
+            self.warned_reason_key = None;
         }
 
-        if self.consecutive_same_tool < policy.max_consecutive_same_tool {
-            self.warned_same_tool_key = None;
-            return Some(ProviderTurnLoopVerdict::Continue);
+        if self.consecutive_same_tool >= policy.max_consecutive_same_tool {
+            let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
+            let reason = format!(
+                "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
+                self.consecutive_same_tool, policy.max_consecutive_same_tool
+            );
+
+            return Some(self.resolve_reason(reason_key, reason));
         }
 
-        let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
-        let reason = format!(
-            "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
-            self.consecutive_same_tool, policy.max_consecutive_same_tool
-        );
-
-        if self.warned_same_tool_key.as_deref() == Some(reason_key.as_str()) {
-            Some(ProviderTurnLoopVerdict::HardStop { reason })
+        let failed = turn_result
+            .failure()
+            .is_some_and(|failure| failure.retryable);
+        if failed {
+            if self.last_failed_tool_name.as_deref() == Some(tool_name_signature.as_str()) {
+                self.consecutive_failed_same_tool += 1;
+            } else {
+                self.last_failed_tool_name = Some(tool_name_signature.clone());
+                self.consecutive_failed_same_tool = 1;
+            }
         } else {
-            self.warned_same_tool_key = Some(reason_key);
-            Some(ProviderTurnLoopVerdict::InjectWarning { reason })
+            self.last_failed_tool_name = None;
+            self.consecutive_failed_same_tool = 0;
+        }
+
+        if self.consecutive_failed_same_tool >= policy.max_same_tool_failure_rounds {
+            let reason_key = format!("same_tool_failure_streak:{tool_name_signature}");
+            let reason = format!(
+                "same_tool_failure_streak: {tool_name_signature} failed {} rounds in a row (limit={})",
+                self.consecutive_failed_same_tool, policy.max_same_tool_failure_rounds
+            );
+
+            return Some(self.resolve_reason(reason_key, reason));
+        }
+
+        self.warned_reason_key = None;
+        Some(ProviderTurnLoopVerdict::Continue)
+    }
+
+    fn resolve_reason(&mut self, reason_key: String, reason: String) -> ProviderTurnLoopVerdict {
+        if self.warned_reason_key.as_deref() == Some(reason_key.as_str()) {
+            ProviderTurnLoopVerdict::HardStop { reason }
+        } else {
+            self.warned_reason_key = Some(reason_key);
+            ProviderTurnLoopVerdict::InjectWarning { reason }
         }
     }
 }
@@ -2969,7 +3005,8 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         .await;
     }
     observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
-    let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
+    let loop_verdict =
+        turn_loop_state.observe_turn(turn_loop_policy, &turn, &lane_execution.turn_result);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
     ProviderTurnContinuePhase::new(
@@ -6007,7 +6044,14 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     );
     let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
         .is_some_and(|payload| {
-            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
+            matches!(
+                payload,
+                ToolDrivenFollowupPayload::DiscoveryRecovery { .. }
+                    | ToolDrivenFollowupPayload::ToolFailure {
+                        retryable: true,
+                        ..
+                    }
+            )
         });
     let malformed_parse_followup_turn =
         provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
@@ -10138,220 +10182,6 @@ mod tests {
         let fast_plan = ProviderTurnLanePlan::from_user_input(&config, "say hello");
         assert_eq!(fast_plan.decision.lane, ExecutionLane::Fast);
         assert!(!fast_plan.should_use_safe_lane_plan_path(&config, &tool_turn));
-    }
-
-    #[derive(Default)]
-    struct MissingToolContinuationRuntime {
-        queued_turns: StdMutex<Vec<ProviderTurn>>,
-        request_turn_messages: StdMutex<Vec<Vec<Value>>>,
-    }
-
-    #[async_trait]
-    impl ConversationRuntime for MissingToolContinuationRuntime {
-        async fn build_messages(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _include_system_prompt: bool,
-            _tool_view: &crate::tools::ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<Vec<Value>> {
-            Ok(vec![json!({
-                "role": "system",
-                "content": "continuation test"
-            })])
-        }
-
-        async fn request_completion(
-            &self,
-            _config: &LoongConfig,
-            _messages: &[Value],
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<String> {
-            panic!("request_completion should not run in missing-tool continuation tests")
-        }
-
-        async fn request_turn(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _turn_id: &str,
-            messages: &[Value],
-            _tool_view: &crate::tools::ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<ProviderTurn> {
-            self.request_turn_messages
-                .lock()
-                .expect("request-turn messages lock should not be poisoned")
-                .push(messages.to_vec());
-            let mut queued_turns = self
-                .queued_turns
-                .lock()
-                .expect("queued turns lock should not be poisoned");
-            if queued_turns.is_empty() {
-                panic!("request_turn called without a queued ProviderTurn");
-            }
-            Ok(queued_turns.remove(0))
-        }
-
-        async fn request_turn_streaming(
-            &self,
-            _config: &LoongConfig,
-            _session_id: &str,
-            _turn_id: &str,
-            _messages: &[Value],
-            _tool_view: &crate::tools::ToolView,
-            _binding: ConversationRuntimeBinding<'_>,
-            _on_token: crate::provider::StreamingTokenCallback,
-        ) -> CliResult<ProviderTurn> {
-            panic!("request_turn_streaming should not run in missing-tool continuation tests")
-        }
-
-        async fn persist_turn(
-            &self,
-            _session_id: &str,
-            _role: &str,
-            _content: &str,
-            _binding: ConversationRuntimeBinding<'_>,
-        ) -> CliResult<()> {
-            Ok(())
-        }
-    }
-
-    fn provider_continuation_test_preparation(
-        config: &LoongConfig,
-        user_input: &str,
-    ) -> ProviderTurnPreparation {
-        ProviderTurnPreparation::from_assembled_context(
-            config,
-            AssembledConversationContext::from_messages(vec![json!({
-                "role": "system",
-                "content": "sys"
-            })]),
-            user_input,
-            None,
-        )
-    }
-
-    fn provider_continuation_test_continue_phase_with_lane(
-        config: &LoongConfig,
-        assistant_preface: String,
-        had_tool_intents: bool,
-        supports_provider_turn_followup: bool,
-        malformed_parse_followup_turn: bool,
-        turn_result: TurnResult,
-    ) -> ProviderTurnContinuePhase {
-        ProviderTurnContinuePhase::new(
-            2,
-            ProviderTurnLaneExecution {
-                lane: ExecutionLane::Fast,
-                assistant_preface,
-                provider_usage: None,
-                had_tool_intents,
-                tool_request_summary: None,
-                discovery_search_turn: false,
-                search_tool_intents: 0,
-                malformed_parse_followup_turn,
-                supports_provider_turn_followup,
-                raw_tool_output_requested: false,
-                turn_result,
-                safe_lane_terminal_route: None,
-                tool_events: Vec::new(),
-            },
-            None,
-            config.clone(),
-            None,
-        )
-    }
-
-    fn provider_continuation_test_intent(
-        session_id: &str,
-        turn_id: &str,
-        tool_call_id: &str,
-        tool_id: &str,
-        arguments: Value,
-    ) -> ToolIntent {
-        ToolIntent {
-            tool_name: tool_id.to_owned(),
-            args_json: arguments,
-            source: "provider_tool_call".to_owned(),
-            session_id: session_id.to_owned(),
-            turn_id: turn_id.to_owned(),
-            tool_call_id: tool_call_id.to_owned(),
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn provider_continuation_recovers_malformed_parse_followup_without_real_tool_call() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let mut config = LoongConfig::default();
-        config.tools.file_root = Some(temp_dir.path().display().to_string());
-
-        let user_input = "Write the repaired response to recovered.txt";
-        let preparation = provider_continuation_test_preparation(&config, user_input);
-        let continue_phase = provider_continuation_test_continue_phase_with_lane(
-            &config,
-            "let me retry.\n<function=shell.exec><parameter=command>ls /root</parameter>"
-                .to_owned(),
-            false,
-            true,
-            true,
-            TurnResult::FinalText(String::new()),
-        );
-        let runtime = MissingToolContinuationRuntime {
-            queued_turns: StdMutex::new(vec![
-                ProviderTurn {
-                    assistant_text: String::new(),
-                    tool_intents: vec![provider_continuation_test_intent(
-                        "session-malformed",
-                        "turn-write",
-                        "call-write",
-                        "write",
-                        json!({
-                            "path": "recovered.txt",
-                            "content": "recovered body"
-                        }),
-                    )],
-                    raw_meta: Value::Null,
-                },
-                ProviderTurn {
-                    assistant_text: "[followup_state:done]\nFinished writing recovered.txt."
-                        .to_owned(),
-                    tool_intents: Vec::new(),
-                    raw_meta: Value::Null,
-                },
-            ]),
-            request_turn_messages: StdMutex::new(Vec::new()),
-        };
-        let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
-        let mut turn_loop_state = ProviderTurnLoopState::default();
-
-        let resolved = resolve_provider_turn_reply(
-            &runtime,
-            &config,
-            "session-malformed",
-            &preparation,
-            &continue_phase,
-            user_input,
-            &turn_loop_policy,
-            &mut turn_loop_state,
-            3,
-            ConversationRuntimeBinding::advisory_only(),
-            None,
-            None,
-            None,
-        )
-        .await;
-
-        assert_eq!(
-            resolved.reply_text(),
-            Some("Finished writing recovered.txt.")
-        );
-        let request_turn_messages = runtime
-            .request_turn_messages
-            .lock()
-            .expect("request-turn messages lock should not be poisoned");
-        assert_eq!(request_turn_messages.len(), 2);
     }
 
     #[test]

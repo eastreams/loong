@@ -2896,11 +2896,11 @@ mod tests {
     #[test]
     fn provider_shape_discovery_followup_uses_latest_hidden_lease_in_multiline_source_order() {
         let first_summary = serde_json::to_string(&json!({
-            "query": "external skills policy",
+            "query": "external skills list",
             "results": [
                 {
                     "tool_id": "skills",
-                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "summary": "Search, inspect, install, list, or run external skills.",
                     "argument_hint": "operation:string",
                     "required_fields": ["operation"],
                     "required_field_groups": [["operation"]],
@@ -2910,11 +2910,11 @@ mod tests {
         }))
         .expect("encode first search payload summary");
         let second_summary = serde_json::to_string(&json!({
-            "query": "external skills policy again",
+            "query": "external skills list again",
             "results": [
                 {
                     "tool_id": "skills",
-                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "summary": "Search, inspect, install, list, or run external skills.",
                     "argument_hint": "operation:string",
                     "required_fields": ["operation"],
                     "required_field_groups": [["operation"]],
@@ -2956,11 +2956,11 @@ mod tests {
     #[test]
     fn provider_shape_discovery_followup_ignores_newer_mixed_content_messages() {
         let latest_summary = serde_json::to_string(&json!({
-            "query": "external skills policy",
+            "query": "external skills list",
             "results": [
                 {
                     "tool_id": "skills",
-                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "summary": "Search, inspect, install, list, or run external skills.",
                     "argument_hint": "operation:string",
                     "required_fields": ["operation"],
                     "required_field_groups": [["operation"]],
@@ -2974,7 +2974,7 @@ mod tests {
             "results": [
                 {
                     "tool_id": "skills",
-                    "summary": "Manage installable external skills and related policy surfaces.",
+                    "summary": "Search, inspect, install, list, or run external skills.",
                     "argument_hint": "operation:string",
                     "required_fields": ["operation"],
                     "required_field_groups": [["operation"]],

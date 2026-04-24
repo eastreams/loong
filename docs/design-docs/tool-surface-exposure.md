@@ -30,12 +30,14 @@ Loong needs one design that keeps all of the following true at the same time:
 - search remains prompt-driven and metadata-driven
 - provider schemas, prompt copy, runtime snapshots, and operator surfaces stay
   aligned
+- precise file mutation is one call away without overloading `write`
+- retryable tool failures can continue through the tool loop instead of collapsing into a text-only fallback
 
 ## Design Goals
 
 1. Keep the provider-visible tool surface extremely small.
 2. Prefer short action names over taxonomy-heavy names.
-3. Keep common file, edit, shell, web, browser, and memory work one call away.
+3. Keep common file, grep, find, edit, shell, web, browser, and memory work one call away.
 4. Preserve `tool.search -> tool.invoke` for hidden specialized tools.
 5. Preserve canonical internal tool identities for governance, telemetry,
    testing, and runtime routing.
@@ -51,6 +53,9 @@ They must be short, high-prior, and assistant-first.
 Current direct tool vocabulary:
 
 - `read`
+- `grep`
+- `find`
+- `edit`
 - `write`
 - `exec`
 - `web`
@@ -64,11 +69,13 @@ Examples:
 
 - `read { path }` -> `file.read`
 - `read { path, offset, limit }` -> `file.read`
-- `read { query }` -> `content.search`
-- `read { pattern }` -> `glob.search`
+- `grep { query }` -> `content.search`
+- `read { query }` -> `content.search` (compatibility path; prefer `grep` for direct text search)
+- `find { pattern }` -> `glob.search`
+- `read { pattern }` -> `glob.search` (compatibility path; prefer `find` for direct path matching)
+- `edit { path, edits }` -> `file.edit`
+- `edit { path, old_string, new_string }` -> `file.edit` (legacy exact-edit mode)
 - `write { path, content }` -> `file.write`
-- `write { path, edits }` -> `file.edit`
-- `write { path, old_string, new_string }` -> `file.edit` (legacy exact-edit mode)
 - `exec { command }` -> `shell.exec`
 - `exec { script }` -> `bash.exec`
 
@@ -165,6 +172,11 @@ This metadata is shared across:
 - runtime snapshots
 - gateway read models
 - status surfaces
+
+For file mutation, the prompt contract should now distinguish:
+
+- `edit` for surgical exact-match replacements in existing files
+- `write` for new files and whole-file replacement
 
 The capability snapshot should append active surface-specific guidance bullets only
 for the surfaces that are actually visible in the current runtime. That keeps the

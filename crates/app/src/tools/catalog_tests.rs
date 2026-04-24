@@ -485,7 +485,17 @@ fn tool_catalog_entries_expose_concurrency_class() {
     assert!(
         file_write
             .usage_guidance
-            .is_some_and(|guidance| guidance.contains("normal patching and file creation"))
+            .is_some_and(|guidance| guidance.contains("new files and full rewrites"))
+    );
+
+    let file_edit = find_tool_catalog_entry("file.edit").expect("file.edit catalog entry");
+    assert_eq!(file_edit.scheduling_class, ToolSchedulingClass::SerialOnly);
+    assert_eq!(file_edit.concurrency_class, ToolConcurrencyClass::Mutating);
+    assert_eq!(file_edit.surface_id, Some("edit"));
+    assert!(
+        file_edit
+            .usage_guidance
+            .is_some_and(|guidance| guidance.contains("surgical changes"))
     );
 
     let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
@@ -912,6 +922,36 @@ fn external_skills_policy_definition_surfaces_update_controls() {
     assert!(properties["policy_update_approved"].is_object());
     assert!(properties["allowed_domains"].is_object());
     assert!(properties["blocked_domains"].is_object());
+}
+
+#[test]
+fn external_skills_plumbing_tools_are_internal_only() {
+    let catalog = tool_catalog();
+    let internal_only = [
+        "external_skills.fetch",
+        "external_skills.resolve",
+        "external_skills.recommend",
+        "external_skills.source_search",
+        "external_skills.remove",
+    ];
+
+    for tool_name in internal_only {
+        let descriptor = catalog
+            .descriptor(tool_name)
+            .unwrap_or_else(|| panic!("missing descriptor `{tool_name}`"));
+        assert!(
+            descriptor.exposure == ToolExposureClass::Internal,
+            "{tool_name} should be internal-only"
+        );
+        assert!(
+            !descriptor.is_discoverable(),
+            "{tool_name} should not be discoverable"
+        );
+        assert!(
+            !descriptor.is_provider_exposed(),
+            "{tool_name} should not be provider-exposed"
+        );
+    }
 }
 
 #[cfg(feature = "tool-websearch")]

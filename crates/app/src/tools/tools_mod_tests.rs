@@ -221,6 +221,7 @@ fn capability_snapshot_is_deterministic() {
     assert!(snapshot.starts_with("[tool_discovery_runtime]"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
+    assert!(snapshot.contains("- edit:"));
     assert!(snapshot.contains("- write:"));
     assert!(snapshot.contains("- exec:"));
     assert!(snapshot.contains("Available tools:"));
@@ -233,6 +234,7 @@ fn capability_snapshot_is_deterministic() {
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Keep tool.search queries short and capability-focused."));
     assert!(snapshot.contains("Use read for repo inspection before shelling out."));
+    assert!(snapshot.contains("Use edit for precise changes to existing files."));
     assert!(snapshot.contains(
             "Use `offset` and `limit` to page through large files instead of reading everything at once."
         ));
@@ -322,6 +324,9 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     let snapshot = capability_snapshot();
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("- read:"));
+    assert!(snapshot.contains("- grep:"));
+    assert!(snapshot.contains("- find:"));
+    assert!(snapshot.contains("- edit:"));
     assert!(snapshot.contains("- write:"));
     assert!(snapshot.contains("- exec:"));
     assert!(snapshot.contains("Available tools:"));
@@ -333,6 +338,7 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     assert!(snapshot.contains("Additional specialized tools available through tool.search:"));
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Keep tool.search queries short and capability-focused."));
+    assert!(snapshot.contains("Use edit for precise changes to existing files."));
     assert!(snapshot.contains("Use write for new files or whole-file rewrites."));
     assert!(!snapshot.contains("claw.migrate"));
     assert!(!snapshot.contains("external_skills.fetch"));
@@ -340,8 +346,10 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     assert!(!snapshot.contains("shell.exec"));
 
     let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-    assert!(lines.len() >= 8);
+    assert!(lines.len() >= 10);
     assert!(lines.iter().any(|line| line.starts_with("- read:")));
+    assert!(lines.iter().any(|line| line.starts_with("- grep:")));
+    assert!(lines.iter().any(|line| line.starts_with("- find:")));
     assert!(lines.iter().any(|line| line.starts_with("- tool.search:")));
 }
 
@@ -359,35 +367,7 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<BTreeSet<_>>();
-    let expected = BTreeSet::from([
-        "approval_request_resolve",
-        "approval_request_status",
-        "approval_requests_list",
-        "config.import",
-        "delegate",
-        "delegate_async",
-        "external_skills.policy",
-        "provider.switch",
-        "session_archive",
-        "session_cancel",
-        "session_continue",
-        "session_events",
-        "session_recover",
-        "session_search",
-        "session_status",
-        "session_tool_policy_clear",
-        "session_tool_policy_set",
-        "session_tool_policy_status",
-        "session_wait",
-        "task_events",
-        "task_history",
-        "task_status",
-        "task_wait",
-        "tasks_list",
-        "tasks_search",
-        "sessions_history",
-        "sessions_list",
-    ]);
+    let expected = BTreeSet::from(["agent"]);
     assert_eq!(names, expected);
 }
 
@@ -405,35 +385,7 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websea
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<BTreeSet<_>>();
-    let expected = BTreeSet::from([
-        "approval_request_resolve",
-        "approval_request_status",
-        "approval_requests_list",
-        "config.import",
-        "delegate",
-        "delegate_async",
-        "external_skills.policy",
-        "provider.switch",
-        "session_archive",
-        "session_cancel",
-        "session_continue",
-        "session_events",
-        "session_recover",
-        "session_search",
-        "session_status",
-        "session_tool_policy_clear",
-        "session_tool_policy_set",
-        "session_tool_policy_status",
-        "session_wait",
-        "task_events",
-        "task_history",
-        "task_status",
-        "task_wait",
-        "tasks_list",
-        "tasks_search",
-        "sessions_history",
-        "sessions_list",
-    ]);
+    let expected = BTreeSet::from(["agent"]);
 
     assert_eq!(names, expected);
 }
@@ -453,12 +405,30 @@ fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_th
         .map(|entry| entry.name.clone())
         .collect::<Vec<_>>();
 
-    assert!(names.contains(&"session_archive".to_owned()));
-    assert!(names.contains(&"session_cancel".to_owned()));
-    assert!(names.contains(&"session_continue".to_owned()));
-    assert!(names.contains(&"session_recover".to_owned()));
-    assert!(names.contains(&"session_tool_policy_set".to_owned()));
-    assert!(names.contains(&"session_tool_policy_clear".to_owned()));
+    assert_eq!(names, vec!["agent".to_owned()]);
+}
+
+#[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn tool_registry_groups_external_skills_behind_skills_surface_when_runtime_enabled() {
+    let root = unique_tool_temp_dir("loong-tool-registry-skills-surface");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let entries = tool_registry_with_config(Some(&config));
+    let names = entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert!(names.contains("skills"));
+    assert!(!names.contains("external_skills.search"));
+    assert!(!names.contains("external_skills.inspect"));
+    assert!(!names.contains("external_skills.install"));
+    assert!(!names.contains("external_skills.invoke"));
+    assert!(!names.contains("external_skills.list"));
+
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -724,7 +694,10 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     let defs = provider_tool_definitions_with_config(Some(&config));
     let expected_names = vec![
         "browser",
+        "edit",
         "exec",
+        "find",
+        "grep",
         "read",
         "tool_invoke",
         "tool_search",
@@ -940,35 +913,35 @@ fn file_write_catalog_exposes_overwrite_flag() {
 fn file_edit_catalog_exposes_exact_edit_blocks() {
     let catalog = tool_catalog();
     let direct_descriptor = catalog
-        .descriptor("write")
-        .expect("write should be in the catalog");
+        .descriptor("edit")
+        .expect("edit should be in the catalog");
     let direct_definition = direct_descriptor.provider_definition();
     let direct_properties = direct_definition["function"]["parameters"]["properties"]
         .as_object()
-        .expect("write parameters");
+        .expect("edit parameters");
     let direct_any_of = direct_definition["function"]["parameters"]["anyOf"]
         .as_array()
-        .expect("write anyOf");
+        .expect("edit anyOf");
 
     assert!(
         direct_properties.contains_key("edits"),
-        "write schema should expose exact edit blocks"
+        "edit schema should expose exact edit blocks"
     );
     assert!(
         direct_descriptor.argument_hint().contains("edits?:array"),
-        "write argument hint should expose edits"
+        "edit argument hint should expose edits"
     );
     assert!(
         direct_descriptor
             .parameter_types()
             .contains(&("edits", "array")),
-        "write parameter types should expose edits"
+        "edit parameter types should expose edits"
     );
     assert!(
         direct_any_of
             .iter()
             .any(|branch| branch["required"] == json!(["edits"])),
-        "write anyOf should include edits mode"
+        "edit anyOf should include edits mode"
     );
 
     let file_edit_descriptor = catalog
@@ -1233,6 +1206,10 @@ fn tool_search_returns_direct_results_for_common_file_queries() {
         results
             .iter()
             .all(|entry| entry["tool_id"] != "tool.search")
+    );
+    assert!(
+        results.iter().any(|entry| entry["tool_id"] == "read"),
+        "common file queries should still keep direct read discoverable: {results:?}"
     );
     assert!(results.iter().any(|entry| entry["tool_id"] == "read"));
     assert!(results.iter().all(|entry| {
@@ -1703,8 +1680,11 @@ fn tool_search_matches_prompt_style_queries_across_tool_surfaces() {
 
     let config = test_tool_runtime_config(root.clone());
     let cases = vec![
-        ("edit file", "write"),
+        ("edit file", "edit"),
+        ("grep repo text", "grep"),
+        ("find matching paths", "find"),
         ("read repo file", "read"),
+        ("external skills policy", "agent"),
         ("search memory notes", "memory"),
         ("search the web", "web"),
         ("install skill", "skills"),
@@ -1787,8 +1767,43 @@ fn tool_search_uses_coarse_listing_fallback_when_query_is_missing() {
 
 #[cfg(feature = "tool-file")]
 #[test]
-fn direct_write_routes_exact_edit_blocks_to_file_edit() {
+fn direct_write_rejects_exact_edit_blocks() {
     let root = unique_tool_temp_dir("loongclaw-direct-write-edit-blocks");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+    let target = root.join("notes.txt");
+    std::fs::write(&target, "alpha\nbeta\ngamma\n").expect("seed target file");
+
+    let config = test_tool_runtime_config(root.clone());
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "write".to_owned(),
+            payload: json!({
+                "path": "notes.txt",
+                "edits": [
+                    {"old_text": "alpha", "new_text": "ALPHA"}
+                ]
+            }),
+        },
+        &config,
+    )
+    .expect_err("direct write should reject exact edit mode");
+
+    assert!(
+        error.contains("direct_write_exact_edit_moved"),
+        "expected edit-moved error, got: {error}"
+    );
+    assert!(
+        error.contains("use `edit`"),
+        "expected write->edit migration hint, got: {error}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn direct_edit_routes_exact_edit_blocks_to_file_edit() {
+    let root = unique_tool_temp_dir("loongclaw-direct-edit-edit-blocks");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let target = root.join("notes.txt");
     std::fs::write(&target, "alpha\nbeta\ngamma\n").expect("seed target file");
@@ -1796,7 +1811,7 @@ fn direct_write_routes_exact_edit_blocks_to_file_edit() {
     let config = test_tool_runtime_config(root.clone());
     let outcome = execute_tool_core_with_config(
         ToolCoreRequest {
-            tool_name: "write".to_owned(),
+            tool_name: "edit".to_owned(),
             payload: json!({
                 "path": "notes.txt",
                 "edits": [
@@ -1807,7 +1822,7 @@ fn direct_write_routes_exact_edit_blocks_to_file_edit() {
         },
         &config,
     )
-    .expect("direct write edit mode should succeed");
+    .expect("direct edit mode should succeed");
 
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload["edit_blocks_applied"], 2);
@@ -1938,11 +1953,11 @@ fn runtime_discoverable_tool_surface_summary_uses_provider_invokable_hidden_entr
         .collect::<BTreeSet<_>>();
     let summary = runtime_discoverable_tool_surface_summary_with_config(&config, Some(&view));
 
-    assert!(all_discoverable_names.contains("session_status"));
-    assert!(all_discoverable_names.contains("delegate"));
-    assert!(!provider_discoverable_names.contains("session_status"));
-    assert!(!provider_discoverable_names.contains("delegate"));
-    assert!(provider_discoverable_names.contains("provider.switch"));
+    assert!(all_discoverable_names.contains("agent"));
+    assert!(!all_discoverable_names.contains("session_status"));
+    assert!(!all_discoverable_names.contains("delegate"));
+    assert!(provider_discoverable_names.contains("agent"));
+    assert!(!provider_discoverable_names.contains("provider.switch"));
     assert_eq!(
         summary.hidden_tool_count,
         provider_discoverable_entries.len()
@@ -2404,8 +2419,8 @@ fn runtime_discoverable_tool_entries_intersect_injected_view_with_runtime_surfac
         .collect::<Vec<_>>();
 
     assert!(
-        names.contains(&"config.import".to_owned()),
-        "expected enabled injected tool to remain visible: {names:?}"
+        names.contains(&"agent".to_owned()),
+        "expected grouped agent surface to remain visible: {names:?}"
     );
     assert!(
         !names.contains(&"sessions_list".to_owned()),
@@ -2718,7 +2733,7 @@ fn tool_invoke_dispatches_a_discovered_tool_with_a_valid_lease() {
     let search = execute_tool_core_with_config(
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
-            payload: json!({"query": "external skills policy"}),
+            payload: json!({"query": "external skills list"}),
         },
         &config,
     )
@@ -2738,8 +2753,7 @@ fn tool_invoke_dispatches_a_discovered_tool_with_a_valid_lease() {
                 "tool_id": "skills",
                 "lease": result["lease"].clone(),
                 "arguments": {
-                    "operation": "policy",
-                    "action": "get"
+                    "operation": "list"
                 }
             }),
         },
@@ -2748,8 +2762,61 @@ fn tool_invoke_dispatches_a_discovered_tool_with_a_valid_lease() {
     .expect("tool invoke should succeed");
 
     assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["action"], "get");
-    assert!(outcome.payload["policy"].is_object());
+    assert!(outcome.payload["skills"].is_array());
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_invoke_skills_facade_rejects_internal_policy_operation() {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-tool-invoke-skills-policy-{nanos}"));
+    fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let search = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({"query": "external skills list"}),
+        },
+        &config,
+    )
+    .expect("tool search should succeed");
+
+    let result = search.payload["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .find(|entry| entry["tool_id"] == "skills")
+        .expect("skills search result");
+
+    let error = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "skills",
+                "lease": result["lease"].clone(),
+                "arguments": {
+                    "operation": "policy",
+                    "action": "get"
+                }
+            }),
+        },
+        &config,
+    )
+    .expect_err("skills facade should reject internal-only operations");
+
+    assert!(
+        error.contains("hidden_skills_unknown_operation"),
+        "expected unknown-operation rejection, got: {error}"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -2896,7 +2963,7 @@ fn tool_invoke_rejects_leases_replayed_in_another_turn() {
         ToolCoreRequest {
             tool_name: "tool.search".to_owned(),
             payload: json!({
-                "query": "external skills policy",
+                "query": "external skills list",
                 TOOL_LEASE_SESSION_ID_FIELD: "session-a",
                 TOOL_LEASE_TURN_ID_FIELD: "turn-a"
             }),
@@ -2919,8 +2986,7 @@ fn tool_invoke_rejects_leases_replayed_in_another_turn() {
                 "tool_id": "skills",
                 "lease": result["lease"].clone(),
                 "arguments": {
-                    "operation": "policy",
-                    "action": "get"
+                    "operation": "list"
                 },
                 TOOL_LEASE_SESSION_ID_FIELD: "session-a",
                 TOOL_LEASE_TURN_ID_FIELD: "turn-b"
@@ -3061,6 +3127,38 @@ fn tool_search_hides_app_only_discoverables_from_provider_visible_results() {
         result.payload["diagnostics"]["reason"],
         json!("exact_tool_id_not_visible")
     );
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn tool_search_hides_exact_hidden_skill_ids_without_falling_back_to_skills_surface() {
+    let root = unique_tool_temp_dir("loong-tool-search-hidden-skill-exact");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+
+    let config = test_tool_runtime_config(root.clone());
+    let result = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({
+                "exact_tool_id": "external_skills.invoke"
+            }),
+        },
+        &config,
+    )
+    .expect("search should succeed");
+
+    let results = result.payload["results"].as_array().expect("results array");
+
+    assert!(
+        results.iter().all(|entry| entry["tool_id"] != "skills"),
+        "exact hidden skill refresh should not fall back to grouped skills card: {results:?}"
+    );
+    assert_eq!(
+        result.payload["diagnostics"]["reason"],
+        json!("exact_tool_id_not_visible")
+    );
+
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[test]
@@ -3389,13 +3487,16 @@ fn provider_tool_definitions_with_config_keeps_direct_surface_when_feishu_runtim
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"browser"));
+    assert!(names.contains(&"edit"));
     assert!(names.contains(&"exec"));
+    assert!(names.contains(&"find"));
+    assert!(names.contains(&"grep"));
     assert!(names.contains(&"read"));
     assert!(names.contains(&"tool_invoke"));
     assert!(names.contains(&"tool_search"));
     assert!(names.contains(&"web"));
     assert!(names.contains(&"write"));
-    assert_eq!(names.len(), 7);
+    assert_eq!(names.len(), 10);
 }
 
 #[cfg(feature = "feishu-integration")]

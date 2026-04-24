@@ -159,6 +159,14 @@ pub(super) fn execute_tool_search_tool_with_config(
             })
         });
     let exact_match_found = exact_match_entry.is_some();
+    let searchable_entries = if exact_match_found {
+        searchable_entries
+    } else {
+        suppress_grouped_hidden_fallback_for_exact_tool_id(
+            searchable_entries,
+            exact_tool_id.as_deref(),
+        )
+    };
     let mut diagnostics_reason = None;
     let results: Vec<Value> = if let Some(entry) = exact_match_entry {
         let why = Vec::new();
@@ -215,6 +223,25 @@ pub(super) fn execute_tool_search_tool_with_config(
             "diagnostics": diagnostics,
         }),
     })
+}
+
+fn suppress_grouped_hidden_fallback_for_exact_tool_id(
+    entries: Vec<SearchableToolEntry>,
+    exact_tool_id: Option<&str>,
+) -> Vec<SearchableToolEntry> {
+    let Some(exact_tool_id) = exact_tool_id else {
+        return entries;
+    };
+    let Some(hidden_surface_tool_id) =
+        super::hidden_facade_tool_name_for_hidden_tool(exact_tool_id)
+    else {
+        return entries;
+    };
+
+    entries
+        .into_iter()
+        .filter(|entry| entry.tool_id != hidden_surface_tool_id)
+        .collect()
 }
 
 fn tool_search_result_entry_json(

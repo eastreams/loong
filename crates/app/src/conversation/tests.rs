@@ -20,6 +20,7 @@ use super::super::config::{
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::{DefaultConversationRuntime, load_default_conversation_runtime};
+use super::turn_shared::TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT;
 use super::*;
 use crate::CliResult;
 use crate::KernelContext;
@@ -11968,20 +11969,41 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
-    let runtime = FakeRuntime::with_turn_and_completion(
+    let note_contents = "hello from repaired file read followup";
+    std::fs::write(harness.temp_dir.join("note.md"), note_contents).expect("seed note");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
         vec![],
-        Ok(ProviderTurn {
-            assistant_text: "Trying to read the file now.".to_owned(),
-            tool_intents: vec![provider_tool_intent(
-                "file.read",
-                json!({}),
-                "session-file-read-followup",
-                "turn-file-read-followup",
-                "call-file-read-followup",
-            )],
-            raw_meta: Value::Null,
-        }),
-        Ok("MODEL_FILE_READ_REPAIR_REPLY".to_owned()),
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Trying to read the file now.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({}),
+                    "session-file-read-followup",
+                    "turn-file-read-followup-1",
+                    "call-file-read-followup-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Retrying with the file path now.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "file.read",
+                    json!({"path": "note.md"}),
+                    "session-file-read-followup",
+                    "turn-file-read-followup-2",
+                    "call-file-read-followup-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: note_contents.to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
     );
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -11995,18 +12017,27 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
             ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
-        .expect("repairable file.read failure should still return completion fallback");
+        .expect("repairable file.read failure should continue through a provider followup turn");
 
-    assert_eq!(reply, "MODEL_FILE_READ_REPAIR_REPLY");
+    assert_eq!(reply, note_contents);
 
-    let completion_requests = runtime
-        .completion_requested_messages
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
         .lock()
-        .expect("completion request lock")
+        .expect("turn request lock")
         .clone();
-    assert_eq!(completion_requests.len(), 1);
+    assert_eq!(requested_turn_messages.len(), 3);
 
-    let followup_messages = &completion_requests[0];
+    let followup_messages = &requested_turn_messages[1];
     assert!(
         followup_messages.iter().any(|message| {
             let role = message.get("role").and_then(Value::as_str);
@@ -12018,7 +12049,7 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
             let shows_empty_request = content.is_some_and(|value| value.contains("\"request\":{}"));
             is_assistant && has_request_marker && mentions_read && shows_empty_request
         }),
-        "completion followup should include the failed read request: {followup_messages:?}"
+        "provider followup should include the failed read request: {followup_messages:?}"
     );
     assert!(
         followup_messages.iter().any(|message| {
@@ -12033,13 +12064,15 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
                 content.is_some_and(|value| value.contains("file.read payload.path is required"));
             is_assistant && has_failure_marker && mentions_repair && mentions_required_path
         }),
-        "completion followup should include the repairable file.read failure reason: {followup_messages:?}"
+        "provider followup should include the repairable file.read failure reason: {followup_messages:?}"
     );
     assert!(
         followup_messages.iter().any(|message| {
             let role = message.get("role").and_then(Value::as_str);
             let content = message.get("content").and_then(Value::as_str);
             let is_user = role == Some("user");
+            let has_retry_prompt = content
+                .is_some_and(|value| value.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT));
             let has_guidance =
                 content.is_some_and(|value| value.contains("Repair guidance for read:"));
             let mentions_path = content.is_some_and(|value| {
@@ -12048,9 +12081,9 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
             let mentions_shape = content.is_some_and(|value| {
                 value.contains("Expected payload shape: path:string,offset?:integer,limit?:integer,max_bytes?:integer.")
             });
-            is_user && has_guidance && mentions_path && mentions_shape
+            is_user && has_retry_prompt && has_guidance && mentions_path && mentions_shape
         }),
-        "completion followup should include file.read repair guidance: {followup_messages:?}"
+        "provider followup should include file.read repair guidance: {followup_messages:?}"
     );
 }
 
@@ -12061,20 +12094,38 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
-    let runtime = FakeRuntime::with_turn_and_completion(
+    let runtime = FakeRuntime::with_turns_and_completions(
         vec![],
-        Ok(ProviderTurn {
-            assistant_text: "Trying the shell command now.".to_owned(),
-            tool_intents: vec![provider_tool_intent(
-                "shell.exec",
-                json!({"command": "/bin/echo", "args": ["hello"]}),
-                "session-shell-followup",
-                "turn-shell-followup",
-                "call-shell-followup",
-            )],
-            raw_meta: Value::Null,
-        }),
-        Ok("MODEL_SHELL_REPAIR_REPLY".to_owned()),
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Trying the shell command now.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "shell.exec",
+                    json!({"command": "/bin/echo", "args": ["hello"]}),
+                    "session-shell-followup",
+                    "turn-shell-followup-1",
+                    "call-shell-followup-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Retrying the shell command with a bare executable.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "shell.exec",
+                    json!({"command": "echo", "args": ["hello"]}),
+                    "session-shell-followup",
+                    "turn-shell-followup-2",
+                    "call-shell-followup-2",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "hello".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
     );
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -12088,18 +12139,27 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
             ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
-        .expect("repairable shell failure should still return completion fallback");
+        .expect("repairable shell failure should continue through a provider followup turn");
 
-    assert_eq!(reply, "MODEL_SHELL_REPAIR_REPLY");
+    assert_eq!(reply, "hello");
 
-    let completion_requests = runtime
-        .completion_requested_messages
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
         .lock()
-        .expect("completion request lock")
+        .expect("turn request lock")
         .clone();
-    assert_eq!(completion_requests.len(), 1);
+    assert_eq!(requested_turn_messages.len(), 3);
 
-    let followup_messages = &completion_requests[0];
+    let followup_messages = &requested_turn_messages[1];
     assert!(
         followup_messages.iter().any(|message| {
             message.get("role").and_then(Value::as_str) == Some("assistant")
@@ -12112,7 +12172,7 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
                             && content.contains("\"command\":\"/bin/echo\"")
                     })
         }),
-        "completion followup should include the failed exec request: {followup_messages:?}"
+        "provider followup should include the failed exec request: {followup_messages:?}"
     );
     assert!(
         followup_messages.iter().any(|message| {
@@ -12125,7 +12185,7 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
                             && content.contains("tool input needs repair")
                     })
         }),
-        "completion followup should include the repairable failure reason: {followup_messages:?}"
+        "provider followup should include the repairable failure reason: {followup_messages:?}"
     );
     assert!(
         followup_messages.iter().any(|message| {
@@ -12134,7 +12194,8 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.contains("Repair guidance for exec:")
+                        content.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT)
+                            && content.contains("Repair guidance for exec:")
                             && content.contains(
                                 "Use a bare lowercase executable name in `payload.command`.",
                             )
@@ -12142,7 +12203,7 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
                                 .contains("The failed request used `/bin/echo`; retry with `echo`")
                     })
         }),
-        "completion followup should include shell repair guidance: {followup_messages:?}"
+        "provider followup should include shell repair guidance: {followup_messages:?}"
     );
 }
 
@@ -12162,29 +12223,47 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
             ..crate::tools::runtime_config::ToolRuntimeConfig::default()
         },
     );
-    let runtime = FakeRuntime::with_turn_and_completion(
+    let runtime = FakeRuntime::with_turns_and_completions(
         vec![],
-        Ok(ProviderTurn {
-            assistant_text: "Trying both shell commands now.".to_owned(),
-            tool_intents: vec![
-                provider_tool_intent(
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Trying both shell commands now.".to_owned(),
+                tool_intents: vec![
+                    provider_tool_intent(
+                        "shell.exec",
+                        json!({"command": "ls", "args": ["."]}),
+                        "session-shell-followup-multi",
+                        "turn-shell-followup-multi-1",
+                        "call-shell-followup-multi-1",
+                    ),
+                    provider_tool_intent(
+                        "shell.exec",
+                        json!({"command": "/bin/echo", "args": ["hello"]}),
+                        "session-shell-followup-multi",
+                        "turn-shell-followup-multi-1",
+                        "call-shell-followup-multi-2",
+                    ),
+                ],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Retrying just the failed shell command.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
                     "shell.exec",
-                    json!({"command": "ls", "args": ["."]}),
+                    json!({"command": "echo", "args": ["hello"]}),
                     "session-shell-followup-multi",
-                    "turn-shell-followup-multi",
-                    "call-shell-followup-multi-1",
-                ),
-                provider_tool_intent(
-                    "shell.exec",
-                    json!({"command": "/bin/echo", "args": ["hello"]}),
-                    "session-shell-followup-multi",
-                    "turn-shell-followup-multi",
-                    "call-shell-followup-multi-2",
-                ),
-            ],
-            raw_meta: Value::Null,
-        }),
-        Ok("MODEL_SHELL_MULTI_REPAIR_REPLY".to_owned()),
+                    "turn-shell-followup-multi-2",
+                    "call-shell-followup-multi-3",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "hello".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
     );
     let mut config = test_config();
     config.conversation.safe_lane_max_tool_steps_per_turn = 2;
@@ -12202,18 +12281,27 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
             ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
         )
         .await
-        .expect("repairable shell failure should still return completion fallback");
+        .expect("repairable shell failure should continue through a provider followup turn");
 
-    assert_eq!(reply, "MODEL_SHELL_MULTI_REPAIR_REPLY");
+    assert_eq!(reply, "hello");
 
-    let completion_requests = runtime
-        .completion_requested_messages
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
         .lock()
-        .expect("completion request lock")
+        .expect("turn request lock")
         .clone();
-    assert_eq!(completion_requests.len(), 1);
+    assert_eq!(requested_turn_messages.len(), 3);
 
-    let followup_messages = &completion_requests[0];
+    let followup_messages = &requested_turn_messages[1];
     assert!(
         followup_messages.iter().any(|message| {
             message.get("role").and_then(Value::as_str) == Some("assistant")
@@ -12227,7 +12315,7 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
                             && !content.contains("\"command\":\"echo\",\"args\":[\"ok\"]")
                     })
         }),
-        "completion followup should include only the failed request: {followup_messages:?}"
+        "provider followup should include only the failed request: {followup_messages:?}"
     );
     assert!(
         followup_messages.iter().any(|message| {
@@ -12236,12 +12324,119 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.contains("The failed request used `/bin/echo`; retry with `echo`")
+                        content.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT)
+                            && content
+                                .contains("The failed request used `/bin/echo`; retry with `echo`")
                     })
         }),
-        "completion followup should use the failed shell command in repair guidance: {followup_messages:?}"
+        "provider followup should use the failed shell command in repair guidance: {followup_messages:?}"
     );
 }
+
+#[cfg(feature = "tool-browser")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_browser_stale_session_failure_requests_provider_followup() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I'll continue from the earlier browser session.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "browser.extract",
+                    json!({"session_id": "browser-stale-123", "mode": "page_text"}),
+                    "session-browser-stale-followup",
+                    "turn-browser-stale-followup-1",
+                    "call-browser-stale-followup-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "I'll reopen the page with a fresh browser session.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-browser-stale-followup",
+            "继续看看百度热搜结果",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        )
+        .await
+        .expect("stale browser session failure should continue through a provider followup turn");
+
+    assert_eq!(reply, "I'll reopen the page with a fresh browser session.");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+
+    let requested_turn_messages = runtime
+        .turn_requested_messages
+        .lock()
+        .expect("turn request lock")
+        .clone();
+    assert_eq!(requested_turn_messages.len(), 2);
+
+    let followup_messages = &requested_turn_messages[1];
+    assert!(
+        followup_messages.iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.starts_with("[tool_request]\n")
+                            && content.contains("\"tool\":\"browser\"")
+                            && content.contains("\"session_id\":\"browser-stale-123\"")
+                    })
+        }),
+        "provider followup should include the stale browser request: {followup_messages:?}"
+    );
+    assert!(
+        followup_messages.iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.starts_with("[tool_failure]\n")
+                            && content.contains("session is no longer available")
+                    })
+        }),
+        "provider followup should include the stale browser failure reason: {followup_messages:?}"
+    );
+    assert!(
+        followup_messages.iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT)
+                            && content.contains("Repair guidance for browser:")
+                            && content.contains("browser-stale-123")
+                            && content.contains("Do not reuse older browser session ids.")
+                    })
+        }),
+        "provider followup should include stale browser recovery guidance: {followup_messages:?}"
+    );
+}
+
 #[tokio::test]
 async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_without_markers() {
     let runtime = FakeRuntime::with_turn_and_completion(

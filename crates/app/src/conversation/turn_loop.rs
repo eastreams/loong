@@ -1108,7 +1108,7 @@ mod tests {
             "preface",
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_preflight_denied: tool input needs repair".to_owned(),
-                retryable: false,
+                retryable: true,
             },
             "retry the command",
             &mut budget,
