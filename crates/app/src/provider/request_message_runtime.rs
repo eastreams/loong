@@ -22,6 +22,8 @@ use crate::workspace_guidance;
 use crate::memory;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{SessionNodeKind, SessionRepository};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store::SessionStoreConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectedMessageContext {
@@ -1164,7 +1166,8 @@ fn load_session_path_projection(
     session_id: &str,
     memory_config: &memory::runtime_config::MemoryRuntimeConfig,
 ) -> CliResult<Option<SessionPathProjection>> {
-    let repo = SessionRepository::new(memory_config).map_err(|error| {
+    let session_store_config = SessionStoreConfig::from_memory_runtime_config(memory_config);
+    let repo = SessionRepository::new(&session_store_config).map_err(|error| {
         format!("open session repository for session path projection failed: {error}")
     })?;
     let nodes = repo
@@ -1515,9 +1518,8 @@ mod tests {
         config.memory.sqlite_path = sqlite_path.display().to_string();
         config.tools.file_root = Some(temp_dir.path().display().to_string());
 
-        let memory_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        let session_store_config = SessionStoreConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&session_store_config).expect("session repository");
         repo.create_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
             kind: SessionKind::Root,
@@ -1527,13 +1529,13 @@ mod tests {
         })
         .expect("create session");
 
-        store::append_session_turn_direct("root-session", "user", "hello", &memory_config)
+        store::append_session_turn_direct("root-session", "user", "hello", &session_store_config)
             .expect("append user turn");
         store::append_session_turn_direct(
             "root-session",
             "assistant",
             "mainline-world",
-            &memory_config,
+            &session_store_config,
         )
         .expect("append mainline assistant turn");
         repo.set_session_head(
@@ -1546,7 +1548,7 @@ mod tests {
             "root-session",
             "assistant",
             "branch-reply",
-            &memory_config,
+            &session_store_config,
         )
         .expect("append branch assistant turn");
 
@@ -1571,9 +1573,8 @@ mod tests {
         config.memory.sqlite_path = sqlite_path.display().to_string();
         config.tools.file_root = Some(temp_dir.path().display().to_string());
 
-        let memory_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        let session_store_config = SessionStoreConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&session_store_config).expect("session repository");
         repo.create_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
             kind: SessionKind::Root,
@@ -1583,13 +1584,13 @@ mod tests {
         })
         .expect("create session");
 
-        store::append_session_turn_direct("root-session", "user", "hello", &memory_config)
+        store::append_session_turn_direct("root-session", "user", "hello", &session_store_config)
             .expect("append user turn");
         store::append_session_turn_direct(
             "root-session",
             "assistant",
             "mainline-world",
-            &memory_config,
+            &session_store_config,
         )
         .expect("append mainline assistant turn");
         repo.fork_session_head(
@@ -1608,7 +1609,7 @@ mod tests {
             "root-session",
             "assistant",
             "branch-reply",
-            &memory_config,
+            &session_store_config,
         )
         .expect("append branch assistant turn");
         repo.set_session_head(

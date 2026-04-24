@@ -211,7 +211,9 @@ fn collect_session_search_artifact_supports_lineage_family_scope() {
 
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+    let session_store_config =
+        mvp::session::store::SessionStoreConfig::from_memory_config(&config.memory);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)
         .expect("session repository");
 
     repo.create_session(mvp::session::repository::NewSessionRecord {
