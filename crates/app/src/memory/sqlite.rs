@@ -1646,6 +1646,197 @@ fn append_turn_session_tree_node(
     Ok(())
 }
 
+fn preserve_session_tree_before_rebuild(
+    conn: &Connection,
+    session_id: &str,
+    turns: &[WindowTurn],
+    fallback_ts: i64,
+) -> Result<(), String> {
+    let new_tail_turn_index: i64 = turns.len() as i64;
+    let preservation_ts: i64 = turns.last().and_then(|turn| turn.ts).unwrap_or(fallback_ts);
+
+    // --- Drop non-active heads whose target would dangle.
+    //
+    // Includes: (a) heads pointing at a node past the new tail, (b) heads
+    // pointing at a node that's already missing (legacy corruption).
+    // The session root node (session_turn_index IS NULL) is always safe —
+    // the rebuild below re-creates it.
+    let stale_heads: Vec<(String, String, Option<String>)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT h.head_name, h.node_id, n.content
+                 FROM session_heads h
+                 LEFT JOIN session_nodes n ON n.node_id = h.node_id
+                 WHERE h.session_id = ?1
+                   AND h.head_name != ?2
+                   AND (
+                        n.node_id IS NULL
+                        OR (n.session_turn_index IS NOT NULL
+                            AND n.session_turn_index > ?3)
+                   )",
+            )
+            .map_err(|error| format!("prepare stale head query failed: {error}"))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![session_id, ACTIVE_SESSION_HEAD_NAME, new_tail_turn_index],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| format!("scan stale heads failed: {error}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|error| format!("read stale head row failed: {error}"))?);
+        }
+        out
+    };
+
+    for (head_name, stale_node_id, content_snapshot) in &stale_heads {
+        let payload = json!({
+            "head_name": head_name,
+            "stale_node_id": stale_node_id,
+            "new_tail_turn_index": new_tail_turn_index,
+            "content_snapshot": content_snapshot,
+        });
+        conn.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, 'session_tree_rewrite_dropped_head', NULL, ?2, '', ?3)",
+            rusqlite::params![session_id, payload.to_string(), preservation_ts],
+        )
+        .map_err(|error| format!("record dropped head event failed: {error}"))?;
+        conn.execute(
+            "DELETE FROM session_heads
+             WHERE session_id = ?1 AND head_name = ?2",
+            rusqlite::params![session_id, head_name],
+        )
+        .map_err(|error| format!("drop stale session head failed: {error}"))?;
+    }
+
+    // --- Null dangling *_node_id columns on artifacts.
+    //
+    // The artifact's own payload_json / summary_text is not node-referential
+    // and is left intact — only the back-references are cleared.
+    let stale_artifact_refs: Vec<(
+        String,
+        Option<String>, // current anchor_node_id
+        Option<String>, // current source_start_node_id
+        Option<String>, // current source_end_node_id
+        Option<i64>,    // anchor target's session_turn_index (NULL when absent)
+        Option<i64>,    // source_start target's session_turn_index
+        Option<i64>,    // source_end target's session_turn_index
+        bool,           // anchor exists in session_nodes
+        bool,           // source_start exists in session_nodes
+        bool,           // source_end exists in session_nodes
+    )> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.artifact_id,
+                        a.anchor_node_id,       a.source_start_node_id,    a.source_end_node_id,
+                        na.session_turn_index,  nss.session_turn_index,    nse.session_turn_index,
+                        na.node_id IS NOT NULL, nss.node_id IS NOT NULL,   nse.node_id IS NOT NULL
+                 FROM session_artifacts a
+                 LEFT JOIN session_nodes na  ON na.node_id  = a.anchor_node_id
+                 LEFT JOIN session_nodes nss ON nss.node_id = a.source_start_node_id
+                 LEFT JOIN session_nodes nse ON nse.node_id = a.source_end_node_id
+                 WHERE a.session_id = ?1",
+            )
+            .map_err(|error| format!("prepare stale artifact query failed: {error}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params![session_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, bool>(7)?,
+                    row.get::<_, bool>(8)?,
+                    row.get::<_, bool>(9)?,
+                ))
+            })
+            .map_err(|error| format!("scan stale artifact refs failed: {error}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|error| format!("read stale artifact row failed: {error}"))?);
+        }
+        out
+    };
+
+    let ref_dangles = |node_id: &Option<String>, ti: Option<i64>, exists: bool| -> bool {
+        node_id.is_some() && (!exists || ti.is_some_and(|v| v > new_tail_turn_index))
+    };
+
+    for (
+        artifact_id,
+        anchor_node_id,
+        source_start_node_id,
+        source_end_node_id,
+        anchor_ti,
+        source_start_ti,
+        source_end_ti,
+        anchor_exists,
+        source_start_exists,
+        source_end_exists,
+    ) in &stale_artifact_refs
+    {
+        let anchor_drop = ref_dangles(anchor_node_id, *anchor_ti, *anchor_exists);
+        let source_start_drop =
+            ref_dangles(source_start_node_id, *source_start_ti, *source_start_exists);
+        let source_end_drop = ref_dangles(source_end_node_id, *source_end_ti, *source_end_exists);
+        if !anchor_drop && !source_start_drop && !source_end_drop {
+            continue;
+        }
+
+        let payload = json!({
+            "artifact_id": artifact_id,
+            "original_anchor_node_id":       if anchor_drop       { anchor_node_id.clone()       } else { None },
+            "original_source_start_node_id": if source_start_drop { source_start_node_id.clone() } else { None },
+            "original_source_end_node_id":   if source_end_drop   { source_end_node_id.clone()   } else { None },
+            "new_tail_turn_index": new_tail_turn_index,
+        });
+        conn.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, search_text, ts
+             ) VALUES (?1, 'session_tree_rewrite_nulled_artifact_refs', NULL, ?2, '', ?3)",
+            rusqlite::params![session_id, payload.to_string(), preservation_ts],
+        )
+        .map_err(|error| format!("record nulled artifact event failed: {error}"))?;
+
+        conn.execute(
+            "UPDATE session_artifacts
+             SET anchor_node_id       = CASE WHEN ?2 THEN NULL ELSE anchor_node_id       END,
+                 source_start_node_id = CASE WHEN ?3 THEN NULL ELSE source_start_node_id END,
+                 source_end_node_id   = CASE WHEN ?4 THEN NULL ELSE source_end_node_id   END
+             WHERE artifact_id = ?1",
+            rusqlite::params![artifact_id, anchor_drop, source_start_drop, source_end_drop],
+        )
+        .map_err(|error| format!("null stale artifact refs failed: {error}"))?;
+    }
+
+    // --- Null artifact.head_name when the referenced head was just dropped.
+    //
+    // Keeps artifact.head_name referentially consistent with session_heads.
+    // Scoped to the `stale_heads` set we already computed above.
+    for (head_name, _, _) in &stale_heads {
+        conn.execute(
+            "UPDATE session_artifacts
+             SET head_name = NULL
+             WHERE session_id = ?1 AND head_name = ?2",
+            rusqlite::params![session_id, head_name],
+        )
+        .map_err(|error| format!("clear artifact head_name failed: {error}"))?;
+    }
+
+    Ok(())
+}
+
 fn rebuild_linear_session_tree_for_turns(
     conn: &Connection,
     session_id: &str,
@@ -1672,6 +1863,17 @@ fn rebuild_linear_session_tree_for_turns(
         )
         .map_err(|error| format!("load session created_at for tree rebuild failed: {error}"))?;
     let root_node_id = session_root_node_id(session_id);
+
+    // --- Pre-rewrite preservation phase.
+    //
+    // Non-`active` heads and artifacts that reference turn nodes past the new
+    // tail would dangle after the DELETE below. Mirror jj's
+    // `MutableRepo::update_rewritten_references` pattern: inside the same
+    // transaction, drop stale heads (with a session_events audit trail
+    // capturing original content) and null the out-of-range *_node_id
+    // columns on artifacts (their own `payload_json` / `summary_text`
+    // survive, so the artifact's self-contained content is not lost).
+    preserve_session_tree_before_rebuild(conn, session_id, turns, root_created_at)?;
 
     conn.execute(
         "DELETE FROM session_nodes WHERE session_id = ?1",
