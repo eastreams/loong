@@ -83,6 +83,7 @@ loongclaw web remove --force
 
 - Windows：`powershell -File scripts/web/start-dev.ps1`
 - macOS / Linux：`bash scripts/web/start-dev.sh`
+- 如需强制重编 daemon：Windows 用 `-BuildDaemon`，macOS / Linux 用 `BUILD_DAEMON=1`
 
 ### 默认地址
 
@@ -108,6 +109,7 @@ npm run build
 
 - Windows：`powershell -File scripts/web/start-same-origin.ps1`
 - macOS / Linux：`bash scripts/web/start-same-origin.sh`
+- 如需强制重编 daemon：Windows 用 `-BuildDaemon`，macOS / Linux 用 `BUILD_DAEMON=1`
 
 默认地址：
 

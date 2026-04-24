@@ -535,6 +535,96 @@
   min-width: 0;
 }
 
+.chat-inspector-kv-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.chat-inspector-kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
+  font-size: 0.76rem;
+}
+
+.chat-inspector-kv-row span {
+  color: var(--color-text-secondary);
+}
+
+.chat-inspector-kv-row strong {
+  color: var(--color-text-primary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chat-inspector-approval-list {
+  display: grid;
+  gap: 0;
+}
+
+.chat-inspector-approval-item {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.chat-inspector-approval-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.chat-inspector-approval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.chat-inspector-approval-name,
+.chat-inspector-approval-meta,
+.chat-inspector-approval-side span {
+  min-width: 0;
+}
+
+.chat-inspector-approval-name {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-inspector-approval-meta,
+.chat-inspector-approval-side {
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+}
+
+.chat-inspector-approval-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-inspector-approval-side {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.chat-inspector-approval-side span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-inspector-tool-list {
   display: grid;
   gap: 0;
@@ -693,6 +783,10 @@
 
 .chat-tool-chip-ok {
   border-color: color-mix(in srgb, var(--color-success) 26%, var(--color-border));
+}
+
+.chat-tool-chip-pending {
+  border-color: rgba(231, 164, 59, 0.28);
 }
 
 .chat-tool-chip-error {

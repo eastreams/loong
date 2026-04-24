@@ -133,6 +133,13 @@ where
             return invocation;
         }
 
+        #[cfg(windows)]
+        if let Some(invocation) =
+            resolve_windows_shell_script_invocation(resolved_path.as_path(), &collected_args)
+        {
+            return invocation;
+        }
+
         return ResolvedCommandInvocation {
             program: resolved_path.into_os_string(),
             args: collected_args,
@@ -234,6 +241,35 @@ fn resolve_existing_command_path(command: &str) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
+fn is_windows_shell_script(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "cmd" | "bat"))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn resolve_windows_shell_script_invocation(
+    script_path: &std::path::Path,
+    collected_args: &[OsString],
+) -> Option<ResolvedCommandInvocation> {
+    if !is_windows_shell_script(script_path) {
+        return None;
+    }
+
+    let mut resolved_args = vec![
+        OsString::from("/C"),
+        script_path.to_path_buf().into_os_string(),
+    ];
+    resolved_args.extend(collected_args.iter().cloned());
+
+    Some(ResolvedCommandInvocation {
+        program: OsString::from("cmd.exe"),
+        args: resolved_args,
+    })
+}
+
+#[cfg(windows)]
 fn stable_command_search_path() -> OsString {
     std::env::var_os("PATH")
         .filter(|value| !value.is_empty())
@@ -268,6 +304,8 @@ mod tests {
     #[cfg(unix)]
     use std::path::Path;
     #[cfg(unix)]
+    use std::path::PathBuf;
+    #[cfg(windows)]
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -311,6 +349,29 @@ mod tests {
 
         assert_eq!(resolved.program, std::ffi::OsString::from("/bin/echo"));
         assert_eq!(resolved.args, vec![std::ffi::OsString::from("hello")]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_command_invocation_wraps_windows_batch_scripts_with_cmd() {
+        let root = crate::test_support::unique_temp_dir("loong-process-launch-cmd");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let script_path = root.join("script.cmd");
+        std::fs::write(&script_path, "@echo off\r\nexit /b 0\r\n").expect("write script");
+
+        let resolved =
+            resolve_command_invocation(script_path.to_string_lossy().as_ref(), ["--flag", "value"]);
+
+        assert_eq!(resolved.program, std::ffi::OsString::from("cmd.exe"));
+        assert_eq!(
+            resolved.args,
+            vec![
+                std::ffi::OsString::from("/C"),
+                PathBuf::from(&script_path).into_os_string(),
+                std::ffi::OsString::from("--flag"),
+                std::ffi::OsString::from("value"),
+            ]
+        );
     }
 
     #[cfg(unix)]

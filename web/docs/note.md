@@ -1,6 +1,6 @@
 # Web Notes
 
-## Mascot Follow-up
+## Mascot Follow-up（做完了）
 
 目标收敛：
 
@@ -13,12 +13,11 @@
 
 - 外观优化：重画形象、表情和气泡样式，补更自然的 idle / thinking / success / error 动效。
 - 状态联动：直接消费 chat 现有 `streamPhase` 和 `turn.phase`，至少覆盖 `idle`、`connecting`、`thinking`、`running_tools`、`streaming`、`finalizing`、`error`。
-- 行为模型：先做有限状态机，不先上行为树。当前后端真值足够支撑状态驱动，但还不适合做复杂自主行为编排。
+- 行为模型：先做有限状态机，当前后端真值足够支撑状态驱动，但还不适合做复杂自主行为编排。
 - Agent 化边界：限定为聊天陪伴、读取当前 Web 页面内容、对当前 Web 页面做有限操作，不扩展到通用 OS 级控制。
 
 和后端真值的对齐结论：
 
-- 聊天状态联动是可做的。后端已发 `turn.phase`，Web 也已有 `streamPhase`。
 - 页面读取/页面内操作不是空白能力。后端已有 `browser.open` / `browser.extract` / `browser.click`，以及 `browser.companion.*` 的 managed browser lane。
 - 当前更准确的说法是“受控 browser/page automation”，不是“桌面级鼠标点点点”。
 - 如果以后要让小宠物变成更强的 agent，再评估把 browser companion readiness、approval、session scope 这些运行时真值接进 UI。

@@ -59,6 +59,7 @@ export default function NavBar() {
           type="button"
           className="navbar-btn"
           onClick={toggleTheme}
+          data-mascot-action="toggle-theme"
           aria-label={`${t("nav.theme")}: ${theme}`}
           title={t("nav.theme")}
         >

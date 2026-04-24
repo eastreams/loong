@@ -151,9 +151,10 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
         let output = wait_for_browser_companion_output(child, timeout_seconds)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
             return Err(format!(
-                "browser_companion_command_failed: status={} stderr={stderr}",
-                output.status
+                "browser_companion_command_failed: status={} stderr={stderr} stdout={stdout}",
+                output.status,
             ));
         }
 

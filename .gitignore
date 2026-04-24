@@ -4,6 +4,8 @@
 /.loong.local.toml
 /.env.local
 /.tmp-web-*.log
+/.tmp-*.log
+/.tmp-*.jsonl
 .worktrees/
 .idea
 .vscode

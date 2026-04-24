@@ -18,7 +18,7 @@ function upsertRecentTool(
   tool: {
     toolId: string;
     label: string;
-    status: "ok" | "error";
+    status: "ok" | "error" | "pending";
     detail?: string;
   },
 ): SessionViewState["recentTools"] {
@@ -34,6 +34,20 @@ function upsertRecentTool(
     nextItem,
     ...current.recentTools.filter((item) => item.toolId !== tool.toolId),
   ].slice(0, 6);
+}
+
+function resolveToolCompletionStatus(
+  event: Extract<ChatTurnStreamEvent, { type: "tool.finished" }>,
+): "ok" | "error" | "pending" {
+  if (event.state === "needs_approval" || event.outcome === "needs_approval") {
+    return "pending";
+  }
+
+  if (event.outcome === "ok" || event.state === "completed") {
+    return "ok";
+  }
+
+  return "error";
 }
 
 function extractErrorHost(message: string): string | null {
@@ -228,28 +242,35 @@ export function useChatStream({
           });
           break;
         case "tool.finished":
-          updateSessionViewState(targetSessionId, (current) => ({
-            ...current,
-            activeTools: current.activeTools.map((item) =>
-              item.toolId === event.toolId
-                ? {
-                    ...item,
-                    label: event.label,
-                    status: event.outcome === "ok" ? ("ok" as const) : ("error" as const),
-                  }
-                : item,
-            ),
-            recentTools: upsertRecentTool(current, {
-              toolId: event.toolId,
-              label: event.label,
-              status: event.outcome === "ok" ? "ok" : "error",
-              detail:
-                event.detail ??
-                (event.outcome === "ok"
-                  ? t("chat.recentTools.detail.ok")
-                  : t("chat.recentTools.detail.error")),
-            }),
-          }));
+          updateSessionViewState(targetSessionId, (current) => {
+            const status = resolveToolCompletionStatus(event);
+            return {
+              ...current,
+              activeTools: current.activeTools.map((item) =>
+                item.toolId === event.toolId
+                  ? {
+                      ...item,
+                      label: event.label,
+                      status,
+                    }
+                  : item,
+              ),
+              recentTools: upsertRecentTool(current, {
+                toolId: event.toolId,
+                label: event.label,
+                status,
+                detail:
+                  event.detail ??
+                  (status === "ok"
+                    ? t("chat.recentTools.detail.ok")
+                    : status === "pending"
+                      ? t("chat.recentTools.detail.pending", {
+                          defaultValue: "Waiting for approval",
+                        })
+                      : t("chat.recentTools.detail.error")),
+              }),
+            };
+          });
           break;
         case "turn.completed":
           internalContentBuffersRef.current.delete(placeholderId);

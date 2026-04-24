@@ -86,6 +86,14 @@ pub(super) async fn run_web_serve(
         .route("/dashboard/approvals", get(dashboard_approvals))
         .route("/dashboard/debug-console", get(dashboard_debug_console))
         .route(
+            "/mascot/browser/theme-toggle",
+            post(mascot::mascot_browser_theme_toggle),
+        )
+        .route(
+            "/mascot/browser/search",
+            post(mascot::mascot_browser_search),
+        )
+        .route(
             "/chat/sessions",
             get(chat_sessions).post(create_chat_session),
         )

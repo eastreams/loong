@@ -45,6 +45,7 @@ mod chat;
 mod dashboard;
 mod debug_console;
 mod install;
+mod mascot;
 mod onboarding;
 mod serve;
 
@@ -313,13 +314,17 @@ impl mvp::conversation::ConversationTurnObserver for WebTurnEventSink {
             | mvp::conversation::ConversationTurnToolState::Denied
             | mvp::conversation::ConversationTurnToolState::Failed
             | mvp::conversation::ConversationTurnToolState::Interrupted => {
-                let outcome = if matches!(
-                    event.state,
-                    mvp::conversation::ConversationTurnToolState::Completed
-                ) {
-                    "ok"
-                } else {
-                    "error"
+                let (outcome, state_label) = match event.state {
+                    mvp::conversation::ConversationTurnToolState::Completed => ("ok", "completed"),
+                    mvp::conversation::ConversationTurnToolState::NeedsApproval => {
+                        ("needs_approval", "needs_approval")
+                    }
+                    mvp::conversation::ConversationTurnToolState::Denied => ("denied", "denied"),
+                    mvp::conversation::ConversationTurnToolState::Failed => ("error", "failed"),
+                    mvp::conversation::ConversationTurnToolState::Interrupted => {
+                        ("error", "interrupted")
+                    }
+                    mvp::conversation::ConversationTurnToolState::Running => ("error", "running"),
                 };
                 let detail = event
                     .detail
@@ -334,6 +339,7 @@ impl mvp::conversation::ConversationTurnObserver for WebTurnEventSink {
                         "toolId": event.tool_call_id,
                         "label": event.tool_name,
                         "outcome": outcome,
+                        "state": state_label,
                         "detail": detail,
                     }),
                 );

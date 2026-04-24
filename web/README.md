@@ -68,6 +68,7 @@ loongclaw web remove
 3. 启动前端 dev server 与本地 API：
    - Windows：`powershell -File scripts/web/start-dev.ps1`
    - macOS / Linux：`bash scripts/web/start-dev.sh`
+   - 如需强制重编 daemon：Windows 用 `-BuildDaemon`，macOS / Linux 用 `BUILD_DAEMON=1`
 
 默认地址：
 
@@ -84,6 +85,7 @@ loongclaw web remove
 4. 启动同源服务：
    - Windows：`powershell -File scripts/web/start-same-origin.ps1`
    - macOS / Linux：`bash scripts/web/start-same-origin.sh`
+   - 如需强制重编 daemon：Windows 用 `-BuildDaemon`，macOS / Linux 用 `BUILD_DAEMON=1`
 
 默认地址：`http://127.0.0.1:4318/`
 

@@ -8,19 +8,20 @@ import {
   type ChatMessage,
   type ChatSessionSummary,
 } from "../api";
+import { CHAT_MASCOT_SESSION_ID } from "../mascotProfile";
 
 export type StreamPhase = "idle" | "connecting" | "thinking" | "streaming";
 
 export interface ActiveToolStatus {
   toolId: string;
   label: string;
-  status: "running" | "ok" | "error";
+  status: "running" | "ok" | "error" | "pending";
 }
 
 export interface RecentToolStatus {
   toolId: string;
   label: string;
-  status: "ok" | "error";
+  status: "ok" | "error" | "pending";
   finishedAt: string;
   detail?: string;
 }
@@ -41,6 +42,10 @@ function readStoredSelectedSessionId(): string | null {
   }
   const value = window.sessionStorage.getItem(CHAT_SELECTED_SESSION_STORAGE_KEY);
   return value && value.trim() ? value : null;
+}
+
+function filterVisibleSessions(sessions: ChatSessionSummary[]): ChatSessionSummary[] {
+  return sessions.filter((session) => session.id !== CHAT_MASCOT_SESSION_ID);
 }
 
 export function useChatSessions(t: TFunction) {
@@ -92,7 +97,7 @@ export function useChatSessions(t: TFunction) {
 
   const refreshSessions = useCallback(async (preferredSessionId?: string) => {
     try {
-      const loadedSessions = await chatApi.listSessions();
+      const loadedSessions = filterVisibleSessions(await chatApi.listSessions());
       setSessions(loadedSessions);
       if (preferredSessionId) {
         setSelectedSessionId(preferredSessionId);
@@ -178,7 +183,7 @@ export function useChatSessions(t: TFunction) {
       setIsLoadingSessions(true);
       setError(null);
       try {
-        const loadedSessions = await chatApi.listSessions();
+        const loadedSessions = filterVisibleSessions(await chatApi.listSessions());
         if (cancelled) return;
         setSessions(loadedSessions);
         setSelectedSessionId((current) => {

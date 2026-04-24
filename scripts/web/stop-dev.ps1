@@ -1,3 +1,8 @@
+param(
+  [int]$ApiPort = 4317,
+  [int]$DevPort = 4173
+)
+
 $ErrorActionPreference = "Stop"
 
 function Get-PortProcessIds {
@@ -17,7 +22,29 @@ function Get-PortProcessIds {
   return $ids | Sort-Object -Unique
 }
 
-$ports = @(4317, 4173)
+function Stop-PidFileProcess {
+  param([string]$PidFile)
+
+  if (-not (Test-Path $PidFile)) {
+    return
+  }
+
+  $rawPid = (Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($rawPid -match "^\d+$") {
+    Stop-Process -Id ([int]$rawPid) -Force -ErrorAction SilentlyContinue
+  }
+
+  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+}
+
+$runRoot = Join-Path $env:USERPROFILE ".loong\run"
+$apiPidFile = Join-Path $runRoot "web-api.pid"
+$devPidFile = Join-Path $runRoot "web-dev.pid"
+
+Stop-PidFileProcess -PidFile $apiPidFile
+Stop-PidFileProcess -PidFile $devPidFile
+
+$ports = @($ApiPort, $DevPort)
 foreach ($port in $ports) {
   $ids = Get-PortProcessIds -Port $port
   if ($ids.Count -gt 0) {
@@ -25,4 +52,4 @@ foreach ($port in $ports) {
   }
 }
 
-Write-Output "Stopped web dev processes on ports 4317 and 4173."
+Write-Output "Stopped web dev processes on ports $ApiPort and $DevPort."

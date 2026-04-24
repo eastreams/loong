@@ -9,7 +9,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import TextareaAutosize from "react-textarea-autosize";
 import "../../../styles/chat.css";
@@ -17,14 +17,25 @@ import { CopyButton } from "../../../components/feedback/CopyButton";
 import { Panel } from "../../../components/surfaces/Panel";
 import { useWebConnection } from "../../../hooks/useWebConnection";
 import { ApiRequestError } from "../../../lib/api/client";
-import { dashboardApi } from "../../dashboard/api";
-import { ChatMascot } from "../components/ChatMascot";
+import {
+  dashboardApi,
+  type DashboardApprovalItem,
+  type DashboardApprovals,
+} from "../../dashboard/api";
+import { abilitiesApi, type SkillsSnapshot } from "../../abilities/api";
+import { ChatMascot, type MascotActionReply } from "../components/ChatMascot";
+import { useMascotAgent } from "../hooks/useMascotAgent";
+import {
+  performMascotBrowserSearch,
+  performMascotPageAction,
+} from "../mascotPageActions";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { useChatStream } from "../hooks/useChatStream";
 import {
   CHAT_MASCOT_TOGGLED_EVENT,
   readChatMascotEnabled,
 } from "../mascotPreference";
+import { captureCurrentPageContext } from "../mascotPageContext";
 
 const MarkdownBlock = lazy(async () => {
   const module = await import("../components/MarkdownBlock");
@@ -32,6 +43,7 @@ const MarkdownBlock = lazy(async () => {
 });
 
 const CHAT_SESSION_TITLE_OVERRIDES_STORAGE_KEY = "loongclaw.web.chat.sessionTitleOverrides";
+const MASCOT_SEARCH_QUERY = "LoongClaw GitHub";
 
 function readStoredSessionTitleOverrides(): Record<string, string> {
   if (typeof window === "undefined") {
@@ -51,6 +63,15 @@ function readStoredSessionTitleOverrides(): Record<string, string> {
   }
 }
 
+function shortUrlLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`.slice(0, 64);
+  } catch {
+    return url.slice(0, 64);
+  }
+}
+
 export default function ChatPage() {
   const { t, i18n } = useTranslation();
   const isChinese = i18n.language.startsWith("zh");
@@ -64,6 +85,8 @@ export default function ChatPage() {
   const [composerText, setComposerText] = useState("");
   const [memoryWindow, setMemoryWindow] = useState<number | null>(null);
   const [currentModel, setCurrentModel] = useState("");
+  const [inspectorApprovals, setInspectorApprovals] = useState<DashboardApprovals | null>(null);
+  const [inspectorSkills, setInspectorSkills] = useState<SkillsSnapshot | null>(null);
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
   const [sessionTitleOverrides, setSessionTitleOverrides] = useState<Record<string, string>>(
     () => readStoredSessionTitleOverrides(),
@@ -113,6 +136,32 @@ export default function ChatPage() {
   });
 
   const { isSubmitting, sendMessage } = streamState;
+  const mascotAgent = useMascotAgent({
+    isChinese,
+    canAccessProtectedApi,
+    markUnauthorized,
+  });
+
+  const refreshInspectorTruth = useCallback(async () => {
+    if (!canAccessProtectedApi) {
+      setInspectorApprovals(null);
+      setInspectorSkills(null);
+      return;
+    }
+
+    try {
+      const [approvals, skills] = await Promise.all([
+        dashboardApi.loadApprovals(),
+        abilitiesApi.loadSkills(),
+      ]);
+      setInspectorApprovals(approvals);
+      setInspectorSkills(skills);
+    } catch (loadError) {
+      if (loadError instanceof ApiRequestError && loadError.status === 401) {
+        markUnauthorized();
+      }
+    }
+  }, [canAccessProtectedApi, markUnauthorized]);
 
   const loadingPhraseKeys = useMemo(() => {
     switch (streamPhase) {
@@ -188,6 +237,16 @@ export default function ChatPage() {
       cancelled = true;
     };
   }, [authRevision, canAccessProtectedApi, markUnauthorized]);
+
+  useEffect(() => {
+    void refreshInspectorTruth();
+  }, [authRevision, refreshInspectorTruth]);
+
+  useEffect(() => {
+    if (streamPhase === "idle") {
+      void refreshInspectorTruth();
+    }
+  }, [refreshInspectorTruth, streamPhase]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -361,6 +420,9 @@ export default function ChatPage() {
   }
 
   function resolveRecentToolStatusTone(tool: (typeof recentTools)[number]) {
+    if (tool.status === "pending") {
+      return "warning";
+    }
     if (tool.status === "error" && /timeout/i.test(tool.detail ?? "")) {
       return "warning";
     }
@@ -371,6 +433,9 @@ export default function ChatPage() {
     const genericDetails = new Set([
       t("chat.recentTools.detail.ok"),
       t("chat.recentTools.detail.error"),
+      t("chat.recentTools.detail.pending", {
+        defaultValue: "Waiting for approval",
+      }),
     ]);
 
     if (!tool.detail || genericDetails.has(tool.detail)) {
@@ -379,6 +444,104 @@ export default function ChatPage() {
 
     return tool.detail;
   }
+
+  function formatToolStatusLabel(status: "running" | "ok" | "error" | "pending") {
+    if (status === "pending") {
+      return t("chat.toolStatus.pending", { defaultValue: "Pending approval" });
+    }
+    return t(`chat.toolStatus.${status}`);
+  }
+
+  function formatBrowserCompanionState(skills: SkillsSnapshot | null) {
+    if (!skills) {
+      return isChinese ? "读取中" : "Loading";
+    }
+
+    if (skills.browserCompanion.ready) {
+      return isChinese ? "已就绪" : "Ready";
+    }
+
+    if (skills.browserCompanion.enabled) {
+      return isChinese ? "未就绪" : "Not ready";
+    }
+
+    return isChinese ? "未开启" : "Off";
+  }
+
+  function formatApprovalItemTime(item: DashboardApprovalItem) {
+    return formatSessionActivityTime(item.requestedAt);
+  }
+
+  const visibleApprovalItems = useMemo(() => {
+    const activeStatuses = new Set(["pending", "approved", "executing"]);
+    const items = inspectorApprovals?.items.filter((item) => activeStatuses.has(item.status)) ?? [];
+    return [...items]
+      .sort((left, right) => {
+        const leftCurrent = left.sessionId === selectedSessionId ? 1 : 0;
+        const rightCurrent = right.sessionId === selectedSessionId ? 1 : 0;
+        if (leftCurrent !== rightCurrent) {
+          return rightCurrent - leftCurrent;
+        }
+        return right.requestedAt.localeCompare(left.requestedAt);
+      })
+      .slice(0, 3);
+  }, [inspectorApprovals?.items, selectedSessionId]);
+
+  const handleMascotReadPage = useCallback(async () => {
+    if (!canAccessProtectedApi) {
+      return isChinese ? "主会话还没接通。" : "the main session is not ready yet.";
+    }
+
+    const pageContext = captureCurrentPageContext();
+    const instruction = isChinese
+      ? "读取当前页面，优先根据可见的会话内容给我一点简短反馈：现在聊到哪、哪里可能卡住、下一步可以留意什么。不要像运行状态报告，也不要罗列页面控件。除非真的看到异常或待处理事项，否则不用特意说。默认不超过四句。"
+      : "Read the current page and respond mainly to the visible conversation content: where the discussion is, what may be stuck, and what to watch next. Do not sound like a runtime status report or list page controls. Only mention errors or pending items if they are actually visible. Keep it within four sentences.";
+
+    const reply = await mascotAgent.requestReply(instruction, { pageContext });
+    return (
+      reply?.content?.trim() ??
+      (isChinese ? "我看完了，但暂时没有新的结论。" : "I checked it, but I do not have anything new to add.")
+    );
+  }, [canAccessProtectedApi, isChinese, mascotAgent]);
+
+  const handleMascotToggleTheme = useCallback(async () => {
+    const result = await performMascotPageAction("toggle-theme");
+
+    if (!result.targetFound) {
+      return isChinese ? "我没找到开关。" : "I could not find the switch.";
+    }
+
+    if (!result.changed) {
+      return isChinese ? "灯没动，再试一次。" : "The lights did not move. Try again.";
+    }
+
+    if (result.nextTheme === "dark") {
+      return isChinese ? "关好了。" : "Lights off.";
+    }
+
+    return isChinese ? "开好了。" : "Lights on.";
+  }, [isChinese]);
+
+  const handleMascotSearchQoong = useCallback(async (): Promise<MascotActionReply | string> => {
+    if (!canAccessProtectedApi) {
+      return isChinese ? "主会话还没接通。" : "the main session is not ready yet.";
+    }
+
+    const result = await performMascotBrowserSearch(MASCOT_SEARCH_QUERY);
+    if (result.firstUrl) {
+      return {
+        text: isChinese
+          ? `我搜了 ${result.query}，第一个网址在这里。`
+          : `I searched ${result.query}. Here is the first URL.`,
+        url: result.firstUrl,
+        linkLabel: shortUrlLabel(result.firstUrl),
+      };
+    }
+
+    return isChinese
+      ? `我搜了 ${result.query}，但这次没拿到第一个网址。`
+      : `I searched ${result.query}, but did not get the first URL this time.`;
+  }, [canAccessProtectedApi, isChinese]);
 
   const selectedSession =
     sessions.find((session) => session.id === selectedSessionId) ?? null;
@@ -636,12 +799,12 @@ export default function ChatPage() {
               <div ref={messagesEndRef} style={{ height: 1 }} />
             </div>
 
-            {activeTools.length > 0 ? (
+              {activeTools.length > 0 ? (
               <div className="chat-stream-tools">
                 {activeTools.map((tool) => (
                   <div key={tool.toolId} className={`chat-tool-chip chat-tool-chip-${tool.status}`}>
                     <span className="chat-tool-chip-label">{tool.label}</span>
-                    <strong>{t(`chat.toolStatus.${tool.status}`)}</strong>
+                    <strong>{formatToolStatusLabel(tool.status)}</strong>
                   </div>
                 ))}
               </div>
@@ -654,6 +817,12 @@ export default function ChatPage() {
                   streamPhase={streamPhase}
                   activeToolCount={activeTools.length}
                   isSubmitting={isSubmitting}
+                  onWake={() => {
+                    void mascotAgent.primeSession();
+                  }}
+                  onReadPage={handleMascotReadPage}
+                  onSearchQoong={handleMascotSearchQoong}
+                  onToggleTheme={handleMascotToggleTheme}
                 />
               ) : null}
 
@@ -731,6 +900,113 @@ export default function ChatPage() {
                     : t("chat.memoryWindow.pending")}
                 </strong>
               </div>
+              <div className="chat-inspector-summary-row">
+                <span className="chat-inspector-summary-label">
+                  {t("chat.inspector.pendingApprovals", {
+                    defaultValue: "Pending approvals",
+                  })}
+                </span>
+                <strong className="chat-inspector-summary-value">
+                  {inspectorApprovals?.pendingApprovalCount ?? 0}
+                </strong>
+              </div>
+              <div className="chat-inspector-summary-row">
+                <span className="chat-inspector-summary-label">
+                  {t("chat.inspector.browserCompanion", {
+                    defaultValue: "Browser companion",
+                  })}
+                </span>
+                <strong className="chat-inspector-summary-value">
+                  {formatBrowserCompanionState(inspectorSkills)}
+                </strong>
+              </div>
+            </div>
+
+            <div className="chat-inspector-section">
+              <div className="metric-label">
+                {t("chat.inspector.runtimeTruth", {
+                  defaultValue: "Runtime truth",
+                })}
+              </div>
+              <div className="chat-inspector-kv-list">
+                <div className="chat-inspector-kv-row">
+                  <span>
+                    {t("chat.inspector.visibleTools", {
+                      defaultValue: "Visible tools",
+                    })}
+                  </span>
+                  <strong>{inspectorSkills?.visibleRuntimeToolCount ?? "-"}</strong>
+                </div>
+                <div className="chat-inspector-kv-row">
+                  <span>
+                    {t("chat.inspector.directTools", {
+                      defaultValue: "Direct tools",
+                    })}
+                  </span>
+                  <strong>{inspectorSkills?.visibleRuntimeDirectToolCount ?? "-"}</strong>
+                </div>
+                <div className="chat-inspector-kv-row">
+                  <span>
+                    {t("chat.inspector.hiddenSurfaces", {
+                      defaultValue: "Hidden surfaces",
+                    })}
+                  </span>
+                  <strong>{inspectorSkills?.hiddenToolCount ?? "-"}</strong>
+                </div>
+                <div className="chat-inspector-kv-row">
+                  <span>
+                    {t("chat.inspector.browserTier", {
+                      defaultValue: "Browser tier",
+                    })}
+                  </span>
+                  <strong>{inspectorSkills?.browserCompanion.executionTier ?? "-"}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="chat-inspector-section">
+              <div className="metric-label">
+                {t("chat.inspector.approvals", {
+                  defaultValue: "Approval queue",
+                })}
+              </div>
+              {visibleApprovalItems.length > 0 ? (
+                <div className="chat-inspector-approval-list">
+                  {visibleApprovalItems.map((item) => (
+                    <div key={item.approvalRequestId} className="chat-inspector-approval-item">
+                      <div className="chat-inspector-approval-head">
+                        <strong className="chat-inspector-approval-name">
+                          {item.visibleToolName}
+                        </strong>
+                        <span
+                          className={`chat-recent-tool-dot chat-recent-tool-dot-${item.status === "pending" ? "warning" : "ok"}`}
+                          aria-label={item.status}
+                          title={item.status}
+                        />
+                      </div>
+                      <div className="chat-inspector-approval-meta" title={item.requestSummary}>
+                        {item.requestSummary}
+                      </div>
+                      <div className="chat-inspector-approval-side">
+                        <span title={item.sessionTitle}>
+                          {item.sessionId === selectedSessionId
+                            ? t("chat.inspector.currentSession", {
+                                defaultValue: "Current session",
+                              })
+                            : item.sessionTitle}
+                        </span>
+                        <span title={item.requestedAt}>{formatApprovalItemTime(item)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="chat-inspector-empty">
+                  {t("chat.inspector.noApprovals", {
+                    defaultValue: "No approval requests need attention.",
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="chat-inspector-section">
@@ -745,8 +1021,8 @@ export default function ChatPage() {
                           <span>{formatRecentToolTime(tool.finishedAt)}</span>
                           <span
                             className={`chat-recent-tool-dot chat-recent-tool-dot-${resolveRecentToolStatusTone(tool)}`}
-                            aria-label={t(`chat.toolStatus.${tool.status}`)}
-                            title={t(`chat.toolStatus.${tool.status}`)}
+                            aria-label={formatToolStatusLabel(tool.status)}
+                            title={formatToolStatusLabel(tool.status)}
                           />
                         </div>
                       </div>

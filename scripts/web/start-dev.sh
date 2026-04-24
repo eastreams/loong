@@ -4,6 +4,7 @@ set -euo pipefail
 API_BIND="${API_BIND:-127.0.0.1:4317}"
 DEV_HOST="${DEV_HOST:-127.0.0.1}"
 DEV_PORT="${DEV_PORT:-4173}"
+BUILD_DAEMON="${BUILD_DAEMON:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -20,6 +21,18 @@ DEV_LOG="${LOG_ROOT}/web-dev.log"
 DEV_ERR="${LOG_ROOT}/web-dev.err.log"
 API_PID_FILE="${RUN_ROOT}/web-api.pid"
 DEV_PID_FILE="${RUN_ROOT}/web-dev.pid"
+
+stop_pid_file_process() {
+  local pid_file="$1"
+  if [[ -f "${pid_file}" ]]; then
+    local pid
+    pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]]; then
+      kill -9 "${pid}" >/dev/null 2>&1 || true
+    fi
+    rm -f "${pid_file}"
+  fi
+}
 
 stop_port_processes() {
   local port="$1"
@@ -47,28 +60,42 @@ wait_for_http() {
   return "${ready}"
 }
 
-stop_port_processes 4317
+resolve_daemon_exe() {
+  local daemon_exe="${REPO_ROOT}/target/debug/loong"
+  if [[ ! -f "${daemon_exe}" && -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
+    daemon_exe="${REPO_ROOT}/target/debug/loongclaw"
+  fi
+
+  if [[ "${BUILD_DAEMON}" == "1" || ! -f "${daemon_exe}" ]]; then
+    (
+      cd "${REPO_ROOT}"
+      cargo build --bin loong
+    )
+    daemon_exe="${REPO_ROOT}/target/debug/loong"
+  fi
+
+  if [[ ! -f "${daemon_exe}" ]]; then
+    echo "Missing daemon binary: ${daemon_exe}" >&2
+    echo "Run with BUILD_DAEMON=1 or build loong manually." >&2
+    return 1
+  fi
+
+  echo "${daemon_exe}"
+}
+
+API_PORT="${API_BIND##*:}"
+stop_pid_file_process "${API_PID_FILE}"
+stop_pid_file_process "${DEV_PID_FILE}"
+stop_port_processes "${API_PORT}"
 stop_port_processes "${DEV_PORT}"
 
-resolve_daemon_exe() {
-  (
-    cd "${REPO_ROOT}"
-    cargo build --bin loong
-  )
-
-  if [[ -f "${REPO_ROOT}/target/debug/loong" ]]; then
-    echo "${REPO_ROOT}/target/debug/loong"
-    return 0
-  fi
-
-  if [[ -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
-    echo "${REPO_ROOT}/target/debug/loongclaw"
-    return 0
-  fi
-
-  echo "Missing daemon binary after build: ${REPO_ROOT}/target/debug/loong" >&2
-  return 1
-}
+if [[ "${BUILD_DAEMON}" == "1" ]]; then
+  DAEMON_BUILD_MODE="forced"
+elif [[ -f "${REPO_ROOT}/target/debug/loong" || -f "${REPO_ROOT}/target/debug/loongclaw" ]]; then
+  DAEMON_BUILD_MODE="reused existing binary"
+else
+  DAEMON_BUILD_MODE="built missing binary"
+fi
 
 DAEMON_EXE="$(resolve_daemon_exe)"
 
@@ -106,3 +133,7 @@ echo "Web Dev: http://${DEV_HOST}:${DEV_PORT}"
 echo "Logs: ${LOG_ROOT}"
 echo "API PID: $(cat "${API_PID_FILE}")"
 echo "Dev PID: $(cat "${DEV_PID_FILE}")"
+if [[ "${BUILD_DAEMON}" == "1" ]]; then
+  :
+fi
+echo "Daemon build: ${DAEMON_BUILD_MODE}"

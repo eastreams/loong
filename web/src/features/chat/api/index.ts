@@ -58,7 +58,8 @@ export type ChatTurnStreamEvent =
       turnId: string;
       toolId: string;
       label: string;
-      outcome: "ok" | "error" | string;
+      outcome: "ok" | "error" | "needs_approval" | "denied" | string;
+      state?: "completed" | "needs_approval" | "denied" | "failed" | "interrupted" | string;
       detail?: string;
     }
   | {
@@ -90,6 +91,25 @@ type CreateTurnResponse = ChatTurnAccepted;
 
 interface CreateTurnRequest {
   input: string;
+}
+
+export interface MascotBrowserThemeToggleResponse {
+  sessionId: string;
+  executionTier: string;
+  pageUrl: string | null;
+  title: string | null;
+  clicked: boolean;
+  snapshot: string;
+}
+
+export interface MascotBrowserSearchResponse {
+  query: string;
+  sessionId: string;
+  executionTier: string;
+  pageUrl: string | null;
+  title: string | null;
+  firstUrl: string | null;
+  snapshot: string;
 }
 
 interface StreamHandlers {
@@ -283,6 +303,28 @@ export const chatApi = {
   async deleteSession(sessionId: string, request?: ApiRequestOptions): Promise<void> {
     await apiDelete(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}`,
+      withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
+    );
+  },
+
+  async mascotToggleThemeWithBrowserCompanion(
+    pageUrl: string,
+    request?: ApiRequestOptions,
+  ): Promise<MascotBrowserThemeToggleResponse> {
+    return apiPostData<MascotBrowserThemeToggleResponse, { pageUrl: string }>(
+      "/api/mascot/browser/theme-toggle",
+      { pageUrl },
+      withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
+    );
+  },
+
+  async mascotSearchWithBrowserCompanion(
+    query?: string,
+    request?: ApiRequestOptions,
+  ): Promise<MascotBrowserSearchResponse> {
+    return apiPostData<MascotBrowserSearchResponse, { query?: string }>(
+      "/api/mascot/browser/search",
+      query ? { query } : {},
       withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
     );
   },
