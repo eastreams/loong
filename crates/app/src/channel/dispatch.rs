@@ -1844,7 +1844,7 @@ pub async fn run_qqbot_channel(
 
     #[cfg(not(feature = "channel-qqbot"))]
     {
-        let _ = (config_path, account_id, bind_override, path_override);
+        let _ = (config_path, account_id, _bind_override, _path_override);
         return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
     }
 
@@ -3023,14 +3023,28 @@ pub async fn run_background_channel_with_stop(
             }
         }
         "qqbot" => {
-            return crate::channel::qqbot::run_qqbot_channel_with_stop(
-                resolved_path,
-                config,
-                account_id,
-                stop,
-                initialize_runtime_environment,
-            )
-            .await;
+            #[cfg(feature = "channel-qqbot")]
+            {
+                return crate::channel::qqbot::run_qqbot_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-qqbot"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
+            }
         }
         _ => Err(format!("unsupported background channel `{channel_id}`")),
     }
