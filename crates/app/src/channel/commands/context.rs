@@ -113,6 +113,7 @@ impl ChannelResolvedRuntimeAccount for ResolvedWebhookChannelConfig {
     }
 }
 
+#[cfg(feature = "channel-qqbot")]
 impl ChannelResolvedRuntimeAccount for ResolvedQqbotChannelConfig {
     fn runtime_account_id(&self) -> &str {
         self.account.id.as_str()

@@ -1023,9 +1023,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::channel::registry::{
-        ChannelOperationHealth, channel_status_snapshots, list_channel_catalog,
-    };
+    use crate::channel::registry::{ChannelOperationHealth, channel_status_snapshots};
 
     fn write_runtime_manifest(
         root: &Path,

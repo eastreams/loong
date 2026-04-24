@@ -19,6 +19,7 @@ use crate::CliResult;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
+    feature = "channel-qqbot",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -36,6 +37,7 @@ use crate::KernelContext;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -53,6 +55,7 @@ use crate::acp::AcpConversationTurnOptions;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
+    feature = "channel-qqbot",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -77,6 +80,7 @@ use crate::config::LoongConfig;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
+    feature = "channel-qqbot",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -159,6 +163,7 @@ use crate::config::ResolvedWhatsappChannelConfig;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -174,6 +179,7 @@ use crate::conversation::{
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -185,6 +191,7 @@ use crate::conversation::{ConversationRuntime, ConversationRuntimeBinding};
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -208,6 +215,7 @@ pub(super) use super::commands::{
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -254,6 +262,7 @@ use super::runtime::state;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -265,6 +274,7 @@ use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -290,8 +300,29 @@ use super::wecom;
 use super::whatsapp;
 
 use super::runtime::state::ChannelOperationRuntime;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook",
+))]
+use super::types::ChannelResolvedAcpTurnHints;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+))]
+use super::types::{ChannelAdapter, process_channel_batch};
 use super::types::{
-    ChannelAdapter, ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
+    ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
     ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt, ChannelSession,
     FeishuChannelSendRequest,
 };
@@ -305,10 +336,7 @@ use super::types::{
     feature = "channel-whatsapp",
     feature = "channel-webhook",
 ))]
-use super::types::{
-    ChannelResolvedAcpTurnHints, KnownChannelSessionSendTarget,
-    parse_known_channel_session_send_target, process_channel_batch,
-};
+use super::types::{KnownChannelSessionSendTarget, parse_known_channel_session_send_target};
 
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -2504,6 +2532,7 @@ pub async fn run_feishu_channel_with_stop(
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3324,6 +3353,7 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3340,6 +3370,7 @@ struct PreparedChannelInboundTurn {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -3366,6 +3397,7 @@ fn prepare_channel_inbound_turn(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -3395,6 +3427,7 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3445,6 +3478,7 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3482,6 +3516,7 @@ pub async fn process_inbound_with_provider(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3513,6 +3548,7 @@ pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3660,6 +3696,7 @@ pub async fn process_inbound_with_provider_and_error_mode(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3680,6 +3717,7 @@ pub(super) fn reload_channel_turn_config(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3750,6 +3788,7 @@ fn resolve_channel_acp_turn_hints(
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3769,6 +3808,7 @@ fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTu
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3829,6 +3869,7 @@ pub(super) fn channel_message_ingress_context(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3846,6 +3887,7 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3872,6 +3914,7 @@ fn normalized_channel_delivery_resource(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"

@@ -93,10 +93,14 @@ async fn run_qqbot_channel_inner(
     // This keeps the WebSocket event loop lightweight and avoids stacking
     // the deep AI pipeline on top of the async select! state machine.
     let process_mgr = Arc::clone(&msg_manager);
-    tokio::spawn(async move {
+    let process_stop = stop.clone();
+    let process_task = tokio::spawn(async move {
         loop {
             process_mgr.lock().await.process_all().await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::select! {
+                _ = process_stop.wait() => break,
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
         }
     });
 
@@ -110,7 +114,7 @@ async fn run_qqbot_channel_inner(
         policy,
     ));
 
-    tokio::select! {
+    let session_result = tokio::select! {
         result = ws_manager.run_session() => result,
         _ = stop.wait() => {
             tracing::info!(
@@ -118,6 +122,19 @@ async fn run_qqbot_channel_inner(
                 "qqbot channel shutting down"
             );
             Ok(())
+        }
+    };
+    stop.request_stop();
+
+    let process_result = process_task
+        .await
+        .map_err(|error| format!("qqbot message worker join failed: {error}"));
+    match (session_result, process_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
+        (Err(session_error), Err(process_error)) => {
+            Err(format!("{session_error}; {process_error}"))
         }
     }
 }
