@@ -3,10 +3,11 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::{
-    MemoryContextEntry, MemoryRetrievalRequest, MemoryStageFamily, MemorySystem,
-    MemorySystemMetadata, StageDiagnostics, StageEnvelope, StageOutcome, WindowTurn,
-    load_prompt_context, resolve_memory_system_runtime, runtime_config::MemoryRuntimeConfig,
+    MemoryContextEntry, MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics,
+    StageEnvelope, StageOutcome, WindowTurn, load_prompt_context, resolve_memory_system_runtime,
+    runtime_config::MemoryRuntimeConfig,
 };
+use crate::memory::stage::MemoryRetrievalPlanResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HydratedMemoryContext {
@@ -121,8 +122,8 @@ impl BuiltinMemoryOrchestrator {
     ) -> Result<StageEnvelope, String> {
         let recent_window = recent_window_records(session_id, config)?;
         let mut entries = load_prompt_context(session_id, config)?;
-        let retrieval_request =
-            system.build_retrieval_request(session_id, workspace_root, config, &recent_window);
+        let retrieval_plan =
+            system.build_retrieval_plan_result(session_id, workspace_root, config, &recent_window);
 
         let derive = run_pre_assembly_stage(MemoryStageFamily::Derive, metadata, config, || {
             run_derivation_stage(system, session_id, config, &recent_window)
@@ -134,14 +135,23 @@ impl BuiltinMemoryOrchestrator {
                 run_retrieval_stage(
                     system,
                     session_id,
-                    retrieval_request.as_ref(),
+                    retrieval_plan.as_ref(),
                     workspace_root,
                     config,
                     &recent_window,
                 )
             })?;
+        let mut retrieve = retrieve;
+        annotate_retrieval_diagnostics_from_plan_result(
+            &mut retrieve.diagnostics,
+            retrieval_plan.as_ref(),
+        );
         entries.extend(retrieve.records);
 
+        let (retrieval_request, retrieval_planner_snapshot) = retrieval_plan
+            .map(MemoryRetrievalPlanResult::into_parts)
+            .map(|(request, planner_snapshot)| (Some(request), Some(planner_snapshot)))
+            .unwrap_or((None, None));
         let rank = run_rank_stage(system, session_id, entries, metadata, config)?;
         let diagnostics = vec![derive.diagnostics, retrieve.diagnostics, rank.diagnostics];
 
@@ -154,6 +164,7 @@ impl BuiltinMemoryOrchestrator {
                 config,
             ),
             retrieval_request,
+            retrieval_planner_snapshot,
             diagnostics,
         })
     }
@@ -279,9 +290,29 @@ where
                 elapsed_ms: None,
                 fallback_activated: true,
                 message: Some(error),
+                planner_snapshot: None,
             },
         }),
         Err(error) => Err(format!("memory {} stage failed: {error}", family.as_str())),
+    }
+}
+
+fn annotate_retrieval_diagnostics_from_plan_result(
+    diagnostics: &mut StageDiagnostics,
+    plan_result: Option<&MemoryRetrievalPlanResult>,
+) {
+    let Some(plan_result) = plan_result else {
+        return;
+    };
+
+    diagnostics.planner_snapshot = Some(plan_result.planner_snapshot().clone());
+    let planner_summary = plan_result.planner_summary_message();
+    match diagnostics.message.as_mut() {
+        Some(existing) => {
+            existing.push_str(" | ");
+            existing.push_str(planner_summary.as_str());
+        }
+        None => diagnostics.message = Some(planner_summary),
     }
 }
 
@@ -343,6 +374,7 @@ fn handle_rank_error(
             elapsed_ms: None,
             fallback_activated: true,
             message: Some(error),
+            planner_snapshot: None,
         };
         let outcome = StageRunResult {
             records: pass_through_entries,
@@ -368,6 +400,7 @@ pub(crate) fn skipped_stage_diagnostics(
         elapsed_ms: None,
         fallback_activated: false,
         message,
+        planner_snapshot: None,
     }
 }
 
@@ -404,6 +437,7 @@ pub(crate) async fn run_builtin_compact_stage(
         elapsed_ms: None,
         fallback_activated: false,
         message: None,
+        planner_snapshot: None,
     })
 }
 
@@ -427,6 +461,7 @@ pub(crate) async fn run_builtin_compact_stage(
                 elapsed_ms: None,
                 fallback_activated: false,
                 message: None,
+                planner_snapshot: None,
             })
         }
         Err(error) if config.effective_fail_open() => Ok(StageDiagnostics {
@@ -436,24 +471,88 @@ pub(crate) async fn run_builtin_compact_stage(
             elapsed_ms: None,
             fallback_activated: true,
             message: Some(error),
+            planner_snapshot: None,
         }),
         Err(error) => Err(format!("memory compact stage failed: {error}")),
     }
 }
 
 pub(super) fn retrieval_query_from_recent_window(recent_window: &[WindowTurn]) -> Option<String> {
-    recent_window.iter().rev().find_map(|turn| {
+    const MAX_QUERY_TURNS: usize = 3;
+    const MAX_QUERY_CHARS_PER_TURN: usize = 160;
+
+    let mut fragments = Vec::new();
+
+    for turn in recent_window.iter().rev() {
         if turn.role != "user" {
-            return None;
+            continue;
         }
 
         let trimmed_content = turn.content.trim();
         if trimmed_content.is_empty() {
-            return None;
+            continue;
+        }
+        if is_low_signal_retrieval_query_fragment(trimmed_content) {
+            continue;
         }
 
-        Some(trimmed_content.to_owned())
-    })
+        let normalized_fragment =
+            truncate_retrieval_query_fragment(trimmed_content, MAX_QUERY_CHARS_PER_TURN);
+        if normalized_fragment.is_empty() {
+            continue;
+        }
+        if fragments.contains(&normalized_fragment) {
+            continue;
+        }
+
+        fragments.push(normalized_fragment);
+        if fragments.len() >= MAX_QUERY_TURNS {
+            break;
+        }
+    }
+
+    if fragments.is_empty() {
+        return None;
+    }
+
+    fragments.reverse();
+    Some(fragments.join("\n"))
+}
+
+fn truncate_retrieval_query_fragment(input: &str, max_chars: usize) -> String {
+    let char_count = input.chars().count();
+    if char_count <= max_chars {
+        return input.to_owned();
+    }
+
+    input.chars().take(max_chars).collect()
+}
+
+fn is_low_signal_retrieval_query_fragment(input: &str) -> bool {
+    let normalized = input.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    if normalized.chars().count() <= 2 {
+        return true;
+    }
+
+    matches!(
+        normalized.as_str(),
+        "ok" | "okay"
+            | "thanks"
+            | "thank you"
+            | "continue"
+            | "go on"
+            | "carry on"
+            | "keep going"
+            | "proceed"
+            | "sure"
+            | "yes"
+            | "yep"
+            | "done"
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -501,7 +600,7 @@ fn run_derivation_stage(
 fn run_retrieval_stage(
     system: &dyn MemorySystem,
     _session_id: &str,
-    retrieval_request: Option<&MemoryRetrievalRequest>,
+    retrieval_plan: Option<&MemoryRetrievalPlanResult>,
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
     recent_window: &[WindowTurn],
@@ -513,11 +612,16 @@ fn run_retrieval_stage(
         return Err(error);
     }
 
-    let Some(retrieval_request) = retrieval_request else {
+    let Some(retrieval_plan) = retrieval_plan else {
         return Ok(None);
     };
 
-    system.run_retrieve_stage(retrieval_request, workspace_root, config, recent_window)
+    system.run_retrieve_stage(
+        retrieval_plan.request(),
+        workspace_root,
+        config,
+        recent_window,
+    )
 }
 
 pub fn hydrate_memory_context(
@@ -580,6 +684,7 @@ pub(crate) fn hydrate_stage_envelope_without_execution_adapter(
     let envelope = StageEnvelope {
         hydrated,
         retrieval_request: None,
+        retrieval_planner_snapshot: None,
         diagnostics,
     };
 
@@ -618,9 +723,10 @@ mod tests {
     use crate::memory::{
         DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextKind, MemoryRecallMode,
         MemoryScope, MemoryStageFamily, MemorySystem, MemorySystemCapability, MemorySystemMetadata,
-        StageOutcome, WORKSPACE_RECALL_MEMORY_SYSTEM_ID, append_turn_direct,
-        register_memory_system,
+        RECALL_FIRST_MEMORY_SYSTEM_ID, StageOutcome, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
+        append_turn_direct, register_memory_system,
     };
+    use serde_json::json;
 
     const REGISTRY_RETRIEVE_ONLY_SYSTEM_ID: &str = "registry-retrieve-only";
     const REGISTRY_RETRIEVE_ONLY_COMPACT_SYSTEM_ID: &str = "registry-retrieve-only-compact";
@@ -896,6 +1002,10 @@ mod tests {
         let retrieval_request = envelope
             .retrieval_request
             .expect("window-plus-summary should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::RecentUserQuery
+        );
         assert_eq!(retrieval_request.query.as_deref(), Some("turn 3"));
 
         let _ = std::fs::remove_file(&db_path);
@@ -946,6 +1056,441 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn hydrate_stage_envelope_with_workspace_root_uses_recent_user_query_with_workspace_strategy() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-query-with-workspace");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("query-with-workspace.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember this").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 4);
+
+        append_turn_direct(
+            "stage-query-with-workspace",
+            "user",
+            "initial deploy checklist",
+            &config,
+        )
+        .expect("append turn 1 should succeed");
+        append_turn_direct(
+            "stage-query-with-workspace",
+            "assistant",
+            "working on it",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        append_turn_direct(
+            "stage-query-with-workspace",
+            "user",
+            "release freeze timing",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-query-with-workspace",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("window-plus-summary with workspace should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::RecentUserQueryWithWorkspace
+        );
+        assert_eq!(
+            retrieval_request.query.as_deref(),
+            Some("initial deploy checklist\nrelease freeze timing")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_with_workspace_root_falls_back_when_latest_user_turn_is_low_signal() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-low-signal-workspace");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("low-signal-workspace.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember deploy freeze").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 4);
+
+        append_turn_direct("stage-low-signal-workspace", "user", "continue", &config)
+            .expect("append turn should succeed");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-low-signal-workspace",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("workspace-backed low-signal request should still hydrate");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkspaceReferenceOnly
+        );
+        assert_eq!(retrieval_request.query, None);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_with_workspace_root_uses_structured_signal_strategy_without_query() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-structured-signal-workspace");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("structured-signal-workspace.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember deploy freeze").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
+
+        append_turn_direct(
+            "stage-structured-signal-workspace",
+            "assistant",
+            crate::memory::build_tool_decision_content(
+                "turn-1",
+                "tool-1",
+                json!({"tool_name": "shell.exec"}),
+            )
+            .as_str(),
+            &config,
+        )
+        .expect("append tool decision should succeed");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-structured-signal-workspace",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("workspace-backed structured signal should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::StructuredSignalQueryWithWorkspace
+        );
+        assert_eq!(retrieval_request.query.as_deref(), Some("shell.exec"));
+        assert_eq!(
+            retrieval_request.allowed_kinds,
+            vec![
+                DerivedMemoryKind::Reference,
+                DerivedMemoryKind::Procedure,
+                DerivedMemoryKind::Fact,
+            ]
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_with_workspace_root_uses_task_progress_intent_query_strategy() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-task-progress-workspace");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("task-progress-workspace.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember deploy freeze").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
+        super::super::ensure_memory_db_ready(Some(db_path.clone()), &config)
+            .expect("ensure memory db ready");
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite db");
+        conn.execute(
+            "INSERT INTO session_events(session_id, event_kind, actor_session_id, payload_json, search_text, ts)
+             VALUES (?1, ?2, NULL, ?3, '', 1)",
+            rusqlite::params![
+                "stage-task-progress-workspace",
+                crate::task_progress::TASK_PROGRESS_EVENT_KIND,
+                serde_json::to_string(&crate::task_progress::task_progress_event_payload(
+                    "unit_test",
+                    &crate::task_progress::TaskProgressRecord {
+                        task_id: "stage-task-progress-workspace".to_owned(),
+                        owner_kind: "conversation_turn".to_owned(),
+                        status: crate::task_progress::TaskProgressStatus::Waiting,
+                        intent_summary: Some("diagnose release freeze".to_owned()),
+                        verification_state: None,
+                        active_handles: Vec::new(),
+                        resume_recipe: None,
+                        updated_at: 1,
+                    },
+                ))
+                .expect("encode task progress payload"),
+            ],
+        )
+        .expect("insert task progress event");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-task-progress-workspace",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("workspace-backed task progress should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::TaskProgressIntentQueryWithWorkspace
+        );
+        assert_eq!(
+            retrieval_request.query.as_deref(),
+            Some("diagnose release freeze")
+        );
+        assert_eq!(retrieval_request.budget_items, 2);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_with_workspace_root_uses_delegate_label_query_strategy() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-delegate-label-workspace");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("delegate-label-workspace.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember deploy freeze").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
+        super::super::ensure_memory_db_ready(Some(db_path.clone()), &config)
+            .expect("ensure memory db ready");
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite db");
+        conn.execute(
+            "INSERT INTO sessions(session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error)
+             VALUES (?1, 'root', NULL, ?2, 'ready', 1, 1, NULL)",
+            rusqlite::params!["root-session", "Root Session"],
+        )
+        .expect("insert root session");
+        conn.execute(
+            "INSERT INTO sessions(session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error)
+             VALUES (?1, ?2, ?3, ?4, 'ready', 1, 1, NULL)",
+            rusqlite::params![
+                "stage-delegate-label-workspace",
+                "delegate_child",
+                "root-session",
+                "Release Child",
+            ],
+        )
+        .expect("insert delegate child session");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-delegate-label-workspace",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("delegate child workspace should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::DelegateLineageQueryWithWorkspace
+        );
+        assert_eq!(
+            retrieval_request.query.as_deref(),
+            Some("Release Child\nRoot Session")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_with_workspace_root_uses_workflow_task_query_strategy() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-delegate-task-workspace");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("delegate-task-workspace.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember deploy freeze").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
+        super::super::ensure_memory_db_ready(Some(db_path.clone()), &config)
+            .expect("ensure memory db ready");
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite db");
+        conn.execute(
+            "INSERT INTO sessions(session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error)
+             VALUES (?1, ?2, ?3, ?4, 'ready', 1, 1, NULL)",
+            rusqlite::params![
+                "stage-delegate-task-workspace",
+                "delegate_child",
+                "root-session",
+                "Release Child",
+            ],
+        )
+        .expect("insert delegate child session");
+        conn.execute(
+            "INSERT INTO session_events(session_id, event_kind, actor_session_id, payload_json, search_text, ts)
+             VALUES (?1, 'delegate_started', ?2, ?3, '', 1)",
+            rusqlite::params![
+                "stage-delegate-task-workspace",
+                "root-session",
+                serde_json::to_string(&json!({
+                    "task": "investigate release freeze",
+                }))
+                .expect("encode delegate task payload"),
+            ],
+        )
+        .expect("insert delegate task event");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-delegate-task-workspace",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("delegate task workspace should advertise retrieval request");
+        let envelope_snapshot = envelope
+            .retrieval_planner_snapshot
+            .as_ref()
+            .expect("envelope planner snapshot");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        assert_eq!(
+            retrieval_request.query.as_deref(),
+            Some("investigate release freeze")
+        );
+        assert_eq!(retrieval_request.budget_items, 2);
+        assert_eq!(
+            envelope_snapshot.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        let planner_snapshot = envelope.diagnostics[1]
+            .planner_snapshot
+            .as_ref()
+            .expect("planner snapshot");
+        assert_eq!(
+            planner_snapshot.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        assert_eq!(planner_snapshot.memory_system_id, DEFAULT_MEMORY_SYSTEM_ID);
+        assert_eq!(planner_snapshot.budget_items, 2);
+        assert!(planner_snapshot.query_present);
+        assert!(
+            planner_snapshot
+                .planning_notes
+                .iter()
+                .any(|note| note.contains("workflow task seed"))
+        );
+        assert!(
+            envelope.diagnostics[1]
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains(
+                    "planner system=builtin strategy=workflow_task_query_with_workspace"
+                ))
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_with_workspace_root_completed_workflow_task_includes_phase_hint() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-complete-workflow-task");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("complete-workflow-task.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let memory_file_path = tmp.join("MEMORY.md");
+        std::fs::write(&memory_file_path, "remember deploy freeze").expect("write memory file");
+
+        let config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 4);
+        super::super::ensure_memory_db_ready(Some(db_path.clone()), &config)
+            .expect("ensure memory db ready");
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite db");
+        conn.execute(
+            "INSERT INTO sessions(session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error)
+             VALUES (?1, ?2, ?3, ?4, 'completed', 1, 1, NULL)",
+            rusqlite::params![
+                "stage-complete-workflow-task",
+                "delegate_child",
+                "root-session",
+                "Release Child",
+            ],
+        )
+        .expect("insert delegate child session");
+        conn.execute(
+            "INSERT INTO session_events(session_id, event_kind, actor_session_id, payload_json, search_text, ts)
+             VALUES (?1, 'delegate_completed', ?2, ?3, '', 1)",
+            rusqlite::params![
+                "stage-complete-workflow-task",
+                "root-session",
+                serde_json::to_string(&json!({
+                    "task": "investigate release freeze",
+                }))
+                .expect("encode delegate task payload"),
+            ],
+        )
+        .expect("insert delegate task event");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "stage-complete-workflow-task",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("completed workflow task should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkflowTaskQueryWithWorkspace
+        );
+        assert_eq!(
+            retrieval_request.query.as_deref(),
+            Some("investigate release freeze\nphase: complete")
+        );
+        assert_eq!(retrieval_request.budget_items, 1);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn hydrate_stage_envelope_window_plus_summary_keeps_summary_retrieval_request() {
         let tmp = hydrated_memory_temp_dir("loong-stage-envelope-window-plus-summary");
         let _ = std::fs::create_dir_all(&tmp);
@@ -975,6 +1520,10 @@ mod tests {
             .retrieval_request
             .expect("window-plus-summary should advertise retrieval request");
         assert_eq!(retrieval_request.memory_system_id, "builtin");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkspaceReferenceOnly
+        );
         assert_eq!(
             retrieval_request.recall_mode,
             crate::memory::MemoryRecallMode::PromptAssembly
@@ -1031,6 +1580,122 @@ mod tests {
             retrieval_query_from_recent_window(recent_window.as_slice()).expect("query fallback");
 
         assert_eq!(query, "release rollback plan");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn retrieval_query_from_recent_window_combines_recent_non_empty_user_turns() {
+        let recent_window = vec![
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "initial deploy checklist".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: "working on it".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "rollback smoke test".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "release freeze timing".to_owned(),
+                ts: None,
+            },
+        ];
+
+        let query =
+            retrieval_query_from_recent_window(recent_window.as_slice()).expect("query fallback");
+
+        assert_eq!(
+            query,
+            "initial deploy checklist\nrollback smoke test\nrelease freeze timing"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn retrieval_query_from_recent_window_dedupes_recent_user_turns() {
+        let recent_window = vec![
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "rollback smoke test".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: "noted".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "rollback smoke test".to_owned(),
+                ts: None,
+            },
+        ];
+
+        let query =
+            retrieval_query_from_recent_window(recent_window.as_slice()).expect("query fallback");
+
+        assert_eq!(query, "rollback smoke test");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn retrieval_query_from_recent_window_skips_low_signal_followups() {
+        let recent_window = vec![
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "rollback smoke test".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: "working on it".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "continue".to_owned(),
+                ts: None,
+            },
+        ];
+
+        let query =
+            retrieval_query_from_recent_window(recent_window.as_slice()).expect("query fallback");
+
+        assert_eq!(query, "rollback smoke test");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn retrieval_query_from_recent_window_returns_none_for_only_low_signal_turns() {
+        let recent_window = vec![
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "ok".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: "done".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "continue".to_owned(),
+                ts: None,
+            },
+        ];
+
+        assert_eq!(
+            retrieval_query_from_recent_window(recent_window.as_slice()),
+            None
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1172,6 +1837,10 @@ mod tests {
             .retrieval_request
             .expect("profile-plus-window should advertise retrieval request");
         assert_eq!(retrieval_request.memory_system_id, "builtin");
+        assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkspaceReferenceOnly
+        );
         assert_eq!(
             retrieval_request.scopes,
             vec![MemoryScope::Workspace, MemoryScope::Session]
@@ -1321,10 +1990,22 @@ mod tests {
             WORKSPACE_RECALL_MEMORY_SYSTEM_ID
         );
         assert_eq!(
+            retrieval_request.strategy,
+            crate::memory::MemoryRetrievalStrategy::WorkspaceReferenceOnly
+        );
+        assert_eq!(
             retrieval_request.recall_mode,
             MemoryRecallMode::PromptAssembly
         );
         assert_eq!(retrieval_request.budget_items, 2);
+        assert_eq!(
+            envelope.retrieval_planner_snapshot,
+            Some(retrieval_request.planner_snapshot())
+        );
+        assert_eq!(
+            envelope.diagnostics[1].planner_snapshot,
+            Some(retrieval_request.planner_snapshot())
+        );
 
         let entry_kinds = envelope
             .hydrated
@@ -1380,6 +2061,62 @@ mod tests {
                 (MemoryStageFamily::Retrieve, StageOutcome::Succeeded),
                 (MemoryStageFamily::Rank, StageOutcome::Succeeded),
             ]
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn recall_first_system_stage_envelope_preserves_selected_identity_and_snapshot() {
+        let tmp = hydrated_memory_temp_dir("loong-stage-envelope-recall-first");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("recall-first.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let mut config =
+            sqlite_memory_config_with_profile(db_path.clone(), MemoryProfile::WindowPlusSummary, 2);
+        config.resolved_system_id = Some(RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned());
+
+        append_turn_direct("recall-first", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("recall-first", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct(
+            "recall-first",
+            "user",
+            "investigate deploy freeze timing",
+            &config,
+        )
+        .expect("append turn 3 should succeed");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "recall-first",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope for recall-first");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .as_ref()
+            .expect("recall-first should advertise retrieval request");
+        assert_eq!(
+            retrieval_request.memory_system_id,
+            RECALL_FIRST_MEMORY_SYSTEM_ID
+        );
+        assert_eq!(
+            envelope.hydrated.diagnostics.system_id,
+            RECALL_FIRST_MEMORY_SYSTEM_ID
+        );
+        assert_eq!(
+            envelope.retrieval_planner_snapshot,
+            Some(retrieval_request.planner_snapshot())
+        );
+        assert_eq!(
+            envelope.diagnostics[1].planner_snapshot,
+            Some(retrieval_request.planner_snapshot())
         );
 
         let _ = std::fs::remove_file(&db_path);

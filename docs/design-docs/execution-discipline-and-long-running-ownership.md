@@ -193,6 +193,35 @@ TaskProgress {
 }
 ```
 
+Where:
+
+- `task_id` is the canonical operator-facing task identity
+- `session_id` is the current runtime/session address that owns execution for
+  that task
+
+The model should expose both values together so task surfaces can resolve
+canonical task identity to the current backing session without treating session
+ids as the durable task contract.
+
+Task-oriented list, search, status, wait, history, and control-plane task
+surfaces should deduplicate by `task_id` and then expose the currently selected
+`owner_session_id` / `task_session_id` as runtime metadata. When task ownership
+moves between sessions, the latest durable task-progress record becomes the
+canonical owner for operator-facing reads.
+
+`task_history` should aggregate turns and task-progress events across every
+visible session that currently resolves to the same canonical `task_id`, while
+still marking which session is the current owner.
+
+`task_history` should aggregate visible lineage sessions that resolve to the
+same canonical `task_id`, not only the current owner session. History should
+surface both the current owner and the contributing `task_session_id` entries
+so operator reads remain task-first even after owner handoff.
+
+`task_status` and `task_wait` should expose the same visible lineage session
+metadata so a task handoff is explainable even when the operator is not asking
+for full history.
+
 #### `TaskStatus`
 
 Suggested states:
@@ -269,6 +298,11 @@ Loong should keep one canonical task-progress record and derive:
 - wait/history projections
 
 from that one record.
+
+That canonical record should also carry the task-to-session mapping. Operators
+and higher-level tooling should address work by `task_id`, while session-shaped
+runtime seams can continue to use `session_id` as the recoverable execution
+address behind that canonical task identity.
 
 The runtime should avoid assignment truth being split across:
 
@@ -372,6 +406,7 @@ verification layer has run or been explicitly recorded as not possible.
 ### Phase 2: Durable task-progress schema
 
 - add `TaskProgress`, `TaskStatus`, `ActiveHandle`, and `ResumeRecipe`
+- persist canonical `task_id -> session_id` mapping alongside task status
 - persist them through session events / runtime storage
 
 ### Phase 3: Coordinator ownership

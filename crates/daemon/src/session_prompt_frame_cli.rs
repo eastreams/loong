@@ -7,11 +7,12 @@ pub(crate) async fn load_session_prompt_frame_payload(
 ) -> Value {
     let summary_limit = prompt_frame_summary_limit(memory_config);
     let binding = mvp::conversation::ConversationRuntimeBinding::direct();
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let summary_result = mvp::conversation::load_prompt_frame_event_summary(
         session_id,
         summary_limit,
         binding,
-        memory_config,
+        &session_store_config,
     )
     .await;
 

@@ -200,11 +200,16 @@ fn bootstrap_kernel_context_with_audit_sink(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
 
+    use loong_contracts::Capability;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::config::MemoryProfile;
+    use crate::memory::runtime_config::MemoryRuntimeConfig;
+    use crate::test_support::ScopedEnv;
 
     #[test]
     fn bootstrap_kernel_context_with_config_writes_jsonl_audit_events() {
@@ -275,6 +280,72 @@ mod tests {
         assert!(
             allowed_capabilities.contains(&Capability::NetworkEgress),
             "bootstrap token should grant network egress for kernel-bound web tools"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn bootstrap_kernel_context_with_config_ignores_memory_env_overrides() {
+        let tempdir = tempdir().expect("tempdir");
+        let sqlite_path = tempdir.path().join("memory.sqlite3");
+
+        let mut seeded_runtime = MemoryRuntimeConfig::for_sqlite_path(sqlite_path.clone());
+        seeded_runtime.profile = MemoryProfile::WindowPlusSummary;
+        seeded_runtime.sliding_window = 2;
+
+        crate::memory::append_turn_direct(
+            "kernel-bootstrap-env-session",
+            "user",
+            "turn 1",
+            &seeded_runtime,
+        )
+        .expect("append turn 1");
+        crate::memory::append_turn_direct(
+            "kernel-bootstrap-env-session",
+            "assistant",
+            "turn 2",
+            &seeded_runtime,
+        )
+        .expect("append turn 2");
+        crate::memory::append_turn_direct(
+            "kernel-bootstrap-env-session",
+            "user",
+            "turn 3",
+            &seeded_runtime,
+        )
+        .expect("append turn 3");
+
+        let mut env = ScopedEnv::new();
+        env.set("LOONG_MEMORY_PROFILE", "window_plus_summary");
+        env.set("LOONG_SQLITE_PATH", "/tmp/env-bootstrap-memory.sqlite3");
+
+        let mut config = LoongConfig::default();
+        config.audit.mode = AuditMode::InMemory;
+        config.memory.profile = MemoryProfile::WindowOnly;
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.memory.sliding_window = 2;
+
+        let context = bootstrap_kernel_context_with_config("test-agent", 60, &config)
+            .expect("bootstrap with config should succeed");
+        let request = crate::memory::build_read_context_request("kernel-bootstrap-env-session");
+        let caps = BTreeSet::from([Capability::MemoryRead]);
+        let outcome = context
+            .kernel
+            .execute_memory_core(context.pack_id(), &context.token, &caps, None, request)
+            .await
+            .expect("read context via kernel");
+        let entries = outcome
+            .payload
+            .get("entries")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.get("kind") != Some(&serde_json::json!("summary"))),
+            "window-only bootstrap should ignore env-driven summary profile"
         );
     }
 }

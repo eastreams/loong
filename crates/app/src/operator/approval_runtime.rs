@@ -307,7 +307,7 @@ mod tests {
 
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 

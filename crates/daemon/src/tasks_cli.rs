@@ -434,10 +434,11 @@ async fn execute_wait_command(
         "after_id": after_id,
         "timeout_ms": timeout_ms.clamp(1, 30_000),
     });
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let outcome = mvp::tools::wait_for_session_with_config(
         payload,
         current_session_id,
-        memory_config,
+        &session_store_config,
         tool_config,
     )
     .await?;
@@ -610,7 +611,8 @@ fn resolve_session_scope(
         return Ok(session);
     }
 
-    let latest_session_id = mvp::session::latest_resumable_root_session_id(memory_config)?;
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
+    let latest_session_id = mvp::session::latest_resumable_root_session_id(&session_store_config)?;
     let latest_session_id = latest_session_id.ok_or_else(|| {
         "tasks CLI session selector `latest` did not find any resumable root session".to_owned()
     })?;
@@ -629,10 +631,11 @@ fn execute_app_tool_request(
         tool_name: tool_name.to_owned(),
         payload,
     };
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
     let outcome = mvp::tools::execute_app_tool_with_config(
         request,
         current_session_id,
-        memory_config,
+        &session_store_config,
         tool_config,
     )?;
     Ok(outcome)
@@ -646,7 +649,8 @@ fn load_visible_background_task_ids(
     overdue_only: bool,
     include_archived: bool,
 ) -> CliResult<Vec<String>> {
-    let repo = mvp::session::repository::SessionRepository::new(memory_config)?;
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(memory_config);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)?;
     let mut sessions = repo.list_visible_sessions(current_session_id)?;
     if tool_config.sessions.visibility == mvp::config::SessionVisibility::SelfOnly {
         sessions.retain(|session| session.session_id == current_session_id);

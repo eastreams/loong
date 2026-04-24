@@ -54,11 +54,12 @@ pub use protocol::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_READ_CONTEXT,
     MEMORY_OP_READ_STAGE_ENVELOPE, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryContextEntry,
     MemoryContextKind, MemoryCoreOperation, WindowTurn, build_append_turn_request,
-    build_read_context_request, build_read_stage_envelope_request,
-    build_read_stage_envelope_request_with_workspace_root, build_replace_turns_request,
-    build_replace_turns_request_with_expectation, build_window_request,
-    decode_memory_context_entries, decode_stage_envelope, decode_window_turn_count,
-    decode_window_turns, encode_stage_envelope_payload, parse_exact_memory_core_operation,
+    build_read_context_request, build_read_context_request_with_workspace_root,
+    build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
+    build_replace_turns_request, build_replace_turns_request_with_expectation,
+    build_window_request, decode_memory_context_entries, decode_stage_envelope,
+    decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
+    parse_exact_memory_core_operation,
 };
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationSessionSummary;
@@ -72,8 +73,8 @@ pub use sqlite::{
 use sqlite_core::{append_turn, clear_session, load_window, replace_turns};
 pub use stage::{
     DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
-    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryStageFamily,
-    MemoryTrustLevel, StageDiagnostics, StageEnvelope, StageOutcome,
+    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryRetrievalStrategy,
+    MemoryStageFamily, MemoryTrustLevel, StageDiagnostics, StageEnvelope, StageOutcome,
     builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
 };
 pub use system::{
@@ -90,7 +91,7 @@ pub use system_registry::{
     describe_memory_system, list_memory_system_ids, list_memory_system_metadata,
     memory_system_id_from_env, register_memory_system, resolve_memory_system,
     resolve_memory_system_runtime, resolve_memory_system_selection,
-    supported_memory_system_kind_from_env,
+    resolve_memory_system_selection_without_env, supported_memory_system_kind_from_env,
 };
 pub use system_runtime::{
     BuiltinMemorySystemRuntime, MemorySystemRuntime, MetadataOnlyMemorySystemRuntime,
@@ -319,14 +320,8 @@ pub(crate) fn search_workspace_memory_documents(
 pub(crate) fn build_read_stage_envelope_request_for_memory_config(
     session_id: &str,
     workspace_root: Option<&Path>,
-    config: &crate::config::MemoryConfig,
 ) -> MemoryCoreRequest {
-    let runtime_config = runtime_config::MemoryRuntimeConfig::from_memory_config(config);
-    build_read_stage_envelope_request_with_workspace_root(
-        session_id,
-        workspace_root,
-        &runtime_config,
-    )
+    build_read_stage_envelope_request_with_workspace_root(session_id, workspace_root)
 }
 
 #[cfg(feature = "memory-sqlite")]

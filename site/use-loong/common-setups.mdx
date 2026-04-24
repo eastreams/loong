@@ -31,6 +31,8 @@ All routes here stay inside the current public contract:
 - outbound-only surfaces stay outbound-only
 - `gateway run` remains the explicit owner contract for longer-lived service
   supervision
+- grouped operator shells such as `runtime`, `channels`, and `gateway` are the
+  canonical docs surface
 
 ## Choose A Playbook
 
@@ -53,7 +55,7 @@ Use the same short loop after each setup slice:
 
 ```bash
 loong doctor
-loong list-models
+loong runtime list models
 loong channels
 ```
 

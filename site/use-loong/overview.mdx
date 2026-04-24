@@ -59,9 +59,9 @@ complete rollout path.
 ## Current Public Runtime Shape
 
 - **Assistant entrypoints**: `onboard`, `ask`, `chat`, and `doctor` are the shortest public operator path.
-- **Provider and model selection**: `onboard` and `list-models` keep provider choice and model discovery visible instead of burying them behind one hardcoded provider story.
-- **Operator runtime commands**: `audit`, `tasks`, `skills`, `plugins`, `channels`, and `runtime-snapshot` are part of the public surface.
-- **Gateway ownership**: `gateway run`, `gateway status`, `gateway stop`, and `multi-channel-serve` cover the current owner and compatibility layer for longer-lived delivery.
+- **Provider and model selection**: `onboard` and `runtime models list` keep provider choice and model discovery visible instead of burying them behind one hardcoded provider story.
+- **Operator runtime commands**: `audit`, `tasks`, `skills`, `plugins`, `channels`, and `runtime` are part of the public surface.
+- **Gateway ownership**: `gateway run`, `gateway status`, and `gateway stop` cover the current owner flow for longer-lived delivery.
 - **Delivery surfaces**: Loong distinguishes runtime-backed reply-loop surfaces, plugin-backed bridge surfaces, and a wider config-backed outbound inventory instead of flattening them into one story.
 - **Governed runtime capabilities**: tools, memory behavior, prompt defaults, policy, approval, and audit stay inside the same runtime model.
 
@@ -85,7 +85,7 @@ complete rollout path.
 | [Channels](/use-loong/channels) | you want the delivery-surface model and runtime-backed vs outbound-only boundary |
 | [Channel Guides](/use-loong/channel-guides/index) | you want the exact built-in contract for one shipped channel surface |
 | [Channel Setup](/use-loong/channel-setup) | you want the practical setup contract for shipped surfaces |
-| [Gateway And Supervision](/use-loong/gateway-and-supervision) | you want to choose between `gateway run` and `multi-channel-serve`, or pin explicit channel accounts |
+| [Gateway And Supervision](/use-loong/gateway-and-supervision) | you want the right `gateway run` shape, or need explicit channel-account selectors |
 | [Channel Recipes](/use-loong/channel-recipes) | you want smoke tests, rollout order, and multi-channel examples |
 | [Tools And Memory](/use-loong/tools-and-memory) | you want the governed-capability overview |
 | [Tool Surface](/use-loong/tool-surface) | you want the visible-tool truth contract |

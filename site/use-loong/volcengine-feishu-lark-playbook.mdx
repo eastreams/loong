@@ -12,7 +12,7 @@ This page keeps the rollout honest:
 
 - Volcengine stays the hosted provider lane
 - Feishu / Lark stays the shipped runtime-backed service channel
-- `gateway run` only comes after the basic `feishu-serve` loop is healthy
+- `gateway run` only comes after the basic `feishu serve` loop is healthy
 
 ## When This Is The Right Playbook
 
@@ -44,7 +44,7 @@ Health loop:
 
 ```bash
 loong doctor
-loong list-models
+loong runtime models list
 loong ask --message "Confirm that the active provider is healthy."
 ```
 
@@ -106,15 +106,15 @@ Operational notes:
 
 ```bash
 loong doctor
-loong feishu-send --receive-id "ou_example_user" --text "hello from loong"
-loong feishu-serve
+loong feishu send --receive-id "ou_example_user" --text "hello from loong"
+loong feishu serve
 ```
 
 Only move forward if:
 
 - `doctor` says the provider and channel prerequisites are healthy
-- `feishu-send` works with the current account
-- `feishu-serve` can stay up cleanly and reply on the expected room boundary
+- `feishu send` works with the current account
+- `feishu serve` can stay up cleanly and reply on the expected room boundary
 
 ## Step 5: Add Named Accounts Before Selectors
 
@@ -155,7 +155,7 @@ loong gateway status --json
 Foreground single-surface loop:
 
 ```bash
-loong feishu-serve
+loong feishu serve
 ```
 
 Persisted owner contract:
@@ -166,14 +166,14 @@ loong gateway status --json
 loong gateway stop
 ```
 
-Use `feishu-serve` first during initial rollout. Use `gateway run` only after
+Use `feishu serve` first during initial rollout. Use `gateway run` only after
 the service loop already behaves correctly.
 
 ## Troubleshooting
 
 | Symptom | What to check |
 | --- | --- |
-| `list-models` fails before the channel even matters | fix the Volcengine provider lane first; do not debug the channel before the hosted path is healthy |
+| `runtime models list` fails before the channel even matters | fix the Volcengine provider lane first; do not debug the channel before the hosted path is healthy |
 | websocket setup still asks for webhook-only material | the config shape is wrong; websocket mode should not depend on `verification_token` or `encrypt_key` |
 | `gateway run --channel-account lark=work` fails on a single-account config | add `default_account` and `accounts.work` first, or run `gateway run` without a selector |
 | sends work but the runtime replies in the wrong room | review `allowed_chat_ids` and `receive_id_type` before changing gateway ownership |

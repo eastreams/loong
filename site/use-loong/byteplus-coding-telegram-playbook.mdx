@@ -78,8 +78,8 @@ allowed_chat_ids = [123456789]
 Smoke-test it:
 
 ```bash
-loong telegram-send --target "123456789" --text "hello from loong"
-loong telegram-serve
+loong channels send telegram --target "123456789" --text "hello from loong"
+loong channels serve telegram
 ```
 
 Operational notes:
@@ -119,7 +119,7 @@ loong gateway status --json
 Foreground loop:
 
 ```bash
-loong telegram-serve
+loong channels serve telegram
 ```
 
 Persisted owner contract:
@@ -139,7 +139,7 @@ the bot path already behaves correctly.
 | --- | --- |
 | the runtime behaves like the general BytePlus lane instead of the coding lane | confirm `active_provider = "coding"` and keep `byteplus_main` separate |
 | the coding profile is pointed at a generic `/api/v3` path | switch back to `byteplus_coding` instead of forcing the route with ad-hoc URL overrides |
-| `telegram-send` works but `telegram-serve` is not stable | review `allowed_chat_ids` and make sure the bot identity is the one you expect |
+| `channels send telegram` works but `channels serve telegram` is not stable | review `allowed_chat_ids` and make sure the bot identity is the one you expect |
 | `gateway run --channel-account telegram=bot_123456` fails | add `default_account` and `accounts.bot_123456` first, or run `gateway run` without a selector |
 
 ## Continue Reading

@@ -146,7 +146,7 @@ pub use provider_schema::{
     provider_tool_definitions, tool_parameter_schema_types, try_provider_tool_definitions_for_view,
 };
 pub(crate) use routing::hidden_operation_for_tool_name;
-#[cfg(test)]
+#[cfg(all(test, unix, feature = "tool-shell"))]
 pub(crate) use routing::route_direct_tool_name;
 pub use tool_surface::ToolSurfaceState;
 
@@ -421,6 +421,11 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "tasks_list"
         | "sessions_history"
         | "task_history"
+        | "task_events"
+        | "session_heads"
+        | "session_path"
+        | "session_children"
+        | "session_artifacts"
         | "session_tool_policy_status"
         | "session_tool_policy_set"
         | "session_tool_policy_clear"
@@ -430,7 +435,13 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "session_search"
         | "session_archive"
         | "session_cancel"
+        | "session_create_checkpoint"
+        | "session_create_branch_summary"
         | "session_continue"
+        | "session_fork_head"
+        | "session_pin_head"
+        | "session_set_active_head"
+        | "session_unpin_head"
         | "session_recover" => session::execute_session_tool_with_policies(
             request,
             current_session_id,
@@ -649,11 +660,16 @@ fn required_capabilities_for_tool_name_and_payload(
         | "tasks_list"
         | "sessions_history"
         | "session_status"
+        | "session_heads"
+        | "session_path"
+        | "session_children"
+        | "session_artifacts"
         | "session_events"
         | "session_wait"
         | "task_status"
         | "task_wait"
         | "task_history"
+        | "task_events"
         | "session_search"
         | "session_tool_policy_status" => {
             caps.insert(Capability::MemoryRead);
@@ -877,10 +893,14 @@ pub fn execute_tool_core_with_config(
     let payload = request.payload;
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
     let runtime_narrowing = trusted_runtime_narrowing_from_payload(&payload)?;
-    let mut effective_config = match workspace_root {
-        Some(workspace_root) => config.with_file_root_override(workspace_root),
-        None => config.clone(),
-    };
+    let mut effective_config = config
+        .workspace_root
+        .clone()
+        .map(|workspace_root| config.with_file_root_override(workspace_root))
+        .unwrap_or_else(|| config.clone());
+    if let Some(workspace_root) = workspace_root {
+        effective_config = effective_config.with_file_root_override(workspace_root);
+    }
     if let Some(runtime_narrowing) = runtime_narrowing {
         effective_config = effective_config.narrowed(&runtime_narrowing);
     }

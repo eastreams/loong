@@ -25,8 +25,10 @@ loong chat
 If you want to inspect the active provider's model catalog after credentials are healthy:
 
 ```bash
-loong list-models
+loong runtime models list
 ```
+
+`loong runtime models list` is the canonical model-catalog entrypoint.
 
 ## What Success Looks Like
 
@@ -63,7 +65,7 @@ Secret reference note:
 ## Why This Page Stays Short
 
 - The first-run handoff should get you to one useful answer quickly.
-- Provider matrices, channel matrices, and richer runtime policy details belong in deeper guides.
+- Provider matrices, channel matrices, and richer runtime policy details belong in deeper guides under grouped shells such as `runtime`, `channels`, and `gateway`.
 - The local CLI success path should come before gateway, channels, or broader product surfaces.
 
 ## What Comes Next

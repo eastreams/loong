@@ -98,7 +98,9 @@ impl LatestSelectorCliFixture {
     }
 
     fn session_repository(&self) -> mvp::session::repository::SessionRepository {
-        mvp::session::repository::SessionRepository::new(&self.memory_config)
+        let session_store_config =
+            mvp::session::store::SessionStoreConfig::from(&self.memory_config);
+        mvp::session::repository::SessionRepository::new(&session_store_config)
             .expect("session repository")
     }
 

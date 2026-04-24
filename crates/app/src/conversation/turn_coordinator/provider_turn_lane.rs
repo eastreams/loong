@@ -166,15 +166,13 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         &turn_result,
         fast_lane_tool_batch_trace.as_ref(),
     );
-    let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
-        .is_some_and(|payload| {
-            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
-        });
+    let runtime_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
+        .is_some_and(|payload| payload.requests_runtime_followup_chain());
     let preface_signals_provider_turn_followup =
         assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
     let supports_provider_turn_followup = followup_chain_active
         || discovery_search_turn
-        || recovery_followup_turn
+        || runtime_followup_turn
         || preface_signals_provider_turn_followup;
     ProviderTurnLaneExecution {
         lane,

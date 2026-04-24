@@ -781,6 +781,7 @@ fn autonomy_capability_action_classifies_representative_tool_families() {
         ("task_status", CapabilityActionClass::ExecuteExisting),
         ("task_wait", CapabilityActionClass::ExecuteExisting),
         ("task_history", CapabilityActionClass::ExecuteExisting),
+        ("task_events", CapabilityActionClass::ExecuteExisting),
         ("tasks_list", CapabilityActionClass::ExecuteExisting),
         ("tasks_search", CapabilityActionClass::ExecuteExisting),
         ("session_recover", CapabilityActionClass::SessionMutation),

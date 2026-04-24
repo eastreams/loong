@@ -32,6 +32,32 @@ struct SessionSearchHit {
     score: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionSearchScope {
+    VisibleSessions,
+    LineageFamily,
+}
+
+impl SessionSearchScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::VisibleSessions => "visible_sessions",
+            Self::LineageFamily => "lineage_family",
+        }
+    }
+
+    fn from_payload(value: &str) -> Result<Self, String> {
+        match value {
+            "visible_sessions" => Ok(Self::VisibleSessions),
+            "lineage_family" => Ok(Self::LineageFamily),
+            _ => Err(
+                "session_search payload.search_scope must be one of: visible_sessions, lineage_family"
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
 pub(super) fn execute_session_search_with_policies(
     payload: Value,
     current_session_id: &str,
@@ -56,8 +82,30 @@ pub(super) fn execute_session_search_with_policies(
     }
 
     let target_session_id = optional_payload_string(&payload, "session_id");
+    let search_scope = optional_payload_string(&payload, "search_scope")
+        .map(|value| SessionSearchScope::from_payload(value.as_str()))
+        .transpose()?
+        .unwrap_or(SessionSearchScope::VisibleSessions);
     let repo = SessionRepository::new(config)?;
-    let mut visible_sessions = repo.list_visible_sessions(current_session_id)?;
+    let requested_scope_session_id = target_session_id.as_deref().unwrap_or(current_session_id);
+    if let Some(target_session_id) = target_session_id.as_deref() {
+        ensure_session_search_target_visible(
+            &repo,
+            current_session_id,
+            target_session_id,
+            tool_config.sessions.visibility,
+            search_scope,
+        )?;
+    }
+
+    let scope_session_id = match search_scope {
+        SessionSearchScope::VisibleSessions => current_session_id.to_owned(),
+        SessionSearchScope::LineageFamily => repo
+            .lineage_root_session_id(requested_scope_session_id)?
+            .ok_or_else(|| format!("session `{requested_scope_session_id}` not found"))?,
+    };
+
+    let mut visible_sessions = repo.list_visible_sessions(&scope_session_id)?;
     if tool_config.sessions.visibility == SessionVisibility::SelfOnly {
         visible_sessions.retain(|session| session.session_id == current_session_id);
     }
@@ -66,24 +114,21 @@ pub(super) fn execute_session_search_with_policies(
     }
 
     if let Some(target_session_id) = target_session_id.as_deref() {
-        ensure_session_search_target_visible(
-            &repo,
-            current_session_id,
-            target_session_id,
-            tool_config.sessions.visibility,
-        )?;
-
-        let archived_hidden = !include_archived
-            && visible_sessions
-                .iter()
-                .all(|session| session.session_id != target_session_id);
+        let target_session = repo.load_session_summary_with_legacy_fallback(target_session_id)?;
+        let target_is_archived = target_session
+            .as_ref()
+            .and_then(|session| session.archived_at)
+            .is_some();
+        let archived_hidden = !include_archived && target_is_archived;
         if archived_hidden {
             return Err(format!(
                 "session_search target session `{target_session_id}` is archived; set include_archived=true to search archived sessions"
             ));
         }
 
-        visible_sessions.retain(|session| session.session_id == target_session_id);
+        if search_scope == SessionSearchScope::VisibleSessions {
+            visible_sessions.retain(|session| session.session_id == target_session_id);
+        }
     }
 
     let searched_session_count = visible_sessions.len();
@@ -99,6 +144,7 @@ pub(super) fn execute_session_search_with_policies(
                 "include_archived": include_archived,
                 "include_turns": include_turns,
                 "include_events": include_events,
+                "search_scope": search_scope.as_str(),
                 "results": [],
             }),
         });
@@ -188,6 +234,7 @@ pub(super) fn execute_session_search_with_policies(
             "include_archived": include_archived,
             "include_turns": include_turns,
             "include_events": include_events,
+            "search_scope": search_scope.as_str(),
             "results": hits.into_iter().map(session_search_hit_json).collect::<Vec<_>>(),
         }),
     })
@@ -207,12 +254,15 @@ fn ensure_session_search_target_visible(
     current_session_id: &str,
     target_session_id: &str,
     visibility: SessionVisibility,
+    search_scope: SessionSearchScope,
 ) -> Result<(), String> {
     let is_visible = match visibility {
         SessionVisibility::SelfOnly => current_session_id == target_session_id,
         SessionVisibility::Children => {
             current_session_id == target_session_id
                 || repo.is_session_visible(current_session_id, target_session_id)?
+                || search_scope == SessionSearchScope::LineageFamily
+                    && session_ids_share_lineage_root(repo, current_session_id, target_session_id)?
         }
     };
     if is_visible {
@@ -221,6 +271,16 @@ fn ensure_session_search_target_visible(
     Err(format!(
         "visibility_denied: session `{target_session_id}` is not visible from `{current_session_id}`"
     ))
+}
+
+fn session_ids_share_lineage_root(
+    repo: &SessionRepository,
+    current_session_id: &str,
+    target_session_id: &str,
+) -> Result<bool, String> {
+    let current_root = repo.lineage_root_session_id(current_session_id)?;
+    let target_root = repo.lineage_root_session_id(target_session_id)?;
+    Ok(current_root.is_some() && current_root == target_root)
 }
 
 fn session_search_score(query: &str, query_tokens: &[String], content: &str) -> u32 {
@@ -320,7 +380,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 
@@ -476,6 +536,45 @@ mod tests {
 
         assert_eq!(outcome.payload["returned_count"], 0);
         assert_eq!(outcome.payload["matched_session_count"], 0);
+    }
+
+    #[test]
+    fn session_search_lineage_family_scope_from_child_finds_root_session_hits() {
+        let config = isolated_memory_config("lineage-family-scope");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_and_child(&repo);
+
+        append_session_turn_direct(
+            "root-session",
+            "assistant",
+            "Parent branch summary mentions deploy freeze approval.",
+            &config,
+        )
+        .expect("append root turn");
+        append_session_turn_direct(
+            "other-session",
+            "assistant",
+            "Deploy freeze hidden elsewhere.",
+            &config,
+        )
+        .expect("append hidden turn");
+
+        let outcome = execute_session_search_with_policies(
+            json!({
+                "query": "deploy freeze",
+                "session_id": "root-session",
+                "search_scope": "lineage_family",
+                "max_results": 5
+            }),
+            "child-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("lineage-family search outcome");
+
+        assert_eq!(outcome.payload["search_scope"], "lineage_family");
+        assert_eq!(outcome.payload["returned_count"], 1);
+        assert_eq!(outcome.payload["results"][0]["session_id"], "root-session");
     }
 
     #[test]

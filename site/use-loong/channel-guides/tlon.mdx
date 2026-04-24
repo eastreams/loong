@@ -33,14 +33,14 @@ code_env = "TLON_CODE"
 ## Smoke Test
 
 ```bash
-loong tlon-send --target "~nec" --text "hello from loong"
+loong channels send tlon --target "~nec" --text "hello from loong"
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| ship message send | `tlon-send` | Usage: loong tlon-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| ship message send | `channels send tlon` | Usage: loong channels send tlon [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
 | ship event service | `tlon-serve` | tlon inbound serve runtime is not implemented yet |
 
 ## Required Fields For Send
@@ -54,7 +54,7 @@ loong tlon-send --target "~nec" --text "hello from loong"
 
 ## Gateway And Ownership
 
-This surface is a direct-send delivery lane. It does not join `multi-channel-serve` or the gateway-owned reply-loop contract today.
+This surface is a direct-send delivery lane. It does not join `gateway run` or the gateway-owned reply-loop contract today.
 
 ## Operator Notes
 

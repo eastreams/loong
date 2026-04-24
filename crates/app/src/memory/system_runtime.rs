@@ -118,6 +118,7 @@ impl MemorySystemRuntime for SystemBackedMemorySystemRuntime {
                     elapsed_ms: None,
                     fallback_activated: true,
                     message: Some(error),
+                    planner_snapshot: None,
                 };
                 Ok(diagnostics)
             }

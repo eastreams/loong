@@ -2729,12 +2729,20 @@ fn triage_event_summary(kind: &AuditEventKind) -> Option<String> {
         reason,
         attempt,
         max_attempts,
+        request_id,
+        auth_error_code,
         ..
     } = kind
     {
         let summary = format!(
-            "pack_id={} provider_id={} reason={} attempt={}/{}",
-            pack_id, provider_id, reason, attempt, max_attempts
+            "pack_id={} provider_id={} reason={} attempt={}/{} request_id={} auth_error_code={}",
+            pack_id,
+            provider_id,
+            reason,
+            attempt,
+            max_attempts,
+            request_id.as_deref().unwrap_or("-"),
+            auth_error_code.as_deref().unwrap_or("-")
         );
         return Some(summary);
     }
@@ -2954,10 +2962,18 @@ fn format_audit_event_detail(kind: &AuditEventKind) -> String {
             reason,
             attempt,
             max_attempts,
+            request_id,
+            auth_error_code,
             ..
         } => format!(
-            "pack_id={} provider_id={} reason={} attempt={}/{}",
-            pack_id, provider_id, reason, attempt, max_attempts
+            "pack_id={} provider_id={} reason={} attempt={}/{} request_id={} auth_error_code={}",
+            pack_id,
+            provider_id,
+            reason,
+            attempt,
+            max_attempts,
+            request_id.as_deref().unwrap_or("-"),
+            auth_error_code.as_deref().unwrap_or("-")
         ),
         AuditEventKind::AuthorizationDenied {
             pack_id,
@@ -4633,6 +4649,10 @@ mod tests {
                         attempt: 1,
                         max_attempts: 3,
                         status_code: Some(429),
+                        request_id: Some("req-audit-1".to_owned()),
+                        cf_ray: None,
+                        auth_error: None,
+                        auth_error_code: Some("token_expired".to_owned()),
                         try_next_model: true,
                         auto_model_mode: true,
                         candidate_index: 0,
@@ -5724,6 +5744,10 @@ mod tests {
                         attempt: 1,
                         max_attempts: 3,
                         status_code: Some(429),
+                        request_id: Some("req-audit-2".to_owned()),
+                        cf_ray: None,
+                        auth_error: None,
+                        auth_error_code: Some("token_expired".to_owned()),
                         try_next_model: true,
                         auto_model_mode: true,
                         candidate_index: 0,

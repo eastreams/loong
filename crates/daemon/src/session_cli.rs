@@ -7,6 +7,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{CliResult, mvp, persist_json_artifact};
 
+const RUNTIME_SESSION_SEARCH_COMMAND: &str = "runtime session search";
+
 pub const SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +39,7 @@ pub struct SessionSearchArtifactDocument {
     pub exported_at: String,
     pub scope_session_id: String,
     pub query: String,
+    pub search_scope: Option<String>,
     pub limit: usize,
     pub include_archived: bool,
     pub include_turns: bool,
@@ -51,23 +54,34 @@ pub fn run_session_search_cli(
     config_path: Option<&str>,
     session: Option<&str>,
     query: &str,
+    search_scope: Option<&str>,
     limit: usize,
     output_path: Option<&str>,
     include_archived: bool,
     as_json: bool,
 ) -> CliResult<()> {
     if limit == 0 {
-        return Err("session-search limit must be >= 1".to_owned());
+        return Err(format!(
+            "{RUNTIME_SESSION_SEARCH_COMMAND} limit must be >= 1"
+        ));
     }
 
     let query = query.trim();
     let query_is_empty = query.is_empty();
     if query_is_empty {
-        return Err("session-search requires a non-empty --query value".to_owned());
+        return Err(format!(
+            "{RUNTIME_SESSION_SEARCH_COMMAND} requires a non-empty --query value"
+        ));
     }
 
-    let (resolved_path, artifact) =
-        collect_session_search_artifact(config_path, session, query, limit, include_archived)?;
+    let (resolved_path, artifact) = collect_session_search_artifact(
+        config_path,
+        session,
+        query,
+        search_scope,
+        limit,
+        include_archived,
+    )?;
 
     let payload = serde_json::to_value(&artifact)
         .map_err(|error| format!("serialize session-search artifact failed: {error}"))?;
@@ -93,6 +107,7 @@ pub fn collect_session_search_artifact(
     config_path: Option<&str>,
     session: Option<&str>,
     query: &str,
+    search_scope: Option<&str>,
     limit: usize,
     include_archived: bool,
 ) -> CliResult<(PathBuf, SessionSearchArtifactDocument)> {
@@ -111,15 +126,17 @@ pub fn collect_session_search_artifact(
         tool_name: "session_search".to_owned(),
         payload: serde_json::json!({
             "query": query,
+            "search_scope": search_scope,
             "max_results": limit,
             "include_archived": include_archived,
         }),
     };
 
+    let session_store_config = mvp::session::store::SessionStoreConfig::from(&memory_config);
     let payload = mvp::tools::execute_app_tool_with_config(
         request,
         &scope_session_id,
-        &memory_config,
+        &session_store_config,
         &config.tools,
     )?
     .payload;
@@ -183,6 +200,7 @@ pub fn collect_session_search_artifact(
         exported_at,
         scope_session_id,
         query: query.to_owned(),
+        search_scope: search_scope.map(str::to_owned),
         limit,
         include_archived,
         include_turns,
@@ -293,9 +311,13 @@ pub fn format_session_search_text(
     let mut lines = vec![
         format!("config={resolved_config_path}"),
         format!(
-            "session_search session={} query={} limit={} include_archived={} returned_count={} output={}",
+            "session_search session={} query={} search_scope={} limit={} include_archived={} returned_count={} output={}",
             artifact.scope_session_id,
             artifact.query,
+            artifact
+                .search_scope
+                .as_deref()
+                .unwrap_or("visible_sessions"),
             artifact.limit,
             artifact.include_archived,
             artifact.returned_count,
@@ -431,6 +453,13 @@ pub fn format_session_search_inspect_text(
         format!("artifact={artifact_path}"),
         format!("scope_session_id={}", artifact.scope_session_id),
         format!("query={}", artifact.query),
+        format!(
+            "search_scope={}",
+            artifact
+                .search_scope
+                .as_deref()
+                .unwrap_or("visible_sessions")
+        ),
         format!("returned_count={}", artifact.returned_count),
         format!("matched_session_count={}", artifact.matched_session_count),
         format!("searched_session_count={}", artifact.searched_session_count),
@@ -442,4 +471,28 @@ pub fn format_session_search_inspect_text(
     ];
     let rendered = lines.join("\n");
     rendered + "\n"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_search_errors_use_grouped_runtime_namespace() {
+        let zero_limit_error =
+            run_session_search_cli(None, None, "hello", None, 0, None, false, false)
+                .expect_err("zero limit should fail before config loading");
+        assert_eq!(
+            zero_limit_error,
+            "runtime session search limit must be >= 1"
+        );
+
+        let empty_query_error =
+            run_session_search_cli(None, None, "   ", None, 1, None, false, false)
+                .expect_err("blank query should fail before config loading");
+        assert_eq!(
+            empty_query_error,
+            "runtime session search requires a non-empty --query value"
+        );
+    }
 }

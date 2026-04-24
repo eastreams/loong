@@ -25,6 +25,9 @@ use super::registry::WECOM_RUNTIME_COMMAND_DESCRIPTOR;
 #[cfg(feature = "channel-whatsapp")]
 use super::registry::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR;
 
+#[cfg(feature = "channel-qqbot")]
+use super::registry::QQBOT_RUNTIME_COMMAND_DESCRIPTOR;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelRuntimeKind {
     Interactive,
@@ -158,12 +161,19 @@ const WEIXIN_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     background_surface_is_enabled: None,
 };
 
+#[cfg(feature = "channel-qqbot")]
+const QQBOT_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
+    Some(QQBOT_RUNTIME_COMMAND_DESCRIPTOR);
+
+#[cfg(not(feature = "channel-qqbot"))]
+const QQBOT_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
+
 const QQBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     channel_id: "qqbot",
-    background_runtime: None,
+    background_runtime: QQBOT_BACKGROUND_RUNTIME,
     is_enabled: qqbot_channel_is_enabled,
     collect_validation_issues: collect_qqbot_channel_validation_issues,
-    background_surface_is_enabled: None,
+    background_surface_is_enabled: Some(qqbot_background_surface_is_enabled),
 };
 
 const ONEBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
@@ -484,9 +494,7 @@ fn channel_operational_model(
 fn channel_serve_subcommand(channel_id: &str) -> Option<&'static str> {
     let family_descriptor = resolve_channel_catalog_command_family_descriptor(channel_id)?;
     let serve_operation = family_descriptor.serve;
-    if serve_operation.availability
-        != super::catalog::ChannelCatalogOperationAvailability::Implemented
-    {
+    if !serve_operation.availability.is_runnable() {
         return None;
     }
 
@@ -964,6 +972,17 @@ fn whatsapp_background_surface_is_enabled(
     Ok(resolved.enabled)
 }
 
+fn qqbot_background_surface_is_enabled(
+    config: &LoongConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.qqbot.enabled {
+        return Ok(false);
+    }
+    let resolved = config.qqbot.resolve_account(account_id)?;
+    Ok(resolved.enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -995,7 +1014,7 @@ mod tests {
     }
 
     fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
-        vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
+        vec!["telegram", "feishu", "matrix", "wecom", "qqbot", "whatsapp"]
     }
 
     fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
@@ -1013,7 +1032,7 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "telegram", "feishu", "matrix", "wecom", "line", "whatsapp", "webhook",
+                "telegram", "feishu", "matrix", "wecom", "qqbot", "line", "whatsapp", "webhook",
             ]
         );
     }
@@ -1083,18 +1102,18 @@ mod tests {
             weixin.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(weixin.serve_subcommand, None);
+        assert_eq!(weixin.serve_subcommand, Some("channels serve weixin"));
 
         let qqbot = channel_descriptor("qq").expect("qq alias should resolve");
         assert_eq!(qqbot.id, "qqbot");
         assert_eq!(qqbot.label, "QQ Bot");
         assert_eq!(qqbot.surface_label, "qq bot channel");
-        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::PluginBacked);
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::RuntimeBacked);
         assert_eq!(
             qqbot.operational_model,
-            ChannelOperationalModel::PluginBacked
+            ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(qqbot.serve_subcommand, None);
+        assert_eq!(qqbot.serve_subcommand, Some("qqbot-serve"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
         assert_eq!(onebot.id, "onebot");
@@ -1105,7 +1124,7 @@ mod tests {
             onebot.operational_model,
             ChannelOperationalModel::PluginBacked
         );
-        assert_eq!(onebot.serve_subcommand, None);
+        assert_eq!(onebot.serve_subcommand, Some("channels serve onebot"));
     }
 
     #[test]

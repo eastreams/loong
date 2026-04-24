@@ -339,15 +339,147 @@ impl MemoryContextProvenance {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryRetrievalStrategy {
+    #[default]
+    Unspecified,
+    RecentUserQuery,
+    RecentUserQueryWithWorkspace,
+    WorkspaceReferenceOnly,
+    WorkspaceReferenceWithStructuredSignals,
+    StructuredSignalQueryWithWorkspace,
+    TaskProgressIntentQueryWithWorkspace,
+    DelegateLabelQueryWithWorkspace,
+    DelegateLineageQueryWithWorkspace,
+    DelegateTaskQueryWithWorkspace,
+    WorkflowTaskQueryWithWorkspace,
+}
+
+impl MemoryRetrievalStrategy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::RecentUserQuery => "recent_user_query",
+            Self::RecentUserQueryWithWorkspace => "recent_user_query_with_workspace",
+            Self::WorkspaceReferenceOnly => "workspace_reference_only",
+            Self::WorkspaceReferenceWithStructuredSignals => {
+                "workspace_reference_with_structured_signals"
+            }
+            Self::StructuredSignalQueryWithWorkspace => "structured_signal_query_with_workspace",
+            Self::TaskProgressIntentQueryWithWorkspace => {
+                "task_progress_intent_query_with_workspace"
+            }
+            Self::DelegateLabelQueryWithWorkspace => "delegate_label_query_with_workspace",
+            Self::DelegateLineageQueryWithWorkspace => "delegate_lineage_query_with_workspace",
+            Self::DelegateTaskQueryWithWorkspace => "delegate_task_query_with_workspace",
+            Self::WorkflowTaskQueryWithWorkspace => "workflow_task_query_with_workspace",
+        }
+    }
+
+    pub fn parse_id(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "unspecified" => Some(Self::Unspecified),
+            "recent_user_query" => Some(Self::RecentUserQuery),
+            "recent_user_query_with_workspace" => Some(Self::RecentUserQueryWithWorkspace),
+            "workspace_reference_only" => Some(Self::WorkspaceReferenceOnly),
+            "workspace_reference_with_structured_signals" => {
+                Some(Self::WorkspaceReferenceWithStructuredSignals)
+            }
+            "structured_signal_query_with_workspace" => {
+                Some(Self::StructuredSignalQueryWithWorkspace)
+            }
+            "task_progress_intent_query_with_workspace" => {
+                Some(Self::TaskProgressIntentQueryWithWorkspace)
+            }
+            "delegate_label_query_with_workspace" => Some(Self::DelegateLabelQueryWithWorkspace),
+            "delegate_lineage_query_with_workspace" => {
+                Some(Self::DelegateLineageQueryWithWorkspace)
+            }
+            "delegate_task_query_with_workspace" => Some(Self::DelegateTaskQueryWithWorkspace),
+            "workflow_task_query_with_workspace" => Some(Self::WorkflowTaskQueryWithWorkspace),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryRetrievalRequest {
     pub session_id: String,
     pub memory_system_id: String,
+    pub strategy: MemoryRetrievalStrategy,
+    pub planning_notes: Vec<String>,
     pub query: Option<String>,
     pub recall_mode: MemoryRecallMode,
     pub scopes: Vec<MemoryScope>,
     pub budget_items: usize,
     pub allowed_kinds: Vec<DerivedMemoryKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRetrievalPlanResult {
+    pub request: MemoryRetrievalRequest,
+    pub planner_snapshot: PlannerDiagnosticsSnapshot,
+}
+
+impl MemoryRetrievalRequest {
+    pub fn planner_snapshot(&self) -> PlannerDiagnosticsSnapshot {
+        PlannerDiagnosticsSnapshot {
+            memory_system_id: self.memory_system_id.clone(),
+            strategy: self.strategy,
+            budget_items: self.budget_items,
+            query_present: self.query.is_some(),
+            planning_notes: self.planning_notes.clone(),
+        }
+    }
+
+    pub fn into_plan_result(self) -> MemoryRetrievalPlanResult {
+        let planner_snapshot = self.planner_snapshot();
+        MemoryRetrievalPlanResult {
+            request: self,
+            planner_snapshot,
+        }
+    }
+}
+
+impl MemoryRetrievalPlanResult {
+    pub fn request(&self) -> &MemoryRetrievalRequest {
+        &self.request
+    }
+
+    pub fn planner_snapshot(&self) -> &PlannerDiagnosticsSnapshot {
+        &self.planner_snapshot
+    }
+
+    pub fn into_request(self) -> MemoryRetrievalRequest {
+        self.request
+    }
+
+    pub fn into_parts(self) -> (MemoryRetrievalRequest, PlannerDiagnosticsSnapshot) {
+        (self.request, self.planner_snapshot)
+    }
+
+    pub fn planner_summary_message(&self) -> String {
+        let query_state = if self.planner_snapshot.query_present {
+            "present"
+        } else {
+            "absent"
+        };
+        let notes = if self.planner_snapshot.planning_notes.is_empty() {
+            "none".to_owned()
+        } else {
+            self.planner_snapshot.planning_notes.join("; ")
+        };
+
+        format!(
+            "planner system={} strategy={} budget={} query={} notes={}",
+            self.planner_snapshot.memory_system_id,
+            self.planner_snapshot.strategy.as_str(),
+            self.planner_snapshot.budget_items,
+            query_state,
+            notes
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,6 +490,7 @@ pub struct StageDiagnostics {
     pub elapsed_ms: Option<u64>,
     pub fallback_activated: bool,
     pub message: Option<String>,
+    pub planner_snapshot: Option<PlannerDiagnosticsSnapshot>,
 }
 
 impl StageDiagnostics {
@@ -369,14 +502,26 @@ impl StageDiagnostics {
             elapsed_ms: None,
             fallback_activated: false,
             message: None,
+            planner_snapshot: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannerDiagnosticsSnapshot {
+    #[serde(default)]
+    pub memory_system_id: String,
+    pub strategy: MemoryRetrievalStrategy,
+    pub budget_items: usize,
+    pub query_present: bool,
+    pub planning_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageEnvelope {
     pub hydrated: HydratedMemoryContext,
     pub retrieval_request: Option<MemoryRetrievalRequest>,
+    pub retrieval_planner_snapshot: Option<PlannerDiagnosticsSnapshot>,
     pub diagnostics: Vec<StageDiagnostics>,
 }
 
@@ -439,12 +584,15 @@ mod tests {
             retrieval_request: Some(MemoryRetrievalRequest {
                 session_id: "session-123".to_owned(),
                 memory_system_id: "builtin".to_owned(),
+                strategy: MemoryRetrievalStrategy::WorkspaceReferenceOnly,
+                planning_notes: vec!["workspace_root present".to_owned()],
                 query: None,
                 recall_mode: MemoryRecallMode::PromptAssembly,
                 scopes: vec![MemoryScope::Session],
                 budget_items: 8,
                 allowed_kinds: vec![DerivedMemoryKind::Summary],
             }),
+            retrieval_planner_snapshot: None,
             diagnostics: vec![StageDiagnostics::succeeded(MemoryStageFamily::Derive)],
         };
 
@@ -472,12 +620,66 @@ mod tests {
                 },
             },
             retrieval_request: None,
+            retrieval_planner_snapshot: None,
             diagnostics: vec![],
         };
 
         let payload = encode_stage_envelope_payload(&envelope);
         let decoded = decode_stage_envelope(&payload).expect("decode stage envelope");
         assert_eq!(decoded.hydrated.diagnostics.system_id, "lucid");
+    }
+
+    #[test]
+    fn retrieval_plan_result_into_parts_round_trips_request_and_snapshot() {
+        let request = MemoryRetrievalRequest {
+            session_id: "session-123".to_owned(),
+            memory_system_id: "recall_first".to_owned(),
+            strategy: MemoryRetrievalStrategy::WorkspaceReferenceOnly,
+            planning_notes: vec!["workspace recall system".to_owned()],
+            query: None,
+            recall_mode: MemoryRecallMode::PromptAssembly,
+            scopes: vec![MemoryScope::Workspace],
+            budget_items: 1,
+            allowed_kinds: vec![DerivedMemoryKind::Reference],
+        };
+        let expected_snapshot = request.planner_snapshot();
+        let result = request.clone().into_plan_result();
+
+        let (actual_request, actual_snapshot) = result.into_parts();
+
+        assert_eq!(actual_request, request);
+        assert_eq!(actual_snapshot, expected_snapshot);
+    }
+
+    #[test]
+    fn retrieval_plan_result_summary_message_uses_snapshot_state() {
+        let result = MemoryRetrievalPlanResult {
+            request: MemoryRetrievalRequest {
+                session_id: "session-123".to_owned(),
+                memory_system_id: "builtin".to_owned(),
+                strategy: MemoryRetrievalStrategy::RecentUserQueryWithWorkspace,
+                planning_notes: vec!["request note".to_owned()],
+                query: Some("request query".to_owned()),
+                recall_mode: MemoryRecallMode::PromptAssembly,
+                scopes: vec![MemoryScope::Workspace],
+                budget_items: 4,
+                allowed_kinds: vec![DerivedMemoryKind::Reference],
+            },
+            planner_snapshot: PlannerDiagnosticsSnapshot {
+                memory_system_id: "recall_first".to_owned(),
+                strategy: MemoryRetrievalStrategy::WorkspaceReferenceOnly,
+                budget_items: 1,
+                query_present: false,
+                planning_notes: vec!["snapshot note".to_owned()],
+            },
+        };
+
+        let summary = result.planner_summary_message();
+
+        assert_eq!(
+            summary,
+            "planner system=recall_first strategy=workspace_reference_only budget=1 query=absent notes=snapshot note"
+        );
     }
 
     #[test]

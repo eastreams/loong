@@ -27,6 +27,10 @@ use crate::session::repository::{
     NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
 use crate::session::store::{self, SessionStoreConfig};
+#[cfg(all(feature = "memory-sqlite", test))]
+use crate::task_progress::TASK_PROGRESS_EVENT_KIND;
+#[cfg(feature = "memory-sqlite")]
+use crate::task_progress::resolve_canonical_task_id_for_session;
 use crate::tools::runtime_events::{
     ToolRuntimeEvent, ToolRuntimeEventSink, with_tool_runtime_event_sink,
 };
@@ -467,6 +471,10 @@ fn denied_tool_decision(tool_name: &str, failure: &TurnFailure) -> ToolDecisionT
 
 #[async_trait]
 pub trait AppToolDispatcher: Send + Sync {
+    fn memory_config(&self) -> Option<&SessionStoreConfig> {
+        None
+    }
+
     async fn preflight_tool_intent_with_binding(
         &self,
         session_context: &SessionContext,
@@ -1359,6 +1367,10 @@ impl Default for DefaultAppToolDispatcher {
 
 #[async_trait]
 impl AppToolDispatcher for DefaultAppToolDispatcher {
+    fn memory_config(&self) -> Option<&SessionStoreConfig> {
+        Some(&self.memory_config)
+    }
+
     async fn preflight_tool_intent_with_binding(
         &self,
         session_context: &SessionContext,
@@ -1840,6 +1852,7 @@ fn augment_tool_payload_for_kernel(
     canonical_tool_name: &str,
     payload: serde_json::Value,
     session_context: &SessionContext,
+    memory_config: &SessionStoreConfig,
 ) -> AugmentedToolPayload {
     let invoked_tool_name = if canonical_tool_name == "tool.invoke" {
         payload
@@ -1887,6 +1900,15 @@ fn augment_tool_payload_for_kernel(
     );
     let mut payload = augmented_workspace_root.payload;
     let trusted_internal_context = augmented_workspace_root.trusted_internal_context;
+    let canonical_task_id = resolve_canonical_task_id_for_runtime(session_context, memory_config);
+
+    if task_scope_injection_required(canonical_tool_name) {
+        payload = inject_task_scope_field(payload, canonical_task_id.as_str());
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context,
+        };
+    }
 
     // Direct browser tool calls: inject scope at the top level.
     if browser_scope_injection_required(canonical_tool_name) {
@@ -1906,6 +1928,23 @@ fn augment_tool_payload_for_kernel(
             outer.insert(
                 "arguments".to_owned(),
                 inject_browser_scope_field(arguments, &session_context.session_id),
+            );
+        }
+        payload = serde_json::Value::Object(outer);
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context,
+        };
+    }
+
+    let is_task_invoke = invoked_tool_name
+        .as_deref()
+        .is_some_and(task_scope_injection_required);
+    if is_task_invoke && let serde_json::Value::Object(mut outer) = payload {
+        if let Some(arguments) = outer.remove("arguments") {
+            outer.insert(
+                "arguments".to_owned(),
+                inject_task_scope_field(arguments, canonical_task_id.as_str()),
             );
         }
         payload = serde_json::Value::Object(outer);
@@ -2082,6 +2121,50 @@ fn requested_file_tool_path(
         }
         _ => None,
     }
+}
+
+fn task_scope_injection_required(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "task_status" | "task_wait" | "task_history" | "task_events"
+    )
+}
+
+fn inject_task_scope_field(payload: serde_json::Value, task_id: &str) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Object(mut object) => {
+            let has_task_id = object
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty());
+            if !has_task_id {
+                object.insert("task_id".to_owned(), json!(task_id));
+            }
+            serde_json::Value::Object(object)
+        }
+        other @ serde_json::Value::Null
+        | other @ serde_json::Value::Bool(_)
+        | other @ serde_json::Value::Number(_)
+        | other @ serde_json::Value::String(_)
+        | other @ serde_json::Value::Array(_) => other,
+    }
+}
+
+fn resolve_canonical_task_id_for_runtime(
+    session_context: &SessionContext,
+    memory_config: &SessionStoreConfig,
+) -> String {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Ok(repo) = SessionRepository::new(memory_config) {
+            let task_id = resolve_canonical_task_id_for_session(&repo, &session_context.session_id);
+            if let Some(task_id) = task_id {
+                return task_id;
+            }
+        }
+    }
+
+    session_context.session_id.clone()
 }
 
 fn inject_tool_search_visibility_context_trusted(
@@ -2337,6 +2420,10 @@ fn compact_tool_result_payload_value(
     tool_name: &str,
     payload: &serde_json::Value,
 ) -> serde_json::Value {
+    if let Some(compacted_payload) = compact_continuation_payload_summary(payload) {
+        return compacted_payload;
+    }
+
     if tool_name == "tool.search" {
         let compacted_payload = compact_tool_search_payload_summary(payload);
 
@@ -2346,6 +2433,42 @@ fn compact_tool_result_payload_value(
     }
 
     payload.clone()
+}
+
+fn compact_continuation_payload_summary(payload: &serde_json::Value) -> Option<serde_json::Value> {
+    let payload_object = payload.as_object()?;
+    let continuation_object = payload_object.get("continuation")?.as_object()?;
+
+    let mut compacted = serde_json::Map::new();
+    for key in [
+        "mode",
+        "profile",
+        "label",
+        "state",
+        "wait_status",
+        "task_id",
+    ] {
+        if let Some(value) = payload_object.get(key) {
+            compacted.insert(key.to_owned(), value.clone());
+        }
+    }
+
+    let mut compacted_continuation = serde_json::Map::new();
+    for key in [
+        "state",
+        "is_terminal",
+        "recommended_tool",
+        "recommended_payload",
+    ] {
+        if let Some(value) = continuation_object.get(key) {
+            compacted_continuation.insert(key.to_owned(), value.clone());
+        }
+    }
+    compacted.insert(
+        "continuation".to_owned(),
+        Value::Object(compacted_continuation),
+    );
+    Some(Value::Object(compacted))
 }
 
 fn summarize_tool_result_payload(
@@ -2719,6 +2842,12 @@ async fn execute_tool_intent_via_kernel(
             {
                 return recovery_failure;
             }
+            if let KernelError::ToolPlane(ToolPlaneError::Execution(reason)) = &error
+                && let Some(stripped) = RepairableToolPreflight::parse(reason.as_str())
+            {
+                let human_reason = RepairableToolPreflight::render(stripped);
+                return TurnFailure::retryable("tool_preflight_denied", human_reason);
+            }
 
             let reason = render_kernel_error_reason(&error);
             match classify_kernel_error(&error) {
@@ -2956,6 +3085,7 @@ struct PreparedToolIntentFailure {
 #[derive(Clone, Copy)]
 struct ToolIntentPreparationHarness<'a, 'b, D: AppToolDispatcher + ?Sized> {
     session_context: &'a SessionContext,
+    memory_config: &'a SessionStoreConfig,
     app_dispatcher: &'a D,
     binding: ConversationRuntimeBinding<'b>,
     budget_state: &'a AutonomyTurnBudgetState,
@@ -2965,6 +3095,7 @@ struct ToolIntentPreparationHarness<'a, 'b, D: AppToolDispatcher + ?Sized> {
 impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b, D> {
     fn new(
         session_context: &'a SessionContext,
+        memory_config: &'a SessionStoreConfig,
         app_dispatcher: &'a D,
         binding: ConversationRuntimeBinding<'b>,
         budget_state: &'a AutonomyTurnBudgetState,
@@ -2972,6 +3103,7 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
     ) -> Self {
         Self {
             session_context,
+            memory_config,
             app_dispatcher,
             binding,
             budget_state,
@@ -3019,6 +3151,7 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
             resolved_tool.canonical_name,
             normalized_payload.clone(),
             self.session_context,
+            self.memory_config,
         );
         let augmented_payload_uses_reserved_internal_context =
             crate::tools::payload_uses_reserved_internal_tool_context(&augmented_payload.payload);
@@ -4126,8 +4259,12 @@ impl TurnEngine {
         budget_state: &AutonomyTurnBudgetState,
         ingress: Option<&ConversationIngressContext>,
     ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
+        let memory_config = app_dispatcher
+            .memory_config()
+            .unwrap_or(store::current_session_store_config());
         let preparation_harness = ToolIntentPreparationHarness::new(
             session_context,
+            memory_config,
             app_dispatcher,
             binding,
             budget_state,
@@ -4235,8 +4372,8 @@ mod tests {
     use super::*;
     use crate::config::{AutonomyProfile, GovernedToolApprovalMode, ToolConfig};
     use crate::session::repository::{
-        ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionRecord, SessionKind,
-        SessionRepository, SessionState,
+        ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
+        SessionKind, SessionRepository, SessionState,
     };
 
     fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
@@ -4249,7 +4386,7 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
-            ..SessionStoreConfig::default()
+            runtime_config: None,
         }
     }
 
@@ -6163,6 +6300,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn browser_companion_click_turn_executes_when_approval_is_disabled() {
+        let mut env = crate::test_support::ScopedEnv::new();
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let memory_config = isolated_memory_config("browser-companion-click-exec");
         let repo = SessionRepository::new(&memory_config).expect("repository");
@@ -6206,7 +6344,6 @@ mod tests {
             .expect("session id should exist")
             .to_owned();
 
-        let mut env = crate::test_support::ScopedEnv::new();
         env.set("LOONG_BROWSER_COMPANION_READY", "true");
 
         let mut tool_config = ToolConfig::default();
@@ -6264,6 +6401,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn browser_companion_click_turn_uses_runtime_visible_readiness_without_env_recheck() {
+        let mut env = crate::test_support::ScopedEnv::new();
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let memory_config = isolated_memory_config("browser-companion-click-runtime-ready");
         let repo = SessionRepository::new(&memory_config).expect("repository");
@@ -6307,7 +6445,6 @@ mod tests {
             .expect("session id should exist")
             .to_owned();
 
-        let mut env = crate::test_support::ScopedEnv::new();
         env.set("LOONG_BROWSER_COMPANION_READY", "false");
 
         let mut tool_config = ToolConfig::default();
@@ -6365,6 +6502,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn browser_companion_click_turn_uses_runtime_visible_policy_when_app_config_is_default() {
+        let mut env = crate::test_support::ScopedEnv::new();
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let memory_config = isolated_memory_config("browser-companion-click-runtime-policy");
         let repo = SessionRepository::new(&memory_config).expect("repository");
@@ -6409,7 +6547,6 @@ mod tests {
             .expect("session id should exist")
             .to_owned();
 
-        let mut env = crate::test_support::ScopedEnv::new();
         env.set("LOONG_BROWSER_COMPANION_ENABLED", "true");
         env.set("LOONG_BROWSER_COMPANION_READY", "false");
         env.set(
@@ -6771,6 +6908,63 @@ mod tests {
     }
 
     #[test]
+    fn continuation_payload_summary_is_compacted_before_low_limit_truncation() {
+        let intent = provider_app_tool_intent(
+            "session_wait",
+            json!({"session_id": "child-session"}),
+            "session-continuation-payload",
+            "turn-continuation-payload",
+            "call-continuation-payload",
+        );
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "session": {
+                    "session_id": "child-session",
+                    "state": "running",
+                    "label": "Child",
+                    "kind": "delegate_child",
+                    "details": "x".repeat(512),
+                },
+                "wait_status": "waiting",
+                "events": [
+                    {
+                        "event_kind": "delegate_result",
+                        "payload": "x".repeat(512),
+                    }
+                ],
+                "continuation": {
+                    "state": "waiting",
+                    "is_terminal": false,
+                    "recommended_tool": "session_wait",
+                    "recommended_payload": {
+                        "session_id": "child-session",
+                        "timeout_ms": 1000,
+                    },
+                    "note": "Keep waiting before presenting final completion.",
+                }
+            }),
+        };
+
+        let envelope = build_tool_result_envelope(&intent, &outcome, 256);
+        let payload_summary =
+            serde_json::from_str::<Value>(envelope.payload_summary.as_str()).expect("payload json");
+
+        assert!(!envelope.payload_truncated, "envelope: {envelope:?}");
+        assert_eq!(payload_summary["continuation"]["state"], "waiting");
+        assert_eq!(
+            payload_summary["continuation"]["recommended_tool"],
+            "session_wait"
+        );
+        assert!(
+            payload_summary.as_object().is_some_and(|object| {
+                object.contains_key("continuation") && !object.contains_key("events")
+            }),
+            "compacted summary should keep only compact continuation-safe fields: {payload_summary:?}"
+        );
+    }
+
+    #[test]
     fn augment_tool_payload_injects_browser_scope_for_companion_tool_invoke() {
         let (tool_name, payload) = crate::tools::synthesize_test_provider_tool_call_with_scope(
             "browser.companion.session.start",
@@ -6785,7 +6979,12 @@ mod tests {
             "root-session",
             crate::tools::ToolView::from_tool_names(std::iter::empty::<&str>()),
         );
-        let augmented = augment_tool_payload_for_kernel(&tool_name, payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            &tool_name,
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload["tool_id"],
@@ -6815,7 +7014,12 @@ mod tests {
             "limit": 3,
         });
 
-        let augmented = augment_tool_payload_for_kernel("tool.search", payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.search",
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
@@ -6855,7 +7059,12 @@ mod tests {
             },
         });
 
-        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.invoke",
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
@@ -6889,7 +7098,12 @@ mod tests {
             },
         });
 
-        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.invoke",
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
@@ -6923,7 +7137,12 @@ mod tests {
             },
         });
 
-        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.invoke",
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
@@ -6961,7 +7180,12 @@ mod tests {
             },
         });
 
-        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.invoke",
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
@@ -6998,12 +7222,164 @@ mod tests {
             },
         });
 
-        let augmented = augment_tool_payload_for_kernel("tool.invoke", payload, &session_context);
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.invoke",
+            payload,
+            &session_context,
+            &SessionStoreConfig::default(),
+        );
 
         assert_eq!(
             augmented.payload[crate::tools::LOONG_INTERNAL_TOOL_CONTEXT_KEY]
                 [crate::tools::LOONG_INTERNAL_WORKSPACE_ROOT_KEY],
             json!(expected_workspace_root)
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn augment_tool_payload_injects_canonical_task_id_for_task_tools() {
+        let memory_config = isolated_memory_config("task-tool-scope");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: None,
+            state: SessionState::Running,
+        })
+        .expect("create session");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-root".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Waiting,
+                    intent_summary: None,
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 123,
+                },
+            ),
+        })
+        .expect("append task progress");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["task_wait"]),
+        );
+
+        let augmented = augment_tool_payload_for_kernel(
+            "task_wait",
+            json!({}),
+            &session_context,
+            &memory_config,
+        );
+
+        assert_eq!(augmented.payload["task_id"], "task-root");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn augment_tool_payload_injects_canonical_task_id_for_task_events() {
+        let memory_config = isolated_memory_config("task-events-tool-scope");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: None,
+            state: SessionState::Running,
+        })
+        .expect("create session");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-root".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Waiting,
+                    intent_summary: None,
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 123,
+                },
+            ),
+        })
+        .expect("append task progress");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["task_events"]),
+        );
+
+        let augmented = augment_tool_payload_for_kernel(
+            "task_events",
+            json!({}),
+            &session_context,
+            &memory_config,
+        );
+
+        assert_eq!(augmented.payload["task_id"], "task-root");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn augment_tool_payload_injects_canonical_task_id_for_nested_task_invoke() {
+        let memory_config = isolated_memory_config("task-tool-invoke-scope");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: None,
+            state: SessionState::Running,
+        })
+        .expect("create session");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: TASK_PROGRESS_EVENT_KIND.to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: crate::task_progress::task_progress_event_payload(
+                "unit_test",
+                &crate::task_progress::TaskProgressRecord {
+                    task_id: "task-root".to_owned(),
+                    owner_kind: "conversation_turn".to_owned(),
+                    status: crate::task_progress::TaskProgressStatus::Waiting,
+                    intent_summary: None,
+                    verification_state: Some(crate::task_progress::TaskVerificationState::Pending),
+                    active_handles: Vec::new(),
+                    resume_recipe: None,
+                    updated_at: 123,
+                },
+            ),
+        })
+        .expect("append task progress");
+
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.invoke", "task_wait"]),
+        );
+
+        let augmented = augment_tool_payload_for_kernel(
+            "tool.invoke",
+            json!({
+                "tool_id": "task_wait",
+                "arguments": {}
+            }),
+            &session_context,
+            &memory_config,
+        );
+
+        assert_eq!(augmented.payload["arguments"]["task_id"], "task-root");
     }
 }

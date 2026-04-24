@@ -1063,10 +1063,6 @@ pub fn run_weixin_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCom
     run_managed_plugin_bridge_serve_cli_impl("weixin", args)
 }
 
-pub fn run_qqbot_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
-    run_managed_plugin_bridge_serve_cli_impl("qqbot", args)
-}
-
 pub fn run_onebot_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     run_managed_plugin_bridge_serve_cli_impl("onebot", args)
 }
@@ -1107,7 +1103,7 @@ fn require_managed_bridge_target<'a>(
     channel_id: &str,
     target: Option<&'a str>,
 ) -> CliResult<&'a str> {
-    let command_name = format!("{channel_id}-send");
+    let command_name = format!("channels send {channel_id}");
     let target = target.map(str::trim);
     let Some(target) = target else {
         return Err(format!("{command_name} requires --target"));

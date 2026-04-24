@@ -71,6 +71,8 @@ use self::operator_surfaces::render_cli_chat_status_lines_with_width;
 use self::operator_surfaces::render_manual_compaction_lines_with_width;
 use self::operator_surfaces::should_run_missing_config_onboard;
 use self::render_support::*;
+#[cfg(test)]
+use crate::conversation::DefaultConversationRuntime;
 
 use super::config::{self, ConversationConfig, LoongConfig};
 #[cfg(test)]
@@ -940,31 +942,30 @@ async fn process_cli_chat_input(
         ChatCommandMatchResult::NotMatched => {}
     }
 
-    let agent_runtime = crate::agent_runtime::AgentRuntime::new();
-    let turn_result = agent_runtime
-        .run_turn_with_runtime(
-            runtime,
-            &crate::agent_runtime::AgentTurnRequest {
-                message: input.to_owned(),
-                turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-                channel_id: runtime.session_address.channel_id.clone(),
-                account_id: runtime.session_address.account_id.clone(),
-                conversation_id: runtime.session_address.conversation_id.clone(),
-                participant_id: runtime.session_address.participant_id.clone(),
-                thread_id: runtime.session_address.thread_id.clone(),
-                metadata: BTreeMap::new(),
-                acp: runtime.explicit_acp_request,
-                acp_event_stream: event_sink.is_some(),
-                acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
-                acp_cwd: runtime
-                    .effective_working_directory
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                live_surface_enabled: true,
-            },
-            event_sink,
-        )
-        .await?;
+    let turn_request = crate::agent_runtime::AgentTurnRequest {
+        message: input.to_owned(),
+        turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+        channel_id: runtime.session_address.channel_id.clone(),
+        account_id: runtime.session_address.account_id.clone(),
+        conversation_id: runtime.session_address.conversation_id.clone(),
+        participant_id: runtime.session_address.participant_id.clone(),
+        thread_id: runtime.session_address.thread_id.clone(),
+        metadata: BTreeMap::new(),
+        acp: runtime.explicit_acp_request,
+        acp_event_stream: event_sink.is_some(),
+        acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+        acp_cwd: runtime
+            .effective_working_directory
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        live_surface_enabled: true,
+    };
+    let turn_options = crate::agent_runtime::TurnExecutionOptions {
+        event_sink,
+        ..Default::default()
+    };
+    let turn_service = crate::agent_runtime::RuntimeTurnExecutionService::new(runtime);
+    let turn_result = turn_service.execute(&turn_request, turn_options).await?;
 
     Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
 }
@@ -1007,6 +1008,8 @@ pub(crate) async fn run_cli_turn_with_address(
         AcpTurnProvenance::default(),
         ProviderErrorMode::InlineMessage,
         observer_override,
+        None,
+        None,
     )
     .await
 }
@@ -1022,6 +1025,8 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
     provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<String> {
     run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
         runtime,
@@ -1034,6 +1039,8 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
         provenance,
         provider_error_mode,
         observer_override,
+        retry_progress,
+        acp_manager,
     )
     .await
     .map(|outcome| outcome.reply)
@@ -1050,6 +1057,8 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
     let acp_options = if runtime.explicit_acp_request {
@@ -1070,22 +1079,39 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     } else {
         None
     };
+    let binding = runtime.conversation_binding();
     if let Some(ingress) = ingress {
         runtime
             .turn_coordinator
-            .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
+            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
                 &turn_config,
                 address,
                 input,
                 provider_error_mode,
                 &acp_options,
-                runtime.conversation_binding(),
+                binding,
                 Some(ingress),
                 live_surface_observer,
+                retry_progress,
+                acp_manager,
             )
             .await
             .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
     } else {
+        #[cfg(feature = "memory-sqlite")]
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &turn_config.memory,
+            );
+        #[cfg(feature = "memory-sqlite")]
+        let hosted_runtime = crate::conversation::HostedConversationRuntime::new_with_memory_config(
+            crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+            memory_config,
+        );
+        #[cfg(not(feature = "memory-sqlite"))]
+        let hosted_runtime =
+            crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+
         runtime
             .turn_coordinator
             .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
@@ -1093,12 +1119,13 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 address,
                 input,
                 provider_error_mode,
-                &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+                &hosted_runtime,
                 &acp_options,
-                runtime.conversation_binding(),
+                binding,
                 None,
                 live_surface_observer,
-                None,
+                retry_progress,
+                acp_manager,
             )
             .await
     }
@@ -2053,9 +2080,17 @@ async fn load_turn_checkpoint_summary_output(
     limit: usize,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<String> {
-    let diagnostics = turn_coordinator
-        .load_turn_checkpoint_diagnostics_with_limit(config, session_id, limit, binding)
-        .await?;
+    let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+    let runtime_ref = &runtime;
+    let diagnostics_future = turn_coordinator
+        .load_turn_checkpoint_diagnostics_with_runtime_and_limit(
+            config,
+            session_id,
+            limit,
+            runtime_ref,
+            binding,
+        );
+    let diagnostics = diagnostics_future.await?;
 
     Ok(format_turn_checkpoint_summary_output(
         session_id,
@@ -2929,7 +2964,7 @@ mod tests {
             .register_pack(pack)
             .expect("register memory test pack");
 
-        let adapter = crate::memory::MvpMemoryAdapter::with_config(memory_config.clone());
+        let adapter = crate::session::store::session_memory_adapter(memory_config);
         kernel.register_core_memory_adapter(adapter);
 
         kernel

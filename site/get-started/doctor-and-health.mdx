@@ -15,6 +15,8 @@ Loong uses `doctor` as the main repair path when the base runtime is unhealthy.
 | apply the safe repair path | `loong doctor --fix` |
 | feed health output into another tool or script | `loong doctor --json` |
 | inspect the security-oriented checks only | `loong doctor security` |
+| keep a live developer watch on one runtime/session | `loong debug watch --config <path> --session-id <session>` |
+| capture one deeper developer/debug bundle | `loong debug bundle --config <path> --session-id <session>` |
 
 ## Core Commands
 
@@ -24,6 +26,11 @@ loong doctor --fix
 loong doctor --json
 loong doctor security
 loong doctor security --json
+loong debug watch --config /path/to/loong.toml --session-id session-123
+loong debug watch --config /path/to/loong.toml --session-id session-123 --refresh-ms 1000
+loong debug bundle --config /path/to/loong.toml --session-id session-123
+loong debug bundle --config /path/to/loong.toml --session-id session-123 --output /tmp/debug-bundle.json
+loong debug show --artifact /tmp/debug-bundle.json
 ```
 
 ## When To Escalate To Audit
@@ -39,6 +46,22 @@ Use the audit commands when:
 - the runtime looks unhealthy and you need recent operator-visible evidence
 - a repair action happened but you want to inspect what changed
 - policy or token flow needs a more explicit trail than `doctor` alone provides
+
+## When To Escalate To Debug Bundle
+
+```bash
+loong debug watch --config /path/to/loong.toml --session-id session-123
+loong debug bundle --config /path/to/loong.toml --session-id session-123
+loong debug bundle --config /path/to/loong.toml --session-id session-123 --output /tmp/debug-bundle.json
+loong debug show --artifact /tmp/debug-bundle.json
+```
+
+Use the debug bundle when:
+
+- you need a live, continuously refreshed view over one active runtime or session before you decide whether to capture a point-in-time artifact
+- the runtime is behaving incorrectly and you need one combined view over status, ACP, session, provider failover, and audit evidence
+- you want to hand one artifact to another maintainer without asking them to rebuild the same local inspection steps
+- you need request ids, failover rollups, session recovery state, and audit integrity in one place
 
 ## What This Page Optimizes For
 
@@ -57,8 +80,10 @@ Use the audit commands when:
 
 1. Run `loong doctor`.
 2. Run `loong doctor --fix` if the safe repair path is appropriate.
-3. Use audit commands when you need evidence or a deeper trail.
-4. Return to [First Run](/get-started/first-run) once the base path is healthy again.
+3. Use `loong debug watch` when you need live counters, recent session events, and failover/audit attention while the issue is still happening.
+4. Capture `loong debug bundle` when you need a stable artifact to share or compare later.
+5. Use audit commands when you need evidence or a deeper governance trail.
+6. Return to [First Run](/get-started/first-run) once the base path is healthy again.
 
 ## What Comes Next
 

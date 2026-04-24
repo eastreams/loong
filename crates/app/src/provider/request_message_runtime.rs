@@ -20,6 +20,10 @@ use crate::workspace_guidance;
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{SessionNodeKind, SessionRepository};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store::SessionStoreConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectedMessageContext {
@@ -32,6 +36,13 @@ pub(crate) struct ProjectedMessageContext {
 struct BasePromptProjection {
     system_message: Option<Value>,
     prompt_fragments: Vec<PromptFragment>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SessionPathProjection {
+    assistant_contents: Vec<String>,
+    turns: Vec<(String, String)>,
 }
 
 pub(super) fn build_system_message(
@@ -387,6 +398,8 @@ fn render_execution_discipline_section() -> String {
             .to_owned(),
         "- If one retrieval path returns partial or empty results, retry with a different bounded strategy before asking the user."
             .to_owned(),
+        "- Prefer continuing through bounded intermediate steps over narrating every step to the user."
+            .to_owned(),
         "</tool_persistence>".to_owned(),
         "<mandatory_tool_use>".to_owned(),
         "- Do not answer live system, file-content, git-state, or current-fact questions from memory when runtime retrieval is available."
@@ -399,6 +412,8 @@ fn render_execution_discipline_section() -> String {
             .to_owned(),
         "- Ask only when the missing detail changes the required tool, target, or side effect."
             .to_owned(),
+        "- Do not emit incremental progress chatter after each tool result; keep going until you can deliver a completed result, a concrete blocker, or a real approval request."
+            .to_owned(),
         "</act_dont_ask>".to_owned(),
         "<prerequisite_checks>".to_owned(),
         "- Before a mutating step or a high-confidence claim, check whether discovery, inspection, or preflight lookup is still needed."
@@ -410,6 +425,8 @@ fn render_execution_discipline_section() -> String {
         "- Before finalizing, check correctness, grounding, output shape, and whether a real stop condition has been reached."
             .to_owned(),
         "- A reply is not by itself proof that a long-running task is complete."
+            .to_owned(),
+        "- Queued async work, waiting task handles, blocked task states, and pending approvals are intermediate runtime states, not final completion."
             .to_owned(),
         "</verification>".to_owned(),
         "<missing_context>".to_owned(),
@@ -587,7 +604,8 @@ async fn load_runtime_self_model_with_binding_and_budget(
         );
     };
 
-    let source_candidates = runtime_self::runtime_self_source_candidates(workspace_root);
+    let source_candidates =
+        runtime_self::runtime_self_source_candidates(workspace_root, tool_runtime_config);
     let mut loaded_paths = BTreeSet::new();
     let mut model = runtime_self::RuntimeSelfModel::default();
 
@@ -739,17 +757,21 @@ pub(crate) fn build_projected_context_for_session_in_view(
         let mem_config =
             memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let workspace_root = resolved_workspace_root(config);
+        let session_path_projection = load_session_path_projection(session_id, &mem_config)
+            .ok()
+            .flatten();
         let hydrated = memory::hydrate_memory_context_with_workspace_root(
             session_id,
             workspace_root.as_deref(),
             &mem_config,
         )
         .map_err(|error| format!("hydrate prompt memory context failed: {error}"))?;
-        Ok(project_hydrated_memory_context_for_view(
+        Ok(project_hydrated_memory_context_for_view_and_session_path(
             config,
             include_system_prompt,
             tool_view,
             &hydrated,
+            session_path_projection.as_ref(),
         ))
     }
 
@@ -785,20 +807,26 @@ pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
         let mem_config =
             memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let workspace_root = resolved_workspace_root(config);
+        let session_path_projection = load_session_path_projection(session_id, &mem_config)
+            .ok()
+            .flatten();
         let hydrated = memory::hydrate_memory_context_with_workspace_root(
             session_id,
             workspace_root.as_deref(),
             &mem_config,
         )
         .map_err(|error| format!("hydrate prompt memory context failed: {error}"))?;
-        Ok(project_hydrated_memory_context_for_view_with_binding(
-            config,
-            include_system_prompt,
-            tool_view,
-            binding,
-            &hydrated,
+        Ok(
+            project_hydrated_memory_context_for_view_with_binding_and_session_path(
+                config,
+                include_system_prompt,
+                tool_view,
+                binding,
+                &hydrated,
+                session_path_projection.as_ref(),
+            )
+            .await,
         )
-        .await)
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
@@ -831,6 +859,27 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
     binding: ProviderRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
 ) -> ProjectedMessageContext {
+    project_hydrated_memory_context_for_view_with_binding_and_session_path(
+        config,
+        include_system_prompt,
+        tool_view,
+        binding,
+        #[cfg(feature = "memory-sqlite")]
+        hydrated,
+        #[cfg(feature = "memory-sqlite")]
+        None,
+    )
+    .await
+}
+
+async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
+    config: &LoongConfig,
+    include_system_prompt: bool,
+    tool_view: &ToolView,
+    binding: ProviderRuntimeBinding<'_>,
+    #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
+    #[cfg(feature = "memory-sqlite")] session_path_projection: Option<&SessionPathProjection>,
+) -> ProjectedMessageContext {
     let projection = build_base_prompt_projection_for_view_with_binding(
         config,
         include_system_prompt,
@@ -850,9 +899,15 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
                 &mut prompt_fragments,
                 tool_view,
                 hydrated,
+                session_path_projection,
             );
         }
-        append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
+        append_hydrated_memory_messages(
+            &mut messages,
+            &mut artifacts,
+            hydrated,
+            session_path_projection,
+        );
     }
 
     ProjectedMessageContext {
@@ -862,11 +917,30 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn project_hydrated_memory_context_for_view(
     config: &LoongConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
+) -> ProjectedMessageContext {
+    project_hydrated_memory_context_for_view_and_session_path(
+        config,
+        include_system_prompt,
+        tool_view,
+        #[cfg(feature = "memory-sqlite")]
+        hydrated,
+        #[cfg(feature = "memory-sqlite")]
+        None,
+    )
+}
+
+fn project_hydrated_memory_context_for_view_and_session_path(
+    config: &LoongConfig,
+    include_system_prompt: bool,
+    tool_view: &ToolView,
+    #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
+    #[cfg(feature = "memory-sqlite")] session_path_projection: Option<&SessionPathProjection>,
 ) -> ProjectedMessageContext {
     let projection = build_base_prompt_projection_with_tool_runtime_config(
         config,
@@ -886,9 +960,15 @@ pub(crate) fn project_hydrated_memory_context_for_view(
                 &mut prompt_fragments,
                 tool_view,
                 hydrated,
+                session_path_projection,
             );
         }
-        append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
+        append_hydrated_memory_messages(
+            &mut messages,
+            &mut artifacts,
+            hydrated,
+            session_path_projection,
+        );
     }
 
     ProjectedMessageContext {
@@ -903,7 +983,9 @@ fn append_hydrated_memory_messages(
     messages: &mut Vec<Value>,
     artifacts: &mut Vec<ContextArtifactDescriptor>,
     hydrated: &memory::HydratedMemoryContext,
+    session_path_projection: Option<&SessionPathProjection>,
 ) {
+    let use_session_tree_projection = session_path_projection.is_some();
     for entry in &hydrated.entries {
         match entry.kind {
             memory::MemoryContextKind::Profile
@@ -913,9 +995,15 @@ fn append_hydrated_memory_messages(
                 append_advisory_memory_message(messages, artifacts, entry);
             }
             memory::MemoryContextKind::Turn => {
-                append_history_memory_message(messages, artifacts, entry);
+                if !use_session_tree_projection {
+                    append_history_memory_message(messages, artifacts, entry);
+                }
             }
         }
+    }
+
+    if let Some(session_path_projection) = session_path_projection {
+        append_session_path_projection_messages(messages, artifacts, session_path_projection);
     }
 }
 
@@ -924,15 +1012,20 @@ fn append_hydrated_tool_discovery_prompt_fragment(
     prompt_fragments: &mut Vec<PromptFragment>,
     tool_view: &ToolView,
     hydrated: &memory::HydratedMemoryContext,
+    session_path_projection: Option<&SessionPathProjection>,
 ) {
-    let assistant_contents = hydrated
-        .recent_window
-        .iter()
-        .filter(|turn| turn.role == "assistant")
-        .map(|turn| turn.content.trim())
-        .filter(|content| !content.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
+    let assistant_contents = session_path_projection
+        .map(|projection| projection.assistant_contents.clone())
+        .unwrap_or_else(|| {
+            hydrated
+                .recent_window
+                .iter()
+                .filter(|turn| turn.role == "assistant")
+                .map(|turn| turn.content.trim())
+                .filter(|content| !content.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
     let discovery_state =
         latest_tool_discovery_state_from_assistant_contents(assistant_contents.as_slice());
     let filtered_state = discovery_state
@@ -957,6 +1050,26 @@ fn append_hydrated_tool_discovery_prompt_fragment(
     .with_tool_discovery_state(discovery_state);
 
     prompt_fragments.push(fragment);
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_session_path_projection_messages(
+    messages: &mut Vec<Value>,
+    artifacts: &mut Vec<ContextArtifactDescriptor>,
+    projection: &SessionPathProjection,
+) {
+    for (role, content) in &projection.turns {
+        let message_index = messages.len();
+        push_history_message(messages, role.as_str(), content.as_str());
+        if messages.len() != message_index {
+            artifacts.push(ContextArtifactDescriptor {
+                message_index,
+                artifact_kind: ContextArtifactKind::ConversationTurn,
+                maskable: false,
+                streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+            });
+        }
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1040,6 +1153,51 @@ fn advisory_allowed_root_headings(kind: memory::MemoryContextKind) -> &'static [
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn load_session_path_projection(
+    session_id: &str,
+    memory_config: &memory::runtime_config::MemoryRuntimeConfig,
+) -> CliResult<Option<SessionPathProjection>> {
+    let session_store_config = SessionStoreConfig::from_memory_runtime_config(memory_config);
+    let repo = SessionRepository::new(&session_store_config).map_err(|error| {
+        format!("open session repository for session path projection failed: {error}")
+    })?;
+    let nodes = repo
+        .load_active_session_path(session_id)
+        .map_err(|error| format!("load active session path failed: {error}"))?;
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut projection = SessionPathProjection::default();
+    for node in nodes {
+        match node.kind {
+            SessionNodeKind::UserTurn | SessionNodeKind::AssistantTurn => {
+                let Some(role) = node.role else {
+                    continue;
+                };
+                let Some(content) = node.content else {
+                    continue;
+                };
+                if role == "assistant" {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        projection.assistant_contents.push(trimmed.to_owned());
+                    }
+                }
+                projection.turns.push((role, content));
+            }
+            SessionNodeKind::Root | SessionNodeKind::Artifact => {}
+        }
+    }
+
+    if projection.turns.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(projection))
+}
+
 fn is_supported_chat_role(role: &str) -> bool {
     matches!(role, "system" | "user" | "assistant" | "tool")
 }
@@ -1069,6 +1227,11 @@ fn should_skip_history_turn(role: &str, content: &str) -> bool {
 mod tests {
     use super::*;
     use crate::config::MemoryProfile;
+    use crate::session::repository::{
+        ACTIVE_SESSION_HEAD_NAME, NewSessionArtifactRecord, NewSessionRecord, SessionKind,
+        SessionRepository, SessionState,
+    };
+    use crate::session::store;
     use crate::test_support::TurnTestHarness;
     use tempfile::tempdir;
 
@@ -1092,10 +1255,27 @@ mod tests {
         system_content
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    fn non_system_message_contents(messages: &[Value]) -> Vec<String> {
+        messages
+            .iter()
+            .filter(|message| message["role"] != "system")
+            .filter_map(|message| message["content"].as_str().map(ToOwned::to_owned))
+            .collect()
+    }
+
     #[test]
     fn build_system_message_returns_none_when_disabled() {
         let config = LoongConfig::default();
         assert_eq!(build_system_message(&config, false), None);
+    }
+
+    #[test]
+    fn execution_discipline_section_emphasizes_continued_execution_over_progress_chatter() {
+        let section = render_execution_discipline_section();
+        assert!(section.contains("Prefer continuing through bounded intermediate steps"));
+        assert!(section.contains("Do not emit incremental progress chatter"));
+        assert!(section.contains("intermediate runtime states, not final completion"));
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1318,6 +1498,146 @@ mod tests {
         assert_eq!(
             tool_plane_event_count, 1,
             "runtime-self loading should use the runtime workspace root, not the decoy tool root"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn projected_context_prefers_active_session_tree_path_over_linear_turn_window() {
+        let temp_dir = tempdir().expect("tempdir");
+        let sqlite_path = temp_dir.path().join("provider-session-tree.sqlite3");
+        let mut config = LoongConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.tools.file_root = Some(temp_dir.path().display().to_string());
+
+        let session_store_config = SessionStoreConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&session_store_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create session");
+
+        store::append_session_turn_direct("root-session", "user", "hello", &session_store_config)
+            .expect("append user turn");
+        store::append_session_turn_direct(
+            "root-session",
+            "assistant",
+            "mainline-world",
+            &session_store_config,
+        )
+        .expect("append mainline assistant turn");
+        repo.set_session_head(
+            "root-session",
+            ACTIVE_SESSION_HEAD_NAME,
+            "session-turn:root-session:1",
+        )
+        .expect("rewind active head");
+        store::append_session_turn_direct(
+            "root-session",
+            "assistant",
+            "branch-reply",
+            &session_store_config,
+        )
+        .expect("append branch assistant turn");
+
+        let projected = build_projected_context_for_session(&config, "root-session", false)
+            .expect("projected context");
+        let contents = non_system_message_contents(&projected.messages);
+
+        assert!(contents.iter().any(|content| content == "hello"));
+        assert!(contents.iter().any(|content| content == "branch-reply"));
+        assert!(
+            !contents.iter().any(|content| content == "mainline-world"),
+            "active tree projection should exclude the abandoned mainline tail"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn projected_context_does_not_auto_inject_branch_summary_from_non_active_head() {
+        let temp_dir = tempdir().expect("tempdir");
+        let sqlite_path = temp_dir.path().join("provider-branch-summary.sqlite3");
+        let mut config = LoongConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config.tools.file_root = Some(temp_dir.path().display().to_string());
+
+        let session_store_config = SessionStoreConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&session_store_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create session");
+
+        store::append_session_turn_direct("root-session", "user", "hello", &session_store_config)
+            .expect("append user turn");
+        store::append_session_turn_direct(
+            "root-session",
+            "assistant",
+            "mainline-world",
+            &session_store_config,
+        )
+        .expect("append mainline assistant turn");
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:1",
+            "thread/alpha",
+        )
+        .expect("fork thread head");
+        repo.set_session_head(
+            "root-session",
+            ACTIVE_SESSION_HEAD_NAME,
+            "session-turn:root-session:1",
+        )
+        .expect("rewind active head");
+        store::append_session_turn_direct(
+            "root-session",
+            "assistant",
+            "branch-reply",
+            &session_store_config,
+        )
+        .expect("append branch assistant turn");
+        repo.set_session_head(
+            "root-session",
+            ACTIVE_SESSION_HEAD_NAME,
+            "session-turn:root-session:2",
+        )
+        .expect("restore active head to mainline");
+        repo.create_session_artifact(NewSessionArtifactRecord {
+            artifact_id: "branch-summary-1".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: crate::session::repository::SessionArtifactKind::BranchSummary,
+            head_name: Some("thread/alpha".to_owned()),
+            anchor_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_start_node_id: Some("session-turn:root-session:3".to_owned()),
+            source_end_node_id: Some("session-turn:root-session:3".to_owned()),
+            payload_json: json!({"head_name": "thread/alpha"}),
+            summary_text: Some("alpha summary should stay retrieval-only".to_owned()),
+        })
+        .expect("create branch summary artifact");
+
+        let projected = build_projected_context_for_session(&config, "root-session", false)
+            .expect("projected context");
+        let contents = non_system_message_contents(&projected.messages);
+
+        assert!(contents.iter().any(|content| content == "hello"));
+        assert!(contents.iter().any(|content| content == "mainline-world"));
+        assert!(
+            !contents.iter().any(|content| content == "branch-reply"),
+            "non-active branch turns should not be auto-injected"
+        );
+        assert!(
+            !contents
+                .iter()
+                .any(|content| content == "alpha summary should stay retrieval-only"),
+            "branch summary artifacts should stay out of implicit prompt context"
         );
     }
 

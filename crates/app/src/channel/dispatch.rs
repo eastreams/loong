@@ -19,6 +19,7 @@ use crate::CliResult;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
+    feature = "channel-qqbot",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -33,6 +34,18 @@ use crate::KernelContext;
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook",
+))]
+use crate::acp::AcpConversationTurnOptions;
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
     feature = "channel-email",
@@ -42,6 +55,7 @@ use crate::KernelContext;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
+    feature = "channel-qqbot",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -52,7 +66,7 @@ use crate::KernelContext;
     feature = "channel-whatsapp",
     feature = "channel-imessage",
 ))]
-use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
+use crate::acp::AcpTurnProvenance;
 use crate::config::LoongConfig;
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -66,6 +80,7 @@ use crate::config::LoongConfig;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
+    feature = "channel-qqbot",
     feature = "channel-signal",
     feature = "channel-twitch",
     feature = "channel-slack",
@@ -79,6 +94,7 @@ use crate::config::LoongConfig;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-discord",
     feature = "channel-dingtalk",
@@ -124,6 +140,8 @@ use crate::config::ResolvedMattermostChannelConfig;
 use crate::config::ResolvedNextcloudTalkChannelConfig;
 #[cfg(feature = "channel-nostr")]
 use crate::config::ResolvedNostrChannelConfig;
+#[cfg(feature = "channel-qqbot")]
+use crate::config::ResolvedQqbotChannelConfig;
 #[cfg(feature = "channel-slack")]
 use crate::config::ResolvedSlackChannelConfig;
 #[cfg(feature = "channel-synology-chat")]
@@ -145,6 +163,7 @@ use crate::config::ResolvedWhatsappChannelConfig;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -152,8 +171,7 @@ use crate::config::ResolvedWhatsappChannelConfig;
 use crate::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
-    ConversationIngressPrivateContext, ConversationRuntime, ConversationRuntimeBinding,
-    DefaultConversationRuntime,
+    ConversationIngressPrivateContext, ConversationSessionAddress,
 };
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -161,12 +179,33 @@ use crate::conversation::{
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook",
+))]
+use crate::conversation::{ConversationRuntime, ConversationRuntimeBinding};
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
 ))]
 use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+use super::access_policy::ChannelInboundAccessPolicy;
 pub(super) use super::commands::{
     ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
@@ -176,6 +215,7 @@ pub(super) use super::commands::{
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -205,27 +245,12 @@ use super::mattermost;
 use super::nextcloud_talk;
 #[cfg(feature = "channel-nostr")]
 use super::nostr;
+#[cfg(feature = "channel-qqbot")]
+use super::qqbot;
 use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR,
 };
-#[cfg(not(any(
-    feature = "channel-plugin-bridge",
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-)))]
-use super::runtime::serve::ChannelServeStopHandle;
-#[cfg(any(
-    feature = "channel-plugin-bridge",
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp"
-))]
 use super::runtime::serve::{
     ChannelServeRuntimeSpec, ChannelServeStopHandle, with_channel_serve_runtime_with_stop,
 };
@@ -237,6 +262,7 @@ use super::runtime::state;
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -248,6 +274,7 @@ use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook",
@@ -273,22 +300,32 @@ use super::wecom;
 use super::whatsapp;
 
 use super::runtime::state::ChannelOperationRuntime;
-#[cfg(any(feature = "channel-telegram", feature = "channel-matrix"))]
-use super::types::ChannelProcessFuture;
-use super::types::FeishuChannelSendRequest;
-use super::types::{
-    ChannelAdapter, ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
-    ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt, ChannelSession,
-};
-#[cfg(not(any(
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-line",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+    feature = "channel-webhook",
+))]
+use super::types::ChannelResolvedAcpTurnHints;
+#[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
-    feature = "channel-whatsapp"
-)))]
-use super::types::{ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt};
+    feature = "channel-whatsapp",
+))]
+use super::types::{ChannelAdapter, process_channel_batch};
+use super::types::{
+    ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
+    ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt, ChannelSession,
+    FeishuChannelSendRequest,
+};
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -299,16 +336,10 @@ use super::types::{ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceip
     feature = "channel-whatsapp",
     feature = "channel-webhook",
 ))]
-use super::types::{ChannelResolvedAcpTurnHints, process_channel_batch};
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-))]
 use super::types::{KnownChannelSessionSendTarget, parse_known_channel_session_send_target};
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-dingtalk",
     feature = "channel-webhook",
     feature = "channel-google-chat",
@@ -320,27 +351,8 @@ enum EndpointBackedSendTargetSource {
     ConfiguredEndpoint,
 }
 
-#[cfg(any(feature = "channel-telegram", feature = "channel-matrix"))]
-fn process_inbound_with_provider_future(
-    config: LoongConfig,
-    resolved_path: PathBuf,
-    message: ChannelInboundMessage,
-    kernel_ctx: Arc<crate::KernelContext>,
-    turn_feedback_policy: ChannelTurnFeedbackPolicy,
-) -> ChannelProcessFuture {
-    Box::pin(async move {
-        Box::pin(process_inbound_with_provider(
-            &config,
-            Some(resolved_path.as_path()),
-            &message,
-            kernel_ctx.as_ref(),
-            turn_feedback_policy,
-        ))
-        .await
-    })
-}
-
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-dingtalk",
     feature = "channel-webhook",
     feature = "channel-google-chat",
@@ -353,6 +365,7 @@ struct EndpointBackedSendTarget {
 }
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-dingtalk",
     feature = "channel-webhook",
     feature = "channel-google-chat",
@@ -682,6 +695,39 @@ pub(super) fn build_whatsapp_command_context(
     if !resolved.enabled {
         return Err(format!(
             "whatsapp account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
+#[cfg(feature = "channel-qqbot")]
+fn load_qqbot_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
+    let (resolved_path, config) = crate::config::load(config_path)?;
+    build_qqbot_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-qqbot")]
+pub(super) fn build_qqbot_command_context(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedQqbotChannelConfig>> {
+    let resolved = config.qqbot.resolve_account(account_id)?;
+    let route = config
+        .qqbot
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "qqbot account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -1025,116 +1071,118 @@ fn build_nostr_command_context(
 
 #[cfg(feature = "channel-telegram")]
 #[allow(clippy::print_stdout)] // CLI startup banner
-fn run_telegram_channel_with_context(
+async fn run_telegram_channel_with_context(
     context: ChannelCommandContext<ResolvedTelegramChannelConfig>,
     once: bool,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    Box::pin(async move {
-        validate_telegram_security_config(&context.resolved)?;
-        if initialize_runtime_environment {
-            crate::runtime_env::initialize_runtime_environment(
-                &context.config,
-                Some(context.resolved_path.as_path()),
-            );
-        }
-        let kernel_ctx = bootstrap_kernel_context_with_config(
-            "channel-telegram",
-            DEFAULT_TOKEN_TTL_S,
+) -> CliResult<()> {
+    validate_telegram_security_config(&context.resolved)?;
+    if initialize_runtime_environment {
+        crate::runtime_env::initialize_runtime_environment(
             &context.config,
-        )?;
-        let token = context.resolved.bot_token().ok_or_else(|| {
-            "telegram bot token missing (set telegram.bot_token or env)".to_owned()
-        })?;
-        let route = context.route.clone();
-        let resolved_path = context.resolved_path.clone();
-        let resolved = context.resolved.clone();
-        let batch_config = context.config.clone();
-        let batch_kernel_ctx = Arc::new(crate::KernelContext {
-            kernel: kernel_ctx.kernel.clone(),
-            token: kernel_ctx.token.clone(),
-        });
-        let runtime_account_id = resolved.account.id.clone();
-        let runtime_account_label = resolved.account.label.clone();
+            Some(context.resolved_path.as_path()),
+        );
+    }
+    let kernel_ctx = bootstrap_kernel_context_with_config(
+        "channel-telegram",
+        DEFAULT_TOKEN_TTL_S,
+        &context.config,
+    )?;
+    let token = context
+        .resolved
+        .bot_token()
+        .ok_or_else(|| "telegram bot token missing (set telegram.bot_token or env)".to_owned())?;
+    let route = context.route.clone();
+    let resolved_path = context.resolved_path.clone();
+    let resolved = context.resolved.clone();
+    let batch_config = context.config.clone();
+    let batch_kernel_ctx = Arc::new(crate::KernelContext {
+        kernel: kernel_ctx.kernel.clone(),
+        token: kernel_ctx.token.clone(),
+    });
+    let runtime_account_id = resolved.account.id.clone();
+    let runtime_account_label = resolved.account.label.clone();
 
-        Box::pin(with_channel_serve_runtime_with_stop(
-            ChannelServeRuntimeSpec {
-                platform: ChannelPlatform::Telegram,
-                operation_id: CHANNEL_OPERATION_SERVE_ID,
-                account_id: runtime_account_id.as_str(),
-                account_label: runtime_account_label.as_str(),
-            },
-            stop,
-            move |runtime, stop| async move {
-                let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
-                context.emit_route_notice("telegram");
+    with_channel_serve_runtime_with_stop(
+        ChannelServeRuntimeSpec {
+            platform: ChannelPlatform::Telegram,
+            operation_id: CHANNEL_OPERATION_SERVE_ID,
+            account_id: runtime_account_id.as_str(),
+            account_label: runtime_account_label.as_str(),
+        },
+        stop,
+        move |runtime, stop| async move {
+            let mut adapter = telegram::TelegramAdapter::new(&resolved, token);
+            context.emit_route_notice("telegram");
 
-                println!(
-                    "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
-                    adapter.name(),
-                    resolved_path.display(),
-                    resolved.configured_account_id,
-                    resolved.account.label,
-                    route.selected_by_default(),
-                    route.default_account_source.as_str(),
-                    resolved.polling_timeout_s
-                );
+            println!(
+                "{} channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, timeout={}s)",
+                adapter.name(),
+                resolved_path.display(),
+                resolved.configured_account_id,
+                resolved.account.label,
+                route.selected_by_default(),
+                route.default_account_source.as_str(),
+                resolved.polling_timeout_s
+            );
 
-                loop {
-                    let batch = tokio::select! {
-                        _ = stop.wait() => break,
-                        batch = adapter.receive_batch() => batch?,
-                    };
-                    let config = batch_config.clone();
-                    let kernel_ctx = batch_kernel_ctx.clone();
-                    let had_messages = process_channel_batch(
-                        &mut adapter,
-                        batch,
-                        Some(runtime.as_ref()),
-                        |message, turn_feedback_policy| {
-                            process_inbound_with_provider_future(
-                                config.clone(),
-                                resolved_path.clone(),
-                                message,
-                                kernel_ctx.clone(),
+            loop {
+                let batch = tokio::select! {
+                    _ = stop.wait() => break,
+                    batch = adapter.receive_batch() => batch?,
+                };
+                let config = batch_config.clone();
+                let kernel_ctx = batch_kernel_ctx.clone();
+                let had_messages = process_channel_batch(
+                    &mut adapter,
+                    batch,
+                    Some(runtime.as_ref()),
+                    |message, turn_feedback_policy| {
+                        let config = config.clone();
+                        let kernel_ctx = kernel_ctx.clone();
+                        let resolved_path = resolved_path.clone();
+                        Box::pin(async move {
+                            process_inbound_with_provider(
+                                &config,
+                                Some(resolved_path.as_path()),
+                                &message,
+                                kernel_ctx.as_ref(),
                                 turn_feedback_policy,
                             )
-                        },
-                    )
-                    .await?;
-                    if !had_messages && once {
-                        break;
-                    }
-                    if once {
-                        break;
-                    }
-                    tokio::select! {
-                        _ = stop.wait() => break,
-                        _ = sleep(Duration::from_millis(250)) => {}
-                    }
+                            .await
+                        })
+                    },
+                )
+                .await?;
+                if !had_messages && once {
+                    break;
                 }
-                Ok(())
-            },
-        ))
-        .await
-    })
+                if once {
+                    break;
+                }
+                tokio::select! {
+                    _ = stop.wait() => break,
+                    _ = sleep(Duration::from_millis(250)) => {}
+                }
+            }
+            Ok(())
+        },
+    )
+    .await
 }
 
 #[cfg(feature = "channel-telegram")]
-pub fn run_telegram_channel_with_stop(
+pub async fn run_telegram_channel_with_stop(
     resolved_path: PathBuf,
     config: LoongConfig,
     once: bool,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    let account_id = account_id.map(str::to_owned);
-    Box::pin(async move {
-        let context = build_telegram_command_context(resolved_path, config, account_id.as_deref())?;
-        run_telegram_channel_with_context(context, once, stop, initialize_runtime_environment).await
-    })
+) -> CliResult<()> {
+    let context = build_telegram_command_context(resolved_path, config, account_id)?;
+    run_telegram_channel_with_context(context, once, stop, initialize_runtime_environment).await
 }
 
 #[allow(clippy::print_stdout)] // CLI output
@@ -1603,13 +1651,13 @@ pub async fn run_whatsapp_channel(
     #[cfg(feature = "channel-whatsapp")]
     {
         let context = load_whatsapp_command_context(config_path, account_id)?;
-        Box::pin(whatsapp::run_whatsapp_channel_with_context(
+        whatsapp::run_whatsapp_channel_with_context(
             context,
             bind_override,
             path_override,
             ChannelServeStopHandle::new(),
             true,
-        ))
+        )
         .await
     }
 }
@@ -1622,13 +1670,13 @@ pub async fn run_whatsapp_channel_with_stop(
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
 ) -> CliResult<()> {
-    Box::pin(whatsapp::run_whatsapp_channel_with_stop(
+    whatsapp::run_whatsapp_channel_with_stop(
         resolved_path,
         config,
         account_id,
         stop,
         initialize_runtime_environment,
-    ))
+    )
     .await
 }
 
@@ -1779,6 +1827,35 @@ pub async fn run_webhook_channel(
             ChannelServeStopHandle::new(),
             true,
         )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_qqbot_channel(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    _bind_override: Option<&str>,
+    _path_override: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-qqbot") {
+        return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-qqbot"))]
+    {
+        let _ = (config_path, account_id, _bind_override, _path_override);
+        return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-qqbot")]
+    {
+        let context = load_qqbot_command_context(config_path, account_id)?;
+        Box::pin(qqbot::run_qqbot_channel_with_context(
+            context,
+            ChannelServeStopHandle::new(),
+            true,
+        ))
         .await
     }
 }
@@ -2236,13 +2313,7 @@ pub async fn run_telegram_channel(
     #[cfg(feature = "channel-telegram")]
     {
         let context = load_telegram_command_context(config_path, account_id)?;
-        Box::pin(run_telegram_channel_with_context(
-            context,
-            once,
-            ChannelServeStopHandle::new(),
-            true,
-        ))
-        .await
+        run_telegram_channel_with_context(context, once, ChannelServeStopHandle::new(), true).await
     }
 }
 
@@ -2378,28 +2449,28 @@ pub async fn run_feishu_channel(
     #[cfg(feature = "channel-feishu")]
     {
         let context = load_feishu_command_context(config_path, account_id)?;
-        Box::pin(run_feishu_channel_with_context(
+        run_feishu_channel_with_context(
             context,
             bind_override,
             path_override,
             ChannelServeStopHandle::new(),
             true,
-        ))
+        )
         .await
     }
 }
 
 #[cfg(feature = "channel-feishu")]
-fn run_feishu_channel_with_context(
+async fn run_feishu_channel_with_context(
     context: ChannelCommandContext<ResolvedFeishuChannelConfig>,
     bind_override: Option<&str>,
     path_override: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
+) -> CliResult<()> {
     let bind_override = bind_override.map(str::to_owned);
     let path_override = path_override.map(str::to_owned);
-    Box::pin(run_channel_serve_command_with_stop(
+    run_channel_serve_command_with_stop(
         context,
         ChannelServeCommandSpec {
             family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
@@ -2413,7 +2484,7 @@ fn run_feishu_channel_with_context(
                 let resolved_path = context.resolved_path.clone();
                 let resolved = context.resolved.clone();
                 let config = context.config.clone();
-                Box::pin(feishu::run_feishu_channel(
+                feishu::run_feishu_channel(
                     &config,
                     &resolved,
                     &resolved_path,
@@ -2424,15 +2495,16 @@ fn run_feishu_channel_with_context(
                     kernel_ctx,
                     runtime,
                     stop,
-                ))
+                )
                 .await
             })
         },
-    ))
+    )
+    .await
 }
 
 #[cfg(feature = "channel-feishu")]
-pub fn run_feishu_channel_with_stop(
+pub async fn run_feishu_channel_with_stop(
     resolved_path: PathBuf,
     config: LoongConfig,
     account_id: Option<&str>,
@@ -2440,30 +2512,27 @@ pub fn run_feishu_channel_with_stop(
     path_override: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    let account_id = account_id.map(str::to_owned);
-    let bind_override = bind_override.map(str::to_owned);
-    let path_override = path_override.map(str::to_owned);
-    Box::pin(async move {
-        let context = build_feishu_command_context(resolved_path, config, account_id.as_deref())?;
-        run_feishu_channel_with_context(
-            context,
-            bind_override.as_deref(),
-            path_override.as_deref(),
-            stop,
-            initialize_runtime_environment,
-        )
-        .await
-    })
+) -> CliResult<()> {
+    let context = build_feishu_command_context(resolved_path, config, account_id)?;
+    run_feishu_channel_with_context(
+        context,
+        bind_override,
+        path_override,
+        stop,
+        initialize_runtime_environment,
+    )
+    .await
 }
 
 #[doc(hidden)]
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -2587,25 +2656,19 @@ pub async fn run_matrix_channel(
     #[cfg(feature = "channel-matrix")]
     {
         let context = load_matrix_command_context(config_path, account_id)?;
-        Box::pin(run_matrix_channel_with_context(
-            context,
-            once,
-            ChannelServeStopHandle::new(),
-            true,
-        ))
-        .await
+        run_matrix_channel_with_context(context, once, ChannelServeStopHandle::new(), true).await
     }
 }
 
 #[cfg(feature = "channel-matrix")]
 #[allow(clippy::print_stdout)]
-fn run_matrix_channel_with_context(
+async fn run_matrix_channel_with_context(
     context: ChannelCommandContext<ResolvedMatrixChannelConfig>,
     once: bool,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    Box::pin(run_channel_serve_command_with_stop(
+) -> CliResult<()> {
+    run_channel_serve_command_with_stop(
         context,
         ChannelServeCommandSpec {
             family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
@@ -2652,13 +2715,16 @@ fn run_matrix_channel_with_context(
                             let config = config.clone();
                             let kernel_ctx = batch_kernel_ctx.clone();
                             let resolved_path = resolved_path.clone();
-                            process_inbound_with_provider_future(
-                                config,
-                                resolved_path,
-                                message,
-                                kernel_ctx,
-                                turn_feedback_policy,
-                            )
+                            Box::pin(async move {
+                                process_inbound_with_provider(
+                                    &config,
+                                    Some(resolved_path.as_path()),
+                                    &message,
+                                    kernel_ctx.as_ref(),
+                                    turn_feedback_policy,
+                                )
+                                .await
+                            })
                         },
                     )
                     .await?;
@@ -2672,23 +2738,21 @@ fn run_matrix_channel_with_context(
                 Ok(())
             })
         },
-    ))
+    )
+    .await
 }
 
 #[cfg(feature = "channel-matrix")]
-pub fn run_matrix_channel_with_stop(
+pub async fn run_matrix_channel_with_stop(
     resolved_path: PathBuf,
     config: LoongConfig,
     once: bool,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    let account_id = account_id.map(str::to_owned);
-    Box::pin(async move {
-        let context = build_matrix_command_context(resolved_path, config, account_id.as_deref())?;
-        run_matrix_channel_with_context(context, once, stop, initialize_runtime_environment).await
-    })
+) -> CliResult<()> {
+    let context = build_matrix_command_context(resolved_path, config, account_id)?;
+    run_matrix_channel_with_context(context, once, stop, initialize_runtime_environment).await
 }
 
 #[allow(clippy::print_stdout)]
@@ -2764,22 +2828,17 @@ pub async fn run_wecom_channel(
     #[cfg(feature = "channel-wecom")]
     {
         let context = load_wecom_command_context(config_path, account_id)?;
-        Box::pin(run_wecom_channel_with_context(
-            context,
-            ChannelServeStopHandle::new(),
-            true,
-        ))
-        .await
+        run_wecom_channel_with_context(context, ChannelServeStopHandle::new(), true).await
     }
 }
 
 #[cfg(feature = "channel-wecom")]
-fn run_wecom_channel_with_context(
+async fn run_wecom_channel_with_context(
     context: ChannelCommandContext<ResolvedWecomChannelConfig>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    Box::pin(run_channel_serve_command_with_stop(
+) -> CliResult<()> {
+    run_channel_serve_command_with_stop(
         context,
         ChannelServeCommandSpec {
             family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
@@ -2793,7 +2852,7 @@ fn run_wecom_channel_with_context(
                 let resolved_path = context.resolved_path.clone();
                 let resolved = context.resolved.clone();
                 let config = context.config.clone();
-                Box::pin(wecom::run_wecom_channel(
+                wecom::run_wecom_channel(
                     &config,
                     &resolved,
                     &resolved_path,
@@ -2802,57 +2861,47 @@ fn run_wecom_channel_with_context(
                     kernel_ctx,
                     runtime,
                     stop,
-                ))
+                )
                 .await
             })
         },
-    ))
+    )
+    .await
 }
 
 #[cfg(feature = "channel-wecom")]
-pub fn run_wecom_channel_with_stop(
+pub async fn run_wecom_channel_with_stop(
     resolved_path: PathBuf,
     config: LoongConfig,
     account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
-    let account_id = account_id.map(str::to_owned);
-    Box::pin(async move {
-        let context = build_wecom_command_context(resolved_path, config, account_id.as_deref())?;
-        run_wecom_channel_with_context(context, stop, initialize_runtime_environment).await
-    })
+) -> CliResult<()> {
+    let context = build_wecom_command_context(resolved_path, config, account_id)?;
+    run_wecom_channel_with_context(context, stop, initialize_runtime_environment).await
 }
 
-/// Keep this as a plain dispatcher that returns boxed per-channel futures.
-///
-/// A monolithic `async fn` match across every compiled background channel can
-/// produce one very large debug-only state machine. Returning boxed branch
-/// futures keeps the dispatch frame shallow and prevents multi-channel serve
-/// startup from consuming excessive Tokio worker stack.
-pub fn run_background_channel_with_stop(
+pub async fn run_background_channel_with_stop(
     channel_id: &str,
     resolved_path: PathBuf,
     config: LoongConfig,
-    account_id: Option<String>,
+    account_id: Option<&str>,
     stop: ChannelServeStopHandle,
     initialize_runtime_environment: bool,
-) -> crate::channel::core::types::ChannelCommandFuture<'static> {
+) -> CliResult<()> {
     match channel_id {
         "telegram" => {
             #[cfg(feature = "channel-telegram")]
             {
-                Box::pin(async move {
-                    run_telegram_channel_with_stop(
-                        resolved_path,
-                        config,
-                        false,
-                        account_id.as_deref(),
-                        stop,
-                        initialize_runtime_environment,
-                    )
-                    .await
-                })
+                return run_telegram_channel_with_stop(
+                    resolved_path,
+                    config,
+                    false,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
             }
             #[cfg(not(feature = "channel-telegram"))]
             {
@@ -2863,29 +2912,24 @@ pub fn run_background_channel_with_stop(
                     stop,
                     initialize_runtime_environment,
                 );
-                Box::pin(async {
-                    Err(
-                        "telegram channel is disabled (enable feature `channel-telegram`)"
-                            .to_owned(),
-                    )
-                })
+                return Err(
+                    "telegram channel is disabled (enable feature `channel-telegram`)".to_owned(),
+                );
             }
         }
         "feishu" => {
             #[cfg(feature = "channel-feishu")]
             {
-                Box::pin(async move {
-                    run_feishu_channel_with_stop(
-                        resolved_path,
-                        config,
-                        account_id.as_deref(),
-                        None,
-                        None,
-                        stop,
-                        initialize_runtime_environment,
-                    )
-                    .await
-                })
+                return run_feishu_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    None,
+                    None,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
             }
             #[cfg(not(feature = "channel-feishu"))]
             {
@@ -2896,25 +2940,23 @@ pub fn run_background_channel_with_stop(
                     stop,
                     initialize_runtime_environment,
                 );
-                Box::pin(async {
-                    Err("feishu channel is disabled (enable feature `channel-feishu`)".to_owned())
-                })
+                return Err(
+                    "feishu channel is disabled (enable feature `channel-feishu`)".to_owned(),
+                );
             }
         }
         "matrix" => {
             #[cfg(feature = "channel-matrix")]
             {
-                Box::pin(async move {
-                    run_matrix_channel_with_stop(
-                        resolved_path,
-                        config,
-                        false,
-                        account_id.as_deref(),
-                        stop,
-                        initialize_runtime_environment,
-                    )
-                    .await
-                })
+                return run_matrix_channel_with_stop(
+                    resolved_path,
+                    config,
+                    false,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
             }
             #[cfg(not(feature = "channel-matrix"))]
             {
@@ -2925,24 +2967,22 @@ pub fn run_background_channel_with_stop(
                     stop,
                     initialize_runtime_environment,
                 );
-                Box::pin(async {
-                    Err("matrix channel is disabled (enable feature `channel-matrix`)".to_owned())
-                })
+                return Err(
+                    "matrix channel is disabled (enable feature `channel-matrix`)".to_owned(),
+                );
             }
         }
         "wecom" => {
             #[cfg(feature = "channel-wecom")]
             {
-                Box::pin(async move {
-                    run_wecom_channel_with_stop(
-                        resolved_path,
-                        config,
-                        account_id.as_deref(),
-                        stop,
-                        initialize_runtime_environment,
-                    )
-                    .await
-                })
+                return run_wecom_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
             }
             #[cfg(not(feature = "channel-wecom"))]
             {
@@ -2953,24 +2993,20 @@ pub fn run_background_channel_with_stop(
                     stop,
                     initialize_runtime_environment,
                 );
-                Box::pin(async {
-                    Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned())
-                })
+                return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
             }
         }
         "whatsapp" => {
             #[cfg(feature = "channel-whatsapp")]
             {
-                Box::pin(async move {
-                    run_whatsapp_channel_with_stop(
-                        resolved_path,
-                        config,
-                        account_id.as_deref(),
-                        stop,
-                        initialize_runtime_environment,
-                    )
-                    .await
-                })
+                return run_whatsapp_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
             }
             #[cfg(not(feature = "channel-whatsapp"))]
             {
@@ -2981,26 +3017,41 @@ pub fn run_background_channel_with_stop(
                     stop,
                     initialize_runtime_environment,
                 );
-                Box::pin(async {
-                    Err(
-                        "whatsapp channel is disabled (enable feature `channel-whatsapp`)"
-                            .to_owned(),
-                    )
-                })
+                return Err(
+                    "whatsapp channel is disabled (enable feature `channel-whatsapp`)".to_owned(),
+                );
             }
         }
-        _ => {
-            let unsupported_channel_id = channel_id.to_owned();
-            Box::pin(async move {
-                Err(format!(
-                    "unsupported background channel `{unsupported_channel_id}`"
-                ))
-            })
+        "qqbot" => {
+            #[cfg(feature = "channel-qqbot")]
+            {
+                return crate::channel::qqbot::run_qqbot_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-qqbot"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err("qqbot channel is disabled (enable feature `channel-qqbot`)".to_owned());
+            }
         }
+        _ => Err(format!("unsupported background channel `{channel_id}`")),
     }
 }
 
 #[cfg(any(
+    feature = "channel-plugin-bridge",
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-line",
@@ -3089,10 +3140,11 @@ pub(crate) async fn send_text_to_known_session(
                             .to_owned(),
                     );
                 }
-                if !crate::channel::feishu::feishu_allowlist_allows_chat(
-                    &resolved.allowed_chat_ids,
-                    &conversation_id,
-                ) {
+                let target_allowed = crate::channel::feishu::feishu_allowlist_allows_chat(
+                    resolved.allowed_chat_ids.iter(),
+                    conversation_id.as_str(),
+                );
+                if !target_allowed {
                     return Err(format!(
                         "sessions_send_target_not_allowed: feishu target `{conversation_id}` is not present in feishu.allowed_chat_ids"
                     ));
@@ -3315,12 +3367,56 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
 ))]
-#[cfg_attr(not(test), allow(dead_code))]
-pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
+struct PreparedChannelInboundTurn {
+    address: ConversationSessionAddress,
+    acp_turn_hints: ChannelResolvedAcpTurnHints,
+    ingress: Option<ConversationIngressContext>,
+    feedback_capture: ChannelTurnFeedbackCapture,
+}
+
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+fn prepare_channel_inbound_turn(
+    config: &LoongConfig,
+    message: &ChannelInboundMessage,
+    feedback_policy: ChannelTurnFeedbackPolicy,
+) -> CliResult<PreparedChannelInboundTurn> {
+    let address = message.session.conversation_address();
+    let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
+    let ingress = channel_message_ingress_context(message);
+    let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
+
+    Ok(PreparedChannelInboundTurn {
+        address,
+        acp_turn_hints,
+        ingress,
+        feedback_capture,
+    })
+}
+
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+#[cfg(test)]
+pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
     message: &ChannelInboundMessage,
@@ -3345,10 +3441,12 @@ pub async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + 
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
 ))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     R: ConversationRuntime + ?Sized,
 >(
@@ -3360,17 +3458,18 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<String> {
-    let address = message.session.conversation_address();
-    let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
+    let prepared = prepare_channel_inbound_turn(config, message, feedback_policy)?;
+    let address = prepared.address;
+    let acp_turn_hints = prepared.acp_turn_hints;
+    let ingress = prepared.ingress;
+    let feedback_capture = prepared.feedback_capture;
     let acp_options = AcpConversationTurnOptions::automatic()
         .with_additional_bootstrap_mcp_servers(&acp_turn_hints.bootstrap_mcp_servers)
         .with_working_directory(acp_turn_hints.working_directory.as_deref())
         .with_provenance(channel_message_acp_turn_provenance(message));
-    let ingress = channel_message_ingress_context(message);
-    let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
     let observer = feedback_capture.observer_handle();
     let reply = ConversationTurnCoordinator::new()
-        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+        .handle_production_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
             config,
             &address,
             &message.text,
@@ -3381,6 +3480,7 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
             ingress.as_ref(),
             observer,
             retry_progress,
+            None,
         )
         .await?;
     Ok(feedback_capture.render_reply(reply))
@@ -3392,10 +3492,19 @@ pub async fn process_inbound_with_runtime_and_feedback_and_error_mode<
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
 ))]
+/// Bridge an inbound channel message into the shared chat/provider turn
+/// runtime.
+///
+/// Unlike the CLI entrypoints, channel surfaces already own the surrounding
+/// kernel authority for the serve loop. This helper therefore reloads
+/// provider-facing config, derives channel-specific ACP hints, reuses the
+/// supplied `kernel_ctx`, and assembles a one-shot chat runtime around the
+/// channel session address before handing execution to `AgentRuntime`.
 pub async fn process_inbound_with_provider(
     config: &LoongConfig,
     resolved_path: Option<&std::path::Path>,
@@ -3421,6 +3530,7 @@ pub async fn process_inbound_with_provider(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3452,6 +3562,7 @@ pub async fn process_inbound_with_provider_and_error_mode_and_retry_progress(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3467,21 +3578,47 @@ pub async fn process_inbound_with_provider_and_error_mode(
 ) -> CliResult<String> {
     let started_at = std::time::Instant::now();
     let result = match reload_channel_turn_config(config, resolved_path) {
-        Ok(turn_config) => match DefaultConversationRuntime::from_config_or_env(&turn_config) {
-            Ok(runtime) => {
-                Box::pin(process_inbound_with_runtime_and_feedback_and_error_mode(
-                    &turn_config,
-                    &runtime,
-                    message,
-                    ConversationRuntimeBinding::kernel(kernel_ctx),
-                    feedback_policy,
-                    error_mode,
-                    retry_progress,
-                ))
-                .await
-            }
-            Err(error) => Err(error),
-        },
+        Ok(turn_config) => {
+            let prepared = prepare_channel_inbound_turn(&turn_config, message, feedback_policy)?;
+            let address = prepared.address;
+            let acp_turn_hints = prepared.acp_turn_hints;
+            let ingress = prepared.ingress;
+            let feedback_capture = prepared.feedback_capture;
+            let request = crate::agent_runtime::AgentTurnRequest {
+                message: message.text.clone(),
+                turn_mode: crate::agent_runtime::AgentTurnMode::Oneshot,
+                channel_id: address.channel_id.clone(),
+                account_id: address.account_id.clone(),
+                conversation_id: address.conversation_id.clone(),
+                participant_id: address.participant_id.clone(),
+                thread_id: address.thread_id.clone(),
+                acp_bootstrap_mcp_servers: acp_turn_hints.bootstrap_mcp_servers.clone(),
+                acp_cwd: acp_turn_hints
+                    .working_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                ..Default::default()
+            };
+            let resolved_turn_path = resolved_path
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default();
+            let observer = feedback_capture.observer_handle();
+            let turn_service =
+                crate::agent_runtime::TurnExecutionService::new(resolved_turn_path, turn_config)
+                    .with_kernel_ctx(kernel_ctx.clone());
+            let turn_options = crate::agent_runtime::TurnExecutionOptions {
+                observer,
+                ingress: ingress.as_ref(),
+                provenance: channel_message_acp_turn_provenance(message),
+                provider_error_mode: error_mode,
+                retry_progress,
+                ..Default::default()
+            };
+            let result = turn_service
+                .execute(Some(address.session_id.as_str()), &request, turn_options)
+                .await?;
+            Ok(feedback_capture.render_reply(result.output_text))
+        }
         Err(error) => Err(error),
     };
     let duration_ms = started_at.elapsed().as_millis();
@@ -3573,11 +3710,12 @@ pub async fn process_inbound_with_provider_and_error_mode(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
 ))]
-pub fn reload_channel_turn_config(
+pub(super) fn reload_channel_turn_config(
     config: &LoongConfig,
     resolved_path: Option<&std::path::Path>,
 ) -> CliResult<LoongConfig> {
@@ -3593,6 +3731,7 @@ pub fn reload_channel_turn_config(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3663,6 +3802,7 @@ fn resolve_channel_acp_turn_hints(
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3682,6 +3822,7 @@ fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTu
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-nextcloud-talk",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3742,6 +3883,7 @@ pub(super) fn channel_message_ingress_context(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3759,6 +3901,7 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3785,6 +3928,7 @@ fn normalized_channel_delivery_resource(
     feature = "channel-feishu",
     feature = "channel-line",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-webhook"
@@ -3815,7 +3959,12 @@ fn normalized_feishu_callback_context(
 pub(super) fn validate_telegram_security_config(
     config: &ResolvedTelegramChannelConfig,
 ) -> CliResult<()> {
-    if config.allowed_chat_ids.is_empty() {
+    let access_policy = ChannelInboundAccessPolicy::from_i64_lists(
+        config.allowed_chat_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
+    if !has_allowlist {
         return Err(
             "telegram.allowed_chat_ids is empty; configure at least one trusted chat id".to_owned(),
         );
@@ -3827,10 +3976,12 @@ pub(super) fn validate_telegram_security_config(
 pub(super) fn validate_feishu_security_config(
     config: &ResolvedFeishuChannelConfig,
 ) -> CliResult<()> {
-    let has_allowlist = config
-        .allowed_chat_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        config.allowed_chat_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+        true,
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         return Err(
             "feishu.allowed_chat_ids is empty; configure at least one trusted chat id".to_owned(),
@@ -3867,10 +4018,12 @@ pub(super) fn validate_feishu_security_config(
 pub(super) fn validate_matrix_security_config(
     config: &ResolvedMatrixChannelConfig,
 ) -> CliResult<()> {
-    let has_allowlist = config
-        .allowed_room_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        config.allowed_room_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+        false,
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         return Err(
             "matrix.allowed_room_ids is empty; configure at least one trusted room id".to_owned(),
@@ -3901,16 +4054,24 @@ pub(super) fn validate_matrix_security_config(
                 .to_owned(),
         );
     }
+    if config.require_mention && !has_user_id {
+        return Err(
+            "matrix.user_id is missing; configure user_id when require_mention is enabled"
+                .to_owned(),
+        );
+    }
 
     Ok(())
 }
 
 #[cfg(feature = "channel-wecom")]
 pub(super) fn validate_wecom_security_config(config: &ResolvedWecomChannelConfig) -> CliResult<()> {
-    let has_allowlist = config
-        .allowed_conversation_ids
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let access_policy = ChannelInboundAccessPolicy::from_string_lists(
+        config.allowed_conversation_ids.as_slice(),
+        config.allowed_sender_ids.as_slice(),
+        false,
+    );
+    let has_allowlist = access_policy.has_conversation_restrictions();
     if !has_allowlist {
         return Err(
             "wecom.allowed_conversation_ids is empty; configure at least one trusted conversation id"
@@ -3978,28 +4139,5 @@ mod tests {
             !result,
             "non-matched chat_id should be rejected without wildcard"
         );
-    }
-}
-
-#[cfg(test)]
-mod background_dispatch_tests {
-    use super::run_background_channel_with_stop;
-    use crate::{channel::ChannelServeStopHandle, config::LoongConfig};
-    use std::path::PathBuf;
-
-    #[tokio::test]
-    async fn run_background_channel_with_stop_rejects_unknown_channel() {
-        let error = run_background_channel_with_stop(
-            "unknown",
-            PathBuf::from("/tmp/loong-channel-unknown.toml"),
-            LoongConfig::default(),
-            Some("account-1".to_owned()),
-            ChannelServeStopHandle::new(),
-            false,
-        )
-        .await
-        .expect_err("unknown channel should fail");
-
-        assert_eq!(error, "unsupported background channel `unknown`");
     }
 }

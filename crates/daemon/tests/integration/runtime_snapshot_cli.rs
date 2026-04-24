@@ -308,6 +308,12 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
     assert!(payload["provider"]["transport_runtime"]["http_client_cache_hits"].is_number());
     assert!(payload["provider"]["transport_runtime"]["http_client_cache_misses"].is_number());
     assert!(payload["provider"]["transport_runtime"]["built_http_clients"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["failover_total_events"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["failover_continued_events"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["failover_exhausted_events"].is_number());
+    assert!(payload["provider"]["transport_runtime"]["failover_by_reason"].is_object());
+    assert!(payload["provider"]["transport_runtime"]["failover_by_stage"].is_object());
+    assert!(payload["provider"]["transport_runtime"]["failover_by_provider"].is_object());
     assert!(array_contains_string(
         &payload["tools"]["visible_tool_names"],
         "external_skills.list"
@@ -600,7 +606,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("outbound_only_enabled=-"));
     assert!(
         rendered.contains(
-            "surfaces=28 runtime_backed=7 config_backed=15 plugin_backed=3 catalog_only=3"
+            "surfaces=28 runtime_backed=8 config_backed=15 plugin_backed=2 catalog_only=3"
         )
     );
     assert!(rendered.contains("acp_mcp docs status=pending"));

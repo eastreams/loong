@@ -5,7 +5,7 @@ description: Configure the LINE channel surface in Loong.
 
 # LINE
 
-This is a shipped standalone native-serve surface: direct sends are implemented, the signed webhook reply loop is implemented, and the runtime stays on `line-serve` instead of `gateway run` today.
+This is a shipped standalone native-serve surface: direct sends are implemented, the signed webhook reply loop is implemented, and the runtime stays on `channels serve line` instead of `gateway run` today.
 
 ## At A Glance
 
@@ -30,16 +30,16 @@ channel_secret_env = "LINE_CHANNEL_SECRET"
 ## Smoke Test
 
 ```bash
-loong line-send --target "U4af4980629..." --text "hello from loong"
-loong line-serve --bind 127.0.0.1:6401
+loong channels send line --target "U4af4980629..." --text "hello from loong"
+loong channels serve line --bind 127.0.0.1:6401
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| push send | `line-send` | Usage: loong line-send [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
-| webhook reply loop | `line-serve` | Usage: loong line-serve --bind &lt;HOST:PORT&gt; [--path &lt;PATH&gt;] |
+| push send | `channels send line` | Usage: loong channels send line [OPTIONS] --target &lt;TARGET&gt; --text &lt;TEXT&gt; |
+| webhook reply loop | `channels serve line` | Usage: loong channels serve line --bind &lt;HOST:PORT&gt; [--path &lt;PATH&gt;] |
 
 ## Required Fields For Send
 
@@ -58,11 +58,11 @@ loong line-serve --bind 127.0.0.1:6401
 
 ## Gateway And Ownership
 
-This surface ships a real built-in serve loop, but it remains a standalone native-serve lane today. Use `line-serve` directly; it does not join `multi-channel-serve` or the gateway-owned reply-loop contract yet.
+This surface ships a real built-in serve loop, but it remains a standalone native-serve lane today. Use `channels serve line` directly; it does not join `gateway run` or the gateway-owned reply-loop contract yet.
 
 ## Operator Notes
 
-- `line-serve` requires `--bind` because the local listener address stays an explicit operator decision.
+- `channels serve line` requires `--bind` because the local listener address stays an explicit operator decision.
 - `--path` is optional when the default webhook path already matches the LINE console setup.
 - Treat this as a native serve lane, not as an outbound-only sink.
 

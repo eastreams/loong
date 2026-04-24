@@ -5,7 +5,7 @@ description: Configure the Webhook channel surface in Loong.
 
 # Webhook
 
-This is a shipped standalone native-serve surface: outbound POST delivery is implemented, the signed inbound webhook service is implemented, and the runtime stays on `webhook-serve` instead of gateway supervision today.
+This is a shipped standalone native-serve surface: outbound POST delivery is implemented, the signed inbound webhook service is implemented, and the runtime stays on `channels serve webhook` instead of gateway supervision today.
 
 ## At A Glance
 
@@ -32,16 +32,16 @@ signing_secret_env = "WEBHOOK_SIGNING_SECRET"
 ## Smoke Test
 
 ```bash
-loong webhook-send --text "hello from loong"
-loong webhook-serve --bind 127.0.0.1:7401
+loong channels send webhook --text "hello from loong"
+loong channels serve webhook --bind 127.0.0.1:7401
 ```
 
 ## Command Surface
 
 | Operation | Command | Usage or status |
 | --- | --- | --- |
-| http post send | `webhook-send` | Usage: loong webhook-send [OPTIONS] --text &lt;TEXT&gt; |
-| inbound webhook service | `webhook-serve` | Usage: loong webhook-serve --bind &lt;HOST:PORT&gt; [--path &lt;PATH&gt;] |
+| http post send | `channels send webhook` | Usage: loong channels send webhook [OPTIONS] --text &lt;TEXT&gt; |
+| inbound webhook service | `channels serve webhook` | Usage: loong channels serve webhook --bind &lt;HOST:PORT&gt; [--path &lt;PATH&gt;] |
 
 ## Required Fields For Send
 
@@ -59,11 +59,11 @@ loong webhook-serve --bind 127.0.0.1:7401
 
 ## Gateway And Ownership
 
-This surface ships a real built-in inbound service, but it remains a standalone native-serve lane today. Use `webhook-serve` directly; it does not join `multi-channel-serve` or the gateway-owned reply-loop contract yet.
+This surface ships a real built-in inbound service, but it remains a standalone native-serve lane today. Use `channels serve webhook` directly; it does not join `gateway run` or the gateway-owned reply-loop contract yet.
 
 ## Operator Notes
 
-- `webhook-serve` requires `--bind` because the local listener address stays operator-owned instead of coming from static config.
+- `channels serve webhook` requires `--bind` because the local listener address stays operator-owned instead of coming from static config.
 - Use `[outbound_http] allow_private_hosts = true` when you intentionally post to a loopback or private bridge endpoint.
 - Treat this as a native serve lane, not as an outbound-only sink.
 

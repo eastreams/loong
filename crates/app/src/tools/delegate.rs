@@ -216,12 +216,23 @@ pub(crate) fn delegate_async_queued_outcome(
     profile: Option<DelegateBuiltinProfile>,
     timeout_seconds: u64,
 ) -> ToolCoreOutcome {
+    let recommended_payload = json!({
+        "session_id": child_session_id,
+        "timeout_ms": timeout_seconds.saturating_mul(1_000),
+    });
     let mut payload = json!({
         "child_session_id": child_session_id,
         "label": label,
         "mode": "async",
         "state": "queued",
         "timeout_seconds": timeout_seconds,
+        "continuation": {
+            "state": "queued",
+            "is_terminal": false,
+            "recommended_tool": "session_wait",
+            "recommended_payload": recommended_payload,
+            "note": "This queued delegate child is still running in the background. Wait for the child result before presenting final completion if the original request depends on it."
+        }
     });
     if let Some(profile) = profile
         && let Some(object) = payload.as_object_mut()
@@ -519,6 +530,29 @@ mod tests {
         .expect_err("invalid timeout should be rejected");
 
         assert!(error.contains("invalid_timeout_seconds"), "error: {error}");
+    }
+
+    #[test]
+    fn delegate_async_queued_outcome_exposes_generic_continuation_metadata() {
+        let outcome = delegate_async_queued_outcome(
+            "delegate:child-1".to_owned(),
+            None,
+            Some("research-child".to_owned()),
+            None,
+            30,
+        );
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["continuation"]["state"], "queued");
+        assert_eq!(outcome.payload["continuation"]["is_terminal"], false);
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_tool"],
+            "session_wait"
+        );
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["session_id"],
+            "delegate:child-1"
+        );
     }
 
     #[test]

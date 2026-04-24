@@ -3323,6 +3323,12 @@ fn provider_failover_audit_event_records_structured_payload() {
         attempt: 2,
         max_attempts: 3,
         status_code: Some(429),
+        response_debug_context: Some(crate::provider::ProviderResponseDebugContext {
+            request_id: Some("req-provider-1".to_owned()),
+            cf_ray: Some("ray-provider-1".to_owned()),
+            auth_error: None,
+            auth_error_code: Some("token_expired".to_owned()),
+        }),
     };
     let provider = ProviderConfig {
         kind: ProviderKind::KimiCoding,
@@ -3353,6 +3359,10 @@ fn provider_failover_audit_event_records_structured_payload() {
                 attempt,
                 max_attempts,
                 status_code,
+                request_id,
+                cf_ray,
+                auth_error,
+                auth_error_code,
                 try_next_model,
                 auto_model_mode,
                 candidate_index,
@@ -3368,6 +3378,10 @@ fn provider_failover_audit_event_records_structured_payload() {
                     attempt,
                     max_attempts,
                     status_code,
+                    request_id,
+                    cf_ray,
+                    auth_error,
+                    auth_error_code,
                     try_next_model,
                     auto_model_mode,
                     candidate_index,
@@ -3387,10 +3401,14 @@ fn provider_failover_audit_event_records_structured_payload() {
     assert_eq!(failover_event.5, 2);
     assert_eq!(failover_event.6, 3);
     assert_eq!(failover_event.7, Some(429));
-    assert!(failover_event.8);
-    assert!(failover_event.9);
-    assert_eq!(failover_event.10, 1);
-    assert_eq!(failover_event.11, 4);
+    assert_eq!(failover_event.8.as_deref(), Some("req-provider-1"));
+    assert_eq!(failover_event.9.as_deref(), Some("ray-provider-1"));
+    assert!(failover_event.10.is_none());
+    assert_eq!(failover_event.11.as_deref(), Some("token_expired"));
+    assert!(failover_event.12);
+    assert!(failover_event.13);
+    assert_eq!(failover_event.14, 1);
+    assert_eq!(failover_event.15, 4);
 }
 
 #[test]
@@ -3403,6 +3421,7 @@ fn provider_failover_audit_event_is_noop_without_kernel_context() {
         attempt: 1,
         max_attempts: 3,
         status_code: None,
+        response_debug_context: None,
     };
     let provider = ProviderConfig::default();
     let before = audit.snapshot().len();
@@ -3432,6 +3451,7 @@ fn provider_failover_metrics_record_even_without_kernel_context() {
         attempt: 1,
         max_attempts: 3,
         status_code: None,
+        response_debug_context: None,
     };
     let provider = ProviderConfig::default();
 
@@ -3487,6 +3507,7 @@ fn provider_failover_metrics_track_continue_path() {
         attempt: 2,
         max_attempts: 4,
         status_code: Some(429),
+        response_debug_context: None,
     };
     let provider = ProviderConfig {
         kind: ProviderKind::KimiCoding,

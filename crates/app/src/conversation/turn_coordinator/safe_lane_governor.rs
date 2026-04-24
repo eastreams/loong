@@ -1,5 +1,4 @@
 use super::*;
-use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct SafeLaneAdaptiveVerifyPolicyState {
@@ -414,7 +413,8 @@ pub(super) async fn load_safe_lane_history_signals_for_governor(
         .safe_lane_session_governor_window_turns();
     #[cfg(feature = "memory-sqlite")]
     {
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
         return match load_assistant_contents_from_session_window_detailed(
             session_id,
             window_turns,

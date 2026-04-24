@@ -32,6 +32,8 @@ mod nextcloud_talk;
 mod nostr;
 #[cfg(feature = "channel-plugin-bridge")]
 mod plugin_bridge_runtime;
+#[cfg(feature = "channel-qqbot")]
+mod qqbot;
 mod registry;
 mod runtime;
 pub(crate) mod sdk;
@@ -177,6 +179,7 @@ pub use runtime::serve::ChannelServeStopHandle;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -190,6 +193,7 @@ pub use runtime::serve::{
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -209,6 +213,7 @@ use commands::context::render_channel_route_notice;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
@@ -217,6 +222,7 @@ pub use dispatch::process_inbound_with_provider;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
@@ -261,8 +267,8 @@ pub use dispatch::{
     run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
     run_google_chat_send, run_imessage_send, run_irc_send, run_line_channel, run_line_send,
     run_matrix_channel, run_matrix_send, run_mattermost_send, run_nextcloud_talk_send,
-    run_nostr_send, run_signal_send, run_slack_send, run_synology_chat_send, run_teams_send,
-    run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
+    run_nostr_send, run_qqbot_channel, run_signal_send, run_slack_send, run_synology_chat_send,
+    run_teams_send, run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
     run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
 };
 #[cfg(test)]

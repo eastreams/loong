@@ -57,11 +57,11 @@ After each provider edit, use the same short verification loop:
 
 ```bash
 loong doctor
-loong list-models
+loong runtime models list
 loong ask --message "Say hello and summarize the active provider setup."
 ```
 
-If `list-models` fails but chat still works, that is usually a signal to pin
+If `runtime models list` fails but chat still works, that is usually a signal to pin
 `provider.model`, add `preferred_models`, or fix the provider route rather than
 pretending discovery is always available.
 
@@ -128,7 +128,7 @@ Use this when:
 What to do next:
 
 1. Run `loong doctor` to verify credentials and route health.
-2. Run `loong list-models` once credentials are healthy.
+2. Run `loong runtime models list` once credentials are healthy.
 3. Keep `model = "auto"` during first setup, then pin an explicit model if you want deterministic behavior.
 
 Operational notes:
@@ -372,7 +372,7 @@ Region note:
 
 | Symptom | What to do |
 | --- | --- |
-| credentials look healthy, but `list-models` fails while config still uses `model = "auto"` | rerun onboarding and accept a reviewed model when available, or set `provider.model` / `preferred_models` explicitly |
+| credentials look healthy, but `runtime models list` fails while config still uses `model = "auto"` | rerun onboarding and accept a reviewed model when available, or set `provider.model` / `preferred_models` explicitly |
 | auth failures show up only on some region-sensitive providers | verify `base_url`, `endpoint`, and `models_endpoint` all match the account region |
 | `volcengine_coding` or `byteplus_coding` was pointed at a generic `/api/v3` path | switch back to the dedicated coding kind and route pairing instead of patching around it with ad-hoc URL overrides |
 | a compatibility gateway answers chat requests but model discovery is broken | keep the gateway profile, pin `model`, and only keep `models_endpoint` when the endpoint is actually real |

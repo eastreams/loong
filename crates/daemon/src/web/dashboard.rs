@@ -21,7 +21,9 @@ pub(super) async fn dashboard_approvals(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<DashboardApprovalsPayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
-    let repo = mvp::session::repository::SessionRepository::new(&snapshot.memory_config)
+    let session_store_config =
+        mvp::session::store::SessionStoreConfig::from_memory_config(&snapshot.config.memory);
+    let repo = mvp::session::repository::SessionRepository::new(&session_store_config)
         .map_err(WebApiError::internal)?;
     let mut title_by_session_id = HashMap::new();
     let mut approvals = Vec::new();

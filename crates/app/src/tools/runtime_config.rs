@@ -747,7 +747,10 @@ impl ToolRuntimeConfig {
             .tools
             .configured_runtime_workspace_root()
             .or_else(|| file_root.clone());
-        let memory_system_selection = crate::memory::resolve_memory_system_selection(config);
+        // Tool runtime should reflect the provided config, not ambient
+        // `LOONG_MEMORY_SYSTEM` overrides that are meant for other entrypaths.
+        let memory_system_selection =
+            crate::memory::resolve_memory_system_selection_without_env(config);
         let selected_memory_system_id = memory_system_selection.id;
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
@@ -2237,6 +2240,8 @@ mod tests {
 
     #[test]
     fn tool_runtime_config_from_loong_config_keeps_file_root_unset_when_not_configured() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
         let config = crate::config::LoongConfig::default();
 
         let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
@@ -2246,6 +2251,23 @@ mod tests {
 
     #[test]
     fn memory_sqlite_path_uses_injected_config() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        let config = crate::config::LoongConfig::default();
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(
+            runtime.memory_sqlite_path,
+            Some(config.memory.resolved_sqlite_path())
+        );
+    }
+
+    #[test]
+    fn memory_sqlite_path_from_loong_config_ignores_env_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_SQLITE_PATH", "/tmp/env-tool-runtime-memory.sqlite3");
+
         let config = crate::config::LoongConfig::default();
         let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
@@ -2257,12 +2279,40 @@ mod tests {
 
     #[test]
     fn selected_memory_system_id_uses_injected_config() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
         let mut config = crate::config::LoongConfig::default();
         config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
 
         let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
 
         assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
+    fn selected_memory_system_id_from_loong_config_ignores_env_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "recall_first");
+
+        let mut config = crate::config::LoongConfig::default();
+        config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
+    fn selected_memory_system_id_supports_recall_first_from_config() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        let mut config = crate::config::LoongConfig::default();
+        config.memory.system = crate::config::MemorySystemKind::RecallFirst;
+
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert_eq!(runtime.selected_memory_system_id, "recall_first");
     }
 
     #[test]
@@ -2288,6 +2338,17 @@ mod tests {
         let runtime = ToolRuntimeConfig::from_env();
 
         assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
+    fn selected_memory_system_id_from_env_supports_recall_first() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "recall_first");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(runtime.selected_memory_system_id, "recall_first");
     }
 
     #[test]

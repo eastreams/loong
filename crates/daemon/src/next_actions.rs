@@ -1101,7 +1101,7 @@ mod tests {
             .find(|action| action.kind == SetupNextActionKind::Doctor)
             .expect("managed bridge doctor action");
 
-        assert_eq!(doctor_action.label, "verify managed bridges: weixin, qqbot");
+        assert_eq!(doctor_action.label, "verify weixin managed bridge");
         assert_eq!(
             doctor_action.command,
             "loong doctor --config '/tmp/loong.toml'"

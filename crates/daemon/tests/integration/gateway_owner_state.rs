@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 
 use std::{
@@ -33,6 +35,12 @@ type TestBackgroundChannelRunner =
     Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static>;
 
 const GATEWAY_OWNER_TEST_TIMEOUT: Duration = Duration::from_secs(2);
+const GATEWAY_OWNER_WAIT_ATTEMPTS: usize = 400;
+const GATEWAY_OWNER_WAIT_INTERVAL: Duration = Duration::from_millis(10);
+
+fn gateway_control_surface_test_lock() -> MutexGuard<'static, ()> {
+    lock_gateway_control_surface_tests()
+}
 
 fn boxed_cli_result(f: impl Future<Output = CliResult<()>> + Send + 'static) -> BoxedCliFuture {
     Box::pin(f)
@@ -58,8 +66,10 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
 
 fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongConfig::default();
+    config.gateway.port = 0;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
@@ -69,9 +79,11 @@ fn headless_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
 
 fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongConfig::default();
+    config.gateway.port = 0;
     config.telegram.enabled = true;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
         config,
@@ -80,8 +92,10 @@ fn telegram_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSuperv
 
 fn plugin_backed_loaded_config_fixture(runtime_dir: &std::path::Path) -> LoadedSupervisorConfig {
     let mut config = super::mixed_account_weixin_plugin_bridge_config();
+    config.gateway.port = 0;
     let sqlite_path = runtime_dir.join("gateway-owner-memory.sqlite3");
     config.memory.sqlite_path = sqlite_path.display().to_string();
+    config.gateway.port = 0;
 
     LoadedSupervisorConfig {
         resolved_path: runtime_dir.join("loong.toml"),
@@ -114,11 +128,11 @@ fn background_channel_runner_registry(
 }
 
 async fn wait_until(description: &str, predicate: impl Fn() -> bool) {
-    for _ in 0..200 {
+    for _ in 0..GATEWAY_OWNER_WAIT_ATTEMPTS {
         if predicate() {
             return;
         }
-        sleep(Duration::from_millis(5)).await;
+        sleep(GATEWAY_OWNER_WAIT_INTERVAL).await;
     }
 
     panic!("timed out waiting for {description}");
@@ -146,6 +160,7 @@ async fn wait_for_gateway_control_surface(
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("headless-stop");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -210,6 +225,7 @@ async fn gateway_owner_state_headless_run_claims_slot_and_stops_via_stop_request
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_rejects_second_active_owner_slot() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("exclusive-slot");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -283,6 +299,7 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("duplicate-start-pending-stop");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -359,6 +376,7 @@ async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_session() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("compat-wrapper");
     let telegram_runner = idle_background_channel_runner();
     let background_channel_runners = background_channel_runner_registry(vec![(
@@ -424,6 +442,7 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
 #[allow(clippy::await_holding_lock)]
 async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_runtime() {
     let _lock = lock_daemon_test_environment();
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("localhost-control");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -471,20 +490,31 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     let base_url = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::new();
 
-    let unauthorized_status_response = client
-        .get(format!("{base_url}/api/gateway/status"))
-        .send()
-        .await
-        .expect("send unauthorized gateway status request");
-    assert_eq!(
-        unauthorized_status_response.status(),
-        reqwest::StatusCode::UNAUTHORIZED
-    );
-    let unauthorized_status_json: Value = unauthorized_status_response
-        .json()
-        .await
-        .expect("decode unauthorized gateway status response");
-    assert_eq!(unauthorized_status_json["error"]["code"], "unauthorized");
+    for path in [
+        "/api/gateway/status",
+        "/api/gateway/channels",
+        "/api/gateway/runtime-snapshot",
+        "/api/gateway/operator-summary",
+        "/api/gateway/acp/sessions",
+        "/api/gateway/acp/observability",
+        "/api/gateway/acp/status?session=missing-session",
+    ] {
+        let response = client
+            .get(format!("{base_url}{path}"))
+            .send()
+            .await
+            .unwrap_or_else(|_| panic!("send unauthorized gateway request for {path}"));
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+        let response_json: Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| panic!("decode unauthorized gateway response for {path}"));
+        assert_eq!(response_json["error"]["code"], "unauthorized", "{path}");
+    }
 
     let authorized_status_response = client
         .get(format!("{base_url}/api/gateway/status"))
@@ -544,16 +574,6 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
         runtime_snapshot_json["tools"]["visible_tool_count"]
             .as_u64()
             .is_some()
-    );
-
-    let unauthorized_acp_sessions_response = client
-        .get(format!("{base_url}/api/gateway/acp/sessions"))
-        .send()
-        .await
-        .expect("send unauthorized gateway ACP sessions request");
-    assert_eq!(
-        unauthorized_acp_sessions_response.status(),
-        reqwest::StatusCode::UNAUTHORIZED
     );
 
     let authorized_acp_sessions_response = client
@@ -671,6 +691,21 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
         "invalid_selector"
     );
 
+    let unauthorized_stop_response = client
+        .post(format!("{base_url}/api/gateway/stop"))
+        .send()
+        .await
+        .expect("send unauthorized gateway stop request");
+    assert_eq!(
+        unauthorized_stop_response.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let unauthorized_stop_json: Value = unauthorized_stop_response
+        .json()
+        .await
+        .expect("decode unauthorized gateway stop response");
+    assert_eq!(unauthorized_stop_json["error"]["code"], "unauthorized");
+
     let stop_response = client
         .post(format!("{base_url}/api/gateway/stop"))
         .bearer_auth(token.as_str())
@@ -703,6 +738,7 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("turn-policy-disabled");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -775,6 +811,7 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
 
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stops_runtime() {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("local-client");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -883,6 +920,7 @@ async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stop
 #[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plugin_backed_parity()
 {
+    let _control_surface_lock = gateway_control_surface_test_lock();
     let runtime_dir = unique_runtime_dir("plugin-backed-parity");
     let hooks = SupervisorRuntimeHooks {
         load_config: Arc::new({
@@ -919,6 +957,7 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         .operator_summary()
         .await
         .expect("read gateway operator summary");
+    let nodes = client.nodes().await.expect("read gateway nodes");
     let channel_surfaces = channels["channel_surfaces"]
         .as_array()
         .expect("channel surfaces array");
@@ -959,6 +998,27 @@ async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plu
         weixin_operator_surface
             .plugin_bridge_account_summary
             .as_deref(),
+        Some(expected_summary)
+    );
+    assert_eq!(
+        operator_summary.nodes.paired_device_count,
+        nodes.summary.paired_device_count
+    );
+    assert_eq!(
+        operator_summary.nodes.managed_bridge_count,
+        nodes.summary.managed_bridge_count
+    );
+    assert_eq!(
+        operator_summary.nodes.total_count,
+        nodes.summary.total_count
+    );
+    let weixin_managed_bridge = nodes
+        .managed_bridges
+        .iter()
+        .find(|node| node.channel_id == "weixin")
+        .expect("weixin managed bridge node");
+    assert_eq!(
+        weixin_managed_bridge.account_summary.as_deref(),
         Some(expected_summary)
     );
 

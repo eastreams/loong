@@ -71,7 +71,7 @@ payload_text_field = "text"
 Smoke-test it:
 
 ```bash
-loong webhook-send --text "local-runtime smoke test"
+loong channels send webhook --text "local-runtime smoke test"
 ```
 
 Email example:
@@ -86,7 +86,7 @@ from_address = "loong@example.com"
 ```
 
 ```bash
-loong email-send --target "ops@example.com" --text $'Local run is healthy\nEverything is green.'
+loong channels send email --target "ops@example.com" --text $'Local run is healthy\nEverything is green.'
 ```
 
 ## Step 3: Keep The Boundary Truthful

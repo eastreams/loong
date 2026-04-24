@@ -337,6 +337,31 @@ impl SessionContext {
     }
 }
 
+fn configured_root_session_workspace_root(config: &LoongConfig) -> Option<PathBuf> {
+    config
+        .tools
+        .configured_runtime_workspace_root()
+        .or_else(|| config.tools.configured_file_root())
+        .and_then(|workspace_root| {
+            let canonical_workspace_root = dunce::canonicalize(&workspace_root).ok()?;
+            canonical_workspace_root
+                .is_dir()
+                .then_some(canonical_workspace_root)
+        })
+}
+
+fn root_session_context_from_config(
+    config: &LoongConfig,
+    session_id: impl Into<String>,
+    tool_view: ToolView,
+) -> SessionContext {
+    let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
+    if let Some(workspace_root) = configured_root_session_workspace_root(config) {
+        session_context = session_context.with_workspace_root(workspace_root);
+    }
+    session_context
+}
+
 fn non_empty_runtime_narrowing_ref(
     runtime_narrowing: Option<&ToolRuntimeNarrowing>,
 ) -> Option<&ToolRuntimeNarrowing> {
@@ -500,7 +525,8 @@ struct PersistedSessionSnapshot {
 
 #[cfg(feature = "memory-sqlite")]
 fn open_session_repository(config: &LoongConfig) -> CliResult<SessionRepository> {
-    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let memory_config =
+        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
     SessionRepository::new(&memory_config)
         .map_err(|error| format!("open session repository failed: {error}"))
 }
@@ -761,7 +787,7 @@ fn build_session_context_from_snapshot(
         Some(parent_session_id) => {
             SessionContext::child(snapshot.session_id.clone(), parent_session_id, tool_view)
         }
-        None => SessionContext::root_with_tool_view(snapshot.session_id.clone(), tool_view),
+        None => root_session_context_from_config(config, snapshot.session_id.clone(), tool_view),
     };
     if let Some(profile) = snapshot.delegate_profile {
         session_context = session_context.with_profile(profile);
@@ -827,6 +853,7 @@ pub struct AsyncDelegateSpawnRequest {
     pub child_session_id: String,
     pub parent_session_id: String,
     pub task: String,
+    pub canonical_task_id: Option<String>,
     pub label: Option<String>,
     pub profile: Option<DelegateBuiltinProfile>,
     pub execution: ConstrainedSubagentExecution,
@@ -854,6 +881,7 @@ pub fn async_delegate_spawn_request_from_serialized_parts(
     child_session_id: String,
     parent_session_id: String,
     task: String,
+    canonical_task_id: Option<String>,
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     execution: ConstrainedSubagentExecution,
@@ -869,6 +897,7 @@ pub fn async_delegate_spawn_request_from_serialized_parts(
         child_session_id,
         parent_session_id,
         task,
+        canonical_task_id,
         label,
         profile,
         execution,
@@ -918,6 +947,7 @@ pub async fn execute_async_delegate_spawn_request(
         child_session_id,
         parent_session_id,
         task,
+        canonical_task_id,
         label,
         profile,
         execution,
@@ -935,7 +965,8 @@ pub async fn execute_async_delegate_spawn_request(
         ));
     }
 
-    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let memory_config =
+        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
     let runtime = load_default_conversation_runtime(config)?;
     let runtime_ref = &runtime;
@@ -956,6 +987,8 @@ pub async fn execute_async_delegate_spawn_request(
                     label.as_deref(),
                     profile,
                     runtime_self_continuity.as_ref(),
+                    canonical_task_id.as_deref(),
+                    Some(child_session_id_for_spawn.as_str()),
                 );
             let transition_request = TransitionSessionWithEventIfCurrentRequest {
                 expected_state: SessionState::Ready,
@@ -1011,6 +1044,7 @@ pub type BoxedDefaultConversationRuntime =
 #[derive(Clone)]
 pub struct HostedConversationRuntime<R> {
     inner: R,
+    memory_config: store::SessionStoreConfig,
     async_delegate_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
     background_task_spawner_override: Option<Arc<dyn AsyncDelegateSpawner>>,
 }
@@ -1018,8 +1052,14 @@ pub struct HostedConversationRuntime<R> {
 #[cfg(feature = "memory-sqlite")]
 impl<R> HostedConversationRuntime<R> {
     pub fn new(inner: R) -> Self {
+        let memory_config = store::current_session_store_config().clone();
+        Self::new_with_memory_config(inner, memory_config)
+    }
+
+    pub fn new_with_memory_config(inner: R, memory_config: store::SessionStoreConfig) -> Self {
         Self {
             inner,
+            memory_config,
             async_delegate_spawner_override: None,
             background_task_spawner_override: None,
         }
@@ -1479,7 +1519,9 @@ pub fn load_hosted_default_conversation_runtime(
     config: &LoongConfig,
 ) -> CliResult<HostedConversationRuntime<BoxedDefaultConversationRuntime>> {
     let inner_runtime = load_default_conversation_runtime(config)?;
-    let runtime = HostedConversationRuntime::new(inner_runtime);
+    let memory_config =
+        store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
+    let runtime = HostedConversationRuntime::new_with_memory_config(inner_runtime, memory_config);
     Ok(runtime)
 }
 
@@ -1500,13 +1542,9 @@ pub trait ConversationRuntime: Send + Sync {
             return Ok(session_context);
         }
 
-        let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
-        let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
-        if !visible_external_skill_roots.is_empty() {
-            session_context =
-                session_context.with_visible_external_skill_roots(visible_external_skill_roots);
-        }
-        Ok(session_context)
+        Ok(root_session_context_from_config(
+            config, session_id, tool_view,
+        ))
     }
 
     fn tool_view(
@@ -1883,9 +1921,17 @@ where
         content: &str,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<()> {
-        self.inner
-            .persist_turn(session_id, role, content, binding)
-            .await
+        if binding.kernel_context().is_some() {
+            return self
+                .inner
+                .persist_turn(session_id, role, content, binding)
+                .await;
+        }
+
+        store::append_session_turn_direct(session_id, role, content, &self.memory_config)
+            .map_err(|error| format!("persist {role} turn failed: {error}"))?;
+
+        Ok(())
     }
 
     async fn after_turn(
@@ -1970,28 +2016,19 @@ where
                 );
             }
 
-            let visible_external_skill_roots =
-                model_visible_external_skill_roots_from_config(config);
-            let mut session_context =
-                SessionContext::root_with_tool_view(session_id, base_tool_view);
-            if !visible_external_skill_roots.is_empty() {
-                session_context =
-                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
-            }
-            Ok(session_context)
+            Ok(root_session_context_from_config(
+                config,
+                session_id,
+                base_tool_view,
+            ))
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
             let tool_view = self.tool_view(config, session_id, _binding)?;
-            let visible_external_skill_roots =
-                model_visible_external_skill_roots_from_config(config);
-            let mut session_context = SessionContext::root_with_tool_view(session_id, tool_view);
-            if !visible_external_skill_roots.is_empty() {
-                session_context =
-                    session_context.with_visible_external_skill_roots(visible_external_skill_roots);
-            }
-            Ok(session_context)
+            Ok(root_session_context_from_config(
+                config, session_id, tool_view,
+            ))
         }
     }
 
@@ -2435,8 +2472,6 @@ mod tests {
         ACTIVE_EXTERNAL_SKILLS_EVENT_KIND, ActiveExternalSkill, ActiveExternalSkillsState,
     };
     #[cfg(feature = "memory-sqlite")]
-    use crate::memory::runtime_config::MemoryRuntimeConfig;
-    #[cfg(feature = "memory-sqlite")]
     use crate::session::repository::{
         NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
     };
@@ -2765,6 +2800,48 @@ mod tests {
         assert!(background_task_spawner.is_none());
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_direct_binding() {
+        let root = unique_temp_dir("hosted-runtime-explicit-memory");
+        let sqlite_path = root.join("explicit-memory.db");
+        let memory_config =
+            crate::session::store::SessionStoreConfig::for_sqlite_path(sqlite_path.clone());
+        let session_id = "hosted-runtime-explicit-session";
+        let runtime = HostedConversationRuntime::new_with_memory_config(
+            SpawnerAwareRuntime {
+                async_delegate_spawner: None,
+                background_task_spawner: None,
+            },
+            memory_config.clone(),
+        );
+
+        crate::session::store::ensure_session_store_ready(Some(sqlite_path), &memory_config)
+            .expect("initialize explicit session store");
+
+        runtime
+            .persist_turn(
+                session_id,
+                "assistant",
+                "persist via explicit memory config",
+                ConversationRuntimeBinding::Direct,
+            )
+            .await
+            .expect("persist hosted runtime turn");
+
+        let turns = crate::session::store::window_session_turns(session_id, 8, &memory_config)
+            .expect("load persisted turns");
+        let persisted_turn = turns
+            .iter()
+            .find(|turn| {
+                turn.role == "assistant" && turn.content == "persist via explicit memory config"
+            })
+            .expect("persisted assistant turn");
+
+        assert_eq!(persisted_turn.role, "assistant");
+        assert_eq!(persisted_turn.content, "persist via explicit memory config");
+    }
+
     #[tokio::test]
     async fn default_runtime_build_context_rehydrates_active_external_skills() {
         let runtime = DefaultConversationRuntime::default();
@@ -2778,7 +2855,8 @@ mod tests {
         config.memory.sqlite_path = sqlite_path.display().to_string();
         config.tools.file_root = Some(workspace_root.display().to_string());
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         repo.create_session(NewSessionRecord {
             session_id: session_id.to_owned(),
@@ -2863,7 +2941,8 @@ mod tests {
             "default runtime should expose the direct web surface"
         );
 
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let memory_config =
+            crate::session::store::session_store_config_from_memory_config(&config.memory);
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         repo.create_session(NewSessionRecord {
             session_id: session_id.to_owned(),

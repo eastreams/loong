@@ -211,6 +211,10 @@ impl<R> AppToolDispatcher for CoordinatorAppToolDispatcher<'_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
+    fn memory_config(&self) -> Option<&crate::session::store::SessionStoreConfig> {
+        self.fallback.memory_config()
+    }
+
     async fn preflight_tool_intent_with_binding(
         &self,
         session_context: &SessionContext,

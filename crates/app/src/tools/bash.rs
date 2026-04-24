@@ -252,10 +252,12 @@ mod tests {
     };
     use loong_contracts::ToolCoreRequest;
     use serde_json::json;
+    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{Arc, Mutex};
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     #[derive(Default)]

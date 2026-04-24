@@ -554,11 +554,16 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
             "approval-resolve" => Ok("approval_request_resolve"),
             "sessions-list" => Ok("sessions_list"),
             "session-history" => Ok("sessions_history"),
+            "session-heads" => Ok("session_heads"),
+            "session-path" => Ok("session_path"),
+            "session-children" => Ok("session_children"),
+            "session-artifacts" => Ok("session_artifacts"),
             "session-events" => Ok("session_events"),
             "session-search" => Ok("session_search"),
             "session-status" => Ok("session_status"),
             "session-wait" => Ok("session_wait"),
             "task-history" => Ok("task_history"),
+            "task-events" => Ok("task_events"),
             "tasks-list" => Ok("tasks_list"),
             "tasks-search" => Ok("tasks_search"),
             "task-status" => Ok("task_status"),
@@ -566,6 +571,12 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
             "session-policy-status" => Ok("session_tool_policy_status"),
             "session-policy-set" => Ok("session_tool_policy_set"),
             "session-policy-clear" => Ok("session_tool_policy_clear"),
+            "session-create-branch-summary" => Ok("session_create_branch_summary"),
+            "session-create-checkpoint" => Ok("session_create_checkpoint"),
+            "session-fork-head" => Ok("session_fork_head"),
+            "session-pin-head" => Ok("session_pin_head"),
+            "session-set-active-head" => Ok("session_set_active_head"),
+            "session-unpin-head" => Ok("session_unpin_head"),
             "session-archive" => Ok("session_archive"),
             "session-cancel" => Ok("session_cancel"),
             "session-continue" => Ok("session_continue"),
@@ -661,6 +672,9 @@ fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static str, String>
     if has_task_id || has_task_ids {
         if has_timeout_ms {
             return Ok("task_wait");
+        }
+        if has_after_id {
+            return Ok("task_events");
         }
         if has_limit {
             return Ok("task_history");
@@ -858,11 +872,16 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
             "approval_request_resolve" => Some("approval-resolve".to_owned()),
             "sessions_list" => Some("sessions-list".to_owned()),
             "sessions_history" => Some("session-history".to_owned()),
+            "session_heads" => Some("session-heads".to_owned()),
+            "session_path" => Some("session-path".to_owned()),
+            "session_children" => Some("session-children".to_owned()),
+            "session_artifacts" => Some("session-artifacts".to_owned()),
             "session_events" => Some("session-events".to_owned()),
             "session_search" => Some("session-search".to_owned()),
             "session_status" => Some("session-status".to_owned()),
             "session_wait" => Some("session-wait".to_owned()),
             "task_history" => Some("task-history".to_owned()),
+            "task_events" => Some("task-events".to_owned()),
             "tasks_list" => Some("tasks-list".to_owned()),
             "tasks_search" => Some("tasks-search".to_owned()),
             "task_status" => Some("task-status".to_owned()),
@@ -870,6 +889,12 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
             "session_tool_policy_status" => Some("session-policy-status".to_owned()),
             "session_tool_policy_set" => Some("session-policy-set".to_owned()),
             "session_tool_policy_clear" => Some("session-policy-clear".to_owned()),
+            "session_create_branch_summary" => Some("session-create-branch-summary".to_owned()),
+            "session_create_checkpoint" => Some("session-create-checkpoint".to_owned()),
+            "session_fork_head" => Some("session-fork-head".to_owned()),
+            "session_pin_head" => Some("session-pin-head".to_owned()),
+            "session_set_active_head" => Some("session-set-active-head".to_owned()),
+            "session_unpin_head" => Some("session-unpin-head".to_owned()),
             "session_archive" => Some("session-archive".to_owned()),
             "session_cancel" => Some("session-cancel".to_owned()),
             "session_continue" => Some("session-continue".to_owned()),
@@ -1013,5 +1038,23 @@ mod tests {
         );
 
         assert_eq!(logged_tool_name, "browser");
+    }
+
+    #[test]
+    fn hidden_agent_routes_task_events_when_task_cursor_is_present() {
+        let routed = route_hidden_agent_tool_name(&json!({
+            "task_id": "task-root",
+            "after_id": 10
+        }))
+        .expect("task events payload should route");
+
+        assert_eq!(routed, "task_events");
+    }
+
+    #[test]
+    fn hidden_operation_for_task_events_uses_task_events_alias() {
+        let operation = hidden_operation_for_tool_name("task_events").expect("task events alias");
+
+        assert_eq!(operation, "task-events");
     }
 }

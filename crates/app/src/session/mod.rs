@@ -94,7 +94,7 @@ mod latest_cli_session_selector_tests {
         let sqlite_path = root.join("memory.sqlite3");
         let config = store::SessionStoreConfig {
             sqlite_path: Some(sqlite_path.clone()),
-            ..store::SessionStoreConfig::default()
+            runtime_config: None,
         };
 
         store::ensure_session_store_ready(Some(sqlite_path), &config)

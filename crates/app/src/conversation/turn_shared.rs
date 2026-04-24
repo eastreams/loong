@@ -23,12 +23,17 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::CliResult;
 
-pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue satisfying the original user request. Prefer the next bounded tool call or completion step over narrating intermediate status. Only stop to answer in natural language when the request is actually complete, blocked on a real approval or input gate, or the available evidence is already sufficient. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
+const TOOL_FOLLOWUP_REPAIR_PROMPT: &str = "Repair notice:\nThe previous reply described a next step without issuing the required tool call. Do not describe the plan again.";
+const TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT: &str = "The previous tool failure was retryable. Default to [followup_state:continue] and retry or repair the tool call unless the task is already complete or genuinely blocked.";
+const FOLLOWUP_STATE_MARKER_PREFIX: &str = "[followup_state:";
+const MISSING_TOOL_CALL_REASON_PREFIX: &str = "missing_tool_call_followup:";
+const MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS: usize = 240;
 
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
@@ -91,10 +96,80 @@ fn think_tag_prefix_len(input: &str, tag: &str) -> Option<usize> {
 }
 
 fn sanitize_reply_text(text: &str) -> String {
-    let stripped_text = strip_think_tags(text);
-    let trimmed_text = stripped_text.trim();
-    trimmed_text.to_owned()
+    parse_tool_driven_continuation_reply(text).reply
 }
+
+pub fn missing_tool_call_followup_payload(reply_text: &str) -> Option<ToolDrivenFollowupPayload> {
+    let sanitized_reply = sanitize_reply_text(reply_text);
+    let detection_kind = detect_missing_tool_call_kind(sanitized_reply.as_str())?;
+    let excerpt = truncated_missing_tool_call_excerpt(sanitized_reply.as_str());
+    let reason = match detection_kind {
+        MissingToolCallKind::EmptyFollowup => format!(
+            "{MISSING_TOOL_CALL_REASON_PREFIX} previous assistant reply ended the tool-followup round without any content or tool call. If more tool work is needed, emit the exact next tool call now instead of returning an empty follow-up."
+        ),
+        MissingToolCallKind::PseudoToolCommand => format!(
+            "{MISSING_TOOL_CALL_REASON_PREFIX} previous assistant reply emitted pseudo-tool text instead of a real tool call. If another tool is required, emit the exact next tool call now instead of formatting it as plain text.\nReply excerpt:\n{excerpt}"
+        ),
+    };
+
+    Some(ToolDrivenFollowupPayload::ToolFailure {
+        reason,
+        retryable: true,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingToolCallKind {
+    EmptyFollowup,
+    PseudoToolCommand,
+}
+
+fn detect_missing_tool_call_kind(reply_text: &str) -> Option<MissingToolCallKind> {
+    let normalized_reply = reply_text.trim();
+    if normalized_reply.is_empty() {
+        return Some(MissingToolCallKind::EmptyFollowup);
+    }
+
+    normalized_reply
+        .lines()
+        .map(str::trim)
+        .any(line_looks_like_pseudo_tool_command)
+        .then_some(MissingToolCallKind::PseudoToolCommand)
+}
+
+fn line_looks_like_pseudo_tool_command(line: &str) -> bool {
+    let Some(trimmed_line) = line.strip_prefix('/') else {
+        return false;
+    };
+    let Some((surface, remainder)) = trimmed_line.split_once(':') else {
+        return false;
+    };
+    let has_surface = !surface.trim().is_empty();
+    let has_remainder = !remainder.trim().is_empty();
+    let surface_is_tool_like = surface
+        .chars()
+        .all(|character| character.is_ascii_lowercase() || ".-_".contains(character));
+
+    has_surface && has_remainder && surface_is_tool_like
+}
+
+fn truncated_missing_tool_call_excerpt(reply_text: &str) -> String {
+    let total_chars = reply_text.chars().count();
+    if total_chars <= MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS {
+        return reply_text.to_owned();
+    }
+
+    let truncated_reply = reply_text
+        .chars()
+        .take(MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS)
+        .collect::<String>();
+
+    format!(
+        "{truncated_reply}\n[reply_excerpt_truncated] omitted_chars={}",
+        total_chars - MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS
+    )
+}
+
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -120,8 +195,47 @@ pub fn tool_loop_circuit_breaker_reply(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenFollowupPayload {
     ToolResult { text: String },
-    ToolFailure { reason: String },
+    ToolFailure { reason: String, retryable: bool },
     DiscoveryRecovery { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDrivenContinuationState {
+    Continue,
+    Done,
+    Blocked,
+}
+
+impl ToolDrivenContinuationState {
+    pub const fn marker(self) -> &'static str {
+        match self {
+            Self::Continue => "[followup_state:continue]",
+            Self::Done => "[followup_state:done]",
+            Self::Blocked => "[followup_state:blocked]",
+        }
+    }
+
+    fn parse_token(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "continue" => Some(Self::Continue),
+            "done" => Some(Self::Done),
+            "blocked" => Some(Self::Blocked),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolDrivenFollowupContractMode {
+    RetryableFailure,
+    RepairRetryableFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedToolDrivenContinuationReply {
+    pub state: Option<ToolDrivenContinuationState>,
+    pub reply: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -296,12 +410,91 @@ impl ToolDrivenFollowupPayload {
         let label = self.label();
         match self {
             Self::ToolResult { text } => ToolDrivenFollowupTextRef::new(label, text.as_str()),
-            Self::ToolFailure { reason } => ToolDrivenFollowupTextRef::new(label, reason.as_str()),
+            Self::ToolFailure { reason, .. } => {
+                ToolDrivenFollowupTextRef::new(label, reason.as_str())
+            }
             Self::DiscoveryRecovery { reason } => {
                 ToolDrivenFollowupTextRef::new(label, reason.as_str())
             }
         }
     }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn retryable_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::ToolFailure {
+                retryable: true,
+                ..
+            }
+        )
+    }
+
+    pub fn requests_runtime_followup_chain(&self) -> bool {
+        match self {
+            Self::DiscoveryRecovery { .. } => true,
+            Self::ToolResult { text } => {
+                let tool_result_context = parse_tool_result_followup_context(text.as_str());
+                let continuation = tool_result_context
+                    .as_ref()
+                    .and_then(|context| parse_tool_result_continuation(&context.payload_json));
+                continuation.is_some_and(|continuation| !continuation.is_terminal)
+            }
+            Self::ToolFailure { .. } => false,
+        }
+    }
+}
+
+pub fn parse_tool_driven_continuation_reply(text: &str) -> ParsedToolDrivenContinuationReply {
+    let stripped_text = strip_think_tags(text);
+    let trimmed_text = stripped_text.trim();
+    let Some(rest) = trimmed_text.strip_prefix(FOLLOWUP_STATE_MARKER_PREFIX) else {
+        return ParsedToolDrivenContinuationReply {
+            state: None,
+            reply: trimmed_text.to_owned(),
+        };
+    };
+    let Some((state_token, remainder)) = rest.split_once(']') else {
+        return ParsedToolDrivenContinuationReply {
+            state: None,
+            reply: trimmed_text.to_owned(),
+        };
+    };
+    let Some(state) = ToolDrivenContinuationState::parse_token(state_token) else {
+        return ParsedToolDrivenContinuationReply {
+            state: None,
+            reply: trimmed_text.to_owned(),
+        };
+    };
+
+    ParsedToolDrivenContinuationReply {
+        state: Some(state),
+        reply: remainder.trim().to_owned(),
+    }
+}
+
+pub(crate) fn render_tool_followup_continuation_contract(
+    mode: ToolDrivenFollowupContractMode,
+) -> String {
+    let mut sections = Vec::new();
+    if matches!(mode, ToolDrivenFollowupContractMode::RepairRetryableFailure) {
+        sections.push(TOOL_FOLLOWUP_REPAIR_PROMPT.to_owned());
+    }
+    if matches!(
+        mode,
+        ToolDrivenFollowupContractMode::RetryableFailure
+            | ToolDrivenFollowupContractMode::RepairRetryableFailure
+    ) {
+        sections.push(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT.to_owned());
+    }
+    sections.push(format!(
+        "Structured continuation contract:\n- Start your reply with exactly one marker: {}, {}, or {}.\n- If you choose continue, emit the next tool call now. Do not only describe a plan.\n- If you choose done, give the completed final answer now.\n- If you choose blocked, explain the blocker briefly and do not claim the task is running or complete.",
+        ToolDrivenContinuationState::Continue.marker(),
+        ToolDrivenContinuationState::Done.marker(),
+        ToolDrivenContinuationState::Blocked.marker(),
+    ));
+    sections.join("\n\n")
 }
 
 pub fn turn_failure_supports_discovery_recovery(failure: &TurnFailure) -> bool {
@@ -334,6 +527,7 @@ pub fn tool_driven_followup_payload(
         TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: failure.reason.clone(),
+                retryable: failure.retryable,
             })
         }
         TurnResult::ProviderError(_) => None,
@@ -1320,6 +1514,8 @@ fn parse_tool_result_envelope(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(candidate).ok()
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_followup_user_prompt(
     user_input: &str,
     loop_warning_reason: Option<&str>,
@@ -1359,11 +1555,140 @@ pub fn build_tool_followup_user_prompt_with_context(
     if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
         sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
     }
+    if let Some(continuation_guidance) =
+        proactive_followup_continuation_context(tool_result_text, rendered_tool_result_text)
+    {
+        sections.push(continuation_guidance);
+    }
     if let Some(extra_context) = extra_context {
         sections.push(extra_context.to_owned());
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
+}
+
+fn combine_followup_extra_context(parts: &[Option<&str>]) -> Option<String> {
+    let joined = parts
+        .iter()
+        .flatten()
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    (!joined.is_empty()).then(|| joined.join("\n\n"))
+}
+
+fn proactive_followup_continuation_context(
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> Option<String> {
+    let primary_context = tool_result_text.and_then(parse_tool_result_followup_context);
+    let fallback_context = rendered_tool_result_text.and_then(parse_tool_result_followup_context);
+    let tool_result_context = primary_context.or(fallback_context)?;
+    let continuation = parse_tool_result_continuation(&tool_result_context.payload_json)?;
+    Some(render_tool_result_continuation_guidance(&continuation))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolResultFollowupContext {
+    payload_json: Value,
+}
+
+fn parse_tool_result_followup_context(tool_result_text: &str) -> Option<ToolResultFollowupContext> {
+    tool_result_text.lines().find_map(|line| {
+        let trimmed_line = line.trim();
+        let tool_result_line = ToolResultLine::parse(trimmed_line)?;
+        let payload_json = tool_result_line.payload_summary_json()?;
+        Some(ToolResultFollowupContext { payload_json })
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolResultContinuation {
+    state: String,
+    is_terminal: bool,
+    recommended_tool: Option<String>,
+    recommended_payload: Option<Value>,
+    note: Option<String>,
+}
+
+fn parse_tool_result_continuation(payload_json: &Value) -> Option<ToolResultContinuation> {
+    let continuation_value = payload_json.get("continuation")?;
+    let continuation_object = continuation_value.as_object()?;
+    let state = continuation_object
+        .get("state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let is_terminal = continuation_object
+        .get("is_terminal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let recommended_tool = continuation_object
+        .get("recommended_tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let recommended_payload = continuation_object.get("recommended_payload").cloned();
+    let note = continuation_object
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Some(ToolResultContinuation {
+        state,
+        is_terminal,
+        recommended_tool,
+        recommended_payload,
+        note,
+    })
+}
+
+fn render_tool_result_continuation_guidance(continuation: &ToolResultContinuation) -> String {
+    let mut lines = vec!["Continuation guidance:".to_owned()];
+    let state_line = if continuation.is_terminal {
+        format!(
+            "The tool reported terminal state `{}`. Finish the request only if the user-facing work is actually complete.",
+            continuation.state
+        )
+    } else {
+        format!(
+            "The tool reported intermediate state `{}`. Do not present this as final completion.",
+            continuation.state
+        )
+    };
+    lines.push(state_line);
+
+    if let Some(note) = continuation.note.as_deref() {
+        lines.push(note.to_owned());
+    }
+
+    if let Some(recommended_tool) = continuation.recommended_tool.as_deref() {
+        let mut recommendation = format!(
+            "If the original request still depends on this work, continue with `{recommended_tool}`"
+        );
+        if let Some(recommended_payload) = continuation.recommended_payload.as_ref() {
+            let payload_text =
+                serde_json::to_string(recommended_payload).unwrap_or_else(|_| "{}".to_owned());
+            recommendation.push_str(" using payload:");
+            recommendation.push('\n');
+            recommendation.push_str(payload_text.as_str());
+            recommendation.push('\n');
+            recommendation.push_str("before answering.");
+        } else {
+            recommendation.push_str(" before answering.");
+        }
+        lines.push(recommendation);
+    } else if !continuation.is_terminal {
+        lines.push(
+            "Keep advancing if you can resolve the gate from available tools; otherwise report the exact blocker instead of a vague progress update."
+                .to_owned(),
+        );
+    }
+
+    lines.join("\n")
 }
 
 pub fn build_discovery_recovery_followup_user_prompt(
@@ -1745,11 +2070,34 @@ pub fn build_external_skill_followup_user_prompt(
     sections.join("\n\n")
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_result_followup_tail<F>(
     assistant_preface: &str,
     tool_result_text: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_result_followup_tail_with_contract(
+        assistant_preface,
+        tool_result_text,
+        user_input,
+        loop_warning_reason,
+        None,
+        payload_mapper,
+    )
+}
+
+pub(crate) fn build_tool_result_followup_tail_with_contract<F>(
+    assistant_preface: &str,
+    tool_result_text: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    continuation_contract: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1785,12 +2133,12 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt(
+        "content": build_tool_followup_user_prompt_with_context(
             user_input,
             loop_warning_reason,
             Some(tool_result_text),
             Some(bounded_result.as_str()),
-            None,
+            continuation_contract,
         ),
     }));
     messages
@@ -1819,12 +2167,37 @@ where
     )
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_failure_followup_tail_with_request_summary<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_request_summary: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_failure_followup_tail_with_request_summary_and_contract(
+        assistant_preface,
+        tool_failure_reason,
+        user_input,
+        loop_warning_reason,
+        tool_request_summary,
+        None,
+        payload_mapper,
+    )
+}
+
+pub(crate) fn build_tool_failure_followup_tail_with_request_summary_and_contract<F>(
+    assistant_preface: &str,
+    tool_failure_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
+    continuation_contract: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1862,7 +2235,11 @@ where
             loop_warning_reason,
             None,
             None,
-            repair_guidance.as_deref(),
+            combine_followup_extra_context(&[
+                repair_guidance.as_deref(),
+                continuation_contract,
+            ])
+            .as_deref(),
         ),
     }));
     messages
@@ -1934,21 +2311,48 @@ pub fn build_tool_driven_followup_tail_with_request_summary<F>(
 where
     F: FnMut(&str, &str) -> String,
 {
+    build_tool_driven_followup_tail_with_request_summary_and_contract(
+        assistant_preface,
+        payload,
+        user_input,
+        loop_warning_reason,
+        tool_request_summary,
+        None,
+        payload_mapper,
+    )
+}
+
+pub(crate) fn build_tool_driven_followup_tail_with_request_summary_and_contract<F>(
+    assistant_preface: &str,
+    payload: &ToolDrivenFollowupPayload,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
+    continuation_contract: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
     match payload {
-        ToolDrivenFollowupPayload::ToolResult { text } => build_tool_result_followup_tail(
-            assistant_preface,
-            text.as_str(),
-            user_input,
-            loop_warning_reason,
-            payload_mapper,
-        ),
-        ToolDrivenFollowupPayload::ToolFailure { reason } => {
-            build_tool_failure_followup_tail_with_request_summary(
+        ToolDrivenFollowupPayload::ToolResult { text } => {
+            build_tool_result_followup_tail_with_contract(
+                assistant_preface,
+                text.as_str(),
+                user_input,
+                loop_warning_reason,
+                continuation_contract,
+                payload_mapper,
+            )
+        }
+        ToolDrivenFollowupPayload::ToolFailure { reason, .. } => {
+            build_tool_failure_followup_tail_with_request_summary_and_contract(
                 assistant_preface,
                 reason.as_str(),
                 user_input,
                 loop_warning_reason,
                 tool_request_summary,
+                continuation_contract,
                 payload_mapper,
             )
         }
@@ -1973,6 +2377,16 @@ fn render_tool_failure_repair_guidance(
     let summary_tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
     let repair_tool_name = repair_guidance_tool_name(summary_tool_name, tool_failure_reason);
     let request_summary_request = request_summary_json.get("request");
+    let direct_routing_guidance = render_direct_routing_failure_repair_guidance(
+        repair_tool_name.as_str(),
+        request_summary_request,
+        tool_failure_reason,
+    );
+
+    if direct_routing_guidance.is_some() {
+        return direct_routing_guidance;
+    }
+
     let reason_mentions_repairable_shape = tool_failure_reason.contains("tool input needs repair")
         || tool_failure_reason.contains("payload must be an object")
         || tool_failure_reason.contains("payload.");
@@ -1999,6 +2413,37 @@ fn render_tool_failure_repair_guidance(
     }
 
     render_tool_input_repair_guidance_from_reason(repair_tool_name.as_str(), tool_failure_reason)
+}
+
+fn render_direct_routing_failure_repair_guidance(
+    tool_name: &str,
+    request_summary_request: Option<&Value>,
+    tool_failure_reason: &str,
+) -> Option<String> {
+    let normalized_reason = tool_failure_reason
+        .strip_prefix("tool execution failed: ")
+        .unwrap_or(tool_failure_reason);
+
+    let guidance = if normalized_reason.starts_with("hidden_agent_requires_operation:") {
+        "Add `operation` for grouped agent/runtime control requests such as session archive, cancel, recover, or approval workflows.".to_owned()
+    } else if normalized_reason.starts_with("hidden_agent_requires_actionable_fields:") {
+        "Add the concrete session / approval / delegate / provider / config fields needed for the request, or set `operation` when the grouped `tool.invoke` request is ambiguous.".to_owned()
+    } else if normalized_reason.starts_with("hidden_skills_requires_actionable_fields:") {
+        "Add search, inspect, install, run, or list fields for the grouped `skills` surface, or provide `operation` to make the request explicit.".to_owned()
+    } else if normalized_reason.starts_with("hidden_channel_requires_operation:") {
+        "Add `operation` for the grouped channel surface, for example `messages.send`, `messages.reply`, `card.update`, or `feishu.whoami`.".to_owned()
+    } else {
+        return None;
+    };
+
+    let visible_tool_name = repair_guidance_visible_tool_name(tool_name);
+    let request_preview = request_summary_request
+        .and_then(|request| serde_json::to_string(request).ok())
+        .unwrap_or_else(|| "{}".to_owned());
+
+    Some(format!(
+        "Repair guidance for {visible_tool_name}:\n{guidance}\nCurrent request preview: {request_preview}"
+    ))
 }
 
 fn repair_guidance_tool_name(summary_tool_name: &str, tool_failure_reason: &str) -> String {
@@ -2122,6 +2567,35 @@ where
     messages
 }
 
+pub async fn request_completion_with_raw_fallback_detailed<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    config: &LoongConfig,
+    messages: &[Value],
+    binding: ConversationRuntimeBinding<'_>,
+    raw_reply: &str,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+) -> ParsedToolDrivenContinuationReply {
+    match runtime
+        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
+        .await
+    {
+        Ok(final_reply) => {
+            let parsed_reply = parse_tool_driven_continuation_reply(final_reply.as_str());
+            if parsed_reply.reply.is_empty() && parsed_reply.state.is_none() {
+                parse_tool_driven_continuation_reply(raw_reply)
+            } else if parsed_reply.reply.is_empty() {
+                ParsedToolDrivenContinuationReply {
+                    state: parsed_reply.state,
+                    reply: sanitize_reply_text(raw_reply),
+                }
+            } else {
+                parsed_reply
+            }
+        }
+        Err(_) => parse_tool_driven_continuation_reply(raw_reply),
+    }
+}
+
 pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     config: &LoongConfig,
@@ -2130,20 +2604,16 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
     raw_reply: &str,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> String {
-    match runtime
-        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
-        .await
-    {
-        Ok(final_reply) => {
-            let sanitized_reply = sanitize_reply_text(final_reply.as_str());
-            if sanitized_reply.is_empty() {
-                sanitize_reply_text(raw_reply)
-            } else {
-                sanitized_reply
-            }
-        }
-        Err(_) => sanitize_reply_text(raw_reply),
-    }
+    request_completion_with_raw_fallback_detailed(
+        runtime,
+        config,
+        messages,
+        binding,
+        raw_reply,
+        retry_progress,
+    )
+    .await
+    .reply
 }
 
 pub fn join_non_empty_lines(parts: &[&str]) -> String {
@@ -2459,6 +2929,7 @@ mod tests {
             kernel.followup_payload(),
             Some(ToolDrivenFollowupPayload::ToolFailure {
                 reason: "temporary failure".to_owned(),
+                retryable: true,
             })
         );
     }
@@ -2511,6 +2982,7 @@ mod tests {
     fn tool_driven_followup_payload_reports_failure_kind_and_context() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool failed".to_owned(),
+            retryable: false,
         };
         let message_context = payload.message_context();
 
@@ -2521,6 +2993,7 @@ mod tests {
         );
         assert_eq!(message_context.label().as_str(), "tool_failure");
         assert_eq!(message_context.text(), "tool failed");
+        assert!(!payload.retryable_failure());
     }
 
     #[test]
@@ -2557,6 +3030,80 @@ mod tests {
                 .expect("serialize kind"),
             Value::String("discovery_recovery".to_owned())
         );
+    }
+
+    #[test]
+    fn parse_tool_driven_continuation_reply_extracts_leading_marker() {
+        let parsed = parse_tool_driven_continuation_reply(
+            "<think>hidden</think>\n[followup_state:continue]\nNow merging the files.",
+        );
+
+        assert_eq!(parsed.state, Some(ToolDrivenContinuationState::Continue));
+        assert_eq!(parsed.reply, "Now merging the files.");
+        assert_eq!(
+            sanitize_reply_text("[followup_state:done]\nFinished."),
+            "Finished."
+        );
+    }
+
+    #[test]
+    fn parse_tool_driven_continuation_reply_leaves_unknown_marker_text_intact() {
+        let parsed =
+            parse_tool_driven_continuation_reply("[followup_state:unknown]\nkeep this literal");
+
+        assert_eq!(parsed.state, None);
+        assert_eq!(parsed.reply, "[followup_state:unknown]\nkeep this literal");
+    }
+
+    #[test]
+    fn render_tool_followup_continuation_contract_includes_repair_and_retryable_context() {
+        let repair = render_tool_followup_continuation_contract(
+            ToolDrivenFollowupContractMode::RepairRetryableFailure,
+        );
+
+        assert!(repair.contains("[followup_state:continue]"));
+        assert!(repair.contains("[followup_state:done]"));
+        assert!(repair.contains("[followup_state:blocked]"));
+        assert!(repair.contains("Do not describe the plan again"));
+        assert!(repair.contains("retryable"));
+    }
+
+    #[test]
+    fn missing_tool_call_followup_detects_pseudo_tool_commands() {
+        let payload = missing_tool_call_followup_payload(
+            "/workspace:df -h\n/tool.search:disk usage\n/web:disk usage command line",
+        )
+        .expect("pseudo-tool lines should trigger missing-tool-call recovery");
+
+        let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
+            panic!("expected tool failure payload");
+        };
+
+        assert!(reason.contains("pseudo-tool text"));
+        assert!(reason.contains("Reply excerpt"));
+        assert!(retryable);
+    }
+
+    #[test]
+    fn missing_tool_call_followup_detects_empty_followup() {
+        let payload = missing_tool_call_followup_payload("   ")
+            .expect("empty followup should trigger missing-tool-call recovery");
+
+        let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
+            panic!("expected tool failure payload");
+        };
+
+        assert!(reason.contains("without any content or tool call"));
+        assert!(retryable);
+    }
+
+    #[test]
+    fn missing_tool_call_followup_ignores_normal_final_answer_text() {
+        let payload = missing_tool_call_followup_payload(
+            "The disk is nearly full because the cache directory is consuming most of the space.",
+        );
+
+        assert!(payload.is_none());
     }
 
     #[test]
@@ -2665,6 +3212,7 @@ mod tests {
                 raw_reply: "preface\ntemporary failure".to_owned(),
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
+                    retryable: true,
                 },
             }
         );
@@ -2747,6 +3295,7 @@ mod tests {
                 raw_reply: "preface\ntemporary failure".to_owned(),
                 payload: ToolDrivenFollowupPayload::ToolFailure {
                     reason: "temporary failure".to_owned(),
+                    retryable: true,
                 },
             }
         );
@@ -2992,6 +3541,7 @@ mod tests {
     fn tool_driven_followup_tail_dispatches_failure_payload() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
+            retryable: false,
         };
         let tail = build_tool_driven_followup_tail(
             "preface",
@@ -3023,6 +3573,7 @@ mod tests {
     fn tool_driven_followup_tail_preserves_request_summary_for_failure_payloads() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "payload.command contains path separators".to_owned(),
+            retryable: false,
         };
         let tool_request_summary =
             r#"{"tool":"exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
@@ -3146,6 +3697,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"ls -la"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3171,6 +3723,7 @@ mod tests {
     fn tool_failure_followup_tail_strips_quoted_shell_arguments_from_repair_guidance() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"\"ls -la\" "}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3198,6 +3751,7 @@ mod tests {
             reason:
                 "tool_preflight_denied: tool input needs repair: file.read payload.path is required (string)"
                     .to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"read","request":{}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3223,10 +3777,94 @@ mod tests {
     }
 
     #[test]
+    fn tool_failure_followup_tail_renders_hidden_agent_operation_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "hidden_agent_requires_operation: provide `operation` for archive, cancel, recover, or other multi-session control work".to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"agent","request":{"session_ids":["child-1"]}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "archive these sessions",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for agent"));
+        assert!(user_prompt.contains("Add `operation`"));
+        assert!(user_prompt.contains(r#"Current request preview: {"session_ids":["child-1"]}"#));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_hidden_skills_actionable_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason:
+                "hidden_skills_requires_actionable_fields: provide actionable fields for grouped skills requests"
+                    .to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"skills","request":{"query":"browser companion"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "inspect the browser companion skill",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for skills"));
+        assert!(user_prompt.contains("search, inspect, install, run, or list fields"));
+        assert!(user_prompt.contains(r#"Current request preview: {"query":"browser companion"}"#));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_renders_hidden_channel_operation_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "hidden_channel_requires_operation: provide `operation`, such as `messages.send`, `messages.reply`, `card.update`, or `feishu.whoami`".to_owned(),
+            retryable: true,
+        };
+        let tool_request_summary = r#"{"tool":"channel","request":{"account_id":"default"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "send a message",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for channel"));
+        assert!(user_prompt.contains("messages.send"));
+        assert!(user_prompt.contains(r#"Current request preview: {"account_id":"default"}"#));
+    }
+
+    #[test]
     fn tool_failure_followup_tail_uses_failure_reason_when_shell_summary_redacts_args_type() {
         let payload = ToolDrivenFollowupPayload::ToolFailure {
             reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.args must be array"
                 .to_owned(),
+            retryable: false,
         };
         let tool_request_summary = r#"{"tool":"exec","request":{"command":"echo"}}"#;
         let tail = build_tool_driven_followup_tail(
@@ -3375,6 +4013,145 @@ mod tests {
 
         assert!(prompt.contains(DISCOVERY_RESULT_FOLLOWUP_PROMPT));
         assert!(prompt.contains("Original request:\nfind the latest ai news and summarize it"));
+    }
+
+    #[test]
+    fn followup_prompt_uses_generic_continuation_metadata_for_delegate_queue() {
+        let payload_summary = json!({
+            "child_session_id": "delegate:child-1",
+            "mode": "async",
+            "state": "queued",
+            "continuation": {
+                "state": "queued",
+                "is_terminal": false,
+                "recommended_tool": "session_wait",
+                "recommended_payload": {
+                    "session_id": "delegate:child-1",
+                    "timeout_ms": 30000
+                },
+                "note": "The delegated child is still running in the background."
+            }
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "delegate_async",
+                "tool_call_id": "call-delegate-1",
+                "payload_summary": payload_summary,
+                "payload_chars": 256,
+                "payload_truncated": false
+            })
+        );
+
+        let prompt = build_tool_followup_user_prompt(
+            "finish the delegated research and summarize the result",
+            None,
+            Some(tool_result.as_str()),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Continuation guidance:"));
+        assert!(prompt.contains("intermediate state `queued`"));
+        assert!(prompt.contains("still running in the background"));
+        assert!(prompt.contains("`session_wait`"));
+        assert!(prompt.contains("{\"session_id\":\"delegate:child-1\",\"timeout_ms\":30000}"));
+    }
+
+    #[test]
+    fn followup_prompt_uses_generic_continuation_metadata_for_waiting_task() {
+        let payload_summary = json!({
+            "wait_status": "waiting",
+            "continuation": {
+                "state": "waiting",
+                "is_terminal": false,
+                "note": "The runtime is still waiting on an approval or external completion gate."
+            }
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "task_wait",
+                "tool_call_id": "call-task-wait-1",
+                "payload_summary": payload_summary,
+                "payload_chars": 256,
+                "payload_truncated": false
+            })
+        );
+
+        let prompt = build_tool_followup_user_prompt(
+            "wait until the task is complete and then summarize it",
+            None,
+            Some(tool_result.as_str()),
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Continuation guidance:"));
+        assert!(prompt.contains("intermediate state `waiting`"));
+        assert!(prompt.contains("approval or external completion gate"));
+        assert!(prompt.contains("exact blocker"));
+    }
+
+    #[test]
+    fn tool_result_payload_requests_runtime_followup_chain_for_nonterminal_continuation() {
+        let payload = ToolDrivenFollowupPayload::ToolResult {
+            text: format!(
+                "[ok] {}",
+                json!({
+                    "status": "ok",
+                    "tool": "session_wait",
+                    "tool_call_id": "call-session-wait",
+                    "payload_summary": json!({
+                        "wait_status": "waiting",
+                        "continuation": {
+                            "state": "waiting",
+                            "is_terminal": false,
+                            "recommended_tool": "session_wait",
+                            "recommended_payload": {
+                                "session_id": "child-session",
+                                "timeout_ms": 1000
+                            }
+                        }
+                    })
+                    .to_string(),
+                    "payload_chars": 256,
+                    "payload_truncated": false
+                })
+            ),
+        };
+
+        assert!(payload.requests_runtime_followup_chain());
+    }
+
+    #[test]
+    fn tool_result_payload_does_not_request_runtime_followup_chain_for_terminal_continuation() {
+        let payload = ToolDrivenFollowupPayload::ToolResult {
+            text: format!(
+                "[ok] {}",
+                json!({
+                    "status": "ok",
+                    "tool": "session_wait",
+                    "tool_call_id": "call-session-wait",
+                    "payload_summary": json!({
+                        "wait_status": "completed",
+                        "continuation": {
+                            "state": "completed",
+                            "is_terminal": true
+                        }
+                    })
+                    .to_string(),
+                    "payload_chars": 256,
+                    "payload_truncated": false
+                })
+            ),
+        };
+
+        assert!(!payload.requests_runtime_followup_chain());
     }
 
     #[test]

@@ -178,8 +178,14 @@ model = "auto"
 推荐先走命令行二维码接入：
 
 ```bash
-loong feishu onboard
+# 国内飞书租户（open.feishu.cn）—— CLI 默认值
+loong feishu onboard --domain feishu
+
+# 国际版 Lark 租户（open.larksuite.com）
+loong feishu onboard --domain lark
 ```
+
+`--domain` 一定要和你登录的租户类型对上：`feishu` 走国内 `open.feishu.cn`，`lark` 走国际 `open.larksuite.com`。选错端点时二维码扫完也绑不上对应 app。省略 `--domain` 时默认走 `feishu`。
 
 这条命令会在终端里展示二维码，走官方 Feishu/Lark 注册接口创建 bot app，并把生成的凭据写回 `loong.toml`。如果你已经有现成凭据，也可以继续用 `loong feishu onboard --manual --app-id ... --app-secret ...` 手动回填。
 

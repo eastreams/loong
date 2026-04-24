@@ -257,9 +257,22 @@ Current baseline already in place:
 - active `http_json` runtime execution lane (no longer plan-only):
   - timeout-controlled request execution
   - structured runtime evidence (`status_code`, `response_json`)
-- builtin-only memory-system foundation for `dev`:
+- memory-system foundation for `dev`:
   - typed memory-system metadata and registry seam
   - hydrated memory orchestration over Loong-owned canonical history
+  - result-first retrieval-plan envelope with explicit request/planner-snapshot
+    compatibility adapters for legacy request-only systems
+  - symmetric explicit helper pair for request-only and plan-result-only
+    compatibility paths while keeping the generic trait defaults intentionally
+    asymmetric until a wider policy flip is accepted
+  - direct and boxed regression coverage now fence the compatibility matrix
+    across request-only, plan-result-only, and shipped built-in memory systems;
+    direct and boxed request/snapshot alignment is now explicit for `builtin`,
+    `recall_first`, and `workspace_recall`
+  - the remaining decision is whether to keep that asymmetric contract or later
+    promote result-first defaults as policy
+  - stable planner diagnostics carrying memory-system identity through stage
+    envelopes and protocol decode/backfill paths
   - operator diagnostics for selected system, capability set, and effective
     memory fail-open policy
 
@@ -387,13 +400,13 @@ Focus: ship a low-friction daily-usable daemon entry for non-developers.
 
 ### Experiment-State Foundation
 
-- `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
-- `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
-- `runtime-experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
-- `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
-- `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
-- `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
-- `runtime-capability apply` materializes one deterministic governed `memory_stage_profile` artifact from a promotable capability family, keeps the output idempotent, and rejects conflicting or unsupported apply paths instead of mutating live runtime state directly
+- `runtime snapshot` persists lineage-aware runtime checkpoint artifacts
+- `runtime restore` replays a persisted checkpoint as a dry-run or apply plan
+- `runtime experiment start|finish|show|compare` records baseline snapshot, mutation summary, result snapshot, evaluation metrics, warnings, final decision, and optional snapshot-backed runtime deltas for operator review
+- `runtime capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
+- `runtime capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
+- `runtime capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
+- `runtime capability apply` materializes one deterministic governed `memory_stage_profile` artifact from a promotable capability family, keeps the output idempotent, and rejects conflicting or unsupported apply paths instead of mutating live runtime state directly
 
 ### Runtime Architecture Hardening
 
@@ -462,9 +475,9 @@ reader-facing docs flow until their public contracts are ready.
 - gateway service foundation:
   - land the first explicit daemon-owned gateway owner contract through
     `gateway run`, `gateway status`, and `gateway stop`, while keeping
-    `multi-channel-serve` as the attached compatibility wrapper instead of the
-    long-term runtime-owner noun
-  - extract channel, ACP, and runtime-snapshot payload builders into shared
+    `channels serve` as the durable operator surface instead of carrying a
+    compatibility-only runtime-owner noun at the root
+  - extract channel, ACP, and runtime snapshot payload builders into shared
     service read models that can feed CLI, dashboard, Web UI, and future
     paired/browser/mobile clients
   - centralize bind ownership, route mounting, local admin auth, pairing, and
@@ -592,7 +605,7 @@ Current baseline:
 
 - a real ACP control plane
 - a durable session repository
-- operator-facing `onboard`, `doctor`, `acp-status`, and observability surfaces
+- operator-facing `onboard`, `doctor`, `runtime acp status`, and observability surfaces
 
 Missing contract:
 

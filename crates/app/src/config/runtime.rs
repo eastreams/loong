@@ -16,15 +16,16 @@ use crate::secrets::DefaultSecretResolver;
 use loong_contracts::{SecretRef, SecretResolver};
 
 use super::{
-    OnebotChannelConfig, QqbotChannelConfig, WeixinChannelConfig,
+    OnebotChannelConfig, WeixinChannelConfig,
     audit::AuditConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
         FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
         LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
-        NextcloudTalkChannelConfig, NostrChannelConfig, SignalChannelConfig, SlackChannelConfig,
-        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TlonChannelConfig,
-        TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
+        NextcloudTalkChannelConfig, NostrChannelConfig, QqbotChannelConfig, SignalChannelConfig,
+        SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig,
+        TlonChannelConfig, TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig,
+        WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
