@@ -94,7 +94,7 @@ impl QqbotTokenManager {
         match &*acs_token {
             Some(token) => {
                 token.expires_at.saturating_duration_since(Instant::now())
-                    <= Duration::from_secs(TOKEN_REFRESH_LEEWAY_S)
+                    > Duration::from_secs(TOKEN_REFRESH_LEEWAY_S)
             }
             None => false,
         }
@@ -120,4 +120,39 @@ fn parse_qqbot_token_response(payload: &serde_json::Value) -> CliResult<QqbotAcc
         access_token: access_token.to_owned(),
         expires_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manager_with_cached_token(expires_in: Duration) -> QqbotTokenManager {
+        let manager = QqbotTokenManager::new(
+            "app".to_owned(),
+            "secret".to_owned(),
+            reqwest::Client::new(),
+            ChannelOutboundHttpPolicy::default(),
+        );
+        let token = QqbotAccessToken {
+            access_token: "cached-token".to_owned(),
+            expires_at: Instant::now() + expires_in,
+        };
+        *manager
+            .current_token
+            .try_write()
+            .expect("cache lock available") = Some(token);
+        manager
+    }
+
+    #[tokio::test]
+    async fn token_is_valid_only_beyond_refresh_leeway() {
+        let manager = manager_with_cached_token(Duration::from_secs(TOKEN_REFRESH_LEEWAY_S + 10));
+        assert!(manager.is_token_valid().await);
+
+        let manager = manager_with_cached_token(Duration::from_secs(TOKEN_REFRESH_LEEWAY_S));
+        assert!(!manager.is_token_valid().await);
+
+        let manager = manager_with_cached_token(Duration::from_secs(1));
+        assert!(!manager.is_token_valid().await);
+    }
 }

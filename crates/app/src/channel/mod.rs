@@ -32,6 +32,7 @@ mod nextcloud_talk;
 mod nostr;
 #[cfg(feature = "channel-plugin-bridge")]
 mod plugin_bridge_runtime;
+#[cfg(feature = "channel-qqbot")]
 mod qqbot;
 mod registry;
 mod runtime;
@@ -178,6 +179,7 @@ pub use runtime::serve::ChannelServeStopHandle;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -191,6 +193,7 @@ pub use runtime::serve::{
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
@@ -210,6 +213,7 @@ use commands::context::render_channel_route_notice;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
@@ -218,6 +222,7 @@ pub use dispatch::process_inbound_with_provider;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
+    feature = "channel-qqbot",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]

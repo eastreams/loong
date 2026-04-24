@@ -15,21 +15,21 @@ use crate::config::{
     LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV, LoongConfig, MATRIX_ACCESS_TOKEN_ENV,
     MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV, NEXTCLOUD_TALK_SERVER_URL_ENV,
     NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV, NOSTR_RELAY_URLS_ENV,
-    ResolvedDingtalkChannelConfig, ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig,
-    ResolvedFeishuChannelConfig, ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig,
-    ResolvedIrcChannelConfig, ResolvedLineChannelConfig, ResolvedMatrixChannelConfig,
-    ResolvedMattermostChannelConfig, ResolvedNextcloudTalkChannelConfig,
-    ResolvedNostrChannelConfig, ResolvedSignalChannelConfig, ResolvedSlackChannelConfig,
-    ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig,
-    ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig, ResolvedWebhookChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig, SIGNAL_ACCOUNT_ENV,
-    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
-    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
-    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, TWITCH_ACCESS_TOKEN_ENV,
-    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
-    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
-    WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat, parse_email_smtp_endpoint,
-    parse_irc_server_endpoint,
+    QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
+    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
+    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
+    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
+    SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
+    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
+    TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV,
+    WECOM_BOT_ID_ENV, WECOM_SECRET_ENV, WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV,
+    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV, WebhookPayloadFormat,
+    parse_email_smtp_endpoint, parse_irc_server_endpoint,
 };
 
 use self::descriptors::CHANNEL_REGISTRY;
@@ -612,14 +612,48 @@ const QQBOT_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
         label: "qq bot app id",
         config_paths: &["qqbot.app_id", "qqbot.accounts.<account>.app_id"],
         env_pointer_paths: &["qqbot.app_id_env", "qqbot.accounts.<account>.app_id_env"],
+        default_env_var: Some(QQBOT_APP_ID_ENV),
+    };
+
+const QQBOT_CLIENT_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "client_secret",
+        label: "qq bot client secret",
+        config_paths: &[
+            "qqbot.client_secret",
+            "qqbot.accounts.<account>.client_secret",
+        ],
+        env_pointer_paths: &[
+            "qqbot.client_secret_env",
+            "qqbot.accounts.<account>.client_secret_env",
+        ],
+        default_env_var: Some(QQBOT_CLIENT_SECRET_ENV),
+    };
+
+const QQBOT_ALLOWED_PEER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_peer_ids",
+        label: "allowed peer ids",
+        config_paths: &[
+            "qqbot.allowed_peer_ids",
+            "qqbot.accounts.<account>.allowed_peer_ids",
+        ],
+        env_pointer_paths: &[],
         default_env_var: None,
     };
 
-const QQBOT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
-    &[QQBOT_ENABLED_REQUIREMENT, QQBOT_APP_ID_REQUIREMENT];
+const QQBOT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    QQBOT_ENABLED_REQUIREMENT,
+    QQBOT_APP_ID_REQUIREMENT,
+    QQBOT_CLIENT_SECRET_REQUIREMENT,
+];
 
-const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
-    &[QQBOT_ENABLED_REQUIREMENT, QQBOT_APP_ID_REQUIREMENT];
+const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    QQBOT_ENABLED_REQUIREMENT,
+    QQBOT_APP_ID_REQUIREMENT,
+    QQBOT_CLIENT_SECRET_REQUIREMENT,
+    QQBOT_ALLOWED_PEER_IDS_REQUIREMENT,
+];
 
 const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
@@ -672,7 +706,7 @@ const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 
 const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure qqbot app_id and client_secret under qqbot or qqbot.accounts.<account> in loong.toml",
+    setup_hint: "configure qqbot app_id, client_secret, and allowed_peer_ids under qqbot or qqbot.accounts.<account> in loong.toml before serving the runtime channel",
     status_command: "loong doctor",
     repair_command: None,
 };
@@ -6347,6 +6381,31 @@ mod tests {
         assert_eq!(qqbot.onboarding.status_command, "loong doctor");
         assert_eq!(qqbot.onboarding.repair_command, None);
         assert!(qqbot.onboarding.setup_hint.contains("qqbot"));
+        assert!(qqbot.onboarding.setup_hint.contains("client_secret"));
+        assert!(qqbot.onboarding.setup_hint.contains("allowed_peer_ids"));
+
+        let qqbot_send_requirements = qqbot
+            .operation(CHANNEL_OPERATION_SEND_ID)
+            .expect("qqbot send operation")
+            .requirements
+            .iter()
+            .map(|requirement| requirement.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qqbot_send_requirements,
+            vec!["enabled", "app_id", "client_secret"]
+        );
+        let qqbot_serve_requirements = qqbot
+            .operation(CHANNEL_OPERATION_SERVE_ID)
+            .expect("qqbot serve operation")
+            .requirements
+            .iter()
+            .map(|requirement| requirement.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qqbot_serve_requirements,
+            vec!["enabled", "app_id", "client_secret", "allowed_peer_ids"]
+        );
 
         assert_eq!(onebot.onboarding.strategy.as_str(), "plugin_bridge");
         assert_eq!(onebot.onboarding.status_command, "loong doctor");
