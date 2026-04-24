@@ -2827,8 +2827,6 @@ fn managed_bridge_onboard_preflight_warns_when_managed_bridge_setup_is_incomplet
 
     let checks = loong_daemon::onboard_cli::collect_channel_preflight_checks(&config);
 
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // No managed bridge preflight checks are emitted for qqbot.
     assert!(
         !checks.iter().any(|check| check.name.contains("qqbot")),
         "qqbot should not appear in managed bridge preflight checks: {checks:#?}"
@@ -6278,8 +6276,6 @@ fn onboarding_success_summary_adds_doctor_action_for_incomplete_managed_bridge_s
 
     let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
 
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // No doctor action should be produced for incomplete managed bridge setup.
     assert!(
         !summary
             .next_actions
