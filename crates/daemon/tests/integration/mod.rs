@@ -1166,7 +1166,6 @@ fn render_channel_surfaces_text_groups_plugin_backed_channels_into_their_own_sec
         plugin_section.contains("Weixin [weixin]"),
         "plugin-backed section should include weixin: {plugin_section}"
     );
-    // QQBot is now a native runtime channel, not plugin-backed.
     assert!(
         plugin_section.contains("OneBot [onebot]"),
         "plugin-backed section should include onebot: {plugin_section}"
@@ -1209,8 +1208,6 @@ fn render_channel_surfaces_text_reports_plugin_backed_stable_targets() {
         ),
         "rendered channel surfaces should expose weixin stable target templates: {rendered}"
     );
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // It does not have plugin_bridge_contract stable_targets or account_scope_note.
 }
 
 #[test]
@@ -1750,9 +1747,6 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
                         == Some("external_plugin")
             })
     );
-
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // It does not have a plugin_bridge_contract.
 }
 
 #[test]
@@ -1803,9 +1797,6 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_stable_targets() {
                         ])
             })
     );
-
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // It does not have a plugin_bridge_contract or stable_targets.
 }
 
 #[test]

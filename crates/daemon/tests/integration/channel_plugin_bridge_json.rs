@@ -31,9 +31,6 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
                         == Some("external_plugin")
             })
     );
-
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // It does not have a plugin_bridge_contract.
 }
 
 #[test]
@@ -84,9 +81,6 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_stable_targets() {
                         ])
             })
     );
-
-    // QQBot is now a native runtime channel, not a managed bridge.
-    // It does not have a plugin_bridge_contract or stable_targets.
 }
 
 #[test]

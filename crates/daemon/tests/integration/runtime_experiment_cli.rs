@@ -1030,7 +1030,6 @@ fn runtime_experiment_compare_reports_channel_taxonomy_deltas() {
             .removed
             .contains(&"weixin".to_owned())
     );
-    // QQBot is now a native runtime channel, not plugin-backed.
     assert!(
         snapshot_delta
             .enabled_runtime_backed_channel_ids
