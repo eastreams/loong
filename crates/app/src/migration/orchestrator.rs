@@ -1653,6 +1653,11 @@ mod tests {
         let discovery = discover_import_sources(&root, DiscoveryOptions::default())
             .expect("discovery should succeed");
         let output_path = root.join("loong.toml");
+        let mut original_config = crate::config::LoongConfig::default();
+        original_config.external_skills.enabled = false;
+        original_config.external_skills.auto_expose_installed = false;
+        let original_body = crate::config::render(&original_config).expect("render");
+        fs::write(&output_path, original_body).expect("write original config");
 
         let result = apply_import_selection(&ApplyImportSelection {
             discovery,

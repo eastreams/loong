@@ -338,6 +338,7 @@ pub(super) fn route_direct_browser_tool_name(payload: &Value) -> Result<&'static
     let has_condition = payload_has_non_null_field(payload, "condition");
     let has_timeout_ms = payload_has_non_null_field(payload, "timeout_ms");
     let mode_value = payload.get("mode").and_then(Value::as_str).map(str::trim);
+    let selector_text_extract_requested = mode_value == Some("selector_text");
 
     let route_for_click = || -> Result<&'static str, String> {
         if !has_session_id {
@@ -457,6 +458,16 @@ pub(super) fn route_direct_browser_tool_name(payload: &Value) -> Result<&'static
 
     if has_url {
         return Ok("browser.open");
+    }
+
+    if selector_text_extract_requested && has_selector {
+        if has_session_id {
+            return Ok("browser.extract");
+        }
+        return Err(
+            "direct_browser_extract_requires_session_id: expected `session_id` for selector_text extraction"
+                .to_owned(),
+        );
     }
 
     if has_selector {

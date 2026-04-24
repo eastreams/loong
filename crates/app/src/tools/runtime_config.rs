@@ -208,7 +208,7 @@ pub(crate) fn merge_runtime_narrowing_sources(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSkillsRuntimePolicy {
     pub enabled: bool,
     pub require_download_approval: bool,
@@ -216,6 +216,19 @@ pub struct ExternalSkillsRuntimePolicy {
     pub blocked_domains: BTreeSet<String>,
     pub install_root: Option<PathBuf>,
     pub auto_expose_installed: bool,
+}
+
+impl Default for ExternalSkillsRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            require_download_approval: false,
+            allowed_domains: BTreeSet::new(),
+            blocked_domains: BTreeSet::new(),
+            install_root: None,
+            auto_expose_installed: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,6 +508,8 @@ pub struct AutonomyBudgetPolicy {
     pub max_topology_mutations_per_turn: usize,
 }
 
+pub const UNLIMITED_AUTONOMY_BUDGET: usize = usize::MAX;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutonomyPolicySnapshot {
     pub profile: AutonomyProfile,
@@ -532,13 +547,13 @@ impl AutonomyPolicySnapshot {
             AutonomyProfile::BoundedAutonomous => Self {
                 profile,
                 capability_acquisition_mode: AutonomyOperationMode::Allow,
-                provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
-                topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
-                requires_kernel_binding: true,
+                provider_switch_mode: AutonomyOperationMode::Allow,
+                topology_mutation_mode: AutonomyOperationMode::Allow,
+                requires_kernel_binding: false,
                 budget: AutonomyBudgetPolicy {
-                    max_capability_acquisitions_per_turn: 2,
-                    max_provider_switches_per_turn: 1,
-                    max_topology_mutations_per_turn: 1,
+                    max_capability_acquisitions_per_turn: UNLIMITED_AUTONOMY_BUDGET,
+                    max_provider_switches_per_turn: UNLIMITED_AUTONOMY_BUDGET,
+                    max_topology_mutations_per_turn: UNLIMITED_AUTONOMY_BUDGET,
                 },
             },
         }
@@ -1029,7 +1044,7 @@ impl ToolRuntimeConfig {
             .map(|count| count.clamp(1, 10))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
         let autonomy_profile = resolve_autonomy_profile_from_env();
-        let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
+        let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(true);
         let require_download_approval =
             parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(false);
         let allowed_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
@@ -1038,7 +1053,7 @@ impl ToolRuntimeConfig {
             .ok()
             .map(PathBuf::from);
         let auto_expose_installed =
-            parse_env_bool("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
+            parse_env_bool("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(true);
 
         let tool_execution_default_timeout = parse_env_u64("LOONG_TOOL_DEFAULT_TIMEOUT_SECONDS");
         let mut tool_execution_per_tool_timeout = BTreeMap::new();
@@ -1635,17 +1650,17 @@ fn resolve_autonomy_profile_from_env() -> AutonomyProfile {
 
     let parsed_profile = crate::config::parse_autonomy_profile(raw_profile.as_str());
     let Some(profile) = parsed_profile else {
-        let default_profile = AutonomyProfile::default();
-        let default_profile_id = default_profile.as_str();
+        let fallback_profile = AutonomyProfile::DiscoveryOnly;
+        let fallback_profile_id = fallback_profile.as_str();
         let valid_values = crate::config::AUTONOMY_PROFILE_VALID_VALUES;
 
         #[allow(clippy::print_stderr)]
         {
             eprintln!(
-                "warning: invalid LOONG_AUTONOMY_PROFILE `{raw_profile}`; falling back to `{default_profile_id}`. supported values: {valid_values}"
+                "warning: invalid LOONG_AUTONOMY_PROFILE `{raw_profile}`; falling back to `{fallback_profile_id}`. supported values: {valid_values}"
             );
         }
-        return default_profile;
+        return fallback_profile;
     };
 
     profile
@@ -1858,31 +1873,43 @@ mod tests {
             config.web_search.max_results,
             crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
         );
-        assert!(!config.external_skills.enabled);
+        assert!(config.external_skills.enabled);
         assert!(!config.external_skills.require_download_approval);
         assert!(config.external_skills.allowed_domains.is_empty());
         assert!(config.external_skills.blocked_domains.is_empty());
         assert!(config.external_skills.install_root.is_none());
-        assert!(!config.external_skills.auto_expose_installed);
+        assert!(config.external_skills.auto_expose_installed);
     }
 
     #[test]
-    fn autonomy_profile_runtime_config_defaults_to_discovery_only() {
+    fn autonomy_profile_runtime_config_defaults_to_bounded_autonomous() {
         let config = ToolRuntimeConfig::default();
         let snapshot = config.autonomy_policy_snapshot();
 
-        assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
-        assert_eq!(snapshot.profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(config.autonomy_profile, AutonomyProfile::BoundedAutonomous);
+        assert_eq!(snapshot.profile, AutonomyProfile::BoundedAutonomous);
         assert_eq!(
             snapshot.capability_acquisition_mode,
-            AutonomyOperationMode::Deny
+            AutonomyOperationMode::Allow
         );
-        assert_eq!(snapshot.provider_switch_mode, AutonomyOperationMode::Deny);
-        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert_eq!(snapshot.provider_switch_mode, AutonomyOperationMode::Allow);
+        assert_eq!(
+            snapshot.topology_mutation_mode,
+            AutonomyOperationMode::Allow
+        );
         assert!(!snapshot.requires_kernel_binding);
-        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 0);
-        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 0);
-        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+        assert_eq!(
+            snapshot.budget.max_capability_acquisitions_per_turn,
+            UNLIMITED_AUTONOMY_BUDGET
+        );
+        assert_eq!(
+            snapshot.budget.max_provider_switches_per_turn,
+            UNLIMITED_AUTONOMY_BUDGET
+        );
+        assert_eq!(
+            snapshot.budget.max_topology_mutations_per_turn,
+            UNLIMITED_AUTONOMY_BUDGET
+        );
         assert_eq!(AutonomyProfile::DiscoveryOnly.as_str(), "discovery_only");
         assert_eq!(
             AutonomyProfile::GuidedAcquisition.as_str(),
@@ -2076,18 +2103,24 @@ mod tests {
             snapshot.capability_acquisition_mode,
             AutonomyOperationMode::Allow
         );
-        assert_eq!(
-            snapshot.provider_switch_mode,
-            AutonomyOperationMode::ApprovalRequired
-        );
+        assert_eq!(snapshot.provider_switch_mode, AutonomyOperationMode::Allow);
         assert_eq!(
             snapshot.topology_mutation_mode,
-            AutonomyOperationMode::ApprovalRequired
+            AutonomyOperationMode::Allow
         );
-        assert!(snapshot.requires_kernel_binding);
-        assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 2);
-        assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
-        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
+        assert!(!snapshot.requires_kernel_binding);
+        assert_eq!(
+            snapshot.budget.max_capability_acquisitions_per_turn,
+            UNLIMITED_AUTONOMY_BUDGET
+        );
+        assert_eq!(
+            snapshot.budget.max_provider_switches_per_turn,
+            UNLIMITED_AUTONOMY_BUDGET
+        );
+        assert_eq!(
+            snapshot.budget.max_topology_mutations_per_turn,
+            UNLIMITED_AUTONOMY_BUDGET
+        );
     }
 
     #[test]

@@ -77,6 +77,10 @@ impl LatestSelectorCliFixture {
         &self.config_path
     }
 
+    pub(super) fn root_path(&self) -> &Path {
+        &self.root
+    }
+
     pub(super) fn sqlite_path(&self) -> &Path {
         &self.sqlite_path
     }

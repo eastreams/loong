@@ -12,18 +12,25 @@ pub enum TurnCommands {
         long_about = "Run one non-interactive assistant turn through the unified runtime.\n\nThis is the canonical one-shot turn entrypoint. It routes through the real agent runtime rather than the legacy demo harness path."
     )]
     Run {
+        /// Path to the Loong config file, or omit to use normal config discovery
         #[arg(long)]
         config: Option<String>,
+        /// Session id or selector such as `latest`; defaults to the normal CLI session
         #[arg(long)]
         session: Option<String>,
+        /// User message to send through the canonical runtime turn entrypoint
         #[arg(long)]
         message: String,
+        /// Enable ACP bridge behavior for this turn
         #[arg(long, default_value_t = false)]
         acp: bool,
+        /// Stream ACP turn events while the assistant turn runs
         #[arg(long, default_value_t = false)]
         acp_event_stream: bool,
+        /// Bootstrap an MCP server before the ACP turn starts; repeat to add more servers
         #[arg(long = "acp-bootstrap-mcp-server")]
         acp_bootstrap_mcp_server: Vec<String>,
+        /// Working directory used for ACP and bootstrapped MCP server context
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
     },

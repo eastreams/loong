@@ -25,6 +25,7 @@ mod session_state;
 mod subagent;
 mod tool_discovery_state;
 mod tool_input_contract;
+mod tool_loop_supervisor;
 mod tool_result_compaction;
 mod trust_projection;
 mod turn_budget;

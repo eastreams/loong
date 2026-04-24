@@ -17,6 +17,12 @@ use tokio::time::{Duration, Instant, timeout};
 
 #[path = "turn_coordinator/pending_approval.rs"]
 mod pending_approval;
+#[cfg(test)]
+#[path = "turn_coordinator/provider_followup_builder_tests.rs"]
+mod provider_followup_builder_tests;
+#[cfg(test)]
+#[path = "turn_coordinator/provider_turn_loop_tests.rs"]
+mod provider_turn_loop_tests;
 #[path = "turn_coordinator/safe_lane_events.rs"]
 mod safe_lane_events;
 #[path = "turn_coordinator/safe_lane_execution.rs"]
@@ -114,6 +120,12 @@ use super::subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
+use super::tool_loop_supervisor::{
+    ToolLoopSupervisor, ToolLoopSupervisorPolicy, ToolLoopSupervisorVerdict,
+    tool_intent_signature as provider_turn_tool_signature,
+    tool_loop_round_outcome as provider_turn_loop_outcome,
+    tool_name_signature as provider_turn_tool_name_signature,
+};
 use super::trust_projection::{
     emit_provider_failover_trust_event_if_needed, emit_runtime_binding_trust_event_if_needed,
 };
@@ -121,8 +133,6 @@ use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
 };
-
-type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
 use super::turn_checkpoint::{
     ContextCompactionOutcome, TurnCheckpointDiagnostics, TurnCheckpointFailure,
     TurnCheckpointFailureStep, TurnCheckpointFinalizationProgress, TurnCheckpointIdentity,
@@ -150,10 +160,10 @@ use super::turn_shared::ReplyResolutionMode;
 #[cfg(feature = "memory-sqlite")]
 use super::turn_shared::{ApprovalPromptActionId, parse_approval_prompt_action_input};
 use super::turn_shared::{
-    ParsedToolDrivenContinuationReply, ProviderTurnRequestAction, ReplyPersistenceMode,
-    ToolDrivenContinuationState, ToolDrivenFollowupContractMode, ToolDrivenFollowupKind,
-    ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
-    build_tool_driven_followup_tail_with_request_summary_and_contract,
+    FollowupPayloadBudget, ParsedToolDrivenContinuationReply, ProviderTurnRequestAction,
+    ReplyPersistenceMode, ToolDrivenContinuationState, ToolDrivenFollowupContractMode,
+    ToolDrivenFollowupKind, ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision,
+    ToolDrivenReplyPhase, build_tool_driven_followup_tail_with_request_summary_and_contract,
     build_tool_followup_user_prompt_with_context, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
     effective_followup_visible_tool_name, format_approval_required_reply,
@@ -189,6 +199,8 @@ use support::{
     estimate_tokens_for_messages, inject_delegate_workspace_metadata,
     split_delegate_workspace_cleanup, summarize_discovery_first_followup_turn,
 };
+
+type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContextEngine>>;
 
 #[cfg(feature = "memory-sqlite")]
 pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
@@ -523,35 +535,52 @@ impl ProviderTurnLaneExecution {
 #[derive(Debug, Clone, Copy)]
 struct ProviderTurnLoopPolicy {
     max_total_tool_calls: usize,
-    max_consecutive_same_tool: usize,
+    max_followup_tool_payload_chars: usize,
+    max_followup_tool_payload_chars_total: usize,
+    supervisor: ToolLoopSupervisorPolicy,
 }
 
 impl ProviderTurnLoopPolicy {
     fn from_config(config: &LoongConfig) -> Self {
         let turn_loop = &config.conversation.turn_loop;
+        let supervisor = ToolLoopSupervisorPolicy {
+            max_repeated_tool_call_rounds: turn_loop.max_repeated_tool_call_rounds.max(1),
+            max_ping_pong_cycles: turn_loop.max_ping_pong_cycles.max(1),
+            max_same_tool_failure_rounds: turn_loop.max_same_tool_failure_rounds.max(1),
+            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+        };
         Self {
             max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
-            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+            max_followup_tool_payload_chars: turn_loop.max_followup_tool_payload_chars.max(256),
+            max_followup_tool_payload_chars_total: turn_loop
+                .max_followup_tool_payload_chars_total
+                .max(1),
+            supervisor,
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct ProviderTurnLoopState {
     total_tool_calls: usize,
-    consecutive_same_tool: usize,
-    last_tool_name: Option<String>,
-    warned_same_tool_key: Option<String>,
+    followup_payload_budget: FollowupPayloadBudget,
+    supervisor: ToolLoopSupervisor,
 }
 
-#[derive(Debug, Clone)]
-enum ProviderTurnLoopVerdict {
-    Continue,
-    InjectWarning { reason: String },
-    HardStop { reason: String },
-}
+type ProviderTurnLoopVerdict = ToolLoopSupervisorVerdict;
 
 impl ProviderTurnLoopState {
+    fn new(policy: &ProviderTurnLoopPolicy) -> Self {
+        Self {
+            total_tool_calls: 0,
+            followup_payload_budget: FollowupPayloadBudget::new(
+                policy.max_followup_tool_payload_chars,
+                policy.max_followup_tool_payload_chars_total,
+            ),
+            supervisor: ToolLoopSupervisor::default(),
+        }
+    }
+
     fn circuit_breaker_reply(
         &self,
         policy: &ProviderTurnLoopPolicy,
@@ -565,49 +594,44 @@ impl ProviderTurnLoopState {
         &mut self,
         policy: &ProviderTurnLoopPolicy,
         turn: &ProviderTurn,
+        lane_execution: &ProviderTurnLaneExecution,
     ) -> Option<ProviderTurnLoopVerdict> {
         let tool_intent_count = turn.tool_intents.len();
         self.total_tool_calls = self.total_tool_calls.saturating_add(tool_intent_count);
         if tool_intent_count == 0 {
-            self.warned_same_tool_key = None;
+            self.supervisor.clear_pending_warning();
             return None;
         }
 
+        let outcome = match provider_turn_loop_outcome(&lane_execution.turn_result) {
+            Some(outcome) => outcome,
+            None => {
+                self.supervisor.clear_pending_warning();
+                return Some(ProviderTurnLoopVerdict::Continue);
+            }
+        };
+        let tool_signature = provider_turn_tool_signature(&turn.tool_intents);
         let tool_name_signature = provider_turn_tool_name_signature(&turn.tool_intents);
-        if self.last_tool_name.as_deref() == Some(tool_name_signature.as_str()) {
-            self.consecutive_same_tool += 1;
-        } else {
-            self.last_tool_name = Some(tool_name_signature.clone());
-            self.consecutive_same_tool = 1;
-            self.warned_same_tool_key = None;
-        }
-
-        if self.consecutive_same_tool < policy.max_consecutive_same_tool {
-            self.warned_same_tool_key = None;
-            return Some(ProviderTurnLoopVerdict::Continue);
-        }
-
-        let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
-        let reason = format!(
-            "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
-            self.consecutive_same_tool, policy.max_consecutive_same_tool
+        let verdict = self.supervisor.observe_round(
+            &policy.supervisor,
+            tool_signature.as_str(),
+            tool_name_signature.as_str(),
+            outcome.fingerprint.as_str(),
+            outcome.failed,
         );
 
-        if self.warned_same_tool_key.as_deref() == Some(reason_key.as_str()) {
-            Some(ProviderTurnLoopVerdict::HardStop { reason })
-        } else {
-            self.warned_same_tool_key = Some(reason_key);
-            Some(ProviderTurnLoopVerdict::InjectWarning { reason })
-        }
+        Some(verdict)
     }
 }
 
-fn provider_turn_tool_name_signature(intents: &[ToolIntent]) -> String {
-    intents
-        .iter()
-        .map(|intent| intent.tool_name.trim())
-        .collect::<Vec<_>>()
-        .join("||")
+impl Default for ProviderTurnLoopState {
+    fn default() -> Self {
+        Self {
+            total_tool_calls: 0,
+            followup_payload_budget: FollowupPayloadBudget::unbounded(),
+            supervisor: ToolLoopSupervisor::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2050,13 +2074,26 @@ impl ConversationTurnCoordinator {
             session_id,
             &followup_payload,
         );
-        let follow_up_messages = build_turn_reply_followup_messages_with_warning(
+        let mut followup_payload_budget = FollowupPayloadBudget::new(
+            config
+                .conversation
+                .turn_loop
+                .max_followup_tool_payload_chars
+                .max(256),
+            config
+                .conversation
+                .turn_loop
+                .max_followup_tool_payload_chars_total
+                .max(1),
+        );
+        let follow_up_messages = build_turn_reply_followup_messages_with_warning_and_budget(
             &preparation.session.messages,
             "",
             followup_payload,
             None,
             followup_request,
             None,
+            &mut followup_payload_budget,
         );
         let reply = request_completion_with_raw_fallback(
             runtime,
@@ -2817,7 +2854,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ResolvedProviderTurn {
     let turn_loop_policy = ProviderTurnLoopPolicy::from_config(config);
-    let mut turn_loop_state = ProviderTurnLoopState::default();
+    let mut turn_loop_state = ProviderTurnLoopState::new(&turn_loop_policy);
 
     match decide_provider_turn_request_action(result, error_mode) {
         ProviderTurnRequestAction::Continue { turn } => {
@@ -2969,7 +3006,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         .await;
     }
     observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
-    let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
+    let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn, &lane_execution);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
     ProviderTurnContinuePhase::new(
@@ -3342,6 +3379,7 @@ async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
     raw_reply: String,
     reason: String,
     latest_tool_payload: Option<ToolDrivenFollowupPayload>,
+    followup_payload_budget: &mut FollowupPayloadBudget,
 ) -> ResolvedProviderTurn {
     #[cfg(feature = "memory-sqlite")]
     if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
@@ -3362,6 +3400,7 @@ async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
         reason.as_str(),
         latest_tool_payload.as_ref(),
         user_input,
+        followup_payload_budget,
     );
     let reply = request_completion_with_raw_fallback(
         runtime,
@@ -3430,7 +3469,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
         session_id,
         &followup,
     );
-    let follow_up_messages = build_turn_reply_followup_messages_with_contract(
+    let follow_up_messages = build_turn_reply_followup_messages_with_contract_and_budget(
         &current_preparation.session.messages,
         current_continue_phase
             .lane_execution
@@ -3444,6 +3483,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
         user_input,
         loop_warning_reason.as_deref(),
         continuation_expectation.map(MissingToolContinuationExpectation::contract_mode),
+        &mut turn_loop_state.followup_payload_budget,
     );
 
     if provider_continuation_enabled && *remaining_provider_rounds > 1 {
@@ -4008,6 +4048,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     raw_reply,
                     reason,
                     latest_tool_payload,
+                    &mut turn_loop_state.followup_payload_budget,
                 )
                 .await;
             }
@@ -4082,6 +4123,7 @@ fn build_turn_reply_followup_messages(
     )
 }
 
+#[cfg(test)]
 fn build_turn_reply_followup_messages_with_warning(
     base_messages: &[Value],
     assistant_preface: &str,
@@ -4090,7 +4132,28 @@ fn build_turn_reply_followup_messages_with_warning(
     user_input: &str,
     loop_warning_reason: Option<&str>,
 ) -> Vec<Value> {
-    build_turn_reply_followup_messages_with_contract(
+    let mut followup_payload_budget = FollowupPayloadBudget::unbounded();
+    build_turn_reply_followup_messages_with_warning_and_budget(
+        base_messages,
+        assistant_preface,
+        followup,
+        tool_request_summary,
+        user_input,
+        loop_warning_reason,
+        &mut followup_payload_budget,
+    )
+}
+
+fn build_turn_reply_followup_messages_with_warning_and_budget(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    followup: ToolDrivenFollowupPayload,
+    tool_request_summary: Option<&str>,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    followup_payload_budget: &mut FollowupPayloadBudget,
+) -> Vec<Value> {
+    build_turn_reply_followup_messages_with_contract_and_budget(
         base_messages,
         assistant_preface,
         followup,
@@ -4098,10 +4161,11 @@ fn build_turn_reply_followup_messages_with_warning(
         user_input,
         loop_warning_reason,
         None,
+        followup_payload_budget,
     )
 }
 
-fn build_turn_reply_followup_messages_with_contract(
+fn build_turn_reply_followup_messages_with_contract_and_budget(
     base_messages: &[Value],
     assistant_preface: &str,
     followup: ToolDrivenFollowupPayload,
@@ -4109,6 +4173,7 @@ fn build_turn_reply_followup_messages_with_contract(
     user_input: &str,
     loop_warning_reason: Option<&str>,
     continuation_contract: Option<ToolDrivenFollowupContractMode>,
+    followup_payload_budget: &mut FollowupPayloadBudget,
 ) -> Vec<Value> {
     let mut messages = base_messages.to_vec();
     let continuation_contract =
@@ -4121,7 +4186,10 @@ fn build_turn_reply_followup_messages_with_contract(
             loop_warning_reason,
             tool_request_summary,
             continuation_contract.as_deref(),
-            |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
+            |label, text| {
+                let reduced = reduce_followup_payload_for_model(label, text);
+                followup_payload_budget.truncate_payload_text_label(label, reduced.as_ref())
+            },
         ),
     );
     messages
@@ -4133,6 +4201,7 @@ fn build_turn_reply_guard_messages(
     reason: &str,
     latest_tool_payload: Option<&ToolDrivenFollowupPayload>,
     user_input: &str,
+    followup_payload_budget: &mut FollowupPayloadBudget,
 ) -> Vec<Value> {
     let mut messages = base_messages.to_vec();
     messages.extend(build_tool_loop_guard_tail(
@@ -4140,7 +4209,10 @@ fn build_turn_reply_guard_messages(
         reason,
         user_input,
         latest_tool_payload.map(ToolDrivenFollowupPayload::message_context),
-        |label, text| reduce_followup_payload_for_model(label.as_str(), text).into_owned(),
+        |label, text| {
+            let reduced = reduce_followup_payload_for_model(label.as_str(), text);
+            followup_payload_budget.truncate_payload(label, reduced.as_ref())
+        },
     ));
     messages
 }
@@ -5852,10 +5924,13 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .filter(|intent| effective_followup_tool_name(intent) == "tool.search")
         .count();
     let discovery_search_turn = search_tool_intents > 0;
+    let native_empty_tool_call_turn = provider_turn_has_native_empty_tool_calls(turn);
     let malformed_parse_followup_turn =
         provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
-    let supports_provider_turn_followup =
-        followup_chain_active || discovery_search_turn || malformed_parse_followup_turn;
+    let supports_provider_turn_followup = followup_chain_active
+        || native_empty_tool_call_turn
+        || discovery_search_turn
+        || malformed_parse_followup_turn;
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
     let session_context = match runtime.session_context(config, session_id, binding) {
@@ -6016,6 +6091,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     let preface_signals_provider_turn_followup =
         assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
     let supports_provider_turn_followup = followup_chain_active
+        || native_empty_tool_call_turn
         || discovery_search_turn
         || recovery_followup_turn
         || malformed_parse_followup_turn
@@ -6036,6 +6112,94 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         safe_lane_terminal_route,
         tool_events,
     }
+}
+
+fn provider_turn_has_native_empty_tool_calls(turn: &ProviderTurn) -> bool {
+    if !turn.assistant_text.trim().is_empty() {
+        return false;
+    }
+
+    if turn.tool_intents.is_empty() {
+        return false;
+    }
+
+    raw_meta_has_native_tool_calls(&turn.raw_meta)
+}
+
+fn raw_meta_has_native_tool_calls(raw_meta: &Value) -> bool {
+    if raw_meta_has_openai_native_tool_calls(raw_meta) {
+        return true;
+    }
+
+    if raw_meta_has_responses_native_function_call(raw_meta) {
+        return true;
+    }
+
+    raw_meta_has_anthropic_native_tool_use(raw_meta)
+}
+
+fn raw_meta_has_openai_native_tool_calls(raw_meta: &Value) -> bool {
+    let Some(tool_calls_value) = raw_meta.get("tool_calls") else {
+        return false;
+    };
+
+    let Some(tool_calls) = tool_calls_value.as_array() else {
+        return false;
+    };
+
+    !tool_calls.is_empty()
+}
+
+fn raw_meta_has_anthropic_native_tool_use(raw_meta: &Value) -> bool {
+    let Some(content_value) = raw_meta.get("content") else {
+        return false;
+    };
+
+    let Some(content_blocks) = content_value.as_array() else {
+        return false;
+    };
+
+    content_blocks
+        .iter()
+        .any(raw_meta_content_block_is_anthropic_tool_use)
+}
+
+fn raw_meta_has_responses_native_function_call(raw_meta: &Value) -> bool {
+    let Some(output_value) = raw_meta.get("output") else {
+        return false;
+    };
+
+    let Some(output_items) = output_value.as_array() else {
+        return false;
+    };
+
+    output_items
+        .iter()
+        .any(raw_meta_output_item_is_function_call)
+}
+
+fn raw_meta_output_item_is_function_call(output_item: &Value) -> bool {
+    let Some(output_type_value) = output_item.get("type") else {
+        return false;
+    };
+
+    let Some(output_type) = output_type_value.as_str() else {
+        return false;
+    };
+
+    output_type == "function_call"
+}
+
+fn raw_meta_content_block_is_anthropic_tool_use(content_block: &Value) -> bool {
+    let Some(content_type_value) = content_block.get("type") else {
+        return false;
+    };
+
+    let Some(content_type) = content_type_value.as_str() else {
+        return false;
+    };
+
+    content_type == "tool_use"
 }
 
 fn provider_turn_has_malformed_parse_followup_signal(raw_meta: &Value) -> bool {
@@ -8536,130 +8700,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_turn_reply_followup_messages_include_truncation_hint_for_truncated_tool_results() {
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolResult {
-                text: r#"[ok] {"payload_truncated":true,"payload_summary":"..."}"#.to_owned(),
-            },
-            "summarize note.md",
-        );
-
-        let user_prompt = messages
-            .last()
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .expect("user followup prompt should exist");
-        assert!(
-            user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
-        );
-        assert!(user_prompt.contains("Original request:\nsummarize note.md"));
-    }
-
-    #[test]
-    fn build_turn_reply_followup_messages_do_not_include_truncation_hint_for_failure() {
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolFailure {
-                reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
-                retryable: false,
-            },
-            "summarize note.md",
-        );
-
-        let user_prompt = messages
-            .last()
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .expect("user followup prompt should exist");
-        assert!(
-            !user_prompt.contains(crate::conversation::turn_shared::TOOL_TRUNCATION_HINT_PROMPT)
-        );
-    }
-
-    #[test]
-    fn build_turn_reply_followup_messages_promotes_external_skill_invoke_to_system_context() {
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolResult {
-                text: r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#.to_owned(),
-            },
-            "summarize note.md",
-        );
-
-        assert!(
-            messages.iter().any(|message| message.get("role")
-                == Some(&Value::String("system".to_owned()))
-                && message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(|content| content
-                        .contains("Follow the managed skill instruction before answering."))
-                    .unwrap_or(false)),
-            "safe-lane followup should promote invoked external skill instructions into system context: {messages:?}"
-        );
-        assert!(
-            messages
-                .iter()
-                .filter(
-                    |message| message.get("role") == Some(&Value::String("assistant".to_owned()))
-                )
-                .filter_map(|message| message.get("content").and_then(Value::as_str))
-                .all(|content| !content.contains("[tool_result]\n[ok]")),
-            "safe-lane followup should not carry invoke payload forward as an ordinary assistant tool_result: {messages:?}"
-        );
-    }
-
-    #[test]
-    fn build_turn_reply_followup_messages_rejects_truncated_external_skill_invoke_payload() {
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolResult {
-                text: r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":true}"#.to_owned(),
-            },
-            "summarize note.md",
-        );
-
-        assert!(
-            !messages.iter().any(|message| message.get("role")
-                == Some(&Value::String("system".to_owned()))
-                && message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(|content| content
-                        .contains("Follow the managed skill instruction before answering."))
-                    .unwrap_or(false)),
-            "truncated invoke payload must not activate managed skill system context: {messages:?}"
-        );
-        assert!(
-            messages
-                .iter()
-                .filter(
-                    |message| message.get("role") == Some(&Value::String("assistant".to_owned()))
-                )
-                .filter_map(|message| message.get("content").and_then(Value::as_str))
-                .any(|content| content.contains("[tool_result]\n[ok]")),
-            "truncated invoke payload should stay as ordinary assistant tool_result content: {messages:?}"
-        );
-    }
-
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn persist_runtime_self_continuity_for_compaction_merges_live_and_stored_delegate_continuity() {
@@ -9124,245 +9164,6 @@ mod tests {
 
         assert_eq!(tool_node.label, "invoke `delegate_async`");
         assert_eq!(tool_node.tool_name.as_deref(), Some("delegate_async"));
-    }
-
-    #[test]
-    fn build_turn_reply_followup_messages_reduces_file_read_payload_summary() {
-        let content = (0..96)
-            .map(|index| format!("line {index}: {}", "x".repeat(48)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let payload_summary = serde_json::json!({
-            "adapter": "core-tools",
-            "tool_name": "file.read",
-            "path": "/repo/README.md",
-            "bytes": 8_192,
-            "truncated": false,
-            "content": content,
-        })
-        .to_string();
-        let tool_result = format!(
-            "[ok] {}",
-            serde_json::json!({
-                "status": "ok",
-                "tool": "file.read",
-                "tool_call_id": "call-file",
-                "payload_summary": payload_summary,
-                "payload_chars": 8_192,
-                "payload_truncated": false
-            })
-        );
-
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            "summarize README.md",
-        );
-
-        let assistant_tool_result = messages
-            .iter()
-            .find(|message| {
-                message.get("role") == Some(&Value::String("assistant".to_owned()))
-                    && message
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|content| content.starts_with("[tool_result]\n[ok] "))
-            })
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .expect("assistant tool_result followup message should exist");
-        let line = assistant_tool_result
-            .lines()
-            .nth(1)
-            .expect("assistant tool_result should keep payload line");
-        let envelope: Value = serde_json::from_str(
-            line.strip_prefix("[ok] ")
-                .expect("tool result line should preserve status prefix"),
-        )
-        .expect("reduced followup envelope should stay valid json");
-        let summary: Value = serde_json::from_str(
-            envelope["payload_summary"]
-                .as_str()
-                .expect("payload summary should stay encoded json"),
-        )
-        .expect("file.read payload summary should stay valid json");
-
-        assert_eq!(envelope["tool"], "read");
-        assert_eq!(envelope["payload_truncated"], true);
-        assert_eq!(summary["path"], "/repo/README.md");
-        assert_eq!(summary["bytes"], 8_192);
-        assert_eq!(summary["truncated"], false);
-        assert!(summary.get("content_preview").is_some());
-        assert!(summary.get("content_chars").is_some());
-        assert_eq!(summary["content_truncated"], true);
-    }
-
-    #[test]
-    fn build_turn_reply_followup_messages_reduces_shell_exec_payload_summary() {
-        let tool_result = format!(
-            "[ok] {}",
-            serde_json::json!({
-                "status": "ok",
-                "tool": "shell.exec",
-                "tool_call_id": "call-shell",
-                "payload_summary": serde_json::json!({
-                    "adapter": "core-tools",
-                    "tool_name": "shell.exec",
-                    "command": "cargo",
-                    "args": ["test", "--workspace"],
-                    "cwd": "/repo",
-                    "exit_code": 0,
-                    "stdout": (0..80)
-                        .map(|index| format!("stdout line {index}: {}", "x".repeat(40)))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    "stderr": (0..48)
-                        .map(|index| format!("stderr line {index}: {}", "e".repeat(32)))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .to_string(),
-                "payload_chars": 8_192,
-                "payload_truncated": false
-            })
-        );
-
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            "summarize the test run",
-        );
-
-        let (envelope, summary) =
-            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
-
-        assert_eq!(envelope["tool"], "exec");
-        assert_eq!(envelope["payload_truncated"], true);
-        assert_eq!(summary["command"], "cargo");
-        assert_eq!(summary["exit_code"], 0);
-        assert!(summary.get("stdout_preview").is_some());
-        assert!(summary.get("stdout_chars").is_some());
-        assert_eq!(summary["stdout_truncated"], true);
-        assert!(summary.get("stderr_preview").is_some());
-        assert!(summary.get("stderr_chars").is_some());
-        assert_eq!(summary["stderr_truncated"], true);
-        assert!(
-            summary["stdout_preview"]
-                .as_str()
-                .expect("stdout preview should exist")
-                .contains("stdout line 0"),
-            "expected compact stdout preview, got: {summary:?}"
-        );
-        assert!(
-            summary["stderr_preview"]
-                .as_str()
-                .expect("stderr preview should exist")
-                .contains("stderr line 0"),
-            "expected compact stderr preview, got: {summary:?}"
-        );
-    }
-
-    #[test]
-    fn build_turn_reply_followup_messages_compacts_tool_search_payload_summary() {
-        let payload_summary = serde_json::json!({
-            "adapter": "core-tools",
-            "tool_name": "tool.search",
-            "query": "read repo file",
-            "returned": 2,
-            "results": [
-                {
-                    "tool_id": "file.read",
-                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
-                    "argument_hint": "path:string,offset?:integer,limit?:integer",
-                    "required_fields": ["path"],
-                    "required_field_groups": [["path"]],
-                    "tags": ["core", "file", "read"],
-                    "why": ["summary matches query", "tag matches read"],
-                    "lease": "lease-file"
-                },
-                {
-                    "tool_id": "shell.exec",
-                    "summary": "Execute a shell command in the workspace.",
-                    "argument_hint": "command:string,args?:string[]",
-                    "required_fields": ["command"],
-                    "required_field_groups": [["command"]],
-                    "tags": ["core", "shell", "exec"],
-                    "why": ["summary matches query", "tag matches exec"],
-                    "lease": "lease-shell"
-                }
-            ]
-        });
-        let payload_summary_str = payload_summary.to_string();
-        let tool_result = format!(
-            "[ok] {}",
-            serde_json::json!({
-                "status": "ok",
-                "tool": "tool.search",
-                "tool_call_id": "call-search",
-                "payload_chars": 2_048,
-                "payload_summary": payload_summary_str,
-                "payload_truncated": false
-            })
-        );
-
-        let messages = build_turn_reply_followup_messages(
-            &[serde_json::json!({
-                "role": "system",
-                "content": "sys"
-            })],
-            "preface",
-            ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            "find the right tool",
-        );
-
-        let (envelope, summary) =
-            crate::conversation::turn_shared::parse_tool_result_followup_for_test(&messages);
-        let summary_str = envelope["payload_summary"]
-            .as_str()
-            .expect("payload summary should stay encoded json");
-        let results = summary["results"]
-            .as_array()
-            .expect("results should be an array");
-        let first = &results[0];
-
-        assert_eq!(envelope["tool"], "tool.search");
-        assert_eq!(envelope["payload_truncated"], false);
-        assert_ne!(summary_str, payload_summary.to_string());
-        assert_eq!(summary["query"], "read repo file");
-        assert!(summary.get("adapter").is_none());
-        assert!(summary.get("tool_name").is_none());
-        assert_eq!(summary["returned"], 2);
-        assert_eq!(results.len(), 2);
-        assert_eq!(first["tool_id"], "file.read");
-        assert_eq!(first["lease"], "lease-file");
-        for entry in results {
-            assert!(entry.get("tool_id").and_then(Value::as_str).is_some());
-            assert!(entry.get("summary").and_then(Value::as_str).is_some());
-            assert!(entry.get("argument_hint").and_then(Value::as_str).is_some());
-            assert!(
-                entry
-                    .get("required_fields")
-                    .and_then(Value::as_array)
-                    .is_some()
-            );
-            assert!(
-                entry
-                    .get("required_field_groups")
-                    .and_then(Value::as_array)
-                    .is_some()
-            );
-            assert!(entry.get("lease").and_then(Value::as_str).is_some());
-            assert!(entry.get("tags").is_none());
-            assert!(entry.get("why").is_none());
-        }
     }
 
     #[cfg(feature = "memory-sqlite")]

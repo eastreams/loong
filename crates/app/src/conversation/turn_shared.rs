@@ -273,6 +273,76 @@ impl ToolDrivenFollowupLabel {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FollowupPayloadBudget {
+    per_round_max_chars: usize,
+    remaining_total_chars: usize,
+}
+
+impl FollowupPayloadBudget {
+    pub(crate) fn new(per_round_max_chars: usize, total_max_chars: usize) -> Self {
+        Self {
+            per_round_max_chars: per_round_max_chars.max(1),
+            remaining_total_chars: total_max_chars,
+        }
+    }
+
+    pub(crate) fn unbounded() -> Self {
+        Self {
+            per_round_max_chars: usize::MAX,
+            remaining_total_chars: usize::MAX,
+        }
+    }
+
+    pub(crate) fn truncate_payload(
+        &mut self,
+        label: ToolDrivenFollowupLabel,
+        text: &str,
+    ) -> String {
+        let label_text = label.as_str();
+        self.truncate_payload_text_label(label_text, text)
+    }
+
+    pub(crate) fn truncate_payload_text_label(&mut self, label_text: &str, text: &str) -> String {
+        let per_round_allowed = self
+            .per_round_max_chars
+            .min(self.remaining_total_chars.max(1));
+        if self.remaining_total_chars == 0 {
+            let removed = text.trim().chars().count();
+            return format!(
+                "[{label_text}_truncated] removed_chars={removed} budget_exhausted=true"
+            );
+        }
+
+        let bounded = truncate_followup_tool_payload(label_text, text, per_round_allowed);
+        let normalized = text.trim();
+        let total_chars = normalized.chars().count();
+        let consumed_chars = if total_chars <= per_round_allowed {
+            total_chars
+        } else if per_round_allowed > 80 {
+            per_round_allowed - 80
+        } else {
+            per_round_allowed
+        };
+        self.remaining_total_chars = self.remaining_total_chars.saturating_sub(consumed_chars);
+        bounded
+    }
+}
+
+fn truncate_followup_tool_payload(label: &str, text: &str, max_chars: usize) -> String {
+    let normalized = text.trim();
+    let total_chars = normalized.chars().count();
+    if total_chars <= max_chars {
+        return normalized.to_owned();
+    }
+
+    let reserved_chars = 80usize;
+    let keep_chars = max_chars.saturating_sub(reserved_chars).max(1);
+    let truncated = normalized.chars().take(keep_chars).collect::<String>();
+    let removed = total_chars.saturating_sub(keep_chars);
+    format!("{truncated}\n[{label}_truncated] removed_chars={removed}")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolDrivenFollowupTextRef<'a> {
     label: ToolDrivenFollowupLabel,

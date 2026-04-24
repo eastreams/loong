@@ -140,6 +140,7 @@ fn root_help_prefers_grouped_namespaces_and_hides_flat_legacy_aliases() {
     for command in [
         "onboard",
         "ask",
+        "turn",
         "chat",
         "doctor",
         "status",

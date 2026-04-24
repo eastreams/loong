@@ -2979,7 +2979,7 @@ MCP_LOG = "warn"
         assert_eq!(config.queue_owner_ttl_ms(), 30_000);
         assert!(!config.bindings_enabled);
         assert!(!config.emit_runtime_events);
-        assert!(!config.allow_mcp_server_injection);
+        assert!(config.allow_mcp_server_injection);
         assert!(config.acpx_profile().is_none());
     }
 

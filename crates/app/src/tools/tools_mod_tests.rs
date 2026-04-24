@@ -366,7 +366,17 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         "config.import",
         "delegate",
         "delegate_async",
+        "external_skills.fetch",
+        "external_skills.inspect",
+        "external_skills.install",
+        "external_skills.invoke",
+        "external_skills.list",
         "external_skills.policy",
+        "external_skills.recommend",
+        "external_skills.remove",
+        "external_skills.resolve",
+        "external_skills.search",
+        "external_skills.source_search",
         "provider.switch",
         "session_archive",
         "session_artifacts",
@@ -422,7 +432,17 @@ fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websea
         "config.import",
         "delegate",
         "delegate_async",
+        "external_skills.fetch",
+        "external_skills.inspect",
+        "external_skills.install",
+        "external_skills.invoke",
+        "external_skills.list",
         "external_skills.policy",
+        "external_skills.recommend",
+        "external_skills.remove",
+        "external_skills.resolve",
+        "external_skills.search",
+        "external_skills.source_search",
         "provider.switch",
         "session_archive",
         "session_artifacts",
@@ -2051,6 +2071,15 @@ fn direct_browser_routes_managed_browser_actions_through_browser_surface() {
         }))
         .expect("managed browser click routing should succeed"),
         "browser.companion.click"
+    );
+    assert_eq!(
+        route_direct_browser_tool_name(&json!({
+            "session_id": "browser-1",
+            "mode": "selector_text",
+            "selector": "#headline"
+        }))
+        .expect("selector text extraction should stay on the core browser surface"),
+        "browser.extract"
     );
     assert_eq!(
         route_direct_browser_tool_name(&json!({

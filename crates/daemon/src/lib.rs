@@ -493,7 +493,10 @@ pub enum Commands {
         #[arg(long, default_value = "{}")]
         payload: String,
     },
-    #[command(hide = true)]
+    #[command(
+        about = "Run agent turns through the unified runtime entry surface",
+        long_about = "Run agent turns through the unified runtime entry surface.\n\nUse this namespace for direct runtime E2E checks, scripted provider/tool-call debugging, and other workflows that should exercise the same agent turn path as normal CLI conversations."
+    )]
     /// Run agent turns through the unified runtime entry surface
     Turn {
         #[command(subcommand)]
@@ -790,10 +793,13 @@ pub enum Commands {
     },
     /// Build one developer-facing debug bundle over runtime, provider, ACP, session, and audit signals
     Debug {
+        /// Path to the Loong config file, or omit to use normal config discovery
         #[arg(long, global = true)]
         config: Option<String>,
+        /// Emit machine-readable JSON instead of the operator text view
         #[arg(long, global = true, default_value_t = false)]
         json: bool,
+        /// Current session selector used when a subcommand does not provide `--session-id`
         #[arg(long, global = true, default_value = "default")]
         session: String,
         #[command(subcommand)]
@@ -884,33 +890,46 @@ pub enum Commands {
         long_about = "Run one non-interactive one-shot assistant turn.\n\nUse this when you want a fast answer without entering the interactive `loong chat` REPL. The command reuses the normal CLI conversation runtime, session memory, provider selection, and ACP options."
     )]
     Ask {
+        /// Path to the Loong config file, or omit to use normal config discovery
         #[arg(long)]
         config: Option<String>,
+        /// Session id or selector such as `latest`; defaults to the normal CLI session
         #[arg(long)]
         session: Option<String>,
+        /// User message to send through the real one-shot turn runtime
         #[arg(long)]
         message: String,
+        /// Enable ACP bridge behavior for this turn
         #[arg(long, default_value_t = false)]
         acp: bool,
+        /// Stream ACP turn events while the assistant turn runs
         #[arg(long, default_value_t = false)]
         acp_event_stream: bool,
+        /// Bootstrap an MCP server before the ACP turn starts; repeat to add more servers
         #[arg(long = "acp-bootstrap-mcp-server")]
         acp_bootstrap_mcp_server: Vec<String>,
+        /// Working directory used for ACP and bootstrapped MCP server context
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
     },
     /// Start interactive CLI chat channel with sliding-window memory
     Chat {
+        /// Path to the Loong config file, or omit to use normal config discovery
         #[arg(long)]
         config: Option<String>,
+        /// Session id or selector such as `latest`; defaults to the normal CLI session
         #[arg(long)]
         session: Option<String>,
+        /// Enable ACP bridge behavior for this chat session
         #[arg(long, default_value_t = false)]
         acp: bool,
+        /// Stream ACP turn events while chat turns run
         #[arg(long, default_value_t = false)]
         acp_event_stream: bool,
+        /// Bootstrap an MCP server before the ACP session starts; repeat to add more servers
         #[arg(long = "acp-bootstrap-mcp-server")]
         acp_bootstrap_mcp_server: Vec<String>,
+        /// Working directory used for ACP and bootstrapped MCP server context
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
     },
