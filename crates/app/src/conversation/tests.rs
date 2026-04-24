@@ -20,7 +20,7 @@ use super::super::config::{
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::{DefaultConversationRuntime, load_default_conversation_runtime};
-use super::turn_shared::RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT;
+use super::turn_shared::TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT;
 use super::*;
 use crate::CliResult;
 use crate::KernelContext;
@@ -12072,7 +12072,7 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
             let content = message.get("content").and_then(Value::as_str);
             let is_user = role == Some("user");
             let has_retry_prompt = content
-                .is_some_and(|value| value.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT));
+                .is_some_and(|value| value.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT));
             let has_guidance =
                 content.is_some_and(|value| value.contains("Repair guidance for read:"));
             let mentions_path = content.is_some_and(|value| {
@@ -12194,7 +12194,7 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT)
+                        content.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT)
                             && content.contains("Repair guidance for exec:")
                             && content.contains(
                                 "Use a bare lowercase executable name in `payload.command`.",
@@ -12324,7 +12324,7 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT)
+                        content.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT)
                             && content
                                 .contains("The failed request used `/bin/echo`; retry with `echo`")
                     })
@@ -12427,7 +12427,7 @@ async fn handle_turn_with_runtime_browser_stale_session_failure_requests_provide
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.contains(RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT)
+                        content.contains(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT)
                             && content.contains("Repair guidance for browser:")
                             && content.contains("browser-stale-123")
                             && content.contains("Do not reuse older browser session ids.")

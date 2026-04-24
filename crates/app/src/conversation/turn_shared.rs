@@ -28,11 +28,9 @@ pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a d
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const DISCOVERY_RECOVERY_FOLLOWUP_PROMPT: &str = "The previous tool call could not be executed as requested. If you still need a hidden or discoverable capability, call tool.search with a short natural-language description of the missing capability. If tool.search returns a grouped hidden surface such as `skills`, `agent`, or `channel`, do not call that surface name directly; reuse its fresh lease through tool.invoke and place the requested operation inside payload.arguments. Otherwise, provide the best possible answer with the currently available evidence.";
-pub const RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT: &str = "The previous tool call failed, but the task is not complete yet. Analyze the failure, correct the arguments or choose a better-fitting tool, and continue with the next tool call. Only answer directly after the needed tool work succeeds or you can clearly justify that no further tool call is necessary.";
-pub const TERMINAL_TOOL_FAILURE_FOLLOWUP_PROMPT: &str = "The previous tool call failed. Use the failure details and any repair guidance to choose the best next step. Retry only if a corrected or alternative tool call is likely to succeed; otherwise provide the best-effort final answer and clearly state the limitation.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
 const TOOL_FOLLOWUP_REPAIR_PROMPT: &str = "Repair notice:\nThe previous reply described a next step without issuing the required tool call. Do not describe the plan again.";
-const TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT: &str = "The previous tool failure was retryable. Default to [followup_state:continue] and retry or repair the tool call unless the task is already complete or genuinely blocked.";
+pub(crate) const TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT: &str = "The previous tool failure was retryable. Default to [followup_state:continue] and retry or repair the tool call unless the task is already complete or genuinely blocked.";
 const FOLLOWUP_STATE_MARKER_PREFIX: &str = "[followup_state:";
 const MISSING_TOOL_CALL_REASON_PREFIX: &str = "missing_tool_call_followup:";
 const MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS: usize = 240;
@@ -1709,32 +1707,6 @@ pub fn build_discovery_recovery_followup_user_prompt(
     sections.join("\n\n")
 }
 
-pub fn build_tool_failure_followup_user_prompt(
-    user_input: &str,
-    loop_warning_reason: Option<&str>,
-    retryable: bool,
-    repair_guidance: Option<&str>,
-) -> String {
-    let mut sections = vec![
-        if retryable {
-            RETRYABLE_TOOL_FAILURE_FOLLOWUP_PROMPT
-        } else {
-            TERMINAL_TOOL_FAILURE_FOLLOWUP_PROMPT
-        }
-        .to_owned(),
-    ];
-    if let Some(reason) = loop_warning_reason {
-        sections.push(format!(
-            "Loop warning:\n{reason}\nAvoid repeating the same failed tool call with unchanged arguments. Change the payload, choose a different tool, or conclude with a clearly stated limitation."
-        ));
-    }
-    if let Some(repair_guidance) = repair_guidance {
-        sections.push(repair_guidance.to_owned());
-    }
-    sections.push(format!("Original request:\n{user_input}"));
-    sections.join("\n\n")
-}
-
 fn followup_prompt_needs_truncation_hint(
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
@@ -2188,7 +2160,6 @@ where
     build_tool_failure_followup_tail_with_request_summary(
         assistant_preface,
         tool_failure_reason,
-        false,
         user_input,
         loop_warning_reason,
         tool_request_summary,
@@ -2201,7 +2172,6 @@ where
 pub fn build_tool_failure_followup_tail_with_request_summary<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
-    retryable: bool,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     tool_request_summary: Option<&str>,
@@ -2260,15 +2230,16 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_failure_followup_user_prompt(
+        "content": build_tool_followup_user_prompt_with_context(
             user_input,
             loop_warning_reason,
+            None,
+            None,
             combine_followup_extra_context(&[
                 repair_guidance.as_deref(),
                 continuation_contract,
             ])
             .as_deref(),
-            retryable,
         ),
     }));
     messages
@@ -2374,11 +2345,10 @@ where
                 payload_mapper,
             )
         }
-        ToolDrivenFollowupPayload::ToolFailure { reason, retryable } => {
+        ToolDrivenFollowupPayload::ToolFailure { reason, .. } => {
             build_tool_failure_followup_tail_with_request_summary_and_contract(
                 assistant_preface,
                 reason.as_str(),
-                *retryable,
                 user_input,
                 loop_warning_reason,
                 tool_request_summary,
