@@ -5069,6 +5069,502 @@ mod tests {
         );
     }
 
+    // Regression guard for the shortening-rewrite case — the sibling to the
+    // test above, which only exercises same-length rewrite.
+    //
+    // Scenario: 5-turn session, fork `checkpoint/foo` at turn 5, attach a
+    // checkpoint artifact whose source range is turn 5, then rewrite the
+    // transcript down to 2 turns. After rebuild, turn 5's node is gone. The
+    // session-tree layer must not leave `checkpoint/foo` pointing at the
+    // vanished node, and must not leave the artifact's `source_*_node_id`
+    // columns dangling — that is silent data corruption. Expected behaviour
+    // after the fix: the stale head is dropped with a `session_events` audit
+    // record capturing the pre-rewrite content, and the artifact's
+    // out-of-range node-id columns are nulled (payload_json / summary_text
+    // stay intact, so the artifact's own content is preserved).
+    #[test]
+    fn replace_turns_shorter_drops_stale_head_and_nulls_artifact_refs() {
+        let config = isolated_memory_config("replace-turns-shorter-preserves");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        for i in 1..=5 {
+            let role = if i % 2 == 1 { "user" } else { "assistant" };
+            append_session_turn(&config, "root-session", role, &format!("turn-{i}"));
+        }
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:5",
+            "checkpoint/foo",
+        )
+        .expect("fork checkpoint head");
+
+        repo.create_session_artifact(NewSessionArtifactRecord {
+            artifact_id: "artifact-checkpoint-1".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: SessionArtifactKind::Checkpoint,
+            head_name: Some("checkpoint/foo".to_owned()),
+            anchor_node_id: Some("session-turn:root-session:5".to_owned()),
+            source_start_node_id: Some("session-turn:root-session:5".to_owned()),
+            source_end_node_id: Some("session-turn:root-session:5".to_owned()),
+            payload_json: json!({ "exclusive_node_count": 1 }),
+            summary_text: Some("Checkpoint at turn 5".to_owned()),
+        })
+        .expect("create checkpoint artifact");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "rewritten-1".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "rewritten-2".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace session turns");
+
+        // (1) The stale head must be dropped -- it pointed at a node that no
+        //     longer exists, so leaving it in the table is the corruption.
+        let heads = repo.list_session_heads("root-session").expect("list heads");
+        assert!(
+            heads.iter().all(|h| h.head_name != "checkpoint/foo"),
+            "checkpoint/foo head was not dropped; pointer would dangle: {heads:?}"
+        );
+
+        // (2) An audit event records the drop, preserving the original head
+        //     name, the stale node id, and a snapshot of the original
+        //     content so operators can see what was lost.
+        let events = repo
+            .list_all_events("root-session", 128)
+            .expect("list events");
+        let drop_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_kind == "session_tree_rewrite_dropped_head")
+            .collect();
+        assert_eq!(
+            drop_events.len(),
+            1,
+            "expected 1 drop event, got {drop_events:?}"
+        );
+        let payload = &drop_events[0].payload_json;
+        assert_eq!(payload["head_name"].as_str(), Some("checkpoint/foo"));
+        assert_eq!(
+            payload["stale_node_id"].as_str(),
+            Some("session-turn:root-session:5"),
+        );
+        assert_eq!(payload["content_snapshot"].as_str(), Some("turn-5"));
+
+        // (3) The artifact row survives — its own payload_json /
+        //     summary_text is not node-referential, so we keep it.
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts");
+        let artifact = artifacts
+            .iter()
+            .find(|a| a.artifact_id == "artifact-checkpoint-1")
+            .expect("artifact survives");
+        assert_eq!(
+            artifact.summary_text.as_deref(),
+            Some("Checkpoint at turn 5")
+        );
+
+        // (4) But its out-of-range *_node_id columns must be nulled so
+        //     nothing downstream can follow a dangling pointer.
+        assert!(
+            artifact.anchor_node_id.is_none(),
+            "anchor_node_id still dangles: {:?}",
+            artifact.anchor_node_id
+        );
+        assert!(
+            artifact.source_start_node_id.is_none(),
+            "source_start_node_id still dangles: {:?}",
+            artifact.source_start_node_id
+        );
+        assert!(
+            artifact.source_end_node_id.is_none(),
+            "source_end_node_id still dangles: {:?}",
+            artifact.source_end_node_id
+        );
+    }
+
+    // Edge: only some of the artifact's *_node_id columns dangle; the in-range
+    // columns must be preserved verbatim. Exercises the per-column null logic
+    // in `preserve_session_tree_before_rebuild`.
+    #[test]
+    fn replace_turns_shorter_only_nulls_dangling_artifact_columns() {
+        let config = isolated_memory_config("replace-turns-partial-dangle");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        for i in 1..=5 {
+            let role = if i % 2 == 1 { "user" } else { "assistant" };
+            append_session_turn(&config, "root-session", role, &format!("turn-{i}"));
+        }
+
+        // anchor + source_start at turn 1 (in-range when truncating to 2 turns);
+        // source_end at turn 5 (out-of-range).
+        repo.create_session_artifact(NewSessionArtifactRecord {
+            artifact_id: "artifact-partial-1".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: SessionArtifactKind::BranchSummary,
+            head_name: None,
+            anchor_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_start_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_end_node_id: Some("session-turn:root-session:5".to_owned()),
+            payload_json: json!({ "exclusive_node_count": 5 }),
+            summary_text: Some("Span turns 1-5".to_owned()),
+        })
+        .expect("create artifact");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "rewritten-1".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "rewritten-2".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace session turns");
+
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts");
+        let artifact = artifacts
+            .iter()
+            .find(|a| a.artifact_id == "artifact-partial-1")
+            .expect("artifact survives");
+
+        // Preserved (in-range)
+        assert_eq!(
+            artifact.anchor_node_id.as_deref(),
+            Some("session-turn:root-session:1")
+        );
+        assert_eq!(
+            artifact.source_start_node_id.as_deref(),
+            Some("session-turn:root-session:1")
+        );
+        // Nulled (out-of-range)
+        assert!(
+            artifact.source_end_node_id.is_none(),
+            "source_end_node_id should be nulled, got {:?}",
+            artifact.source_end_node_id
+        );
+        // Self-contained content untouched
+        assert_eq!(artifact.summary_text.as_deref(), Some("Span turns 1-5"));
+        assert_eq!(artifact.payload_json["exclusive_node_count"], 5);
+
+        // Audit event: only `source_end` listed in `original_*` payload.
+        let events = repo
+            .list_all_events("root-session", 128)
+            .expect("list events");
+        let null_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_kind == "session_tree_rewrite_nulled_artifact_refs")
+            .collect();
+        assert_eq!(null_events.len(), 1);
+        let payload = &null_events[0].payload_json;
+        assert!(payload["original_anchor_node_id"].is_null());
+        assert!(payload["original_source_start_node_id"].is_null());
+        assert_eq!(
+            payload["original_source_end_node_id"].as_str(),
+            Some("session-turn:root-session:5")
+        );
+    }
+
+    // Edge: two heads pointing past new tail get separate audit events; one
+    // head still in-range survives untouched.
+    #[test]
+    fn replace_turns_shorter_drops_multiple_stale_heads_with_separate_events() {
+        let config = isolated_memory_config("replace-turns-multi-heads");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        for i in 1..=5 {
+            let role = if i % 2 == 1 { "user" } else { "assistant" };
+            append_session_turn(&config, "root-session", role, &format!("turn-{i}"));
+        }
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:5",
+            "checkpoint/foo",
+        )
+        .expect("fork foo");
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:4",
+            "thread/alpha",
+        )
+        .expect("fork alpha");
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:1",
+            "checkpoint/early",
+        )
+        .expect("fork early");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "r1".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "r2".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace session turns");
+
+        let heads = repo.list_session_heads("root-session").expect("list heads");
+        let head_names: Vec<&str> = heads.iter().map(|h| h.head_name.as_str()).collect();
+        assert!(head_names.contains(&ACTIVE_SESSION_HEAD_NAME));
+        assert!(
+            head_names.contains(&"checkpoint/early"),
+            "in-range head survives"
+        );
+        assert!(
+            !head_names.contains(&"checkpoint/foo"),
+            "foo @ turn 5 dropped"
+        );
+        assert!(
+            !head_names.contains(&"thread/alpha"),
+            "alpha @ turn 4 dropped"
+        );
+
+        let events = repo
+            .list_all_events("root-session", 128)
+            .expect("list events");
+        let drop_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_kind == "session_tree_rewrite_dropped_head")
+            .collect();
+        assert_eq!(drop_events.len(), 2);
+        let dropped_names: Vec<&str> = drop_events
+            .iter()
+            .map(|e| e.payload_json["head_name"].as_str().unwrap_or(""))
+            .collect();
+        assert!(dropped_names.contains(&"checkpoint/foo"));
+        assert!(dropped_names.contains(&"thread/alpha"));
+    }
+
+    // Edge: empty rewrite (turns.len() == 0). All non-active heads must be
+    // dropped; active must repoint at root; the root node must survive
+    // (recreated by the rebuild phase via deterministic id).
+    #[test]
+    fn replace_turns_empty_drops_non_active_heads_and_keeps_root() {
+        let config = isolated_memory_config("replace-turns-empty");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "turn-1");
+        append_session_turn(&config, "root-session", "assistant", "turn-2");
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:2",
+            "checkpoint/foo",
+        )
+        .expect("fork");
+
+        store::replace_session_turns_direct("root-session", &[], &config)
+            .expect("replace with empty turns");
+
+        let heads = repo.list_session_heads("root-session").expect("list heads");
+        let head_names: Vec<&str> = heads.iter().map(|h| h.head_name.as_str()).collect();
+        assert_eq!(
+            head_names,
+            vec![ACTIVE_SESSION_HEAD_NAME],
+            "only active head remains after empty rewrite"
+        );
+
+        let active = heads
+            .iter()
+            .find(|h| h.head_name == ACTIVE_SESSION_HEAD_NAME)
+            .expect("active head present");
+        assert_eq!(
+            active.node_id, "session-root:root-session",
+            "active head repoints at root when no turns remain"
+        );
+
+        let nodes = repo.list_session_nodes("root-session").expect("list nodes");
+        assert_eq!(nodes.len(), 1, "only root node survives");
+        assert!(
+            nodes[0].session_turn_index.is_none(),
+            "root node has no turn_index"
+        );
+    }
+
+    // Edge: legacy dangling head (target node was already missing before this
+    // rewrite). Preservation phase cleans it up too -- exercises the
+    // `n.node_id IS NULL` branch in the stale-head SELECT.
+    #[test]
+    fn replace_turns_cleans_up_legacy_dangling_head() {
+        let config = isolated_memory_config("replace-turns-legacy-dangle");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "turn-1");
+
+        // Inject a head that points at a node id that does not exist.
+        {
+            let conn = repo.open_connection().expect("open conn");
+            conn.execute(
+                "INSERT INTO session_heads(session_id, head_name, node_id, head_mode, updated_at)
+                 VALUES (?1, ?2, ?3, 'live', ?4)",
+                params![
+                    "root-session",
+                    "checkpoint/legacy",
+                    "session-turn:root-session:99",
+                    0_i64
+                ],
+            )
+            .expect("inject legacy head");
+        }
+        let heads_pre = repo
+            .list_session_heads("root-session")
+            .expect("pre-list heads");
+        assert!(
+            heads_pre.iter().any(|h| h.head_name == "checkpoint/legacy"),
+            "legacy head injected"
+        );
+
+        // Trigger any rewrite to fire the preservation phase.
+        store::replace_session_turns_direct(
+            "root-session",
+            &[store::SessionWindowTurn {
+                role: "user".to_owned(),
+                content: "r1".to_owned(),
+                ts: Some(100),
+            }],
+            &config,
+        )
+        .expect("replace");
+
+        let heads_post = repo
+            .list_session_heads("root-session")
+            .expect("post-list heads");
+        assert!(
+            !heads_post
+                .iter()
+                .any(|h| h.head_name == "checkpoint/legacy"),
+            "legacy dangling head was cleaned up"
+        );
+
+        let events = repo
+            .list_all_events("root-session", 128)
+            .expect("list events");
+        let drop_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_kind == "session_tree_rewrite_dropped_head")
+            .collect();
+        let legacy_drop = drop_events
+            .iter()
+            .find(|e| e.payload_json["head_name"].as_str() == Some("checkpoint/legacy"))
+            .expect("legacy drop event recorded");
+        assert_eq!(
+            legacy_drop.payload_json["stale_node_id"].as_str(),
+            Some("session-turn:root-session:99")
+        );
+        // Content snapshot is null since the target never existed.
+        assert!(legacy_drop.payload_json["content_snapshot"].is_null());
+    }
+
+    // Edge: same-length rewrite must NOT emit any preservation events; the
+    // existing test only verifies that heads + artifacts survive, not that
+    // the preservation phase stays a no-op.
+    #[test]
+    fn replace_turns_same_length_emits_no_preservation_events() {
+        let config = isolated_memory_config("replace-turns-equal-length-noop");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "turn-1");
+        append_session_turn(&config, "root-session", "assistant", "turn-2");
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:1",
+            "thread/alpha",
+        )
+        .expect("fork");
+        repo.create_session_artifact(NewSessionArtifactRecord {
+            artifact_id: "art-1".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: SessionArtifactKind::BranchSummary,
+            head_name: Some("thread/alpha".to_owned()),
+            anchor_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_start_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_end_node_id: Some("session-turn:root-session:1".to_owned()),
+            payload_json: json!({}),
+            summary_text: Some("s".to_owned()),
+        })
+        .expect("create artifact");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "r1".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "r2".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace");
+
+        let events = repo
+            .list_all_events("root-session", 128)
+            .expect("list events");
+        let preserve_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event_kind == "session_tree_rewrite_dropped_head"
+                    || e.event_kind == "session_tree_rewrite_nulled_artifact_refs"
+            })
+            .collect();
+        assert!(
+            preserve_events.is_empty(),
+            "expected zero preservation events for same-length rewrite, got {preserve_events:?}"
+        );
+
+        // Belt-and-suspenders: confirm head + artifact survive untouched.
+        let heads = repo.list_session_heads("root-session").expect("list heads");
+        assert!(heads.iter().any(|h| h.head_name == "thread/alpha"));
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts");
+        let art = artifacts
+            .iter()
+            .find(|a| a.artifact_id == "art-1")
+            .expect("survives");
+        assert_eq!(
+            art.anchor_node_id.as_deref(),
+            Some("session-turn:root-session:1")
+        );
+    }
+
     #[test]
     fn session_repository_updates_state_and_last_error() {
         let config = isolated_memory_config("update-state");
