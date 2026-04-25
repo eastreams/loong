@@ -194,6 +194,15 @@ const ONEBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     gateway_ingress_is_enabled: None,
 };
 
+const WHATSAPP_PERSONAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
+    ChannelIntegrationDescriptor {
+        channel_id: "whatsapp-personal",
+        background_runtime: None,
+        is_enabled: whatsapp_personal_channel_is_enabled,
+        collect_validation_issues: collect_whatsapp_personal_channel_validation_issues,
+        background_surface_is_enabled: None,
+    };
+
 const DISCORD_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     channel_id: "discord",
     background_runtime: None,
@@ -410,6 +419,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     WEIXIN_CHANNEL_INTEGRATION,
     QQBOT_CHANNEL_INTEGRATION,
     ONEBOT_CHANNEL_INTEGRATION,
+    WHATSAPP_PERSONAL_CHANNEL_INTEGRATION,
     DISCORD_CHANNEL_INTEGRATION,
     SLACK_CHANNEL_INTEGRATION,
     LINE_CHANNEL_INTEGRATION,
@@ -791,6 +801,10 @@ fn onebot_channel_is_enabled(config: &LoongConfig) -> bool {
     config.onebot.enabled
 }
 
+fn whatsapp_personal_channel_is_enabled(config: &LoongConfig) -> bool {
+    config.whatsapp_personal.enabled
+}
+
 fn discord_channel_is_enabled(config: &LoongConfig) -> bool {
     config.discord.enabled
 }
@@ -893,6 +907,12 @@ fn collect_qqbot_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigVa
 
 fn collect_onebot_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
     config.onebot.validate()
+}
+
+fn collect_whatsapp_personal_channel_validation_issues(
+    config: &LoongConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.whatsapp_personal.validate()
 }
 
 fn collect_discord_channel_validation_issues(config: &LoongConfig) -> Vec<ConfigValidationIssue> {
@@ -1299,6 +1319,24 @@ mod tests {
             ChannelOperationalModel::PluginBacked
         );
         assert_eq!(onebot.serve_subcommand, Some("channels serve onebot"));
+
+        let whatsapp_personal =
+            channel_descriptor("whatsapp-web").expect("whatsapp personal alias should resolve");
+        assert_eq!(whatsapp_personal.id, "whatsapp-personal");
+        assert_eq!(whatsapp_personal.label, "WhatsApp Personal");
+        assert_eq!(whatsapp_personal.surface_label, "whatsapp personal channel");
+        assert_eq!(
+            whatsapp_personal.runtime_kind,
+            ChannelRuntimeKind::PluginBacked
+        );
+        assert_eq!(
+            whatsapp_personal.operational_model,
+            ChannelOperationalModel::PluginBacked
+        );
+        assert_eq!(
+            whatsapp_personal.serve_subcommand,
+            Some("channels serve whatsapp-personal")
+        );
     }
 
     #[test]

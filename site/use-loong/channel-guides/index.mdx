@@ -5,7 +5,7 @@ description: One setup page per actionable Loong channel surface.
 
 # Channel Guides
 
-Loong currently exposes 28 cataloged channel surfaces. Of those, 25 are already actionable public surfaces: 5 gateway-supervised runtime surfaces, 2 standalone native-serve surfaces, 15 config-backed outbound surfaces, and 3 plugin-backed bridge surfaces. The remaining 3 surfaces stay catalog-only planned entries. This hub keeps the full matrix visible while the higher-level chooser pages stay compact.
+Loong currently exposes 29 cataloged channel surfaces. Of those, 26 are already actionable public surfaces: 5 gateway-supervised runtime surfaces, 2 standalone native-serve surfaces, 15 config-backed outbound surfaces, and 4 plugin-backed bridge surfaces. The remaining 3 surfaces stay catalog-only planned entries. This hub keeps the full matrix visible while the higher-level chooser pages stay compact.
 
 Use [Channels](/use-loong/channels) when you still need the conceptual model first. Use this hub when you already know the surface and want the exact config, command, and support boundary for that one channel. Keep [Channel Recipes](/use-loong/channel-recipes) for representative rollout patterns rather than the full channel inventory.
 
@@ -19,7 +19,7 @@ Use this short list when you want a practical starting point before scanning the
 | the lightest reply-loop bot | [Telegram](/use-loong/channel-guides/telegram) | it remains the smallest runtime-backed setup path |
 | a Cloud API plus webhook runtime | [WhatsApp](/use-loong/channel-guides/whatsapp) | send and serve are both shipped on the same surface |
 | the official enterprise AIBot lane | [WeCom](/use-loong/channel-guides/wecom) | the public docs keep the long-connection contract explicit |
-| a WeChat / QQ bridge-first lane | [Weixin](/use-loong/channel-guides/weixin), [QQ Bot](/use-loong/channel-guides/qqbot), or [OneBot](/use-loong/channel-guides/onebot) | plugin-backed bridge surfaces stay visible and actionable instead of being flattened into placeholders |
+| a WeChat / QQ / personal WhatsApp bridge-first lane | [Weixin](/use-loong/channel-guides/weixin), [QQ Bot](/use-loong/channel-guides/qqbot), [OneBot](/use-loong/channel-guides/onebot), or [WhatsApp Personal](/use-loong/channel-guides/whatsapp-personal) | plugin-backed bridge surfaces stay visible and actionable instead of being flattened into placeholders |
 | one operator-owned inbound webhook edge or one-way governed delivery | [Webhook](/use-loong/channel-guides/webhook) or [Email](/use-loong/channel-guides/email) | Webhook now covers the standalone native-serve lane, while Email remains a clean outbound-only example |
 
 ## Gateway-Supervised Runtime Surfaces
@@ -54,6 +54,7 @@ These surfaces are already real Loong channel contracts, but the active runtime 
 | [Weixin](/use-loong/channel-guides/weixin) | wechat_clawbot_ilink_bridge | run `loong weixin onboard`, then verify with `loong doctor` / `loong channels` | external plugin |
 | [QQ Bot](/use-loong/channel-guides/qqbot) | qq_official_bot_gateway_or_plugin_bridge | configure bridge contract + run `loong doctor` / `loong channels` | external plugin |
 | [OneBot](/use-loong/channel-guides/onebot) | onebot_v11_bridge | configure bridge contract + run `loong doctor` / `loong channels` | external plugin |
+| [WhatsApp Personal](/use-loong/channel-guides/whatsapp-personal) | whatsapp_web_baileys_bridge | run the bundled QR bridge, then use `loong doctor` / `loong channels` / grouped send/serve | external plugin |
 
 ## Config-Backed Outbound Surfaces
 

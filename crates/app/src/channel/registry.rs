@@ -44,6 +44,7 @@ use super::{
 #[allow(unused_imports)]
 pub use bridge::{
     ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WEIXIN_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WHATSAPP_PERSONAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
 };
 
 #[path = "registry_bridge.rs"]

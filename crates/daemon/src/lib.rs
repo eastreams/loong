@@ -42,7 +42,8 @@ pub use self::channel_cli_specs::{
     QQBOT_SEND_CLI_SPEC, SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC, SYNOLOGY_CHAT_SEND_CLI_SPEC,
     TEAMS_SEND_CLI_SPEC, TELEGRAM_SEND_CLI_SPEC, TELEGRAM_SERVE_CLI_SPEC, TWITCH_SEND_CLI_SPEC,
     WEBHOOK_SEND_CLI_SPEC, WECOM_SEND_CLI_SPEC, WECOM_SERVE_CLI_SPEC, WEIXIN_SEND_CLI_SPEC,
-    WEIXIN_SERVE_CLI_SPEC, WHATSAPP_SEND_CLI_SPEC,
+    WEIXIN_SERVE_CLI_SPEC, WHATSAPP_PERSONAL_SEND_CLI_SPEC, WHATSAPP_PERSONAL_SERVE_CLI_SPEC,
+    WHATSAPP_SEND_CLI_SPEC,
 };
 pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
@@ -56,6 +57,7 @@ pub use self::managed_plugin_bridge_runtime::{
     default_weixin_send_target_kind, parse_onebot_send_target_kind, parse_qqbot_send_target_kind,
     parse_weixin_send_target_kind, run_onebot_send_cli_impl, run_onebot_serve_cli_impl,
     run_qqbot_send_cli_impl, run_weixin_send_cli_impl, run_weixin_serve_cli_impl,
+    run_whatsapp_personal_send_cli_impl, run_whatsapp_personal_serve_cli_impl,
 };
 pub use self::mcp_cli::{
     build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,

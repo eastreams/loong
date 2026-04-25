@@ -25,7 +25,7 @@ use super::{
         NextcloudTalkChannelConfig, NostrChannelConfig, QqbotChannelConfig, SignalChannelConfig,
         SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig,
         TlonChannelConfig, TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig,
-        WhatsappChannelConfig,
+        WhatsappChannelConfig, WhatsappPersonalChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -132,6 +132,8 @@ pub struct LoongConfig {
     pub qqbot: QqbotChannelConfig,
     #[serde(default)]
     pub onebot: OnebotChannelConfig,
+    #[serde(default)]
+    pub whatsapp_personal: WhatsappPersonalChannelConfig,
     #[serde(default)]
     pub discord: DiscordChannelConfig,
     #[serde(default)]
@@ -1133,6 +1135,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongConfig) {
     canonicalize_weixin_channel_for_encoding(&mut config.weixin);
     canonicalize_qqbot_channel_for_encoding(&mut config.qqbot);
     canonicalize_onebot_channel_for_encoding(&mut config.onebot);
+    canonicalize_whatsapp_personal_channel_for_encoding(&mut config.whatsapp_personal);
     canonicalize_discord_channel_for_encoding(&mut config.discord);
     canonicalize_line_channel_for_encoding(&mut config.line);
     canonicalize_dingtalk_channel_for_encoding(&mut config.dingtalk);
@@ -1235,6 +1238,16 @@ fn canonicalize_onebot_channel_for_encoding(config: &mut OnebotChannelConfig) {
             &mut account.websocket_url_env,
         );
         canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
+    }
+}
+
+fn canonicalize_whatsapp_personal_channel_for_encoding(config: &mut WhatsappPersonalChannelConfig) {
+    canonicalize_env_string_reference(&mut config.bridge_url, &mut config.bridge_url_env);
+    canonicalize_env_string_reference(&mut config.auth_dir, &mut config.auth_dir_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_string_reference(&mut account.bridge_url, &mut account.bridge_url_env);
+        canonicalize_env_string_reference(&mut account.auth_dir, &mut account.auth_dir_env);
     }
 }
 

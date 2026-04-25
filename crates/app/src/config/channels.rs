@@ -49,7 +49,8 @@ pub use account_resolution::normalize_channel_account_id;
 #[allow(unused_imports)]
 pub use bridge::{
     OnebotAccountConfig, OnebotChannelConfig, ResolvedOnebotChannelConfig,
-    ResolvedWeixinChannelConfig, WeixinAccountConfig, WeixinChannelConfig,
+    ResolvedWeixinChannelConfig, ResolvedWhatsappPersonalChannelConfig, WeixinAccountConfig,
+    WeixinChannelConfig, WhatsappPersonalAccountConfig, WhatsappPersonalChannelConfig,
 };
 pub use nostr_impl::{NostrAccountConfig, NostrChannelConfig, ResolvedNostrChannelConfig};
 pub(crate) use nostr_impl::{parse_nostr_private_key_hex, parse_nostr_public_key_hex};
@@ -75,7 +76,8 @@ pub(crate) use shared_types::{
     TLON_CODE_ENV, TLON_SHIP_ENV, TLON_URL_ENV, TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, WHATSAPP_ACCESS_TOKEN_ENV,
-    WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
+    WHATSAPP_APP_SECRET_ENV, WHATSAPP_PERSONAL_AUTH_DIR_ENV, WHATSAPP_PERSONAL_BRIDGE_URL_ENV,
+    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
 };
 use signal_impl::{
     default_signal_account_env, default_signal_service_url, default_signal_service_url_env,
@@ -2179,6 +2181,23 @@ impl Default for OnebotChannelConfig {
             access_token: None,
             access_token_env: Some(ONEBOT_ACCESS_TOKEN_ENV.to_owned()),
             allowed_group_ids: Vec::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for WhatsappPersonalChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            managed_bridge_plugin_id: None,
+            bridge_url: None,
+            bridge_url_env: Some(WHATSAPP_PERSONAL_BRIDGE_URL_ENV.to_owned()),
+            auth_dir: None,
+            auth_dir_env: Some(WHATSAPP_PERSONAL_AUTH_DIR_ENV.to_owned()),
+            allowed_chat_ids: Vec::new(),
             accounts: BTreeMap::new(),
         }
     }

@@ -71,10 +71,11 @@ This surface can run directly through its own `*-serve` command, or under [Gatew
 
 - This page documents the current WhatsApp Cloud API business-account lane: outbound sends are shipped and the webhook reply service is also implemented.
 - Serve mode needs `verify_token` and `app_secret` in addition to the Cloud API access token and phone number id.
-- Keep the Cloud API credential path distinct from any future scan-to-link or personal-account pairing help surface so operators do not confuse QR-style account linking with `access_token` / `phone_number_id` provisioning.
+- Keep the Cloud API credential path distinct from the QR-linked [WhatsApp Personal](/use-loong/channel-guides/whatsapp-personal) surface so operators do not confuse Meta business credentials with personal-account pairing.
 
 ## Related Docs
 
+- Continue to [WhatsApp Personal](/use-loong/channel-guides/whatsapp-personal) for the QR-linked personal-account bridge lane.
 - Continue to [Channel Guides](/use-loong/channel-guides/index) for the full shipped channel matrix.
 - Continue to [Channels](/use-loong/channels) for the conceptual surface model.
 - Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
