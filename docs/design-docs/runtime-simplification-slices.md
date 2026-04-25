@@ -17,6 +17,28 @@ The recommendations here are grounded in the current Loong codebase. The task
 framing is pi-mono-aligned simplification, but the evidence below is taken from
 Loong's existing source rather than from a direct comparator import.
 
+## Architectural Stance
+
+Loong should not grow separate "coding agent" and "non-coding agent" runtime
+bases.
+
+The coding-agent runtime is the base substrate.
+
+Other agent experiences should be treated as modular capability layers on top
+of that base:
+
+- the turn loop stays one coding-grade execution core
+- tool usage, recovery, and verification stay one governed execution core
+- non-coding surfaces add domain modules, channel adapters, or product
+  workflows without forking the base runtime model
+
+That means simplification work should prefer:
+
+- making the coding-grade core thinner, clearer, and more reliable
+- keeping extension points modular above that core
+- avoiding a second runtime path just because a product surface is less
+  code-centric
+
 ## What Is Already In Good Shape
 
 Several important seams are already converged and should stay intact:

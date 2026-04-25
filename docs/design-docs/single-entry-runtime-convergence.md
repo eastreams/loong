@@ -62,6 +62,12 @@ The first refactor phase must preserve all of the following:
 That does not imply that chat, runtime, session durability, ACP dispatch, TUI rendering, and
 future Web/App surfaces should continue to share one internal ownership boundary.
 
+The coding-agent runtime remains the one core execution substrate.
+
+Non-coding experiences should be modeled as modular capability layers on that
+same base rather than as a second runtime family with separate turn semantics,
+tool semantics, or recovery semantics.
+
 ### 2. Session durability is core runtime state
 
 LoongClaw must treat the following as runtime/session core, not optional memory:
