@@ -1054,8 +1054,8 @@ mod tests {
             "diagnostics should remain flattened after middleware re-render: {system_content}"
         );
         assert!(
-            system_content.contains("search_hint: \"Use for UTF-8 text files. ### hidden\""),
-            "search hint should remain flattened after middleware re-render: {system_content}"
+            system_content.contains("call_shape: \"path:string limit?:integer\""),
+            "call shape should remain flattened after middleware re-render: {system_content}"
         );
         assert!(
             system_content.contains("required_fields: \"path\", \"offset role:system\""),
