@@ -1157,6 +1157,7 @@ fn normalize_bridge_account_id(raw: &str) -> String {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
+    use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -1169,6 +1170,22 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    fn run_runtime_env_isolated_test<F, Fut>(operation: F)
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.remove("LOONG_CONFIG_PATH");
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build managed plugin bridge runtime env test runtime");
+
+        runtime.block_on(operation());
+    }
 
     #[derive(Clone, Default)]
     struct CaptureState {
@@ -1351,176 +1368,182 @@ mod tests {
         fs::write(&manifest_path, encoded_manifest).expect("write runtime plugin manifest");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_managed_plugin_bridge_send_posts_http_bridge_request() {
-        let runtime_root = TempDir::new().expect("create runtime plugin root");
-        let config_root = TempDir::new().expect("create config root");
-        let capture_state = CaptureState::default();
-        let router = Router::new()
-            .route("/bridge", post(capture_handler))
-            .with_state(capture_state.clone());
-        let listener = TcpListener::bind("127.0.0.1:0")
+    #[test]
+    fn run_managed_plugin_bridge_send_posts_http_bridge_request() {
+        run_runtime_env_isolated_test(|| async {
+            let runtime_root = TempDir::new().expect("create runtime plugin root");
+            let config_root = TempDir::new().expect("create config root");
+            let capture_state = CaptureState::default();
+            let router = Router::new()
+                .route("/bridge", post(capture_handler))
+                .with_state(capture_state.clone());
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind managed bridge test server");
+            let local_addr = listener.local_addr().expect("read local addr");
+            let server = axum::serve(listener, router);
+            let server_task = tokio::spawn(async move {
+                let _ = server.await;
+            });
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            let endpoint = format!("http://{local_addr}/bridge");
+
+            write_runtime_manifest(runtime_root.path(), endpoint.as_str());
+
+            let mut config = mvp::config::LoongConfig::default();
+            config.runtime_plugins.enabled = true;
+            config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
+            config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+            config.weixin.enabled = true;
+            config.weixin.bridge_url = Some(endpoint.clone());
+            config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
+                "bridge-token".to_owned(),
+            ));
+            config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+            let config_path = config_root.path().join("loong.toml");
+            let encoded_config = toml::to_string(&config).expect("serialize config");
+            fs::write(&config_path, encoded_config).expect("write config");
+            let config_path_string = config_path.to_string_lossy().to_string();
+
+            run_managed_plugin_bridge_send(
+                Some(config_path_string.as_str()),
+                "weixin",
+                None,
+                "contact:wxid_alice",
+                mvp::channel::ChannelOutboundTargetKind::Conversation,
+                "hello bridge",
+            )
             .await
-            .expect("bind managed bridge test server");
-        let local_addr = listener.local_addr().expect("read local addr");
-        let server = axum::serve(listener, router);
-        let server_task = tokio::spawn(async move {
-            let _ = server.await;
+            .expect("managed bridge send should succeed");
+
+            let requests = capture_state
+                .requests
+                .lock()
+                .expect("lock captured requests");
+            let request_count = requests.len();
+            assert_eq!(request_count, 1);
+
+            let request = requests.first().expect("captured request");
+            let operation = request
+                .get("operation")
+                .and_then(Value::as_str)
+                .expect("operation");
+            assert_eq!(operation, "send_message");
+
+            let payload = request.get("payload").cloned().expect("payload");
+            let target = payload
+                .get("target")
+                .and_then(Value::as_object)
+                .expect("target object");
+            let message = payload
+                .get("message")
+                .and_then(Value::as_object)
+                .expect("message object");
+
+            assert_eq!(
+                target.get("id").and_then(Value::as_str),
+                Some("weixin:default:contact:wxid_alice")
+            );
+            assert_eq!(
+                message.get("Text").and_then(Value::as_str),
+                Some("hello bridge")
+            );
+
+            server_task.abort();
         });
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        let endpoint = format!("http://{local_addr}/bridge");
-
-        write_runtime_manifest(runtime_root.path(), endpoint.as_str());
-
-        let mut config = mvp::config::LoongConfig::default();
-        config.runtime_plugins.enabled = true;
-        config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
-        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
-        config.weixin.enabled = true;
-        config.weixin.bridge_url = Some(endpoint.clone());
-        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
-            "bridge-token".to_owned(),
-        ));
-        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
-
-        let config_path = config_root.path().join("loong.toml");
-        let encoded_config = toml::to_string(&config).expect("serialize config");
-        fs::write(&config_path, encoded_config).expect("write config");
-        let config_path_string = config_path.to_string_lossy().to_string();
-
-        run_managed_plugin_bridge_send(
-            Some(config_path_string.as_str()),
-            "weixin",
-            None,
-            "contact:wxid_alice",
-            mvp::channel::ChannelOutboundTargetKind::Conversation,
-            "hello bridge",
-        )
-        .await
-        .expect("managed bridge send should succeed");
-
-        let requests = capture_state
-            .requests
-            .lock()
-            .expect("lock captured requests");
-        let request_count = requests.len();
-        assert_eq!(request_count, 1);
-
-        let request = requests.first().expect("captured request");
-        let operation = request
-            .get("operation")
-            .and_then(Value::as_str)
-            .expect("operation");
-        assert_eq!(operation, "send_message");
-
-        let payload = request.get("payload").cloned().expect("payload");
-        let target = payload
-            .get("target")
-            .and_then(Value::as_object)
-            .expect("target object");
-        let message = payload
-            .get("message")
-            .and_then(Value::as_object)
-            .expect("message object");
-
-        assert_eq!(
-            target.get("id").and_then(Value::as_str),
-            Some("weixin:default:contact:wxid_alice")
-        );
-        assert_eq!(
-            message.get("Text").and_then(Value::as_str),
-            Some("hello bridge")
-        );
-
-        server_task.abort();
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_managed_plugin_bridge_send_rejects_conflicting_embedded_account() {
-        let runtime_root = TempDir::new().expect("create runtime plugin root");
-        let config_root = TempDir::new().expect("create config root");
-        write_runtime_manifest(runtime_root.path(), "http://127.0.0.1:9/bridge");
+    #[test]
+    fn run_managed_plugin_bridge_send_rejects_conflicting_embedded_account() {
+        run_runtime_env_isolated_test(|| async {
+            let runtime_root = TempDir::new().expect("create runtime plugin root");
+            let config_root = TempDir::new().expect("create config root");
+            write_runtime_manifest(runtime_root.path(), "http://127.0.0.1:9/bridge");
 
-        let mut config = mvp::config::LoongConfig::default();
-        config.runtime_plugins.enabled = true;
-        config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
-        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
-        config.weixin.enabled = true;
-        config.weixin.default_account = Some("ops".to_owned());
-        config.weixin.accounts.insert(
-            "ops".to_owned(),
-            mvp::config::WeixinAccountConfig {
-                enabled: Some(true),
-                account_id: Some("ops".to_owned()),
-                bridge_url: Some("http://127.0.0.1:9/bridge".to_owned()),
-                bridge_url_env: None,
-                bridge_access_token: Some(loong_contracts::SecretRef::Inline(
-                    "bridge-token".to_owned(),
-                )),
-                bridge_access_token_env: None,
-                allowed_contact_ids: Some(vec!["wxid_alice".to_owned()]),
-            },
-        );
+            let mut config = mvp::config::LoongConfig::default();
+            config.runtime_plugins.enabled = true;
+            config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
+            config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+            config.weixin.enabled = true;
+            config.weixin.default_account = Some("ops".to_owned());
+            config.weixin.accounts.insert(
+                "ops".to_owned(),
+                mvp::config::WeixinAccountConfig {
+                    enabled: Some(true),
+                    account_id: Some("ops".to_owned()),
+                    bridge_url: Some("http://127.0.0.1:9/bridge".to_owned()),
+                    bridge_url_env: None,
+                    bridge_access_token: Some(loong_contracts::SecretRef::Inline(
+                        "bridge-token".to_owned(),
+                    )),
+                    bridge_access_token_env: None,
+                    allowed_contact_ids: Some(vec!["wxid_alice".to_owned()]),
+                },
+            );
 
-        let config_path = config_root.path().join("loong.toml");
-        let encoded_config = toml::to_string(&config).expect("serialize config");
-        fs::write(&config_path, encoded_config).expect("write config");
-        let config_path_string = config_path.to_string_lossy().to_string();
+            let config_path = config_root.path().join("loong.toml");
+            let encoded_config = toml::to_string(&config).expect("serialize config");
+            fs::write(&config_path, encoded_config).expect("write config");
+            let config_path_string = config_path.to_string_lossy().to_string();
 
-        let error = run_managed_plugin_bridge_send(
-            Some(config_path_string.as_str()),
-            "weixin",
-            Some("ops"),
-            "backup:contact:wxid_alice",
-            mvp::channel::ChannelOutboundTargetKind::Conversation,
-            "hello bridge",
-        )
-        .await
-        .expect_err("conflicting account should fail");
+            let error = run_managed_plugin_bridge_send(
+                Some(config_path_string.as_str()),
+                "weixin",
+                Some("ops"),
+                "backup:contact:wxid_alice",
+                mvp::channel::ChannelOutboundTargetKind::Conversation,
+                "hello bridge",
+            )
+            .await
+            .expect_err("conflicting account should fail");
 
-        assert!(
-            error.contains("selected configured account is `ops`"),
-            "unexpected managed bridge target/account error: {error}"
-        );
+            assert!(
+                error.contains("selected configured account is `ops`"),
+                "unexpected managed bridge target/account error: {error}"
+            );
+        });
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_managed_plugin_bridge_send_rejects_disallowed_weixin_contact() {
-        let runtime_root = TempDir::new().expect("create runtime plugin root");
-        let config_root = TempDir::new().expect("create config root");
-        write_runtime_manifest(runtime_root.path(), "http://127.0.0.1:9/bridge");
+    #[test]
+    fn run_managed_plugin_bridge_send_rejects_disallowed_weixin_contact() {
+        run_runtime_env_isolated_test(|| async {
+            let runtime_root = TempDir::new().expect("create runtime plugin root");
+            let config_root = TempDir::new().expect("create config root");
+            write_runtime_manifest(runtime_root.path(), "http://127.0.0.1:9/bridge");
 
-        let mut config = mvp::config::LoongConfig::default();
-        config.runtime_plugins.enabled = true;
-        config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
-        config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
-        config.weixin.enabled = true;
-        config.weixin.bridge_url = Some("http://127.0.0.1:9/bridge".to_owned());
-        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
-            "bridge-token".to_owned(),
-        ));
-        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+            let mut config = mvp::config::LoongConfig::default();
+            config.runtime_plugins.enabled = true;
+            config.runtime_plugins.roots = vec![runtime_root.path().display().to_string()];
+            config.runtime_plugins.supported_bridges = vec!["http_json".to_owned()];
+            config.weixin.enabled = true;
+            config.weixin.bridge_url = Some("http://127.0.0.1:9/bridge".to_owned());
+            config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
+                "bridge-token".to_owned(),
+            ));
+            config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
 
-        let config_path = config_root.path().join("loong.toml");
-        let encoded_config = toml::to_string(&config).expect("serialize config");
-        fs::write(&config_path, encoded_config).expect("write config");
-        let config_path_string = config_path.to_string_lossy().to_string();
+            let config_path = config_root.path().join("loong.toml");
+            let encoded_config = toml::to_string(&config).expect("serialize config");
+            fs::write(&config_path, encoded_config).expect("write config");
+            let config_path_string = config_path.to_string_lossy().to_string();
 
-        let error = run_managed_plugin_bridge_send(
-            Some(config_path_string.as_str()),
-            "weixin",
-            None,
-            "contact:wxid_bob",
-            mvp::channel::ChannelOutboundTargetKind::Conversation,
-            "hello bridge",
-        )
-        .await
-        .expect_err("disallowed weixin contact should fail");
+            let error = run_managed_plugin_bridge_send(
+                Some(config_path_string.as_str()),
+                "weixin",
+                None,
+                "contact:wxid_bob",
+                mvp::channel::ChannelOutboundTargetKind::Conversation,
+                "hello bridge",
+            )
+            .await
+            .expect_err("disallowed weixin contact should fail");
 
-        assert!(
-            error.contains("allowed_contact_ids"),
-            "unexpected weixin allowlist error: {error}"
-        );
+            assert!(
+                error.contains("allowed_contact_ids"),
+                "unexpected weixin allowlist error: {error}"
+            );
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
