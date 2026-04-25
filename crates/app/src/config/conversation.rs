@@ -28,7 +28,7 @@ pub struct ConversationConfig {
     pub safe_lane_plan_execution_enabled: bool,
     #[serde(default = "default_fast_lane_max_tool_steps_per_turn")]
     pub fast_lane_max_tool_steps_per_turn: usize,
-    #[serde(default)]
+    #[serde(default = "default_fast_lane_parallel_tool_execution_enabled")]
     pub fast_lane_parallel_tool_execution_enabled: bool,
     #[serde(default = "default_fast_lane_parallel_tool_execution_max_in_flight")]
     pub fast_lane_parallel_tool_execution_max_in_flight: usize,
@@ -132,7 +132,8 @@ impl Default for ConversationConfig {
             hybrid_lane_enabled: default_true(),
             safe_lane_plan_execution_enabled: false,
             fast_lane_max_tool_steps_per_turn: default_fast_lane_max_tool_steps_per_turn(),
-            fast_lane_parallel_tool_execution_enabled: false,
+            fast_lane_parallel_tool_execution_enabled:
+                default_fast_lane_parallel_tool_execution_enabled(),
             fast_lane_parallel_tool_execution_max_in_flight:
                 default_fast_lane_parallel_tool_execution_max_in_flight(),
             safe_lane_max_tool_steps_per_turn: default_safe_lane_max_tool_steps_per_turn(),
@@ -460,11 +461,11 @@ const fn default_true() -> bool {
 }
 
 const fn default_turn_loop_max_rounds() -> usize {
-    4
+    6
 }
 
 const fn default_turn_loop_max_tool_steps_per_round() -> usize {
-    1
+    2
 }
 
 const fn default_turn_loop_max_repeated_tool_call_rounds() -> usize {
@@ -500,7 +501,11 @@ const fn default_turn_loop_max_consecutive_same_tool() -> usize {
 }
 
 const fn default_fast_lane_max_tool_steps_per_turn() -> usize {
-    1
+    2
+}
+
+const fn default_fast_lane_parallel_tool_execution_enabled() -> bool {
+    true
 }
 
 const fn default_fast_lane_parallel_tool_execution_max_in_flight() -> usize {

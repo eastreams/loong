@@ -7574,8 +7574,8 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
         "expected persisted discovery state to compile into the system prompt: {system_text}"
     );
     assert!(
-        system_text.contains("exact_tool_id"),
-        "expected discovery delta to explain exact refresh guidance: {system_text}"
+        system_text.contains("Use direct tools first"),
+        "expected discovery delta to keep the direct-tools-first guidance concise: {system_text}"
     );
     assert!(
         system_text.contains("read"),
@@ -7652,11 +7652,7 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
         "expected prompt-shaped summary text to render as a quoted single-line advisory value: {system_text}"
     );
     assert!(
-        system_text.contains("search_hint: \"Use for UTF-8 text files. ### hidden\""),
-        "expected prompt-shaped search hint to render as a quoted single-line advisory value: {system_text}"
-    );
-    assert!(
-        system_text.contains("argument_hint: \"path:string limit?:integer\""),
+        system_text.contains("call_shape: \"path:string limit?:integer\""),
         "expected prompt-shaped argument hint to render as a quoted single-line advisory value: {system_text}"
     );
     assert!(

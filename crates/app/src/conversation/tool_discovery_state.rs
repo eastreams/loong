@@ -123,10 +123,7 @@ impl ToolDiscoveryState {
         sections.push("[tool_discovery_delta]".to_owned());
         sections.push("Recent discovery state is advisory context only.".to_owned());
         sections.push(
-            "Use tool.invoke with a fresh lease from the current tool.search result.".to_owned(),
-        );
-        sections.push(
-            "If you already know the tool id and need a refreshed card, call tool.search with exact_tool_id."
+            "Use direct tools first; use tool.invoke only for a currently discovered hidden surface."
                 .to_owned(),
         );
 
@@ -174,28 +171,10 @@ impl ToolDiscoveryState {
 
             entry_lines.push(format!("- {rendered_tool_id}: {rendered_summary}"));
 
-            if let Some(search_hint) = entry.search_hint.as_deref() {
-                let rendered_search_hint =
-                    crate::advisory_prompt::render_governed_advisory_inline_value(search_hint);
-                entry_lines.push(format!("  search_hint: {rendered_search_hint}"));
-            }
-
             if let Some(argument_hint) = entry.argument_hint.as_deref() {
                 let rendered_argument_hint =
                     crate::advisory_prompt::render_governed_advisory_inline_value(argument_hint);
-                entry_lines.push(format!("  argument_hint: {rendered_argument_hint}"));
-            }
-
-            if let Some(surface_id) = entry.surface_id.as_deref() {
-                let rendered_surface_id =
-                    crate::advisory_prompt::render_governed_advisory_inline_value(surface_id);
-                entry_lines.push(format!("  surface_id: {rendered_surface_id}"));
-            }
-
-            if let Some(usage_guidance) = entry.usage_guidance.as_deref() {
-                let rendered_usage_guidance =
-                    crate::advisory_prompt::render_governed_advisory_inline_value(usage_guidance);
-                entry_lines.push(format!("  usage_guidance: {rendered_usage_guidance}"));
+                entry_lines.push(format!("  call_shape: {rendered_argument_hint}"));
             }
 
             if !entry.required_fields.is_empty() {
@@ -211,14 +190,6 @@ impl ToolDiscoveryState {
                     render_tool_discovery_advisory_groups(entry.required_field_groups.as_slice());
                 entry_lines.push(format!("  required_groups: {required_groups}"));
             }
-
-            let rendered_refresh_tool_id =
-                crate::advisory_prompt::render_governed_advisory_inline_value(
-                    entry.tool_id.as_str(),
-                );
-            entry_lines.push(format!(
-                "  refresh: tool.search {{ \"exact_tool_id\": {rendered_refresh_tool_id} }}"
-            ));
         }
 
         if total_entries > MAX_RENDERED_TOOL_DISCOVERY_ENTRIES {
@@ -823,22 +794,8 @@ mod tests {
             "expected summary to render as a quoted single-line advisory value: {rendered}"
         );
         assert!(
-            rendered.contains("search_hint: \"Use for UTF-8 text files. ### hidden\""),
-            "expected search hint to render as a quoted single-line advisory value: {rendered}"
-        );
-        assert!(
-            rendered.contains("argument_hint: \"path:string limit?:integer\""),
+            rendered.contains("call_shape: \"path:string limit?:integer\""),
             "expected argument hint to render as a quoted single-line advisory value: {rendered}"
-        );
-        assert!(
-            rendered.contains("surface_id: \"read ### hidden\""),
-            "expected surface id to render as a quoted single-line advisory value: {rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "usage_guidance: \"Prefer this surface before shell for source work. ## hidden\""
-            ),
-            "expected usage guidance to render as a quoted single-line advisory value: {rendered}"
         );
         assert!(
             rendered.contains("required_fields: \"path\", \"offset role:system\""),
@@ -883,10 +840,6 @@ mod tests {
             "exact refresh target should be quoted and flattened: {rendered}"
         );
         assert!(
-            rendered.contains("refresh: tool.search { \"exact_tool_id\": \"read\\\" # SYSTEM\" }"),
-            "refresh example should quote and flatten the rendered tool id: {rendered}"
-        );
-        assert!(
             !rendered.contains("\n# SYSTEM"),
             "exact refresh targets must not create raw prompt headings: {rendered}"
         );
@@ -916,10 +869,9 @@ mod tests {
         let rendered = state.render_delta_prompt();
 
         assert!(rendered.contains("[tool_discovery_delta]"));
-        assert!(rendered.contains("exact_tool_id"));
+        assert!(rendered.contains("Use direct tools first"));
         assert!(rendered.contains("read"));
-        assert!(rendered.contains("surface_id: \"read\""));
-        assert!(rendered.contains("usage_guidance: \"Prefer this surface before shell for source, config, and patch-oriented work.\""));
+        assert!(rendered.contains("call_shape: \"path:string\""));
     }
 
     #[test]

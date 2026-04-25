@@ -2449,7 +2449,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
         let raw = std::fs::read_to_string(&config_path).expect("read template");
         assert!(raw.contains("[conversation]"));
-        assert!(raw.contains("fast_lane_parallel_tool_execution_enabled = false"));
+        assert!(raw.contains("fast_lane_parallel_tool_execution_enabled = true"));
         assert!(raw.contains("fast_lane_parallel_tool_execution_max_in_flight = 4"));
 
         std::fs::remove_file(&config_path).ok();

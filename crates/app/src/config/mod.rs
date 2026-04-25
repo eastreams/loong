@@ -2387,8 +2387,8 @@ bot_token = { file = "/run/secrets/telegram" }
     #[test]
     fn turn_loop_policy_defaults_are_stable() {
         let config = LoongConfig::default();
-        assert_eq!(config.conversation.turn_loop.max_rounds, 4);
-        assert_eq!(config.conversation.turn_loop.max_tool_steps_per_round, 1);
+        assert_eq!(config.conversation.turn_loop.max_rounds, 6);
+        assert_eq!(config.conversation.turn_loop.max_tool_steps_per_round, 2);
         assert_eq!(
             config.conversation.turn_loop.max_repeated_tool_call_rounds,
             2
@@ -2559,8 +2559,8 @@ safe_lane_health_replan_warn_threshold = 0.55
         let config = ConversationConfig::default();
         assert!(config.hybrid_lane_enabled);
         assert!(!config.safe_lane_plan_execution_enabled);
-        assert_eq!(config.fast_lane_max_tool_steps_per_turn, 1);
-        assert!(!config.fast_lane_parallel_tool_execution_enabled);
+        assert_eq!(config.fast_lane_max_tool_steps_per_turn, 2);
+        assert!(config.fast_lane_parallel_tool_execution_enabled);
         assert_eq!(config.fast_lane_parallel_tool_execution_max_in_flight, 4);
         assert_eq!(config.safe_lane_max_tool_steps_per_turn, 1);
         assert_eq!(config.safe_lane_node_max_attempts, 2);
