@@ -61,6 +61,33 @@ fn harness_builds_with_invoke_tool_capability() {
 }
 
 #[test]
+fn harness_builder_preserves_custom_capabilities_and_tool_config() {
+    let harness = TurnTestHarness::builder()
+        .capabilities(BTreeSet::from([Capability::MemoryRead]))
+        .tool_config(ToolRuntimeConfig {
+            shell_allow: BTreeSet::from(["echo".to_owned()]),
+            ..ToolRuntimeConfig::default()
+        })
+        .build();
+
+    assert!(
+        harness
+            .kernel_ctx
+            .token
+            .allowed_capabilities
+            .contains(&Capability::MemoryRead)
+    );
+    assert!(
+        !harness
+            .kernel_ctx
+            .token
+            .allowed_capabilities
+            .contains(&Capability::InvokeTool)
+    );
+    assert!(harness.temp_dir.exists());
+}
+
+#[test]
 fn harness_temp_dirs_are_unique() {
     let h1 = TurnTestHarness::new();
     let h2 = TurnTestHarness::new();

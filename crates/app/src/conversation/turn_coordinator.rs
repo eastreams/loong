@@ -893,6 +893,15 @@ impl ProviderTurnRequestTerminalPhase {
     }
 }
 
+#[cfg(test)]
+fn provider_turn_request_error_text(action: &ProviderTurnRequestAction) -> Option<&str> {
+    match action {
+        ProviderTurnRequestAction::Continue { .. } => None,
+        ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => Some(reply.as_str()),
+        ProviderTurnRequestAction::ReturnError { error } => Some(error.as_str()),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SafeLaneTurnOutcome {
     result: TurnResult,
@@ -2845,6 +2854,17 @@ fn build_turn_loop_circuit_breaker_resolved_turn(
     ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
 }
 
+fn resolve_followup_persisted_reply(
+    continue_phase: &ProviderTurnContinuePhase,
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    reply: String,
+    usage: Option<Value>,
+) -> ResolvedProviderTurn {
+    let checkpoint = continue_phase.checkpoint(preparation, user_input, reply.as_str());
+    ResolvedProviderTurn::persist_reply(reply, usage, checkpoint)
+}
+
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
     runtime: &R,
@@ -3229,19 +3249,16 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 config,
                                 runtime,
                                 session_id,
-                                provider_error_text.as_str(),
+                                &provider_error_text,
                                 binding,
                             )
                             .await;
-                            let checkpoint = current_continue_phase.checkpoint(
+                            return resolve_followup_persisted_reply(
+                                &current_continue_phase,
                                 preparation,
                                 user_input,
-                                raw_reply.as_str(),
-                            );
-                            return ResolvedProviderTurn::persist_reply(
                                 raw_reply,
                                 current_continue_phase.lane_execution.provider_usage.clone(),
-                                checkpoint,
                             );
                         }
                     }
@@ -3255,17 +3272,21 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         raw_reply.as_str(),
                     )
                     .await;
-                    let checkpoint =
-                        current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                    return ResolvedProviderTurn::persist_reply(reply, None, checkpoint);
+                    return resolve_followup_persisted_reply(
+                        &current_continue_phase,
+                        preparation,
+                        user_input,
+                        reply,
+                        None,
+                    );
                 }
 
-                let checkpoint =
-                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
-                return ResolvedProviderTurn::persist_reply(
+                return resolve_followup_persisted_reply(
+                    &current_continue_phase,
+                    preparation,
+                    user_input,
                     raw_reply,
                     current_continue_phase.lane_execution.provider_usage.clone(),
-                    checkpoint,
                 );
             }
             ReplyLoopDecision::GuardFollowup {
@@ -9529,6 +9550,17 @@ mod tests {
                 panic!("propagated provider error should resolve to return-error outcome")
             }
         }
+    }
+
+    #[test]
+    fn provider_turn_request_error_text_reads_return_error_text() {
+        let action = ProviderTurnRequestAction::ReturnError {
+            error: "timeout".to_owned(),
+        };
+
+        let error_text = provider_turn_request_error_text(&action);
+
+        assert_eq!(error_text, Some("timeout"));
     }
 
     #[test]

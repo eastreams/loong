@@ -941,29 +941,9 @@ async fn process_cli_chat_input(
     }
 
     let agent_runtime = crate::agent_runtime::AgentRuntime::new();
+    let turn_request = build_interactive_agent_turn_request(runtime, input, event_sink);
     let turn_result = agent_runtime
-        .run_turn_with_runtime(
-            runtime,
-            &crate::agent_runtime::AgentTurnRequest {
-                message: input.to_owned(),
-                turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-                channel_id: runtime.session_address.channel_id.clone(),
-                account_id: runtime.session_address.account_id.clone(),
-                conversation_id: runtime.session_address.conversation_id.clone(),
-                participant_id: runtime.session_address.participant_id.clone(),
-                thread_id: runtime.session_address.thread_id.clone(),
-                metadata: BTreeMap::new(),
-                acp: runtime.explicit_acp_request,
-                acp_event_stream: event_sink.is_some(),
-                acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
-                acp_cwd: runtime
-                    .effective_working_directory
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                live_surface_enabled: true,
-            },
-            event_sink,
-        )
+        .run_turn_with_runtime(runtime, &turn_request, event_sink)
         .await?;
 
     Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
@@ -1052,55 +1032,69 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     observer_override: Option<ConversationTurnObserverHandle>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
-    let acp_options = if runtime.explicit_acp_request {
-        AcpConversationTurnOptions::explicit()
-    } else {
-        AcpConversationTurnOptions::automatic()
-    }
-    .with_event_sink(event_sink)
-    .with_additional_bootstrap_mcp_servers(&runtime.effective_bootstrap_mcp_servers)
-    .with_working_directory(runtime.effective_working_directory.as_deref())
-    .with_metadata(metadata)
-    .with_provenance(provenance);
-    let live_surface_observer = if let Some(observer) = observer_override {
-        Some(observer)
-    } else if live_surface_enabled {
-        let render_width = detect_cli_chat_render_width();
-        Some(build_cli_chat_live_surface_observer(render_width))
-    } else {
-        None
-    };
+    let acp_options = build_cli_turn_acp_options(runtime, event_sink, metadata, provenance);
+    let live_surface_observer = resolve_cli_turn_observer(live_surface_enabled, observer_override);
+    let runtime_binding = runtime.conversation_binding();
+
+    execute_cli_turn_outcome(
+        runtime,
+        &turn_config,
+        address,
+        input,
+        provider_error_mode,
+        &acp_options,
+        runtime_binding,
+        ingress,
+        live_surface_observer,
+    )
+    .await
+}
+
+async fn execute_cli_turn_outcome(
+    runtime: &CliTurnRuntime,
+    turn_config: &LoongConfig,
+    address: &ConversationSessionAddress,
+    input: &str,
+    provider_error_mode: ProviderErrorMode,
+    acp_options: &AcpConversationTurnOptions<'_>,
+    runtime_binding: ConversationRuntimeBinding<'_>,
+    ingress: Option<&ConversationIngressContext>,
+    live_surface_observer: Option<ConversationTurnObserverHandle>,
+) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     if let Some(ingress) = ingress {
-        runtime
+        let reply = runtime
             .turn_coordinator
             .handle_turn_with_address_and_acp_options_and_ingress_and_observer(
-                &turn_config,
+                turn_config,
                 address,
                 input,
                 provider_error_mode,
-                &acp_options,
-                runtime.conversation_binding(),
+                acp_options,
+                runtime_binding,
                 Some(ingress),
                 live_surface_observer,
             )
-            .await
-            .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
-    } else {
-        runtime
-            .turn_coordinator
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
-                &turn_config,
-                address,
-                input,
-                provider_error_mode,
-                &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
-                &acp_options,
-                runtime.conversation_binding(),
-                None,
-                live_surface_observer,
-            )
-            .await
+            .await?;
+        let outcome = crate::conversation::ConversationTurnOutcome { reply, usage: None };
+        return Ok(outcome);
     }
+
+    let conversation_runtime =
+        crate::conversation::DefaultConversationRuntime::from_config_or_env(turn_config)?;
+    runtime
+        .turn_coordinator
+        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
+            turn_config,
+            address,
+            input,
+            provider_error_mode,
+            &conversation_runtime,
+            acp_options,
+            runtime_binding,
+            None,
+            live_surface_observer,
+        )
+        .await
 }
 
 fn reload_cli_turn_config(config: &LoongConfig, resolved_path: &Path) -> CliResult<LoongConfig> {
@@ -1108,6 +1102,68 @@ fn reload_cli_turn_config(config: &LoongConfig, resolved_path: &Path) -> CliResu
         return Ok(config.clone());
     }
     config.reload_provider_runtime_state_from_path(resolved_path)
+}
+
+fn build_interactive_agent_turn_request(
+    runtime: &CliTurnRuntime,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+) -> crate::agent_runtime::AgentTurnRequest {
+    crate::agent_runtime::AgentTurnRequest {
+        message: input.to_owned(),
+        turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+        channel_id: runtime.session_address.channel_id.clone(),
+        account_id: runtime.session_address.account_id.clone(),
+        conversation_id: runtime.session_address.conversation_id.clone(),
+        participant_id: runtime.session_address.participant_id.clone(),
+        thread_id: runtime.session_address.thread_id.clone(),
+        metadata: BTreeMap::new(),
+        acp: runtime.explicit_acp_request,
+        acp_event_stream: event_sink.is_some(),
+        acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+        acp_cwd: runtime
+            .effective_working_directory
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        live_surface_enabled: true,
+    }
+}
+
+fn build_cli_turn_acp_options<'a>(
+    runtime: &'a CliTurnRuntime,
+    event_sink: Option<&'a dyn AcpTurnEventSink>,
+    metadata: Option<&'a BTreeMap<String, String>>,
+    provenance: AcpTurnProvenance<'a>,
+) -> AcpConversationTurnOptions<'a> {
+    let base_options = if runtime.explicit_acp_request {
+        AcpConversationTurnOptions::explicit()
+    } else {
+        AcpConversationTurnOptions::automatic()
+    };
+
+    base_options
+        .with_event_sink(event_sink)
+        .with_additional_bootstrap_mcp_servers(&runtime.effective_bootstrap_mcp_servers)
+        .with_working_directory(runtime.effective_working_directory.as_deref())
+        .with_metadata(metadata)
+        .with_provenance(provenance)
+}
+
+fn resolve_cli_turn_observer(
+    live_surface_enabled: bool,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> Option<ConversationTurnObserverHandle> {
+    if let Some(observer) = observer_override {
+        return Some(observer);
+    }
+
+    if !live_surface_enabled {
+        return None;
+    }
+
+    let render_width = detect_cli_chat_render_width();
+    let observer = build_cli_chat_live_surface_observer(render_width);
+    Some(observer)
 }
 
 fn is_exit_command(config: &LoongConfig, input: &str) -> bool {

@@ -110,10 +110,7 @@ impl AgentRuntime {
         session_hint: Option<&str>,
         request: &AgentTurnRequest,
     ) -> CliResult<AgentTurnResult> {
-        if request.message.trim().is_empty() {
-            return Err("agent runtime message must not be empty".to_owned());
-        }
-
+        require_turn_message(request)?;
         let options = cli_chat_options_for_turn_request(request);
         let runtime = initialize_cli_turn_runtime(
             config_path,
@@ -226,10 +223,7 @@ impl AgentRuntime {
         provider_error_mode: crate::conversation::ProviderErrorMode,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<AgentTurnResult> {
-        if request.message.trim().is_empty() {
-            return Err("agent runtime message must not be empty".to_owned());
-        }
-        let message = request.message.as_str();
+        let message = require_turn_message(request)?;
 
         let turn_address = resolved_session_address(runtime, request);
         let explicit_acp_request = runtime.explicit_acp_request
@@ -256,26 +250,22 @@ impl AgentRuntime {
                 acp_manager,
             )
             .await?;
-            let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
-            let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
             return match execution.outcome {
                 crate::acp::AcpConversationTurnExecutionOutcome::Succeeded(success) => {
-                    Ok(AgentTurnResult {
-                        session_id: runtime.session_id.clone(),
-                        output_text: success.result.output_text,
-                        turn_mode: request.turn_mode,
-                        governed_session_mode: runtime.conversation_binding().session_mode(),
-                        state: Some(acp_session_state_label(success.result.state).to_owned()),
-                        stop_reason: success
+                    Ok(build_agent_turn_result(
+                        runtime,
+                        request,
+                        success.result.output_text,
+                        Some(acp_session_state_label(success.result.state).to_owned()),
+                        success
                             .result
                             .stop_reason
                             .map(acp_turn_stop_reason_label)
                             .map(ToOwned::to_owned),
-                        usage: success.result.usage,
-                        event_count: success.runtime_events.len(),
-                        prompt_assembly,
-                        prompt_cache,
-                    })
+                        success.result.usage,
+                        success.runtime_events.len(),
+                    )
+                    .await)
                 }
                 crate::acp::AcpConversationTurnExecutionOutcome::Failed(failure) => {
                     Err(failure.error)
@@ -298,21 +288,16 @@ impl AgentRuntime {
                 observer,
             )
             .await?;
-        let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
-        let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
-
-        Ok(AgentTurnResult {
-            session_id: runtime.session_id.clone(),
-            output_text: turn_outcome.reply,
-            turn_mode: request.turn_mode,
-            governed_session_mode: runtime.conversation_binding().session_mode(),
-            state: None,
-            stop_reason: None,
-            usage: turn_outcome.usage,
-            event_count: 0,
-            prompt_assembly,
-            prompt_cache,
-        })
+        Ok(build_agent_turn_result(
+            runtime,
+            request,
+            turn_outcome.reply,
+            None,
+            None,
+            turn_outcome.usage,
+            0,
+        )
+        .await)
     }
 
     pub async fn resume_turn(
@@ -338,19 +323,12 @@ impl AgentRuntime {
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
     ) -> CliResult<AgentTurnResult> {
-        if request.message.trim().is_empty() {
-            return Err("agent runtime message must not be empty".to_owned());
-        }
-
-        let options = cli_chat_options_for_turn_request(request);
-        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        require_turn_message(request)?;
+        let runtime = initialize_loaded_config_runtime_for_turn_request(
             resolved_path,
             config,
             session_hint,
-            &options,
-            kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            false,
+            request,
         )?;
 
         self.run_turn_with_runtime(&runtime, request, event_sink)
@@ -367,19 +345,12 @@ impl AgentRuntime {
         observer: Option<crate::conversation::ConversationTurnObserverHandle>,
         provider_error_mode: crate::conversation::ProviderErrorMode,
     ) -> CliResult<AgentTurnResult> {
-        if request.message.trim().is_empty() {
-            return Err("agent runtime message must not be empty".to_owned());
-        }
-
-        let options = cli_chat_options_for_turn_request(request);
-        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        require_turn_message(request)?;
+        let runtime = initialize_loaded_config_runtime_for_turn_request(
             resolved_path,
             config,
             session_hint,
-            &options,
-            kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            false,
+            request,
         )?;
 
         self.run_turn_with_runtime_and_observer_and_context_and_error_mode(
@@ -409,19 +380,12 @@ impl AgentRuntime {
         event_sink: Option<&dyn AcpTurnEventSink>,
         acp_manager: Arc<crate::acp::AcpSessionManager>,
     ) -> CliResult<AgentTurnResult> {
-        if request.message.trim().is_empty() {
-            return Err("agent runtime message must not be empty".to_owned());
-        }
-
-        let options = cli_chat_options_for_turn_request(request);
-        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        require_turn_message(request)?;
+        let runtime = initialize_loaded_config_runtime_for_turn_request(
             resolved_path,
             config,
             session_hint,
-            &options,
-            kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
-            false,
+            request,
         )?;
 
         self.run_turn_with_runtime_and_context_and_manager(
@@ -530,6 +494,31 @@ fn cli_chat_options_for_turn_request(request: &AgentTurnRequest) -> CliChatOptio
         acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
         acp_working_directory: normalized_turn_working_directory(request.acp_cwd.as_deref()),
     }
+}
+
+fn require_turn_message(request: &AgentTurnRequest) -> CliResult<&str> {
+    if request.message.trim().is_empty() {
+        return Err("agent runtime message must not be empty".to_owned());
+    }
+    Ok(request.message.as_str())
+}
+
+fn initialize_loaded_config_runtime_for_turn_request(
+    resolved_path: PathBuf,
+    config: crate::config::LoongConfig,
+    session_hint: Option<&str>,
+    request: &AgentTurnRequest,
+) -> CliResult<crate::chat::CliTurnRuntime> {
+    let options = cli_chat_options_for_turn_request(request);
+    initialize_cli_turn_runtime_with_loaded_config(
+        resolved_path,
+        config,
+        session_hint,
+        &options,
+        kernel_scope_for_turn_mode(request.turn_mode),
+        crate::chat::CliSessionRequirement::AllowImplicitDefault,
+        false,
+    )
 }
 
 fn normalized_turn_working_directory(value: Option<&str>) -> Option<std::path::PathBuf> {
@@ -649,6 +638,32 @@ async fn load_runtime_prompt_frame_summary(
     {
         let _ = runtime;
         PromptFrameEventSummary::default()
+    }
+}
+
+async fn build_agent_turn_result(
+    runtime: &crate::chat::CliTurnRuntime,
+    request: &AgentTurnRequest,
+    output_text: String,
+    state: Option<String>,
+    stop_reason: Option<String>,
+    usage: Option<Value>,
+    event_count: usize,
+) -> AgentTurnResult {
+    let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
+    let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
+
+    AgentTurnResult {
+        session_id: runtime.session_id.clone(),
+        output_text,
+        turn_mode: request.turn_mode,
+        governed_session_mode: runtime.conversation_binding().session_mode(),
+        state,
+        stop_reason,
+        usage,
+        event_count,
+        prompt_assembly,
+        prompt_cache,
     }
 }
 

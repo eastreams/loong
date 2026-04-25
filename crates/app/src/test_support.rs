@@ -361,6 +361,11 @@ pub struct TurnTestHarness {
     pub temp_dir: PathBuf,
 }
 
+pub struct TurnTestHarnessBuilder {
+    capabilities: BTreeSet<Capability>,
+    tool_config_override: ToolRuntimeConfig,
+}
+
 impl TurnTestHarness {
     pub fn new() -> Self {
         Self::with_capabilities(BTreeSet::from([
@@ -374,10 +379,24 @@ impl TurnTestHarness {
         Self::with_tool_config(capabilities, ToolRuntimeConfig::default())
     }
 
+    pub fn builder() -> TurnTestHarnessBuilder {
+        TurnTestHarnessBuilder::new()
+    }
+
     /// Construct a harness with a caller-supplied `ToolRuntimeConfig`.
     /// Use this when a test needs specific allow/deny/approval lists rather
     /// than the generic defaults.
     pub fn with_tool_config(
+        capabilities: BTreeSet<Capability>,
+        tool_config_override: ToolRuntimeConfig,
+    ) -> Self {
+        TurnTestHarnessBuilder::new()
+            .capabilities(capabilities)
+            .tool_config(tool_config_override)
+            .build()
+    }
+
+    fn build_with(
         capabilities: BTreeSet<Capability>,
         tool_config_override: ToolRuntimeConfig,
     ) -> Self {
@@ -386,71 +405,13 @@ impl TurnTestHarness {
             std::env::temp_dir().join(format!("loong-integ-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
 
-        // Merge the caller's overrides with the unique temp dir as file_root.
-        let tool_config = ToolRuntimeConfig {
-            file_root: Some(temp_dir.clone()),
-            config_path: Some(temp_dir.join("loong.toml")),
-            ..tool_config_override
-        };
-
+        let tool_config = build_harness_tool_config(&temp_dir, tool_config_override);
         let audit = Arc::new(InMemoryAuditSink::default());
-        let clock = Arc::new(FixedClock::new(1_700_000_000));
-        let mut kernel =
-            LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
-
-        let pack = VerticalPackManifest {
-            pack_id: "test-pack".to_owned(),
-            domain: "testing".to_owned(),
-            version: "0.1.0".to_owned(),
-            default_route: ExecutionRoute {
-                harness_kind: HarnessKind::EmbeddedPi,
-                adapter: None,
-            },
-            allowed_connectors: BTreeSet::new(),
-            granted_capabilities: capabilities,
-            metadata: BTreeMap::new(),
-        };
-        kernel.register_pack(pack).expect("register pack");
-        kernel.register_core_tool_adapter(MvpToolAdapter::with_config(tool_config.clone()));
-        kernel
-            .set_default_core_tool_adapter("mvp-tools")
-            .expect("set default adapter");
-
-        // Register policy extensions for unified security enforcement.
-        // Policy rules come exclusively from the runtime config; no hardcoded
-        // lists are injected here.
-        kernel.register_policy_extension(
-            crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_config),
-        );
-        kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
-            tool_config.file_root,
-        ));
-
-        #[cfg(feature = "memory-sqlite")]
-        {
-            use crate::memory::runtime_config::MemoryRuntimeConfig;
-            let memory_config =
-                MemoryRuntimeConfig::for_sqlite_path(temp_dir.join("memory.sqlite3"));
-            kernel.register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(
-                memory_config,
-            ));
-            kernel
-                .set_default_core_memory_adapter("mvp-memory")
-                .expect("set default memory adapter");
-        }
-
-        let token = kernel
-            .issue_token("test-pack", "test-agent", 3600)
-            .expect("issue token");
-
-        let ctx = KernelContext {
-            kernel: Arc::new(kernel),
-            token,
-        };
+        let kernel_ctx = build_harness_kernel_context(capabilities, tool_config, audit.clone());
 
         Self {
             engine: TurnEngine::new(1),
-            kernel_ctx: ctx,
+            kernel_ctx,
             audit,
             temp_dir,
         }
@@ -460,6 +421,125 @@ impl TurnTestHarness {
     #[allow(dead_code)]
     pub async fn execute(&self, turn: &ProviderTurn) -> TurnResult {
         self.engine.execute_turn(turn, &self.kernel_ctx).await
+    }
+}
+
+impl TurnTestHarnessBuilder {
+    pub fn new() -> Self {
+        Self {
+            capabilities: BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+            ]),
+            tool_config_override: ToolRuntimeConfig::default(),
+        }
+    }
+
+    pub fn capabilities(mut self, capabilities: BTreeSet<Capability>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub fn tool_config(mut self, tool_config_override: ToolRuntimeConfig) -> Self {
+        self.tool_config_override = tool_config_override;
+        self
+    }
+
+    pub fn build(self) -> TurnTestHarness {
+        TurnTestHarness::build_with(self.capabilities, self.tool_config_override)
+    }
+}
+
+fn build_harness_tool_config(
+    temp_dir: &std::path::Path,
+    tool_config_override: ToolRuntimeConfig,
+) -> ToolRuntimeConfig {
+    ToolRuntimeConfig {
+        file_root: Some(temp_dir.to_path_buf()),
+        config_path: Some(temp_dir.join("loong.toml")),
+        ..tool_config_override
+    }
+}
+
+fn build_harness_kernel_context(
+    capabilities: BTreeSet<Capability>,
+    tool_config: ToolRuntimeConfig,
+    audit: Arc<InMemoryAuditSink>,
+) -> KernelContext {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    register_harness_pack(&mut kernel, capabilities);
+    register_harness_tool_adapters(&mut kernel, &tool_config);
+    register_harness_memory_adapters(&mut kernel, &tool_config);
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    }
+}
+
+fn register_harness_pack(
+    kernel: &mut LoongKernel<StaticPolicyEngine>,
+    capabilities: BTreeSet<Capability>,
+) {
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: capabilities,
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+}
+
+fn register_harness_tool_adapters(
+    kernel: &mut LoongKernel<StaticPolicyEngine>,
+    tool_config: &ToolRuntimeConfig,
+) {
+    kernel.register_core_tool_adapter(MvpToolAdapter::with_config(tool_config.clone()));
+    kernel
+        .set_default_core_tool_adapter("mvp-tools")
+        .expect("set default adapter");
+
+    kernel.register_policy_extension(
+        crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(tool_config),
+    );
+    kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
+        tool_config.file_root.clone(),
+    ));
+}
+
+fn register_harness_memory_adapters(
+    kernel: &mut LoongKernel<StaticPolicyEngine>,
+    tool_config: &ToolRuntimeConfig,
+) {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        use crate::memory::runtime_config::MemoryRuntimeConfig;
+
+        let sqlite_path = tool_config
+            .config_path
+            .as_ref()
+            .map(|config_path| config_path.with_file_name("memory.sqlite3"))
+            .expect("test harness should always set config_path");
+        let memory_config = MemoryRuntimeConfig::for_sqlite_path(sqlite_path);
+        kernel.register_core_memory_adapter(crate::memory::MvpMemoryAdapter::with_config(
+            memory_config,
+        ));
+        kernel
+            .set_default_core_memory_adapter("mvp-memory")
+            .expect("set default memory adapter");
     }
 }
 
