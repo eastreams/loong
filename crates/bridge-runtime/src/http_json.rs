@@ -146,6 +146,11 @@ pub async fn execute_http_json_bridge_call(
     match run {
         Ok(Ok((status_code, success, body, body_json, response_method, response_id))) => {
             let response_payload = extract_http_json_response_payload(&body_json);
+            let error_detail = if success {
+                None
+            } else {
+                http_json_error_detail(&response_payload, &body_json, &body)
+            };
             let runtime_evidence = http_json_runtime_evidence(
                 &protocol_context,
                 &method_label,
@@ -162,7 +167,12 @@ pub async fn execute_http_json_bridge_call(
                 },
             );
             if !success {
-                let reason = format!("http_json bridge request failed with status {status_code}");
+                let reason = match error_detail {
+                    Some(detail) => {
+                        format!("http_json bridge request failed with status {status_code}: {detail}")
+                    }
+                    None => format!("http_json bridge request failed with status {status_code}"),
+                };
                 return Err(BridgeExecutionFailure {
                     blocked: false,
                     reason,
@@ -224,4 +234,32 @@ fn extract_http_json_response_payload(response_body: &Value) -> Value {
     };
 
     payload.clone()
+}
+
+fn http_json_error_detail(
+    response_payload: &Value,
+    response_body: &Value,
+    response_text: &str,
+) -> Option<String> {
+    for candidate in [response_payload, response_body] {
+        if let Some(error) = candidate.get("error").and_then(Value::as_str) {
+            let trimmed = error.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+        if let Some(message) = candidate.get("message").and_then(Value::as_str) {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+
+    let trimmed_text = response_text.trim();
+    if trimmed_text.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_text.to_owned())
 }

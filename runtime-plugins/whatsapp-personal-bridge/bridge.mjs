@@ -327,8 +327,8 @@ class WhatsAppBridge {
   }
 
   async send(targetId, messagePayload) {
-    if (!this.sock) {
-      throw new Error('WhatsApp bridge is not connected');
+    if (!this.sock || this.connectionState !== 'connected') {
+      throw new Error('WhatsApp bridge is not connected yet; scan the QR code and wait for the connected status before sending');
     }
     const { jid } = parseCanonicalTarget(targetId);
     const text = outboundText(messagePayload);

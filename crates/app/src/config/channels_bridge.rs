@@ -300,11 +300,10 @@ impl WeixinChannelConfig {
     }
 
     pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_default_configured_account_selection(
             self.accounts.keys(),
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
         )
     }
 
@@ -317,11 +316,10 @@ impl WeixinChannelConfig {
         requested_account_id: Option<&str>,
         selected_configured_account_id: &str,
     ) -> ChannelResolvedAccountRoute {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_channel_account_route(
             self.accounts.keys(),
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
             requested_account_id,
             selected_configured_account_id,
         )
@@ -408,12 +406,11 @@ impl WeixinChannelConfig {
         &self,
         requested_account_id: Option<&str>,
     ) -> CliResult<ResolvedConfiguredAccount> {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_configured_account_selection(
             self.accounts.keys(),
             requested_account_id,
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
         )
     }
 }
@@ -483,11 +480,10 @@ impl WhatsappPersonalChannelConfig {
     }
 
     pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_default_configured_account_selection(
             self.accounts.keys(),
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
         )
     }
 
@@ -500,11 +496,10 @@ impl WhatsappPersonalChannelConfig {
         requested_account_id: Option<&str>,
         selected_configured_account_id: &str,
     ) -> ChannelResolvedAccountRoute {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_channel_account_route(
             self.accounts.keys(),
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
             requested_account_id,
             selected_configured_account_id,
         )
@@ -605,12 +600,11 @@ impl WhatsappPersonalChannelConfig {
         &self,
         requested_account_id: Option<&str>,
     ) -> CliResult<ResolvedConfiguredAccount> {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_configured_account_selection(
             self.accounts.keys(),
             requested_account_id,
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
         )
     }
 }
@@ -1145,10 +1139,7 @@ mod tests {
             .expect("resolve onebot account from env pointer");
         let websocket_url = resolved.websocket_url();
 
-        assert_eq!(
-            resolved.configured_account_id,
-            "whatsapp_personal_127-0-0-1-39731"
-        );
+        assert_eq!(resolved.configured_account_id, "default");
         assert_eq!(resolved.account.id, "onebot_127-0-0-1-5700");
         assert_eq!(resolved.account.label, "onebot:127.0.0.1:5700");
         assert_eq!(websocket_url.as_deref(), Some("ws://127.0.0.1:5700"));
