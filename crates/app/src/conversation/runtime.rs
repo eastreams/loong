@@ -416,6 +416,20 @@ fn merge_effective_runtime_narrowing(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn delegate_runtime_narrowing_from_execution(
+    is_delegate_child: bool,
+    subagent_execution: Option<&ConstrainedSubagentExecution>,
+) -> Option<ToolRuntimeNarrowing> {
+    if !is_delegate_child {
+        return None;
+    }
+
+    subagent_execution.and_then(|execution| {
+        (!execution.runtime_narrowing.is_empty()).then_some(execution.runtime_narrowing.clone())
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 struct DelegateAnchorSnapshot {
     execution: Option<ConstrainedSubagentExecution>,
     profile: Option<DelegateBuiltinProfile>,
@@ -550,14 +564,10 @@ fn load_persisted_session_snapshot(
         } else {
             None
         };
-        let delegate_runtime_narrowing = if is_delegate_child {
-            subagent_execution.as_ref().and_then(|execution| {
-                (!execution.runtime_narrowing.is_empty())
-                    .then_some(execution.runtime_narrowing.clone())
-            })
-        } else {
-            None
-        };
+        let delegate_runtime_narrowing = delegate_runtime_narrowing_from_execution(
+            is_delegate_child,
+            subagent_execution.as_ref(),
+        );
         let delegate_profile = if is_delegate_child {
             load_delegate_profile(repo, session_id)?
         } else {
@@ -2432,16 +2442,56 @@ mod tests {
     use crate::conversation::active_external_skills::{
         ACTIVE_EXTERNAL_SKILLS_EVENT_KIND, ActiveExternalSkill, ActiveExternalSkillsState,
     };
+    use crate::conversation::subagent::{
+        ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
+        ConstrainedSubagentMode, ConstrainedSubagentProfile, DelegateBuiltinProfile,
+    };
     #[cfg(feature = "memory-sqlite")]
     use crate::session::repository::{
         NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
     };
     use crate::test_support::TurnTestHarness;
     use crate::test_support::unique_temp_dir;
+    use crate::tools::runtime_config::{BrowserRuntimeNarrowing, ToolRuntimeNarrowing};
     #[cfg(feature = "memory-sqlite")]
     use serde_json::json;
     #[cfg(feature = "memory-sqlite")]
     use std::sync::Arc;
+
+    fn test_runtime_narrowing(max_sessions: usize) -> ToolRuntimeNarrowing {
+        ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(max_sessions),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        }
+    }
+
+    fn test_subagent_execution(
+        runtime_narrowing: ToolRuntimeNarrowing,
+        identity: Option<ConstrainedSubagentIdentity>,
+        profile: Option<ConstrainedSubagentProfile>,
+        workspace_root: Option<std::path::PathBuf>,
+    ) -> ConstrainedSubagentExecution {
+        ConstrainedSubagentExecution {
+            mode: ConstrainedSubagentMode::Async,
+            isolation: ConstrainedSubagentIsolation::Shared,
+            owner_kind: None,
+            depth: 1,
+            max_depth: 4,
+            active_children: 0,
+            max_active_children: 2,
+            timeout_seconds: DelegateBuiltinProfile::Verify.default_timeout_seconds(),
+            allow_shell_in_child: true,
+            child_tool_allowlist: vec!["read".to_owned()],
+            workspace_root,
+            runtime_narrowing,
+            kernel_bound: false,
+            identity,
+            profile,
+        }
+    }
 
     #[cfg(feature = "memory-sqlite")]
     #[derive(Clone)]
@@ -2562,6 +2612,107 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn session_context_with_subagent_execution_preserves_existing_contract_metadata() {
+        let base_runtime_narrowing = test_runtime_narrowing(2);
+        let delegating_profile = ConstrainedSubagentProfile::for_child_depth(1, 4);
+        let context =
+            SessionContext::root_with_tool_view("session-1", crate::tools::runtime_tool_view())
+                .with_subagent_identity(ConstrainedSubagentIdentity {
+                    nickname: Some("Research scout".to_owned()),
+                    specialization: Some("runtime".to_owned()),
+                })
+                .with_subagent_profile(delegating_profile)
+                .with_runtime_narrowing(base_runtime_narrowing.clone());
+        let execution = test_subagent_execution(
+            ToolRuntimeNarrowing::default(),
+            None,
+            None,
+            Some(std::path::PathBuf::from("/tmp/child-worktree")),
+        );
+
+        let context = context.with_subagent_execution(execution);
+        let contract = context
+            .resolved_subagent_contract()
+            .expect("resolved subagent contract");
+        let identity = contract.resolved_identity().expect("resolved identity");
+
+        assert_eq!(identity.nickname.as_deref(), Some("Research scout"));
+        assert_eq!(identity.specialization.as_deref(), Some("runtime"));
+        assert_eq!(contract.resolved_profile(), Some(delegating_profile));
+        assert_eq!(contract.runtime_narrowing, base_runtime_narrowing);
+        assert_eq!(
+            context.workspace_root.as_deref(),
+            Some(std::path::Path::new("/tmp/child-worktree"))
+        );
+    }
+
+    #[test]
+    fn session_context_with_runtime_narrowing_updates_execution_and_contract_views() {
+        let inherited_runtime_narrowing = test_runtime_narrowing(4);
+        let explicit_runtime_narrowing = test_runtime_narrowing(1);
+        let leaf_profile = ConstrainedSubagentProfile::for_child_depth(4, 4);
+        let execution = test_subagent_execution(
+            inherited_runtime_narrowing,
+            Some(ConstrainedSubagentIdentity {
+                nickname: Some("Verifier".to_owned()),
+                specialization: None,
+            }),
+            Some(leaf_profile),
+            None,
+        );
+        let context =
+            SessionContext::root_with_tool_view("session-2", crate::tools::runtime_tool_view())
+                .with_subagent_execution(execution)
+                .with_runtime_narrowing(explicit_runtime_narrowing.clone());
+        let stored_execution = context
+            .subagent_execution
+            .as_ref()
+            .expect("stored execution");
+        let contract = context
+            .resolved_subagent_contract()
+            .expect("resolved subagent contract");
+
+        assert_eq!(
+            context.resolved_runtime_narrowing(),
+            Some(&explicit_runtime_narrowing)
+        );
+        assert_eq!(
+            stored_execution.runtime_narrowing,
+            explicit_runtime_narrowing
+        );
+        assert_eq!(contract.runtime_narrowing, test_runtime_narrowing(1));
+        assert_eq!(contract.resolved_profile(), Some(leaf_profile));
+        assert_eq!(
+            contract
+                .resolved_identity()
+                .and_then(|identity| identity.nickname.as_deref()),
+            Some("Verifier")
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn delegate_runtime_narrowing_from_execution_ignores_non_delegate_and_empty_sources() {
+        let non_empty_execution =
+            test_subagent_execution(test_runtime_narrowing(3), None, None, None);
+        let empty_execution =
+            test_subagent_execution(ToolRuntimeNarrowing::default(), None, None, None);
+
+        assert_eq!(
+            delegate_runtime_narrowing_from_execution(true, Some(&non_empty_execution)),
+            Some(test_runtime_narrowing(3))
+        );
+        assert_eq!(
+            delegate_runtime_narrowing_from_execution(true, Some(&empty_execution)),
+            None
+        );
+        assert_eq!(
+            delegate_runtime_narrowing_from_execution(false, Some(&non_empty_execution)),
+            None
+        );
+        assert_eq!(delegate_runtime_narrowing_from_execution(true, None), None);
+    }
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn hosted_runtime_overrides_background_task_spawner_without_changing_async_delegate_spawner() {
