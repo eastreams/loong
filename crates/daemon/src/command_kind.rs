@@ -41,6 +41,7 @@ impl Commands {
             Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
             Self::Weixin { .. } => "weixin",
+            Self::WhatsappPersonal { .. } => "whatsapp_personal",
             Self::Completions { .. } => "completions",
         }
     }
@@ -122,6 +123,21 @@ mod tests {
             }
             .command_kind_for_logging(),
             "weixin"
+        );
+        assert_eq!(
+            Commands::WhatsappPersonal {
+                command: crate::whatsapp_personal_cli::WhatsappPersonalCommand::Bridge {
+                    command: crate::whatsapp_personal_cli::WhatsappPersonalBridgeCommand::Run(
+                        crate::whatsapp_personal_cli::WhatsappPersonalBridgeRunArgs {
+                            config: None,
+                            account: None,
+                            skip_install: false,
+                        }
+                    ),
+                },
+            }
+            .command_kind_for_logging(),
+            "whatsapp_personal"
         );
     }
 }

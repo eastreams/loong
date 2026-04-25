@@ -548,6 +548,7 @@ async fn run_command(command: Commands) -> CliResult<()> {
         Commands::Gateway { command } => gateway::service::run_gateway_cli(command).await,
         Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
         Commands::Weixin { command } => weixin_cli::run_weixin_command(command).await,
+        Commands::WhatsappPersonal { command } => run_whatsapp_personal_command(command).await,
         Commands::Completions { shell } => {
             completions_cli::run_completions_cli(completions_cli::CompletionsCommandOptions {
                 shell,

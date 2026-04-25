@@ -79,6 +79,7 @@ pub use loong_bench::{
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
 pub use runtime_cli::{RuntimeCommands, run_runtime_cli};
 pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
+pub use whatsapp_personal_cli::run_whatsapp_personal_command;
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
 pub fn run_memory_context_benchmark_cli(
     output_path: &str,
@@ -192,6 +193,7 @@ mod turn_cli;
 pub mod update_cli;
 pub mod weixin_cli;
 mod weixin_onboarding;
+mod whatsapp_personal_cli;
 pub mod work_unit_cli;
 pub use self::acp_cli::{
     acp_backend_metadata_json, acp_binding_scope_json, acp_control_plane_json,
@@ -952,6 +954,12 @@ pub enum Commands {
     Weixin {
         #[command(subcommand)]
         command: weixin_cli::WeixinCommand,
+    },
+    /// Operate the personal WhatsApp QR bridge namespace
+    #[command(name = "whatsapp-personal")]
+    WhatsappPersonal {
+        #[command(subcommand)]
+        command: whatsapp_personal_cli::WhatsappPersonalCommand,
     },
     /// Print a shell completion script to stdout
     Completions {

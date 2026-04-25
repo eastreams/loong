@@ -409,7 +409,7 @@ const WHATSAPP_PERSONAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
         strategy: ChannelOnboardingStrategy::PluginBridge,
         setup_hint: "plugin-bridge personal WhatsApp surface; run the bundled WhatsApp Web QR bridge under whatsapp_personal or whatsapp_personal.accounts.<account>, then use this surface as the stable Loong contract while the bridge owns QR login and session persistence",
         status_command: "loong doctor",
-        repair_command: Some("./scripts/whatsapp-personal-bridge-run.sh"),
+        repair_command: Some("loong whatsapp-personal bridge run"),
     };
 
 const EMPTY_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[];
