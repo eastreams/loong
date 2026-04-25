@@ -458,10 +458,19 @@ struct ProviderTurnLanePlan {
 
 impl ProviderTurnLanePlan {
     fn from_user_input(config: &LoongConfig, user_input: &str) -> Self {
-        let decision = if config.conversation.hybrid_lane_enabled {
+        let hybrid_lane_available = config.conversation.hybrid_lane_enabled;
+        let safe_lane_plan_available = config.conversation.safe_lane_plan_execution_enabled;
+        let use_lane_arbiter = hybrid_lane_available && safe_lane_plan_available;
+
+        let decision = if use_lane_arbiter {
             lane_policy_from_config(config).decide(user_input)
         } else {
-            disabled_lane_decision(user_input)
+            let reason_key = if hybrid_lane_available {
+                "safe_lane_plan_disabled"
+            } else {
+                "hybrid_lane_disabled"
+            };
+            fast_only_lane_decision(user_input, reason_key)
         };
         let max_tool_steps = match decision.lane {
             ExecutionLane::Fast => config.conversation.fast_lane_max_tool_steps(),
@@ -2545,15 +2554,15 @@ fn lane_policy_from_config(config: &LoongConfig) -> LaneArbiterPolicy {
     }
 }
 
-fn disabled_lane_decision(user_input: &str) -> LaneDecision {
+fn fast_only_lane_decision(user_input: &str, reason_key: &str) -> LaneDecision {
+    let input_chars = user_input.chars().count();
+    let reason = format!("{reason_key} chars={input_chars}");
+
     LaneDecision {
         lane: ExecutionLane::Fast,
         risk_score: 0,
         complexity_score: 0,
-        reasons: vec![format!(
-            "hybrid_lane_disabled chars={}",
-            user_input.chars().count()
-        )],
+        reasons: vec![reason],
     }
 }
 
@@ -10099,8 +10108,16 @@ mod tests {
             "deploy to production and show raw tool output"
         );
         assert!(preparation.raw_tool_output_requested);
-        assert_eq!(preparation.lane_plan.decision.lane, ExecutionLane::Safe);
-        assert_eq!(preparation.lane_plan.max_tool_steps, 5);
+        assert_eq!(preparation.lane_plan.decision.lane, ExecutionLane::Fast);
+        assert_eq!(preparation.lane_plan.max_tool_steps, 2);
+        assert!(
+            preparation
+                .lane_plan
+                .decision
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("safe_lane_plan_disabled"))
+        );
     }
 
     #[test]
@@ -10138,6 +10155,29 @@ mod tests {
         let fast_plan = ProviderTurnLanePlan::from_user_input(&config, "say hello");
         assert_eq!(fast_plan.decision.lane, ExecutionLane::Fast);
         assert!(!fast_plan.should_use_safe_lane_plan_path(&config, &tool_turn));
+    }
+
+    #[test]
+    fn provider_turn_lane_plan_safe_plan_disabled_forces_fast_lane_limits() {
+        let mut config = LoongConfig::default();
+        config.conversation.hybrid_lane_enabled = true;
+        config.conversation.safe_lane_plan_execution_enabled = false;
+        config.conversation.fast_lane_max_tool_steps_per_turn = 4;
+        config.conversation.safe_lane_max_tool_steps_per_turn = 9;
+
+        let plan = ProviderTurnLanePlan::from_user_input(
+            &config,
+            "deploy to production and rotate the token",
+        );
+
+        assert_eq!(plan.decision.lane, ExecutionLane::Fast);
+        assert_eq!(plan.max_tool_steps, 4);
+        assert!(
+            plan.decision
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("safe_lane_plan_disabled"))
+        );
     }
 
     #[derive(Default)]

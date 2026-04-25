@@ -233,7 +233,6 @@ pub(super) fn estimate_tokens_for_messages(
 ) -> Option<usize> {
     estimated_tokens.or_else(|| estimate_tokens(messages))
 }
-
 const DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS: usize = 200;
 
 pub(super) async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(

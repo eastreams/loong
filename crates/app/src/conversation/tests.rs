@@ -9921,7 +9921,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
 }
 
 #[tokio::test]
-async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget() {
+async fn handle_turn_with_runtime_defaults_to_fast_lane_when_safe_lane_plan_is_disabled() {
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
@@ -9948,6 +9948,8 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
     );
 
     let mut config = test_config();
+    config.conversation.safe_lane_plan_execution_enabled = false;
+    config.conversation.fast_lane_max_tool_steps_per_turn = 2;
     config.conversation.safe_lane_max_tool_steps_per_turn = 2;
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -9961,21 +9963,26 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
             ConversationRuntimeBinding::direct(),
         )
         .await
-        .expect("safe lane should execute with configured step budget");
+        .expect("fast lane should execute when safe-lane planning is disabled");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let checkpoint_payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "turn_checkpoint");
+    let checkpoint_payload = checkpoint_payloads.last().expect("turn_checkpoint payload");
 
     assert!(
         reply.contains("no_kernel_context"),
-        "expected kernel-context denial once tool-step budget is honored, got: {reply}"
+        "expected kernel-context denial once the fast-lane step budget is honored, got: {reply}"
     );
     assert!(
         !reply.contains("max_tool_steps_exceeded"),
-        "safe lane should not hit max_tool_steps after config override, got: {reply}"
+        "fast lane should not hit max_tool_steps after config override, got: {reply}"
     );
+    assert_eq!(checkpoint_payload["checkpoint"]["lane"]["lane"], "fast");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batches_when_plan_path_is_disabled()
- {
+async fn handle_turn_with_runtime_parallelizes_risky_turns_when_safe_lane_plan_is_disabled() {
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use loong_kernel::CoreToolAdapter;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -10094,14 +10101,14 @@ async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batch
             ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
-        .expect("safe lane turn should complete without fast-lane parallel execution");
+        .expect("fast lane turn should complete with parallel execution available");
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     let checkpoint_payloads =
         persisted_conversation_event_payloads_by_name(&persisted, "turn_checkpoint");
     assert_eq!(
         checkpoint_payloads.last().expect("turn_checkpoint payload")["checkpoint"]["lane"]["lane"],
-        "safe"
+        "fast"
     );
     assert!(
         reply
@@ -10112,8 +10119,8 @@ async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batch
         "expected raw tool output for both tool calls, got: {reply}"
     );
     assert!(
-        !overlap_observed.load(Ordering::SeqCst),
-        "safe lane should not reuse fast-lane parallel execution"
+        overlap_observed.load(Ordering::SeqCst),
+        "fast lane should reuse parallel execution when safe-lane planning is disabled"
     );
 }
 
