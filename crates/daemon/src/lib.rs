@@ -2472,6 +2472,12 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub reason: String,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,
+    pub extension_contract: Option<String>,
+    pub extension_facets: Vec<String>,
+    pub extension_methods: Vec<String>,
+    pub extension_events: Vec<String>,
+    pub extension_host_actions: Vec<String>,
+    pub extension_metadata_issues: Vec<String>,
 }
 
 pub(crate) const RUNTIME_WEB_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access stays separately governed";
@@ -3063,6 +3069,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 .iter()
                 .map(kernel::PluginSlotClaim::canonical_label)
                 .collect::<Vec<_>>();
+            let extension_declarations =
+                runtime_plugin_extension_declarations_from_metadata(&entry.metadata);
             let conflicting_slot_claims = if matches!(
                 activation_status,
                 Some(PluginActivationStatus::BlockedSlotClaimConflict)
@@ -3113,6 +3121,12 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 reason,
                 missing_required_env_vars,
                 missing_required_config_keys,
+                extension_contract: extension_declarations.contract,
+                extension_facets: extension_declarations.facets,
+                extension_methods: extension_declarations.methods,
+                extension_events: extension_declarations.events,
+                extension_host_actions: extension_declarations.host_actions,
+                extension_metadata_issues: extension_declarations.metadata_issues,
             }
         })
         .collect::<Vec<_>>();
@@ -3151,6 +3165,101 @@ fn merge_plugin_scan_report(
     combined.matched_plugins += matched_plugins;
     combined.descriptors.extend(descriptors);
     combined.diagnostic_findings.extend(diagnostic_findings);
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimePluginExtensionDeclarations {
+    contract: Option<String>,
+    facets: Vec<String>,
+    methods: Vec<String>,
+    events: Vec<String>,
+    host_actions: Vec<String>,
+    metadata_issues: Vec<String>,
+}
+
+fn runtime_plugin_extension_declarations_from_metadata(
+    metadata: &BTreeMap<String, String>,
+) -> RuntimePluginExtensionDeclarations {
+    let (facets, facets_issue) = runtime_plugin_metadata_json_string_list(
+        metadata,
+        "loong_extension_facets_json",
+        "extension facets",
+    );
+    let (methods, methods_issue) = runtime_plugin_metadata_json_string_list(
+        metadata,
+        "loong_extension_methods_json",
+        "extension methods",
+    );
+    let (events, events_issue) = runtime_plugin_metadata_json_string_list(
+        metadata,
+        "loong_extension_events_json",
+        "extension events",
+    );
+    let (host_actions, host_actions_issue) = runtime_plugin_metadata_json_string_list(
+        metadata,
+        "loong_extension_host_actions_json",
+        "extension host actions",
+    );
+
+    RuntimePluginExtensionDeclarations {
+        contract: runtime_plugin_optional_metadata_value(metadata, "loong_extension_contract"),
+        facets,
+        methods,
+        events,
+        host_actions,
+        metadata_issues: [
+            facets_issue,
+            methods_issue,
+            events_issue,
+            host_actions_issue,
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    }
+}
+
+fn runtime_plugin_optional_metadata_value(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    metadata
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn runtime_plugin_metadata_json_string_list(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+    label: &str,
+) -> (Vec<String>, Option<String>) {
+    let Some(raw_value) = metadata.get(key) else {
+        return (Vec::new(), None);
+    };
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() {
+        return (Vec::new(), None);
+    }
+
+    match serde_json::from_str::<Vec<String>>(trimmed) {
+        Ok(values) => (
+            values
+                .into_iter()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .collect(),
+            None,
+        ),
+        Err(error) => (
+            Vec::new(),
+            Some(format!(
+                "{label} metadata is not a JSON string array: {error}"
+            )),
+        ),
+    }
 }
 
 fn runtime_plugin_setup_readiness_context(

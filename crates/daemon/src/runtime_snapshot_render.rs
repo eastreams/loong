@@ -451,6 +451,28 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
                 .map(String::as_str),
             ",",
         );
+        let extension_contract =
+            crate::render_line_safe_optional_text_value(plugin.extension_contract.as_deref());
+        let extension_facets = crate::render_line_safe_text_values(
+            plugin.extension_facets.iter().map(String::as_str),
+            ",",
+        );
+        let extension_methods = crate::render_line_safe_text_values(
+            plugin.extension_methods.iter().map(String::as_str),
+            ",",
+        );
+        let extension_events = crate::render_line_safe_text_values(
+            plugin.extension_events.iter().map(String::as_str),
+            ",",
+        );
+        let extension_host_actions = crate::render_line_safe_text_values(
+            plugin.extension_host_actions.iter().map(String::as_str),
+            ",",
+        );
+        let extension_metadata_issues = crate::render_line_safe_text_values(
+            plugin.extension_metadata_issues.iter().map(String::as_str),
+            ",",
+        );
         let slot_claims =
             crate::render_line_safe_text_values(plugin.slot_claims.iter().map(String::as_str), ",");
         let conflicting_slot_claims = crate::render_line_safe_text_values(
@@ -459,7 +481,7 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
 
         lines.push(format!(
-            "  runtime_plugin {} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} slot_claims={} conflicting_slot_claims={}",
+            "  runtime_plugin {} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
             plugin_id,
             source_path,
             package_root,
@@ -473,6 +495,12 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             reason,
             missing_required_env_vars,
             missing_required_config_keys,
+            extension_contract,
+            extension_facets,
+            extension_methods,
+            extension_events,
+            extension_host_actions,
+            extension_metadata_issues,
             slot_claims,
             conflicting_slot_claims,
         ));
@@ -708,6 +736,12 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
                 "reason": plugin.reason,
                 "missing_required_env_vars": plugin.missing_required_env_vars,
                 "missing_required_config_keys": plugin.missing_required_config_keys,
+                "extension_contract": plugin.extension_contract,
+                "extension_facets": plugin.extension_facets,
+                "extension_methods": plugin.extension_methods,
+                "extension_events": plugin.extension_events,
+                "extension_host_actions": plugin.extension_host_actions,
+                "extension_metadata_issues": plugin.extension_metadata_issues,
             })
         }).collect::<Vec<_>>(),
     })

@@ -67,6 +67,18 @@ Every public artifact family should follow the same rules:
 - controlled runtime lanes
 - installability and inspectability
 
+Runtime inspectability should expose declared extension metadata before any
+runtime invocation. At minimum, operator-visible snapshot and audit surfaces
+should be able to show:
+
+- the declared extension contract
+- declared facets
+- declared host-facing methods
+- declared events
+- declared host actions
+
+without requiring the host to execute extension code first.
+
 ## What Is Not Promised
 
 The public contract should not promise:

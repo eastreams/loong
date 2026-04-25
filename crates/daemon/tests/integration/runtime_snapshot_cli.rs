@@ -210,7 +210,12 @@ fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
   "capabilities": ["InvokeConnector"],
   "metadata": {
     "bridge_kind": "http_json",
-    "adapter_family": "web-search"
+    "adapter_family": "web-search",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"tooling\",\"events\"]",
+    "loong_extension_methods_json": "[\"extension/tool\",\"extension/event\"]",
+    "loong_extension_events_json": "[\"session_start\",\"tool_result\"]",
+    "loong_extension_host_actions_json": "[\"append_entry\",\"notify\"]"
   },
   "setup": {
     "mode": "metadata_only",
@@ -339,6 +344,33 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         "plugin_id",
         "demo-search-plugin"
     ));
+    let plugin = array_object_with_string_field(
+        &payload["runtime_plugins"]["plugins"],
+        "plugin_id",
+        "demo-search-plugin",
+    )
+    .expect("runtime plugin should be present");
+    assert_eq!(
+        plugin["extension_contract"],
+        serde_json::json!("process_stdio_json_line_v1")
+    );
+    assert_eq!(
+        plugin["extension_facets"],
+        serde_json::json!(["tooling", "events"])
+    );
+    assert_eq!(
+        plugin["extension_methods"],
+        serde_json::json!(["extension/tool", "extension/event"])
+    );
+    assert_eq!(
+        plugin["extension_events"],
+        serde_json::json!(["session_start", "tool_result"])
+    );
+    assert_eq!(
+        plugin["extension_host_actions"],
+        serde_json::json!(["append_entry", "notify"])
+    );
+    assert_eq!(plugin["extension_metadata_issues"], serde_json::json!([]));
 
     fs::remove_dir_all(&root).ok();
 }
@@ -616,6 +648,11 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("setup_mode=metadata_only"));
     assert!(rendered.contains("setup_surface=web_search"));
     assert!(rendered.contains("missing_env_vars=RUNTIME_PLUGIN_DEMO_KEY"));
+    assert!(rendered.contains("extension_contract=process_stdio_json_line_v1"));
+    assert!(rendered.contains("extension_facets=tooling,events"));
+    assert!(rendered.contains("extension_methods=extension/tool,extension/event"));
+    assert!(rendered.contains("extension_events=session_start,tool_result"));
+    assert!(rendered.contains("extension_host_actions=append_entry,notify"));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));
 
