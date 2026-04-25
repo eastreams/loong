@@ -9,7 +9,8 @@ use crate::{
     run_slack_send_cli_impl, run_synology_chat_send_cli_impl, run_teams_send_cli_impl,
     run_telegram_send_cli_impl, run_telegram_serve_cli_impl, run_twitch_send_cli_impl,
     run_webhook_send_cli_impl, run_wecom_send_cli_impl, run_wecom_serve_cli_impl,
-    run_weixin_send_cli_impl, run_weixin_serve_cli_impl, run_whatsapp_send_cli_impl,
+    run_weixin_send_cli_impl, run_weixin_serve_cli_impl, run_whatsapp_personal_send_cli_impl,
+    run_whatsapp_personal_serve_cli_impl, run_whatsapp_send_cli_impl,
 };
 
 pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
@@ -45,6 +46,11 @@ pub const QQBOT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
 pub const ONEBOT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_onebot_send_cli_impl,
+};
+
+pub const WHATSAPP_PERSONAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WHATSAPP_PERSONAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_whatsapp_personal_send_cli_impl,
 };
 
 pub const DISCORD_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
@@ -155,4 +161,9 @@ pub const WEIXIN_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
 pub const ONEBOT_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::ONEBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_onebot_serve_cli_impl,
+};
+
+pub const WHATSAPP_PERSONAL_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::WHATSAPP_PERSONAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_whatsapp_personal_serve_cli_impl,
 };

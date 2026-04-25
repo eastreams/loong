@@ -349,6 +349,7 @@ fn target_platform(channel_id: &str) -> CliResult<mvp::channel::ChannelPlatform>
         "weixin" => Ok(mvp::channel::ChannelPlatform::Weixin),
         "qqbot" => Ok(mvp::channel::ChannelPlatform::Qqbot),
         "onebot" => Ok(mvp::channel::ChannelPlatform::Onebot),
+        "whatsapp-personal" => Ok(mvp::channel::ChannelPlatform::WhatsApp),
         _ => Err(format!(
             "managed bridge runtime does not support channel `{channel_id}`"
         )),
@@ -467,6 +468,7 @@ fn managed_bridge_route_kinds(channel_id: &str) -> &'static [&'static str] {
         "weixin" => &["contact", "room"],
         "qqbot" => &["c2c", "group", "channel"],
         "onebot" => &["private", "group"],
+        "whatsapp-personal" => &["contact", "group"],
         _ => &[],
     }
 }
@@ -519,6 +521,17 @@ fn enforce_managed_bridge_outbound_policy(
             }
             Err(format!(
                 "onebot group target `{}` is not allowed by configured allowed_group_ids",
+                parsed_target.route_id
+            ))
+        }
+        "whatsapp-personal" => {
+            let allowed_chat_ids =
+                runtime_context_string_list(&binding.runtime_context, "allowed_chat_ids");
+            if route_id_is_allowed(allowed_chat_ids.as_slice(), parsed_target.route_id.as_str()) {
+                return Ok(());
+            }
+            Err(format!(
+                "whatsapp-personal target `{}` is not allowed by configured allowed_chat_ids",
                 parsed_target.route_id
             ))
         }
@@ -1041,6 +1054,12 @@ pub fn run_onebot_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComma
     run_managed_plugin_bridge_send_cli_impl("onebot", args)
 }
 
+pub fn run_whatsapp_personal_send_cli_impl(
+    args: ChannelSendCliArgs<'_>,
+) -> ChannelCliCommandFuture<'_> {
+    run_managed_plugin_bridge_send_cli_impl("whatsapp-personal", args)
+}
+
 fn run_managed_plugin_bridge_send_cli_impl<'a>(
     channel_id: &'static str,
     args: ChannelSendCliArgs<'a>,
@@ -1065,6 +1084,12 @@ pub fn run_weixin_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCom
 
 pub fn run_onebot_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     run_managed_plugin_bridge_serve_cli_impl("onebot", args)
+}
+
+pub fn run_whatsapp_personal_serve_cli_impl(
+    args: ChannelServeCliArgs<'_>,
+) -> ChannelCliCommandFuture<'_> {
+    run_managed_plugin_bridge_serve_cli_impl("whatsapp-personal", args)
 }
 
 fn run_managed_plugin_bridge_serve_cli_impl<'a>(

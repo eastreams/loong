@@ -1,0 +1,20 @@
+{
+  "name": "loong-whatsapp-personal-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bundled WhatsApp Personal bridge for Loong using Baileys",
+  "main": "bridge.mjs",
+  "scripts": {
+    "run": "node bridge.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "pino": "^9.0.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

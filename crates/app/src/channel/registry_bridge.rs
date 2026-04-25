@@ -9,7 +9,8 @@ use crate::channel::{
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongConfig, ONEBOT_ACCESS_TOKEN_ENV,
     ONEBOT_WEBSOCKET_URL_ENV, ResolvedOnebotChannelConfig, ResolvedWeixinChannelConfig,
-    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, normalize_channel_account_id,
+    ResolvedWhatsappPersonalChannelConfig, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
+    WHATSAPP_PERSONAL_AUTH_DIR_ENV, WHATSAPP_PERSONAL_BRIDGE_URL_ENV, normalize_channel_account_id,
 };
 
 use super::{
@@ -279,6 +280,138 @@ const ONEBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
     repair_command: None,
 };
 
+const WHATSAPP_PERSONAL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &[
+            "whatsapp_personal.enabled",
+            "whatsapp_personal.accounts.<account>.enabled",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const WHATSAPP_PERSONAL_BRIDGE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bridge_url",
+        label: "local bridge url",
+        config_paths: &[
+            "whatsapp_personal.bridge_url",
+            "whatsapp_personal.accounts.<account>.bridge_url",
+        ],
+        env_pointer_paths: &[
+            "whatsapp_personal.bridge_url_env",
+            "whatsapp_personal.accounts.<account>.bridge_url_env",
+        ],
+        default_env_var: Some(WHATSAPP_PERSONAL_BRIDGE_URL_ENV),
+    };
+
+const WHATSAPP_PERSONAL_AUTH_DIR_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "auth_dir",
+        label: "bridge auth dir",
+        config_paths: &[
+            "whatsapp_personal.auth_dir",
+            "whatsapp_personal.accounts.<account>.auth_dir",
+        ],
+        env_pointer_paths: &[
+            "whatsapp_personal.auth_dir_env",
+            "whatsapp_personal.accounts.<account>.auth_dir_env",
+        ],
+        default_env_var: Some(WHATSAPP_PERSONAL_AUTH_DIR_ENV),
+    };
+
+const WHATSAPP_PERSONAL_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_chat_ids",
+        label: "allowed chat ids",
+        config_paths: &[
+            "whatsapp_personal.allowed_chat_ids",
+            "whatsapp_personal.accounts.<account>.allowed_chat_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const WHATSAPP_PERSONAL_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WHATSAPP_PERSONAL_ENABLED_REQUIREMENT,
+    WHATSAPP_PERSONAL_BRIDGE_URL_REQUIREMENT,
+];
+
+const WHATSAPP_PERSONAL_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    WHATSAPP_PERSONAL_ENABLED_REQUIREMENT,
+    WHATSAPP_PERSONAL_BRIDGE_URL_REQUIREMENT,
+    WHATSAPP_PERSONAL_AUTH_DIR_REQUIREMENT,
+    WHATSAPP_PERSONAL_ALLOWED_CHAT_IDS_REQUIREMENT,
+];
+
+const WHATSAPP_PERSONAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "personal bridge send",
+    command: "channels send whatsapp-personal",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
+    requirements: WHATSAPP_PERSONAL_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const WHATSAPP_PERSONAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "personal bridge reply loop",
+    command: "channels serve whatsapp-personal",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: true,
+    requirements: WHATSAPP_PERSONAL_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+#[allow(dead_code)]
+pub const WHATSAPP_PERSONAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR:
+    super::ChannelCatalogCommandFamilyDescriptor = super::ChannelCatalogCommandFamilyDescriptor {
+    channel_id: "whatsapp-personal",
+    default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+    send: WHATSAPP_PERSONAL_SEND_OPERATION,
+    serve: WHATSAPP_PERSONAL_SERVE_OPERATION,
+};
+
+const WHATSAPP_PERSONAL_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "whatsapp-personal bridge send contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
+const WHATSAPP_PERSONAL_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "whatsapp-personal bridge serve contract",
+        trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "whatsapp-personal bridge serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+
+const WHATSAPP_PERSONAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: WHATSAPP_PERSONAL_SEND_OPERATION,
+        doctor_checks: WHATSAPP_PERSONAL_SEND_DOCTOR_CHECKS,
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: WHATSAPP_PERSONAL_SERVE_OPERATION,
+        doctor_checks: WHATSAPP_PERSONAL_SERVE_DOCTOR_CHECKS,
+    },
+];
+
+const WHATSAPP_PERSONAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::PluginBridge,
+        setup_hint: "plugin-bridge personal WhatsApp surface; run the bundled WhatsApp Web QR bridge under whatsapp_personal or whatsapp_personal.accounts.<account>, then use this surface as the stable Loong contract while the bridge owns QR login and session persistence",
+        status_command: "loong doctor",
+        repair_command: Some("./scripts/whatsapp-personal-bridge-run.sh"),
+    };
+
 const EMPTY_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[];
 
 const WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
@@ -307,8 +440,23 @@ const ONEBOT_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = 
     },
 ];
 
+const WHATSAPP_PERSONAL_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
+    ChannelPluginBridgeStableTarget {
+        template: "whatsapp-personal:<account>:contact:<e164-or-jid>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "direct contact route via an E.164 number or personal WhatsApp JID",
+    },
+    ChannelPluginBridgeStableTarget {
+        template: "whatsapp-personal:<account>:group:<jid>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "group conversation route via a WhatsApp group JID",
+    },
+];
+
 const ONEBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
     "keep <account> stable so personal-account bridge routes stay unambiguous";
+
+const WHATSAPP_PERSONAL_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str = "keep <account> stable so QR-linked personal WhatsApp sessions and route ownership stay legible";
 
 const MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION: &str = "send_message";
 const MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION: &str = "receive_batch";
@@ -478,12 +626,30 @@ pub(super) const ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         operations: ONEBOT_OPERATIONS,
     };
 
+pub(super) const WHATSAPP_PERSONAL_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
+    ChannelRegistryDescriptor {
+        id: "whatsapp-personal",
+        runtime: None,
+        snapshot_builder: Some(build_whatsapp_personal_snapshots),
+        selection_order: 91,
+        selection_label: "personal qr-linked account bridge",
+        blurb: "Plugin-backed personal WhatsApp surface that delegates QR login and session ownership to a local WhatsApp Web bridge while Loong owns the stable send and reply-loop contract.",
+        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
+        label: "WhatsApp Personal",
+        aliases: &["whatsapp-web", "wa-personal", "whatsapp-personal-bridge"],
+        transport: "whatsapp_web_baileys_bridge",
+        onboarding: WHATSAPP_PERSONAL_ONBOARDING_DESCRIPTOR,
+        operations: WHATSAPP_PERSONAL_OPERATIONS,
+    };
+
 pub(super) fn plugin_bridge_stable_targets_for_channel_id(
     channel_id: &str,
 ) -> &'static [ChannelPluginBridgeStableTarget] {
     match channel_id {
         "weixin" => WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS,
         "onebot" => ONEBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
+        "whatsapp-personal" => WHATSAPP_PERSONAL_PLUGIN_BRIDGE_STABLE_TARGETS,
         _ => EMPTY_PLUGIN_BRIDGE_STABLE_TARGETS,
     }
 }
@@ -493,6 +659,7 @@ pub(super) fn plugin_bridge_account_scope_note_for_channel_id(
 ) -> Option<&'static str> {
     match channel_id {
         "onebot" => Some(ONEBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE),
+        "whatsapp-personal" => Some(WHATSAPP_PERSONAL_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE),
         _ => None,
     }
 }
@@ -580,6 +747,59 @@ fn build_onebot_snapshots(
                     now_ms,
                 ),
                 Err(error) => build_invalid_onebot_snapshot(
+                    descriptor,
+                    compiled,
+                    configured_enabled,
+                    configured_account_id.as_str(),
+                    is_default_account,
+                    default_account_source,
+                    error,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn build_whatsapp_personal_snapshots(
+    descriptor: &ChannelRegistryDescriptor,
+    config: &LoongConfig,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> Vec<ChannelStatusSnapshot> {
+    let compiled = true;
+    let http_policy = http::outbound_http_policy_from_config(config);
+    let default_selection = config
+        .whatsapp_personal
+        .default_configured_account_selection();
+    let default_configured_account_id = default_selection.id.clone();
+    let default_account_source = default_selection.source;
+
+    config
+        .whatsapp_personal
+        .configured_account_ids()
+        .into_iter()
+        .map(|configured_account_id| {
+            let is_default_account = configured_account_id == default_configured_account_id;
+            let configured_enabled = configured_whatsapp_personal_account_enabled(
+                config,
+                configured_account_id.as_str(),
+            );
+            match config
+                .whatsapp_personal
+                .resolve_account(Some(configured_account_id.as_str()))
+            {
+                Ok(resolved) => build_whatsapp_personal_snapshot_for_account(
+                    config,
+                    descriptor,
+                    compiled,
+                    resolved,
+                    is_default_account,
+                    default_account_source,
+                    http_policy,
+                    runtime_dir,
+                    now_ms,
+                ),
+                Err(error) => build_invalid_whatsapp_personal_snapshot(
                     descriptor,
                     compiled,
                     configured_enabled,
@@ -701,6 +921,135 @@ fn build_weixin_snapshot_for_account(
         notes.push(format!(
             "allowed_contact_ids_count={allowed_contact_ids_count}"
         ));
+    }
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: resolved.configured_account_id.clone(),
+        configured_account_label: resolved.configured_account_label.clone(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: resolved.enabled,
+        api_base_url: validated_bridge_url
+            .as_ref()
+            .and(bridge_url.as_deref())
+            .and_then(http::redact_endpoint_status_url),
+        notes,
+        reserved_runtime_fields: Vec::new(),
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_whatsapp_personal_snapshot_for_account(
+    config: &LoongConfig,
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    resolved: ResolvedWhatsappPersonalChannelConfig,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: http::ChannelOutboundHttpPolicy,
+    runtime_dir: &Path,
+    now_ms: u64,
+) -> ChannelStatusSnapshot {
+    let mut send_issues = Vec::new();
+
+    let bridge_url = resolved.bridge_url();
+    if bridge_url.is_none() {
+        send_issues.push("bridge_url is missing".to_owned());
+    }
+    let validated_bridge_url = bridge_url
+        .as_deref()
+        .and_then(|url| validate_http_url("bridge_url", url, http_policy, &mut send_issues));
+
+    let mut serve_issues = send_issues.clone();
+    let auth_dir = resolved.auth_dir();
+    if auth_dir.is_none() {
+        serve_issues.push("auth_dir is missing".to_owned());
+    }
+
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_PERSONAL_SEND_OPERATION,
+            "whatsapp-personal bridge surface is unavailable in this build".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            WHATSAPP_PERSONAL_SEND_OPERATION,
+            "disabled by whatsapp_personal account configuration".to_owned(),
+        )
+    } else if !send_issues.is_empty() {
+        misconfigured_operation(WHATSAPP_PERSONAL_SEND_OPERATION, send_issues)
+    } else {
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
+            WHATSAPP_PERSONAL_SEND_OPERATION,
+            &[MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+            runtime_dir,
+            now_ms,
+        )
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_PERSONAL_SERVE_OPERATION,
+            "whatsapp-personal bridge surface is unavailable in this build".to_owned(),
+        )
+    } else if !resolved.enabled {
+        disabled_operation(
+            WHATSAPP_PERSONAL_SERVE_OPERATION,
+            "disabled by whatsapp_personal account configuration".to_owned(),
+        )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(WHATSAPP_PERSONAL_SERVE_OPERATION, serve_issues)
+    } else {
+        managed_bridge_operation_status(
+            config,
+            descriptor.id,
+            resolved.configured_account_id.as_str(),
+            WHATSAPP_PERSONAL_SERVE_OPERATION,
+            &[
+                MANAGED_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
+                MANAGED_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
+            ],
+            runtime_dir,
+            now_ms,
+        )
+    };
+
+    let allowed_chat_ids_count = resolved
+        .allowed_chat_ids
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .count();
+
+    let mut notes = vec![
+        format!("configured_account_id={}", resolved.configured_account_id),
+        format!("configured_account={}", resolved.configured_account_label),
+        format!("account_id={}", resolved.account.id),
+        format!("account={}", resolved.account.label),
+        "bridge_runtime_owner=external_plugin".to_owned(),
+        "bridge_login=qr_registration".to_owned(),
+    ];
+    if auth_dir.is_some() {
+        notes.push("auth_dir_configured=true".to_owned());
+    }
+    if allowed_chat_ids_count > 0 {
+        notes.push(format!("allowed_chat_ids_count={allowed_chat_ids_count}"));
     }
     if is_default_account {
         notes.push("default_account=true".to_owned());
@@ -897,6 +1246,25 @@ fn configured_onebot_account_enabled(config: &LoongConfig, configured_account_id
     config.onebot.enabled && account_enabled
 }
 
+fn configured_whatsapp_personal_account_enabled(
+    config: &LoongConfig,
+    configured_account_id: &str,
+) -> bool {
+    let account_enabled = config
+        .whatsapp_personal
+        .accounts
+        .iter()
+        .find_map(|(raw_account_id, account)| {
+            let normalized_account_id = normalize_channel_account_id(raw_account_id);
+            if normalized_account_id != configured_account_id {
+                return None;
+            }
+            Some(account.enabled.unwrap_or(true))
+        })
+        .unwrap_or(true);
+    config.whatsapp_personal.enabled && account_enabled
+}
+
 fn build_invalid_weixin_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -928,6 +1296,65 @@ fn build_invalid_weixin_snapshot(
         format!("configured_account_id={configured_account_id}"),
         format!("selection_error={error}"),
         "bridge_runtime_owner=external_plugin".to_owned(),
+    ];
+    if is_default_account {
+        notes.push("default_account=true".to_owned());
+    }
+    notes.push(format!(
+        "default_account_source={}",
+        default_account_source.as_str()
+    ));
+
+    ChannelStatusSnapshot {
+        id: descriptor.id,
+        configured_account_id: configured_account_id.to_owned(),
+        configured_account_label: configured_account_id.to_owned(),
+        is_default_account,
+        default_account_source,
+        label: descriptor.label,
+        aliases: descriptor.aliases.to_vec(),
+        transport: descriptor.transport,
+        compiled,
+        enabled: configured_enabled,
+        api_base_url: None,
+        notes,
+        reserved_runtime_fields: Vec::new(),
+        operations: vec![send_operation, serve_operation],
+    }
+}
+
+fn build_invalid_whatsapp_personal_snapshot(
+    descriptor: &ChannelRegistryDescriptor,
+    compiled: bool,
+    configured_enabled: bool,
+    configured_account_id: &str,
+    is_default_account: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    error: String,
+) -> ChannelStatusSnapshot {
+    let send_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_PERSONAL_SEND_OPERATION,
+            "whatsapp-personal bridge surface is unavailable in this build".to_owned(),
+        )
+    } else {
+        misconfigured_operation(WHATSAPP_PERSONAL_SEND_OPERATION, vec![error.clone()])
+    };
+
+    let serve_operation = if !compiled {
+        unsupported_operation(
+            WHATSAPP_PERSONAL_SERVE_OPERATION,
+            "whatsapp-personal bridge surface is unavailable in this build".to_owned(),
+        )
+    } else {
+        misconfigured_operation(WHATSAPP_PERSONAL_SERVE_OPERATION, vec![error.clone()])
+    };
+
+    let mut notes = vec![
+        format!("configured_account_id={configured_account_id}"),
+        format!("selection_error={error}"),
+        "bridge_runtime_owner=external_plugin".to_owned(),
+        "bridge_login=qr_registration".to_owned(),
     ];
     if is_default_account {
         notes.push("default_account=true".to_owned());

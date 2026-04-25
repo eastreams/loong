@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::CliResult;
 use crate::config::{
     LoongConfig, ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig,
-    ResolvedWeixinChannelConfig,
+    ResolvedWeixinChannelConfig, ResolvedWhatsappPersonalChannelConfig,
 };
 
 use super::{ChannelPlatform, normalize_channel_catalog_id};
@@ -382,6 +382,7 @@ fn configured_plugin_id(config: &LoongConfig, channel_id: &str) -> Option<String
         "weixin" => config.weixin.managed_bridge_plugin_id.as_deref(),
         "qqbot" => config.qqbot.managed_bridge_plugin_id.as_deref(),
         "onebot" => config.onebot.managed_bridge_plugin_id.as_deref(),
+        "whatsapp-personal" => config.whatsapp_personal.managed_bridge_plugin_id.as_deref(),
         _ => None,
     };
 
@@ -412,6 +413,12 @@ fn resolve_runtime_account(
         "onebot" => {
             let resolved = config.onebot.resolve_account(requested_account_id)?;
             Ok(resolve_onebot_account(resolved))
+        }
+        "whatsapp-personal" => {
+            let resolved = config
+                .whatsapp_personal
+                .resolve_account(requested_account_id)?;
+            Ok(resolve_whatsapp_personal_account(resolved))
         }
         _ => Err(format!(
             "managed bridge runtime does not support channel `{channel_id}`"
@@ -526,6 +533,42 @@ fn resolve_onebot_account(
         account_id: resolved.account.id,
         account_label: resolved.account.label,
         endpoint_override: websocket_url,
+        runtime_context,
+    }
+}
+
+fn resolve_whatsapp_personal_account(
+    resolved: ResolvedWhatsappPersonalChannelConfig,
+) -> ManagedPluginBridgeResolvedAccount {
+    let mut config_map = Map::new();
+    let bridge_url = resolved.bridge_url();
+    if let Some(bridge_url) = bridge_url.clone() {
+        config_map.insert("bridge_url".to_owned(), Value::String(bridge_url));
+    }
+
+    let auth_dir = resolved.auth_dir();
+    if let Some(auth_dir) = auth_dir {
+        config_map.insert("auth_dir".to_owned(), Value::String(auth_dir));
+    }
+
+    let allowed_chat_ids =
+        serde_json::to_value(&resolved.allowed_chat_ids).unwrap_or(Value::Array(Vec::new()));
+    config_map.insert("allowed_chat_ids".to_owned(), allowed_chat_ids);
+
+    let runtime_context = build_channel_runtime_context(
+        &resolved.configured_account_id,
+        &resolved.configured_account_label,
+        &resolved.account.id,
+        &resolved.account.label,
+        Value::Object(config_map),
+    );
+
+    ManagedPluginBridgeResolvedAccount {
+        configured_account_id: resolved.configured_account_id,
+        configured_account_label: resolved.configured_account_label,
+        account_id: resolved.account.id,
+        account_label: resolved.account.label,
+        endpoint_override: bridge_url,
         runtime_context,
     }
 }
@@ -654,6 +697,7 @@ fn platform_for_channel_id(channel_id: &str) -> Option<ChannelPlatform> {
         "weixin" => Some(ChannelPlatform::Weixin),
         "qqbot" => Some(ChannelPlatform::Qqbot),
         "onebot" => Some(ChannelPlatform::Onebot),
+        "whatsapp-personal" => Some(ChannelPlatform::WhatsApp),
         _ => None,
     }
 }

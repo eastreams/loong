@@ -1,0 +1,113 @@
+---
+title: WhatsApp Personal
+description: Configure the QR-linked personal WhatsApp bridge surface in Loong.
+---
+
+# WhatsApp Personal
+
+This is a shipped plugin-backed bridge surface. Loong owns the stable send and reply-loop contract, while a bundled local bridge owns WhatsApp Web QR login, reconnects, and session persistence.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Catalog id | `whatsapp-personal` |
+| Config key | `whatsapp_personal` |
+| Implementation status | `plugin_backed` |
+| Transport | `whatsapp_web_baileys_bridge` |
+| Aliases | `whatsapp-web`, `wa-personal`, `whatsapp-personal-bridge` |
+| Default send target kind | `conversation` |
+
+## Minimal Config
+
+```toml
+[runtime_plugins]
+enabled = true
+roots = ["./runtime-plugins"]
+
+[whatsapp_personal]
+enabled = true
+managed_bridge_plugin_id = "whatsapp-personal-baileys-bridge"
+bridge_url = "http://127.0.0.1:39731/bridge"
+auth_dir = "~/.loong/whatsapp-personal/default"
+allowed_chat_ids = ["*"]
+```
+
+## First-Time Pairing
+
+Start the bundled bridge in one terminal. On the first run it will install its Node dependencies if needed, print a QR code, and keep the personal account session alive.
+
+```bash
+./scripts/whatsapp-personal-bridge-run.sh --config ./loong.toml
+```
+
+After the QR-linked bridge is live, run the normal Loong reply loop in another terminal:
+
+```bash
+loong channels serve whatsapp-personal --config ./loong.toml
+```
+
+## Smoke Test
+
+```bash
+# Terminal 1: keep the bridge running so the QR-linked session stays online
+./scripts/whatsapp-personal-bridge-run.sh --config ./loong.toml
+
+# Terminal 2: start the Loong reply loop
+loong channels serve whatsapp-personal --config ./loong.toml
+
+# Terminal 3: proactive send through the same personal account bridge
+loong channels send whatsapp-personal \
+  --config ./loong.toml \
+  --target contact:+15551234567 \
+  --text "hello from loong"
+```
+
+## Stable Target Contract
+
+| Target id | Meaning |
+| --- | --- |
+| `whatsapp-personal:<account>:contact:<e164-or-jid>` | direct chat route via an E.164 number or a full WhatsApp contact JID |
+| `whatsapp-personal:<account>:group:<jid>` | group chat route via a WhatsApp group JID |
+
+Grouped commands also accept the short form `<kind>:<id>` when one configured account is already selected.
+
+## Command Surface
+
+| Operation | Command | Usage or status |
+| --- | --- | --- |
+| bridge-backed send | `channels send whatsapp-personal` | requires the bundled bridge to be running |
+| bridge-backed serve | `channels serve whatsapp-personal` | starts the Loong reply loop against the running bundled bridge |
+| bridge helper | `./scripts/whatsapp-personal-bridge-run.sh` | starts the bundled QR bridge and prints the pairing QR when needed |
+
+## Required Fields For Send
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `whatsapp_personal.enabled`<br/>`whatsapp_personal.accounts.<account>.enabled` | none | none |
+| local bridge url | `whatsapp_personal.bridge_url`<br/>`whatsapp_personal.accounts.<account>.bridge_url` | `whatsapp_personal.bridge_url_env`<br/>`whatsapp_personal.accounts.<account>.bridge_url_env` | `WHATSAPP_PERSONAL_BRIDGE_URL` |
+
+## Required Fields For Serve
+
+| Requirement | Config paths | Env pointer paths | Default env |
+| --- | --- | --- | --- |
+| channel enabled | `whatsapp_personal.enabled`<br/>`whatsapp_personal.accounts.<account>.enabled` | none | none |
+| local bridge url | `whatsapp_personal.bridge_url`<br/>`whatsapp_personal.accounts.<account>.bridge_url` | `whatsapp_personal.bridge_url_env`<br/>`whatsapp_personal.accounts.<account>.bridge_url_env` | `WHATSAPP_PERSONAL_BRIDGE_URL` |
+| bridge auth dir | `whatsapp_personal.auth_dir`<br/>`whatsapp_personal.accounts.<account>.auth_dir` | `whatsapp_personal.auth_dir_env`<br/>`whatsapp_personal.accounts.<account>.auth_dir_env` | `WHATSAPP_PERSONAL_AUTH_DIR` |
+| allowed chat ids | `whatsapp_personal.allowed_chat_ids`<br/>`whatsapp_personal.accounts.<account>.allowed_chat_ids` | none | none |
+
+## Operator Notes
+
+- This surface is for QR-linked **personal WhatsApp Web** access. Keep it separate from the shipped [WhatsApp Cloud API](/use-loong/channel-guides/whatsapp) business-account lane.
+- `runtime_plugins.roots` must include `./runtime-plugins` (or another root that contains the `whatsapp-personal-baileys-bridge` manifest) so `loong doctor`, `loong channels`, and grouped send/serve can discover the bundled bridge contract.
+- The bridge binds to `127.0.0.1` only. If you change `bridge_url`, keep it on a local-only interface.
+- `allowed_chat_ids = ["*"]` keeps the bridge open to every chat the linked personal account can see. Replace that wildcard with a narrow allowlist once the route ids you care about are stable.
+- The bridge helper owns QR login and session persistence. The grouped `channels serve whatsapp-personal` loop owns only Loong's reply-loop runtime.
+- The bundled bridge currently supports text sends and text-first inbound relaying. If you need richer media semantics, add them in the bridge package instead of overloading the existing Cloud API lane.
+
+## Related Docs
+
+- Continue to [WhatsApp Cloud API](/use-loong/channel-guides/whatsapp) for the existing Meta business-account lane.
+- Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.
+- Continue to [Channels](/use-loong/channels) for the surface taxonomy and ownership model.
+- Continue to [Channel Guides](/use-loong/channel-guides/index) for the full matrix.

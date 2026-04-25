@@ -216,26 +216,37 @@ pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
     channel_catalog: &[ChannelCatalogEntry],
 ) -> BTreeMap<&'static str, ChannelPluginBridgeDiscovery> {
     let plugin_backed_channel_ids = plugin_backed_channel_ids(channel_catalog);
-    let managed_install_root = config.external_skills.resolved_install_root();
-    let Some(managed_install_root) = managed_install_root else {
+    let scan_roots = if let Some(managed_install_root) = config.external_skills.resolved_install_root()
+    {
+        vec![managed_install_root]
+    } else {
+        config.runtime_plugins.resolved_roots()
+    };
+    if scan_roots.is_empty() {
         return build_not_configured_discovery_by_id(config, &plugin_backed_channel_ids);
-    };
+    }
 
-    let managed_install_root_display = managed_install_root.display().to_string();
     let scanner = PluginScanner::new();
-    let scan_result = scanner.scan_path(&managed_install_root);
-    let scan_report = match scan_result {
-        Ok(scan_report) => scan_report,
-        Err(error) => {
-            let scan_issue = error.to_string();
-            return build_scan_failed_discovery_by_id(
-                config,
-                &plugin_backed_channel_ids,
-                managed_install_root_display,
-                scan_issue,
-            );
+    let managed_install_root_display = scan_roots
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut scan_report = PluginScanReport::default();
+    for scan_root in &scan_roots {
+        match scanner.scan_path(scan_root) {
+            Ok(root_report) => merge_plugin_scan_report(&mut scan_report, root_report),
+            Err(error) => {
+                let scan_issue = error.to_string();
+                return build_scan_failed_discovery_by_id(
+                    config,
+                    &plugin_backed_channel_ids,
+                    managed_install_root_display,
+                    scan_issue,
+                );
+            }
         }
-    };
+    }
 
     let translator = PluginTranslator::new();
     let translation = translator.translate_scan_report(&scan_report);
@@ -251,6 +262,12 @@ pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
         managed_install_root_display,
         grouped_matches,
     )
+}
+
+fn merge_plugin_scan_report(target: &mut PluginScanReport, source: PluginScanReport) {
+    target.scanned_files = target.scanned_files.saturating_add(source.scanned_files);
+    target.matched_plugins = target.matched_plugins.saturating_add(source.matched_plugins);
+    target.descriptors.extend(source.descriptors);
 }
 
 pub fn validate_plugin_channel_bridge_manifest(

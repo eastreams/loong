@@ -8,11 +8,12 @@ use super::{
     ChannelResolvedAccountRoute, ConfigValidationCode, ConfigValidationIssue,
     ConfigValidationSeverity, EnvPointerValidationHint, ONEBOT_ACCESS_TOKEN_ENV,
     ONEBOT_WEBSOCKET_URL_ENV, ResolvedConfiguredAccount, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV,
-    WEIXIN_BRIDGE_URL_ENV, configured_account_ids, default_channel_account_identity,
-    normalize_channel_account_id, resolve_account_for_session_account_id,
-    resolve_channel_account_route, resolve_configured_account_identity,
-    resolve_configured_account_selection, resolve_default_configured_account_selection,
-    resolve_string_with_legacy_env, validate_channel_account_integrity, validate_env_pointer_field,
+    WEIXIN_BRIDGE_URL_ENV, WHATSAPP_PERSONAL_AUTH_DIR_ENV, WHATSAPP_PERSONAL_BRIDGE_URL_ENV,
+    configured_account_ids, default_channel_account_identity, normalize_channel_account_id,
+    resolve_account_for_session_account_id, resolve_channel_account_route,
+    resolve_configured_account_identity, resolve_configured_account_selection,
+    resolve_default_configured_account_selection, resolve_string_with_legacy_env,
+    validate_channel_account_integrity, validate_env_pointer_field,
     validate_secret_ref_env_pointer_field,
 };
 use crate::CliResult;
@@ -106,6 +107,47 @@ impl ResolvedOnebotChannelConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WhatsappPersonalAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub bridge_url: Option<String>,
+    #[serde(default)]
+    pub bridge_url_env: Option<String>,
+    #[serde(default)]
+    pub auth_dir: Option<String>,
+    #[serde(default)]
+    pub auth_dir_env: Option<String>,
+    #[serde(default)]
+    pub allowed_chat_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWhatsappPersonalChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub bridge_url: Option<String>,
+    pub bridge_url_env: Option<String>,
+    pub auth_dir: Option<String>,
+    pub auth_dir_env: Option<String>,
+    pub allowed_chat_ids: Vec<String>,
+}
+
+impl ResolvedWhatsappPersonalChannelConfig {
+    pub fn bridge_url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.bridge_url.as_deref(), self.bridge_url_env.as_deref())
+    }
+
+    pub fn auth_dir(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.auth_dir.as_deref(), self.auth_dir_env.as_deref())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WeixinChannelConfig {
@@ -154,6 +196,31 @@ pub struct OnebotChannelConfig {
     pub allowed_group_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, OnebotAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WhatsappPersonalChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub managed_bridge_plugin_id: Option<String>,
+    #[serde(default)]
+    pub bridge_url: Option<String>,
+    #[serde(default = "default_whatsapp_personal_bridge_url_env")]
+    pub bridge_url_env: Option<String>,
+    #[serde(default)]
+    pub auth_dir: Option<String>,
+    #[serde(default = "default_whatsapp_personal_auth_dir_env")]
+    pub auth_dir_env: Option<String>,
+    #[serde(default)]
+    pub allowed_chat_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, WhatsappPersonalAccountConfig>,
 }
 
 impl WeixinChannelConfig {
@@ -331,6 +398,203 @@ impl WeixinChannelConfig {
                 id,
                 label,
                 source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        let fallback_account_id = self.resolved_account_identity().id;
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            fallback_account_id.as_str(),
+        )
+    }
+}
+
+impl WhatsappPersonalChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "whatsapp_personal",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_effective_whatsapp_personal_runtime_account_ids(&mut issues, self);
+        validate_whatsapp_personal_env_pointer(
+            &mut issues,
+            "whatsapp_personal.bridge_url_env",
+            self.bridge_url_env.as_deref(),
+            "whatsapp_personal.bridge_url",
+        );
+        validate_whatsapp_personal_env_pointer(
+            &mut issues,
+            "whatsapp_personal.auth_dir_env",
+            self.auth_dir_env.as_deref(),
+            "whatsapp_personal.auth_dir",
+        );
+
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = raw_account_id.as_str();
+            let bridge_url_field_path =
+                format!("whatsapp_personal.accounts.{account_id}.bridge_url");
+            let bridge_url_env_field_path = format!("{bridge_url_field_path}_env");
+            validate_whatsapp_personal_env_pointer(
+                &mut issues,
+                bridge_url_env_field_path.as_str(),
+                account.bridge_url_env.as_deref(),
+                bridge_url_field_path.as_str(),
+            );
+
+            let auth_dir_field_path = format!("whatsapp_personal.accounts.{account_id}.auth_dir");
+            let auth_dir_env_field_path = format!("{auth_dir_field_path}_env");
+            validate_whatsapp_personal_env_pointer(
+                &mut issues,
+                auth_dir_env_field_path.as_str(),
+                account.auth_dir_env.as_deref(),
+                auth_dir_field_path.as_str(),
+            );
+        }
+
+        issues
+    }
+
+    pub fn bridge_url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.bridge_url.as_deref(), self.bridge_url_env.as_deref())
+    }
+
+    pub fn auth_dir(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.auth_dir.as_deref(), self.auth_dir_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        let fallback_account_id = self.resolved_account_identity().id;
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            fallback_account_id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        self.default_configured_account_selection().id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        let fallback_account_id = self.resolved_account_identity().id;
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            fallback_account_id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWhatsappPersonalChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = WhatsappPersonalChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            managed_bridge_plugin_id: self.managed_bridge_plugin_id.clone(),
+            bridge_url: account_override
+                .and_then(|account| account.bridge_url.clone())
+                .or_else(|| self.bridge_url.clone()),
+            bridge_url_env: account_override
+                .and_then(|account| account.bridge_url_env.clone())
+                .or_else(|| self.bridge_url_env.clone()),
+            auth_dir: account_override
+                .and_then(|account| account.auth_dir.clone())
+                .or_else(|| self.auth_dir.clone()),
+            auth_dir_env: account_override
+                .and_then(|account| account.auth_dir_env.clone())
+                .or_else(|| self.auth_dir_env.clone()),
+            allowed_chat_ids: account_override
+                .and_then(|account| account.allowed_chat_ids.clone())
+                .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedWhatsappPersonalChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            bridge_url: merged.bridge_url,
+            bridge_url_env: merged.bridge_url_env,
+            auth_dir: merged.auth_dir,
+            auth_dir_env: merged.auth_dir_env,
+            allowed_chat_ids: merged.allowed_chat_ids,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedWhatsappPersonalChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let bridge_url = self.bridge_url();
+        let bridge_url = bridge_url.as_deref();
+        let authority = resolve_url_authority_label(bridge_url);
+        if let Some(authority) = authority {
+            let normalized_authority = normalize_channel_account_id(authority.as_str());
+            let account_id = format!("whatsapp_personal_{normalized_authority}");
+            let account_label = format!("whatsapp-personal:{authority}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
             };
         }
 
@@ -597,6 +861,30 @@ fn validate_effective_onebot_runtime_account_ids(
     push_duplicate_effective_runtime_account_id_issues(issues, "onebot", runtime_account_ids);
 }
 
+fn validate_effective_whatsapp_personal_runtime_account_ids(
+    issues: &mut Vec<ConfigValidationIssue>,
+    config: &WhatsappPersonalChannelConfig,
+) {
+    let mut runtime_account_ids = BTreeMap::<String, Vec<String>>::new();
+    for configured_account_id in config.configured_account_ids() {
+        let resolved = config.resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let normalized_runtime_account_id =
+            normalize_channel_account_id(resolved.account.id.as_str());
+        runtime_account_ids
+            .entry(normalized_runtime_account_id)
+            .or_default()
+            .push(resolved.configured_account_label);
+    }
+    push_duplicate_effective_runtime_account_id_issues(
+        issues,
+        "whatsapp_personal",
+        runtime_account_ids,
+    );
+}
+
 fn push_duplicate_effective_runtime_account_id_issues(
     issues: &mut Vec<ConfigValidationIssue>,
     channel_key: &str,
@@ -640,6 +928,14 @@ fn default_onebot_websocket_url_env() -> Option<String> {
 
 fn default_onebot_access_token_env() -> Option<String> {
     Some(ONEBOT_ACCESS_TOKEN_ENV.to_owned())
+}
+
+fn default_whatsapp_personal_bridge_url_env() -> Option<String> {
+    Some(WHATSAPP_PERSONAL_BRIDGE_URL_ENV.to_owned())
+}
+
+fn default_whatsapp_personal_auth_dir_env() -> Option<String> {
+    Some(WHATSAPP_PERSONAL_AUTH_DIR_ENV.to_owned())
 }
 
 fn resolve_url_authority_label(raw_url: Option<&str>) -> Option<String> {
@@ -718,6 +1014,32 @@ fn validate_onebot_env_pointer(
         ONEBOT_ACCESS_TOKEN_ENV
     } else {
         ONEBOT_WEBSOCKET_URL_ENV
+    };
+
+    let validation_result = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    );
+    if let Err(issue) = validation_result {
+        issues.push(*issue);
+    }
+}
+
+fn validate_whatsapp_personal_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("auth_dir_env") {
+        WHATSAPP_PERSONAL_AUTH_DIR_ENV
+    } else {
+        WHATSAPP_PERSONAL_BRIDGE_URL_ENV
     };
 
     let validation_result = validate_env_pointer_field(
@@ -823,7 +1145,7 @@ mod tests {
             .expect("resolve onebot account from env pointer");
         let websocket_url = resolved.websocket_url();
 
-        assert_eq!(resolved.configured_account_id, "default");
+        assert_eq!(resolved.configured_account_id, "whatsapp_personal_127-0-0-1-39731");
         assert_eq!(resolved.account.id, "onebot_127-0-0-1-5700");
         assert_eq!(resolved.account.label, "onebot:127.0.0.1:5700");
         assert_eq!(websocket_url.as_deref(), Some("ws://127.0.0.1:5700"));
@@ -902,6 +1224,98 @@ mod tests {
                 .iter()
                 .any(|issue| issue.field_path == "weixin.accounts.Ops Team.bridge_url_env"),
             "validation should preserve raw weixin account key in issue path: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn whatsapp_personal_partial_deserialization_keeps_default_env_pointers() {
+        let config: WhatsappPersonalChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize whatsapp personal config");
+
+        assert_eq!(
+            config.bridge_url_env.as_deref(),
+            Some(WHATSAPP_PERSONAL_BRIDGE_URL_ENV)
+        );
+        assert_eq!(
+            config.auth_dir_env.as_deref(),
+            Some(WHATSAPP_PERSONAL_AUTH_DIR_ENV)
+        );
+    }
+
+    #[test]
+    fn whatsapp_personal_resolves_bridge_url_from_env_pointer() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set(
+            "TEST_WHATSAPP_PERSONAL_BRIDGE_URL",
+            "http://127.0.0.1:39731/bridge",
+        );
+
+        let config_value = json!({
+            "enabled": true,
+            "bridge_url_env": "TEST_WHATSAPP_PERSONAL_BRIDGE_URL"
+        });
+        let config: WhatsappPersonalChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize whatsapp personal config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve whatsapp personal account from env pointer");
+        let bridge_url = resolved.bridge_url();
+
+        assert_eq!(resolved.configured_account_id, "whatsapp_personal_127-0-0-1-39731");
+        assert_eq!(resolved.account.id, "whatsapp_personal_127-0-0-1-39731");
+        assert_eq!(bridge_url.as_deref(), Some("http://127.0.0.1:39731/bridge"));
+    }
+
+    #[test]
+    fn whatsapp_personal_validate_rejects_duplicate_effective_runtime_account_ids() {
+        let config: WhatsappPersonalChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "bridge_url": "http://127.0.0.1:39731/bridge",
+            "accounts": {
+                "alpha": {},
+                "beta": {}
+            }
+        }))
+        .expect("deserialize whatsapp personal config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues.iter().any(|issue| {
+                issue.field_path == "whatsapp_personal.accounts"
+                    && issue
+                        .extra_message_variables
+                        .get("normalized_account_id")
+                        .map(|value| value == "whatsapp_personal_127-0-0-1-39731")
+                        .unwrap_or(false)
+            }),
+            "validation should reject duplicate effective whatsapp personal account ids: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn whatsapp_personal_validate_uses_raw_account_key_in_env_pointer_paths() {
+        let config: WhatsappPersonalChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "accounts": {
+                "Ops Team": {
+                    "bridge_url_env": "BAD ENV"
+                }
+            }
+        }))
+        .expect("deserialize whatsapp personal config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path
+                    == "whatsapp_personal.accounts.Ops Team.bridge_url_env"),
+            "validation should preserve raw whatsapp personal account key in issue path: {issues:#?}"
         );
     }
 

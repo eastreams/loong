@@ -1,0 +1,29 @@
+{
+  "api_version": "v1alpha1",
+  "plugin_id": "whatsapp-personal-baileys-bridge",
+  "version": "0.1.0",
+  "provider_id": "whatsapp-personal-bridge",
+  "connector_name": "whatsapp-personal-http",
+  "channel_id": "whatsapp-personal",
+  "endpoint": "http://127.0.0.1:39731/bridge",
+  "capabilities": ["InvokeConnector"],
+  "trust_tier": "unverified",
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "channel-bridge",
+    "transport_family": "whatsapp_web_baileys_bridge",
+    "target_contract": "whatsapp-personal:<account>:contact:<e164-or-jid> | whatsapp-personal:<account>:group:<jid>",
+    "account_scope": "multi_account",
+    "channel_runtime_contract": "loong_channel_bridge_v1",
+    "channel_runtime_operations_json": "[\"send_message\",\"receive_batch\",\"ack_inbound\",\"complete_batch\"]"
+  },
+  "summary": "Bundled personal WhatsApp Web bridge backed by Baileys and QR login",
+  "tags": ["channel", "bridge", "whatsapp", "qr", "baileys"],
+  "setup": {
+    "surface": "channel",
+    "docs_urls": [
+      "https://github.com/eastreams/loong/blob/dev/site/use-loong/channel-guides/whatsapp-personal.mdx"
+    ],
+    "remediation": "Set [runtime_plugins].enabled=true, add ./runtime-plugins to runtime_plugins.roots, then run ./scripts/whatsapp-personal-bridge-run.sh --config <path>"
+  }
+}

@@ -25,7 +25,8 @@ pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::bridge::{
     OnebotAccountConfig, OnebotChannelConfig, ResolvedOnebotChannelConfig,
-    ResolvedWeixinChannelConfig, WeixinAccountConfig, WeixinChannelConfig,
+    ResolvedWeixinChannelConfig, ResolvedWhatsappPersonalChannelConfig, WeixinAccountConfig,
+    WeixinChannelConfig, WhatsappPersonalAccountConfig, WhatsappPersonalChannelConfig,
 };
 #[allow(unused_imports)]
 pub use channels::{
@@ -69,7 +70,8 @@ pub(crate) use channels::{
     TLON_CODE_ENV, TLON_SHIP_ENV, TLON_URL_ENV, TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, WHATSAPP_ACCESS_TOKEN_ENV,
-    WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
+    WHATSAPP_APP_SECRET_ENV, WHATSAPP_PERSONAL_AUTH_DIR_ENV, WHATSAPP_PERSONAL_BRIDGE_URL_ENV,
+    WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
     parse_email_smtp_endpoint, parse_nostr_private_key_hex, parse_nostr_public_key_hex,
 };
 #[allow(unused_imports)]
@@ -202,7 +204,7 @@ mod tests {
     }
 
     fn expected_plugin_backed_channel_ids() -> Vec<&'static str> {
-        vec!["weixin", "onebot"]
+        vec!["weixin", "onebot", "whatsapp-personal"]
     }
 
     fn expected_outbound_channel_ids() -> Vec<&'static str> {
