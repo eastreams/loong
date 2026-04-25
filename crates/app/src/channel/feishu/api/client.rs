@@ -73,6 +73,11 @@ pub struct FeishuUserInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct FeishuBotInfo {
+    pub open_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct FeishuWsEndpointClientConfig {
     #[serde(rename = "ReconnectCount", default)]
     pub reconnect_count: Option<i64>,
@@ -370,6 +375,17 @@ impl FeishuClient {
             )
             .await?;
         parse_user_info_response(&payload)
+    }
+
+    /// Fetch the bot's own profile, including its `open_id`. Used at
+    /// onboarding to identify the bot when applying inbound mention
+    /// filters; the value is cached by the caller and never persisted to
+    /// disk or surfaced through public configuration.
+    pub async fn get_bot_info(&self, tenant_access_token: &str) -> CliResult<FeishuBotInfo> {
+        let payload = self
+            .get_json("/open-apis/bot/v3/info", Some(tenant_access_token), &[])
+            .await?;
+        parse_bot_info_response(&payload)
     }
 
     pub async fn get_json(
@@ -720,6 +736,30 @@ pub fn parse_user_info_response(payload: &Value) -> CliResult<FeishuUserInfo> {
     })
 }
 
+pub fn parse_bot_info_response(payload: &Value) -> CliResult<FeishuBotInfo> {
+    if let Some(code) = payload.get("code").and_then(Value::as_i64)
+        && code != 0
+    {
+        let detail = payload
+            .get("msg")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("<no msg>");
+        return Err(format!(
+            "feishu bot info request failed with code {code}: {detail}"
+        ));
+    }
+    let scope = payload
+        .get("bot")
+        .and_then(Value::as_object)
+        .or_else(|| payload.as_object())
+        .ok_or_else(|| "feishu bot info payload is not an object".to_owned())?;
+    Ok(FeishuBotInfo {
+        open_id: string_field(scope, "open_id"),
+    })
+}
+
 pub fn parse_tenant_access_token_response(payload: &Value) -> CliResult<String> {
     payload
         .get("tenant_access_token")
@@ -929,6 +969,37 @@ mod tests {
         let token = parse_tenant_access_token_response(&payload).expect("parse tenant token");
 
         assert_eq!(token, "t-123");
+    }
+
+    #[test]
+    fn parse_bot_info_response_reads_open_id_from_bot_payload() {
+        let payload = serde_json::json!({
+            "code": 0,
+            "msg": "ok",
+            "bot": {
+                "app_name": "Loong",
+                "open_id": "ou_bot_xyz"
+            }
+        });
+
+        let info = parse_bot_info_response(&payload).expect("parse bot info");
+
+        assert_eq!(info.open_id.as_deref(), Some("ou_bot_xyz"));
+    }
+
+    #[test]
+    fn parse_bot_info_response_surfaces_non_zero_code_with_msg() {
+        let payload = serde_json::json!({
+            "code": 99991672,
+            "msg": "Access denied. App has no permission to access the API."
+        });
+
+        let error = parse_bot_info_response(&payload).expect_err("expect Err on non-zero code");
+
+        assert!(
+            error.contains("99991672") && error.contains("Access denied"),
+            "expected error to surface code and msg, got: {error}"
+        );
     }
 
     #[tokio::test]

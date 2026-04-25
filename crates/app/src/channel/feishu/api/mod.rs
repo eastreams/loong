@@ -16,7 +16,7 @@ pub use auth::{
     summarize_message_write_scope_status,
 };
 pub use client::{
-    FeishuClient, FeishuUserInfo, FeishuWsEndpoint, FeishuWsEndpointClientConfig,
+    FeishuBotInfo, FeishuClient, FeishuUserInfo, FeishuWsEndpoint, FeishuWsEndpointClientConfig,
     parse_user_info_response,
 };
 pub use error::FeishuApiError;

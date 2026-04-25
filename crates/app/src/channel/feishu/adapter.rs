@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use std::future::Future;
+use std::sync::{Arc, OnceLock};
 
 use crate::CliResult;
 use crate::channel::feishu::api::FeishuClient;
@@ -103,6 +104,7 @@ pub(super) struct FeishuAdapter {
     client: FeishuClient,
     receive_id_type: String,
     tenant_access_token: Option<String>,
+    bot_open_id: Arc<OnceLock<String>>,
 }
 
 impl FeishuAdapter {
@@ -122,12 +124,43 @@ impl FeishuAdapter {
             )?,
             receive_id_type: config.receive_id_type.clone(),
             tenant_access_token: None,
+            bot_open_id: Arc::new(OnceLock::new()),
         })
     }
 
     pub(super) async fn refresh_tenant_token(&mut self) -> CliResult<()> {
-        self.tenant_access_token = Some(self.client.get_tenant_access_token().await?);
+        let token = self.client.get_tenant_access_token().await?;
+        self.tenant_access_token = Some(token);
+        // Only needed for the require-mention filter; a lookup failure must
+        // not break the channel — log and retry on the next refresh.
+        if self.bot_open_id.get().is_none()
+            && let Some(token) = self.tenant_access_token.as_deref()
+        {
+            match self.client.get_bot_info(token).await {
+                Ok(info) => {
+                    if let Some(value) = info
+                        .open_id
+                        .as_ref()
+                        .map(|value| value.trim().to_owned())
+                        .filter(|value| !value.is_empty())
+                    {
+                        let _ = self.bot_open_id.set(value);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "loong.channel.feishu",
+                        action = "bot_info_lookup",
+                        "feishu bot info lookup failed: {error}"
+                    );
+                }
+            }
+        }
         Ok(())
+    }
+
+    pub(super) fn bot_open_id_handle(&self) -> Arc<OnceLock<String>> {
+        Arc::clone(&self.bot_open_id)
     }
 
     pub(super) async fn resolve_operator_outbound_message(
