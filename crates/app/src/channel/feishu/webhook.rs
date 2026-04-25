@@ -52,6 +52,8 @@ pub(super) struct FeishuWebhookState {
     access_policy: ChannelInboundAccessPolicy<String>,
     ack_reactions: bool,
     ignore_bot_messages: bool,
+    require_mention: bool,
+    bot_id: Option<String>,
     seen_events: Arc<Mutex<RecentIdCache>>,
     seen_ack_reactions: Arc<Mutex<RecentIdCache>>,
     kernel_ctx: Arc<KernelContext>,
@@ -110,6 +112,8 @@ impl FeishuWebhookState {
             access_policy,
             ack_reactions: resolved.ack_reactions,
             ignore_bot_messages: resolved.ignore_bot_messages,
+            require_mention: resolved.require_mention,
+            bot_id: adapter.bot_open_id().map(str::to_owned),
             config,
             resolved_path,
             adapter: Arc::new(Mutex::new(adapter)),
@@ -124,11 +128,13 @@ impl FeishuWebhookState {
         &self,
         payload: &Value,
     ) -> CliResult<FeishuWebhookAction> {
-        super::payload::parse_feishu_inbound_payload_with_access_policy(
+        super::payload::parse_feishu_inbound_payload_with_options(
             payload,
             super::payload::FeishuTransportAuth::websocket(),
             &self.access_policy,
             self.ignore_bot_messages,
+            self.require_mention,
+            self.bot_id.as_deref(),
             self.configured_account_id.as_str(),
             self.account_id.as_str(),
         )
@@ -625,12 +631,14 @@ async fn handle_feishu_webhook_payload(
 ) -> Result<FeishuWebhookSuccessResponse, (StatusCode, String)> {
     verify_feishu_signature(headers, raw_body, &payload, state.encrypt_key.as_deref())?;
 
-    let parsed = super::payload::parse_feishu_webhook_payload_with_access_policy(
+    let parsed = super::payload::parse_feishu_webhook_payload_with_options(
         &payload,
         state.verification_token.as_deref(),
         state.encrypt_key.as_deref(),
         &state.access_policy,
         state.ignore_bot_messages,
+        state.require_mention,
+        state.bot_id.as_deref(),
         state.configured_account_id.as_str(),
         state.account_id.as_str(),
     )

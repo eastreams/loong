@@ -103,6 +103,7 @@ pub(super) struct FeishuAdapter {
     client: FeishuClient,
     receive_id_type: String,
     tenant_access_token: Option<String>,
+    bot_open_id: Option<String>,
 }
 
 impl FeishuAdapter {
@@ -122,12 +123,41 @@ impl FeishuAdapter {
             )?,
             receive_id_type: config.receive_id_type.clone(),
             tenant_access_token: None,
+            bot_open_id: None,
         })
     }
 
     pub(super) async fn refresh_tenant_token(&mut self) -> CliResult<()> {
-        self.tenant_access_token = Some(self.client.get_tenant_access_token().await?);
+        let token = self.client.get_tenant_access_token().await?;
+        self.tenant_access_token = Some(token);
+        // Lazily resolve the bot's own identity once we have a tenant
+        // token; we only need it for the require-mention filter, so a
+        // failure here must not break the channel — log and proceed.
+        if self.bot_open_id.is_none()
+            && let Some(token) = self.tenant_access_token.as_deref()
+        {
+            match self.client.get_bot_info(token).await {
+                Ok(info) => {
+                    self.bot_open_id = info
+                        .open_id
+                        .as_ref()
+                        .map(|value| value.trim().to_owned())
+                        .filter(|value| !value.is_empty());
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "loong.channel.feishu",
+                        action = "bot_info_lookup",
+                        "feishu bot info lookup failed: {error}"
+                    );
+                }
+            }
+        }
         Ok(())
+    }
+
+    pub(super) fn bot_open_id(&self) -> Option<&str> {
+        self.bot_open_id.as_deref()
     }
 
     pub(super) async fn resolve_operator_outbound_message(

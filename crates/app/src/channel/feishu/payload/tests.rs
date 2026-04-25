@@ -1771,3 +1771,236 @@ fn feishu_message_event_requires_verification_token_configuration() {
 
     assert!(error.contains("verification token is not configured"));
 }
+
+fn feishu_group_text_payload_with_optional_mentions(mentions: Option<Value>) -> Value {
+    let mut message = serde_json::Map::new();
+    message.insert("chat_id".to_owned(), Value::String("oc_group_1".to_owned()));
+    message.insert("chat_type".to_owned(), Value::String("group".to_owned()));
+    message.insert(
+        "message_id".to_owned(),
+        Value::String("om_mention_1".to_owned()),
+    );
+    message.insert("message_type".to_owned(), Value::String("text".to_owned()));
+    message.insert(
+        "content".to_owned(),
+        Value::String("{\"text\":\"hello loong\"}".to_owned()),
+    );
+    if let Some(mentions) = mentions {
+        message.insert("mentions".to_owned(), mentions);
+    }
+
+    json!({
+        "token": "token-123",
+        "header": {
+            "event_id": "evt_mention_filter",
+            "event_type": "im.message.receive_v1"
+        },
+        "event": {
+            "sender": {
+                "sender_type": "user",
+                "sender_id": {
+                    "open_id": "ou_human_1"
+                }
+            },
+            "message": Value::Object(message)
+        }
+    })
+}
+
+fn feishu_mention_filter_access_policy() -> ChannelInboundAccessPolicy<String> {
+    ChannelInboundAccessPolicy::from_string_lists(&["oc_group_1".to_owned()], &[], true)
+}
+
+const FEISHU_TEST_BOT_OPEN_ID: &str = "ou_bot_loong";
+
+fn feishu_test_bot_mention() -> Value {
+    json!({
+        "key": "@_user_1",
+        "mentioned_type": "bot",
+        "id": {
+            "open_id": FEISHU_TEST_BOT_OPEN_ID,
+            "union_id": "on_bot_loong",
+            "user_id": "u_bot_loong"
+        },
+        "name": "loong-bot",
+        "tenant_key": "tenant_1"
+    })
+}
+
+#[test]
+fn feishu_group_chat_message_without_mentions_is_ignored_when_require_mention_enabled() {
+    let payload = feishu_group_text_payload_with_optional_mentions(None);
+    let access_policy = feishu_mention_filter_access_policy();
+
+    let action = parse_feishu_webhook_payload_with_options(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        true,
+        Some(FEISHU_TEST_BOT_OPEN_ID),
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse feishu group payload");
+
+    assert!(matches!(action, FeishuWebhookAction::Ignore));
+}
+
+#[test]
+fn feishu_group_chat_message_with_bot_mention_proceeds_when_require_mention_enabled() {
+    let payload =
+        feishu_group_text_payload_with_optional_mentions(Some(json!([feishu_test_bot_mention()])));
+    let access_policy = feishu_mention_filter_access_policy();
+
+    let action = parse_feishu_webhook_payload_with_options(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        true,
+        Some(FEISHU_TEST_BOT_OPEN_ID),
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse feishu group payload");
+
+    let event = expect_inbound(action);
+    assert_eq!(event.event_id, "evt_mention_filter");
+    assert_eq!(event.text, "hello loong");
+}
+
+#[test]
+fn feishu_group_chat_message_proceeds_when_require_mention_disabled() {
+    let payload = feishu_group_text_payload_with_optional_mentions(None);
+    let access_policy = feishu_mention_filter_access_policy();
+
+    let action = parse_feishu_webhook_payload_with_options(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        false,
+        Some(FEISHU_TEST_BOT_OPEN_ID),
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse feishu group payload");
+
+    let event = expect_inbound(action);
+    assert_eq!(event.event_id, "evt_mention_filter");
+    assert_eq!(event.text, "hello loong");
+}
+
+#[test]
+fn feishu_group_chat_user_only_mention_is_ignored_when_require_mention_enabled() {
+    let payload = feishu_group_text_payload_with_optional_mentions(Some(json!([
+        {
+            "key": "@_user_1",
+            "mentioned_type": "user",
+            "id": {
+                "open_id": "ou_someone_else",
+                "union_id": "on_someone_else",
+                "user_id": "u_someone_else"
+            },
+            "name": "Alice",
+            "tenant_key": "tenant_1"
+        }
+    ])));
+    let access_policy = feishu_mention_filter_access_policy();
+
+    let action = parse_feishu_webhook_payload_with_options(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        true,
+        Some(FEISHU_TEST_BOT_OPEN_ID),
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse feishu group payload");
+
+    assert!(matches!(action, FeishuWebhookAction::Ignore));
+}
+
+#[test]
+fn feishu_group_chat_other_bot_mention_is_ignored_when_bot_id_does_not_match() {
+    let payload = feishu_group_text_payload_with_optional_mentions(Some(json!([
+        {
+            "key": "@_user_1",
+            "mentioned_type": "bot",
+            "id": {
+                "open_id": "ou_other_bot",
+                "union_id": "on_other_bot",
+                "user_id": "u_other_bot"
+            },
+            "name": "OtherBot",
+            "tenant_key": "tenant_1"
+        }
+    ])));
+    let access_policy = feishu_mention_filter_access_policy();
+
+    let action = parse_feishu_webhook_payload_with_options(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        true,
+        Some(FEISHU_TEST_BOT_OPEN_ID),
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse feishu group payload");
+
+    assert!(matches!(action, FeishuWebhookAction::Ignore));
+}
+
+#[test]
+fn feishu_p2p_chat_message_bypasses_require_mention_filter() {
+    let payload = json!({
+        "token": "token-123",
+        "header": {
+            "event_id": "evt_mention_p2p",
+            "event_type": "im.message.receive_v1"
+        },
+        "event": {
+            "sender": {
+                "sender_type": "user",
+                "sender_id": {
+                    "open_id": "ou_human_2"
+                }
+            },
+            "message": {
+                "chat_id": "oc_p2p_1",
+                "chat_type": "p2p",
+                "message_id": "om_p2p_1",
+                "message_type": "text",
+                "content": "{\"text\":\"private hi\"}"
+            }
+        }
+    });
+    let access_policy =
+        ChannelInboundAccessPolicy::from_string_lists(&["oc_p2p_1".to_owned()], &[], true);
+
+    let action = parse_feishu_webhook_payload_with_options(
+        &payload,
+        Some("token-123"),
+        None,
+        &access_policy,
+        true,
+        true,
+        Some(FEISHU_TEST_BOT_OPEN_ID),
+        "feishu_main",
+        "feishu_main",
+    )
+    .expect("parse feishu p2p payload");
+
+    let event = expect_inbound(action);
+    assert_eq!(event.text, "private hi");
+}

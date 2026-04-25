@@ -106,11 +106,34 @@ pub(in crate::channel::feishu) fn parse_feishu_inbound_payload(
     )
 }
 
+#[cfg(test)]
 pub(in crate::channel::feishu) fn parse_feishu_inbound_payload_with_access_policy(
     payload: &Value,
     transport_auth: FeishuTransportAuth<'_>,
     access_policy: &ChannelInboundAccessPolicy<String>,
     ignore_bot_messages: bool,
+    configured_account_id: &str,
+    account_id: &str,
+) -> CliResult<FeishuWebhookAction> {
+    parse_feishu_inbound_payload_with_options(
+        payload,
+        transport_auth,
+        access_policy,
+        ignore_bot_messages,
+        false,
+        None,
+        configured_account_id,
+        account_id,
+    )
+}
+
+pub(in crate::channel::feishu) fn parse_feishu_inbound_payload_with_options(
+    payload: &Value,
+    transport_auth: FeishuTransportAuth<'_>,
+    access_policy: &ChannelInboundAccessPolicy<String>,
+    ignore_bot_messages: bool,
+    require_mention: bool,
+    bot_id: Option<&str>,
     configured_account_id: &str,
     account_id: &str,
 ) -> CliResult<FeishuWebhookAction> {
@@ -211,6 +234,10 @@ pub(in crate::channel::feishu) fn parse_feishu_inbound_payload_with_access_polic
         return Ok(FeishuWebhookAction::Ignore);
     }
 
+    if require_mention && feishu_group_message_lacks_bot_mention(message, bot_id) {
+        return Ok(FeishuWebhookAction::Ignore);
+    }
+
     let message_id = required_string_field(message, "message_id")
         .ok_or_else(|| "feishu message event missing message.message_id".to_owned())?;
     let root_id = optional_string_field(message, "root_id");
@@ -297,6 +324,66 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload(
     )
 }
 
+/// Returns `true` only when the inbound message is a Feishu group chat
+/// message that does not @-mention this bot according to the event's
+/// `mentions` field. We require an entry whose `mentioned_type` is `"bot"`
+/// and whose `id` block (any of `open_id`/`user_id`/`union_id`) matches
+/// `bot_id`. Non-group chats (e.g. p2p) always return `false` so the
+/// require-mention filter is scoped to group chats.
+fn feishu_group_message_lacks_bot_mention(
+    message: &serde_json::Map<String, Value>,
+    bot_id: Option<&str>,
+) -> bool {
+    let chat_type = message
+        .get("chat_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if chat_type != "group" {
+        return false;
+    }
+    let Some(mentions) = message.get("mentions").and_then(Value::as_array) else {
+        return true;
+    };
+    !mentions
+        .iter()
+        .any(|entry| feishu_mention_targets_bot(entry, bot_id))
+}
+
+fn feishu_mention_targets_bot(entry: &Value, bot_id: Option<&str>) -> bool {
+    let Some(map) = entry.as_object() else {
+        return false;
+    };
+    let mentioned_type = map
+        .get("mentioned_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !mentioned_type.eq_ignore_ascii_case("bot") {
+        return false;
+    }
+    let Some(id) = map.get("id").and_then(Value::as_object) else {
+        return false;
+    };
+    let candidates: Vec<&str> = ["open_id", "user_id", "union_id"]
+        .into_iter()
+        .filter_map(|key| {
+            id.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .collect();
+    match bot_id.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(expected) => candidates.contains(&expected),
+        // Without a configured bot identifier we cannot prove the bot was the
+        // mention target. Treat any `mentioned_type=bot` entry as a match so
+        // the filter remains permissive for single-bot chats.
+        None => !candidates.is_empty(),
+    }
+}
+
+#[cfg(test)]
 pub(in crate::channel::feishu) fn parse_feishu_webhook_payload_with_access_policy(
     payload: &Value,
     verification_token: Option<&str>,
@@ -311,6 +398,29 @@ pub(in crate::channel::feishu) fn parse_feishu_webhook_payload_with_access_polic
         FeishuTransportAuth::webhook(verification_token, encrypt_key),
         access_policy,
         ignore_bot_messages,
+        configured_account_id,
+        account_id,
+    )
+}
+
+pub(in crate::channel::feishu) fn parse_feishu_webhook_payload_with_options(
+    payload: &Value,
+    verification_token: Option<&str>,
+    encrypt_key: Option<&str>,
+    access_policy: &ChannelInboundAccessPolicy<String>,
+    ignore_bot_messages: bool,
+    require_mention: bool,
+    bot_id: Option<&str>,
+    configured_account_id: &str,
+    account_id: &str,
+) -> CliResult<FeishuWebhookAction> {
+    parse_feishu_inbound_payload_with_options(
+        payload,
+        FeishuTransportAuth::webhook(verification_token, encrypt_key),
+        access_policy,
+        ignore_bot_messages,
+        require_mention,
+        bot_id,
         configured_account_id,
         account_id,
     )
