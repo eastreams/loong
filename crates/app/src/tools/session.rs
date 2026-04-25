@@ -50,7 +50,7 @@ use crate::task_progress::{
 #[cfg(feature = "memory-sqlite")]
 use crate::tools::ToolView;
 #[cfg(feature = "memory-sqlite")]
-use crate::tools::runtime_config::ToolRuntimeNarrowing;
+use crate::tools::runtime_config::{SessionToolRuntimePolicy, ToolRuntimeNarrowing};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -4990,23 +4990,6 @@ fn session_tool_policy_base_tool_view(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn apply_session_tool_policy_to_tool_view(
-    base_tool_view: &ToolView,
-    session_tool_policy: Option<&SessionToolPolicyRecord>,
-) -> ToolView {
-    let Some(session_tool_policy) = session_tool_policy else {
-        return base_tool_view.clone();
-    };
-    if session_tool_policy.requested_tool_ids.is_empty() {
-        return base_tool_view.clone();
-    }
-
-    let requested_tool_view =
-        ToolView::from_tool_names(session_tool_policy.requested_tool_ids.iter());
-    base_tool_view.intersect(&requested_tool_view)
-}
-
-#[cfg(feature = "memory-sqlite")]
 fn load_session_delegate_runtime_narrowing(
     repo: &SessionRepository,
     session_id: &str,
@@ -5026,16 +5009,20 @@ fn load_session_delegate_runtime_narrowing(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn merge_session_tool_policy_runtime_narrowing(
-    delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+fn session_tool_runtime_policy(
     session_tool_policy: Option<&SessionToolPolicyRecord>,
-) -> Option<ToolRuntimeNarrowing> {
-    let policy_runtime_narrowing = session_tool_policy.and_then(|policy| {
+    delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+) -> SessionToolRuntimePolicy {
+    let requested_tool_ids = session_tool_policy
+        .map(|policy| policy.requested_tool_ids.clone())
+        .unwrap_or_default();
+    let requested_runtime_narrowing = session_tool_policy.and_then(|policy| {
         (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
     });
-    super::runtime_config::merge_runtime_narrowing_sources(
+    SessionToolRuntimePolicy::new(
+        requested_tool_ids,
+        requested_runtime_narrowing,
         delegate_runtime_narrowing,
-        policy_runtime_narrowing,
     )
 }
 
@@ -5074,21 +5061,17 @@ pub(crate) fn build_session_tool_policy_status_payload(
 ) -> Result<Value, String> {
     let session_tool_policy = repo.load_session_tool_policy(target_session_id)?;
     let base_tool_view = session_tool_policy_base_tool_view(repo, target_session_id, tool_config)?;
-    let effective_tool_view =
-        apply_session_tool_policy_to_tool_view(&base_tool_view, session_tool_policy.as_ref());
     let delegate_runtime_narrowing =
         load_session_delegate_runtime_narrowing(repo, target_session_id)?;
-    let effective_runtime_narrowing = merge_session_tool_policy_runtime_narrowing(
-        delegate_runtime_narrowing.clone(),
-        session_tool_policy.as_ref(),
-    );
-    let requested_tool_ids = session_tool_policy
-        .as_ref()
-        .map(|policy| policy.requested_tool_ids.clone())
-        .unwrap_or_default();
-    let requested_runtime_narrowing = session_tool_policy.as_ref().and_then(|policy| {
-        (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
-    });
+    let session_tool_runtime_policy =
+        session_tool_runtime_policy(session_tool_policy.as_ref(), delegate_runtime_narrowing);
+    let effective_tool_view = session_tool_runtime_policy.apply_to_tool_view(&base_tool_view);
+    let effective_runtime_narrowing = session_tool_runtime_policy.effective_runtime_narrowing();
+    let SessionToolRuntimePolicy {
+        requested_tool_ids,
+        requested_runtime_narrowing,
+        delegate_runtime_narrowing,
+    } = session_tool_runtime_policy;
     let updated_at = session_tool_policy.as_ref().map(|policy| policy.updated_at);
     let base_tool_ids = tool_view_names(&base_tool_view);
     let effective_tool_ids = tool_view_names(&effective_tool_view);

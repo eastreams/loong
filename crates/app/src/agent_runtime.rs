@@ -191,36 +191,23 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                     acp_manager,
                 )
                 .await?;
-                let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
-                let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
-
-                let governed_session_mode = runtime.conversation_binding().session_mode();
-
                 return crate::acp::consume_finalized_acp_conversation_turn(
                     execution,
                     |success| async move {
                         let result = success.result;
-                        let output_text = result.output_text;
-                        let state = Some(acp_session_state_label(result.state).to_owned());
-                        let stop_reason = result
-                            .stop_reason
-                            .map(acp_turn_stop_reason_label)
-                            .map(ToOwned::to_owned);
-                        let usage = result.usage;
-                        let event_count = success.runtime_events.len();
-
-                        Ok(AgentTurnResult {
-                            session_id: runtime.session_id.clone(),
-                            output_text,
-                            turn_mode: request.turn_mode,
-                            governed_session_mode,
-                            state,
-                            stop_reason,
-                            usage,
-                            event_count,
-                            prompt_assembly,
-                            prompt_cache,
-                        })
+                        build_agent_turn_result(
+                            runtime,
+                            request,
+                            result.output_text,
+                            Some(acp_session_state_label(result.state).to_owned()),
+                            result
+                                .stop_reason
+                                .map(acp_turn_stop_reason_label)
+                                .map(ToOwned::to_owned),
+                            result.usage,
+                            success.runtime_events.len(),
+                        )
+                        .await
                     },
                     |failure| async move { Err(failure.error) },
                 )
@@ -229,37 +216,20 @@ impl<'a> RuntimeTurnExecutionService<'a> {
 
             let (effective_ingress, effective_provenance) =
                 effective_turn_context(ingress, provenance);
-            let turn_outcome =
-                crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
-                    runtime,
-                    &turn_address,
-                    message,
-                    event_sink,
-                    request.live_surface_enabled,
-                    Some(&request.metadata),
-                    effective_ingress,
-                    effective_provenance,
-                    provider_error_mode,
-                    observer,
-                    retry_progress,
-                    acp_manager,
-                )
-                .await?;
-            let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
-            let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
-
-            Ok(AgentTurnResult {
-                session_id: runtime.session_id.clone(),
-                output_text: turn_outcome.reply,
-                turn_mode: request.turn_mode,
-                governed_session_mode: runtime.conversation_binding().session_mode(),
-                state: None,
-                stop_reason: None,
-                usage: turn_outcome.usage,
-                event_count: 0,
-                prompt_assembly,
-                prompt_cache,
-            })
+            run_standard_turn_with_runtime(
+                runtime,
+                request,
+                &turn_address,
+                message,
+                event_sink,
+                observer,
+                effective_ingress,
+                effective_provenance,
+                provider_error_mode,
+                retry_progress,
+                acp_manager,
+            )
+            .await
         })
     }
 }
@@ -843,6 +813,73 @@ async fn load_runtime_prompt_frame_summary(
         let _ = runtime;
         PromptFrameEventSummary::default()
     }
+}
+
+async fn build_agent_turn_result(
+    runtime: &crate::chat::CliTurnRuntime,
+    request: &AgentTurnRequest,
+    output_text: String,
+    state: Option<String>,
+    stop_reason: Option<String>,
+    usage: Option<Value>,
+    event_count: usize,
+) -> CliResult<AgentTurnResult> {
+    let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
+    let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
+
+    Ok(AgentTurnResult {
+        session_id: runtime.session_id.clone(),
+        output_text,
+        turn_mode: request.turn_mode,
+        governed_session_mode: runtime.conversation_binding().session_mode(),
+        state,
+        stop_reason,
+        usage,
+        event_count,
+        prompt_assembly,
+        prompt_cache,
+    })
+}
+
+async fn run_standard_turn_with_runtime(
+    runtime: &crate::chat::CliTurnRuntime,
+    request: &AgentTurnRequest,
+    turn_address: &ConversationSessionAddress,
+    message: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    observer: Option<crate::conversation::ConversationTurnObserverHandle>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: crate::conversation::ProviderErrorMode,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
+    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+) -> CliResult<AgentTurnResult> {
+    let turn_outcome = crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+        runtime,
+        turn_address,
+        message,
+        event_sink,
+        request.live_surface_enabled,
+        Some(&request.metadata),
+        ingress,
+        provenance,
+        provider_error_mode,
+        observer,
+        retry_progress,
+        acp_manager,
+    )
+    .await?;
+
+    build_agent_turn_result(
+        runtime,
+        request,
+        turn_outcome.reply,
+        None,
+        None,
+        turn_outcome.usage,
+        0,
+    )
+    .await
 }
 
 /// Refresh provider-facing runtime state from disk when a concrete config path
