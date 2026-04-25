@@ -1,9 +1,9 @@
 ---
-title: WhatsApp
-description: Configure the WhatsApp channel surface in Loong.
+title: WhatsApp Cloud API
+description: Configure the WhatsApp Cloud API channel surface in Loong.
 ---
 
-# WhatsApp
+# WhatsApp Cloud API
 
 This is a shipped runtime-backed surface: direct sends are implemented, the serve loop is implemented, and the channel can join `gateway run` or `gateway run`.
 
@@ -69,8 +69,9 @@ This surface can run directly through its own `*-serve` command, or under [Gatew
 
 ## Operator Notes
 
-- WhatsApp is currently a real runtime-backed surface: outbound sends are shipped and the webhook reply service is also implemented.
+- This page documents the current WhatsApp Cloud API business-account lane: outbound sends are shipped and the webhook reply service is also implemented.
 - Serve mode needs `verify_token` and `app_secret` in addition to the Cloud API access token and phone number id.
+- Keep the Cloud API credential path distinct from any future scan-to-link or personal-account pairing help surface so operators do not confuse QR-style account linking with `access_token` / `phone_number_id` provisioning.
 
 ## Related Docs
 
