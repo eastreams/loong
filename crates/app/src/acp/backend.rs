@@ -235,6 +235,7 @@ pub const ACP_TURN_METADATA_SOURCE_MESSAGE_ID: &str = "loong.channel.source_mess
 pub const ACP_TURN_METADATA_ACK_CURSOR: &str = "loong.channel.ack_cursor";
 pub const ACP_TURN_METADATA_ROUTING_INTENT: &str = "loong.acp.routing_intent";
 pub const ACP_TURN_METADATA_ROUTING_ORIGIN: &str = "loong.acp.routing_origin";
+pub const ACP_TURN_METADATA_INITIAL_PROMPT: &str = "loong.acp.initial_prompt";
 pub const ACP_SESSION_METADATA_ACTIVATION_ORIGIN: &str = "loong.acp.activation_origin";
 
 #[derive(Clone, Copy, Default)]
@@ -263,6 +264,7 @@ pub struct AcpConversationTurnOptions<'a> {
     pub additional_bootstrap_mcp_servers: Option<&'a [String]>,
     pub working_directory: Option<&'a Path>,
     pub metadata: Option<&'a BTreeMap<String, String>>,
+    pub initial_prompt: Option<&'a str>,
     pub provenance: AcpTurnProvenance<'a>,
 }
 
@@ -274,6 +276,7 @@ impl Default for AcpConversationTurnOptions<'_> {
             additional_bootstrap_mcp_servers: None,
             working_directory: None,
             metadata: None,
+            initial_prompt: None,
             provenance: AcpTurnProvenance::default(),
         }
     }
@@ -320,6 +323,11 @@ impl<'a> AcpConversationTurnOptions<'a> {
 
     pub fn with_metadata(mut self, metadata: Option<&'a BTreeMap<String, String>>) -> Self {
         self.metadata = metadata.filter(|metadata| !metadata.is_empty());
+        self
+    }
+
+    pub fn with_initial_prompt(mut self, initial_prompt: Option<&'a str>) -> Self {
+        self.initial_prompt = initial_prompt.filter(|value| !value.trim().is_empty());
         self
     }
 

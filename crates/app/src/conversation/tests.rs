@@ -24,11 +24,12 @@ use super::*;
 use crate::CliResult;
 use crate::KernelContext;
 use crate::acp::{
-    ACP_TURN_METADATA_ACK_CURSOR, ACP_TURN_METADATA_ROUTING_INTENT,
-    ACP_TURN_METADATA_SOURCE_MESSAGE_ID, ACP_TURN_METADATA_TRACE_ID, AcpBackendMetadata,
-    AcpCapability, AcpConversationTurnOptions, AcpRoutingIntent, AcpRuntimeBackend,
-    AcpSessionBootstrap, AcpSessionHandle, AcpSessionState, AcpTurnEventSink, AcpTurnProvenance,
-    AcpTurnRequest, AcpTurnResult, AcpTurnStopReason, register_acp_backend,
+    ACP_TURN_METADATA_ACK_CURSOR, ACP_TURN_METADATA_INITIAL_PROMPT,
+    ACP_TURN_METADATA_ROUTING_INTENT, ACP_TURN_METADATA_SOURCE_MESSAGE_ID,
+    ACP_TURN_METADATA_TRACE_ID, AcpBackendMetadata, AcpCapability, AcpConversationTurnOptions,
+    AcpRoutingIntent, AcpRuntimeBackend, AcpSessionBootstrap, AcpSessionHandle, AcpSessionState,
+    AcpTurnEventSink, AcpTurnProvenance, AcpTurnRequest, AcpTurnResult, AcpTurnStopReason,
+    register_acp_backend,
 };
 use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
@@ -4983,6 +4984,135 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
             .get("loong.acp.routing_origin")
             .map(String::as_str),
         Some("explicit_request")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_routes_system_prompt_addition_into_acp_initial_prompt() {
+    let (backend_id, shared) = register_routed_acp_backend("initial-prompt", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    )
+    .with_assembled_context(AssembledConversationContext {
+        messages: vec![json!({
+            "role": "system",
+            "content": "base-system-prompt",
+        })],
+        artifacts: vec![],
+        estimated_tokens: Some(21),
+        prompt_fragments: Vec::new(),
+        system_prompt_addition: Some("extension context addition".to_owned()),
+    });
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.bindings_enabled = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("initial-prompt");
+
+    let reply = coordinator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:42424"),
+            "hello from channel",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                ..AcpConversationTurnOptions::default()
+            },
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("explicit ACP turn should preserve system prompt addition");
+
+    assert_eq!(reply, "acp: hello from channel");
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 0);
+    assert_eq!(
+        runtime
+            .build_context_calls
+            .lock()
+            .expect("build context lock")
+            .as_slice(),
+        &[("telegram:42424".to_owned(), true)]
+    );
+
+    let state = shared.lock().expect("ACP shared state");
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    assert_eq!(
+        bootstrap.initial_prompt.as_deref(),
+        Some("extension context addition")
+    );
+    let request = state
+        .last_request
+        .clone()
+        .expect("ACP request should be captured");
+    assert_eq!(request.input, "hello from channel");
+    assert_eq!(
+        request
+            .metadata
+            .get(ACP_TURN_METADATA_INITIAL_PROMPT)
+            .map(String::as_str),
+        Some("extension context addition")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_keeps_explicit_acp_initial_prompt_without_rebuilding_context() {
+    let (backend_id, shared) = register_routed_acp_backend("initial-prompt-explicit", false);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("provider-should-not-run".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.bindings_enabled = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("initial-prompt-explicit");
+
+    let reply = coordinator
+        .handle_turn_with_runtime_and_address_and_acp_options(
+            &config,
+            &ConversationSessionAddress::from_session_id("telegram:43434"),
+            "hello from channel",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            &AcpConversationTurnOptions {
+                routing_intent: AcpRoutingIntent::Explicit,
+                initial_prompt: Some("operator supplied initial prompt"),
+                ..AcpConversationTurnOptions::default()
+            },
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("explicit ACP turn should keep caller-provided initial prompt");
+
+    assert_eq!(reply, "acp: hello from channel");
+    assert!(
+        runtime
+            .build_context_calls
+            .lock()
+            .expect("build context lock")
+            .is_empty()
+    );
+
+    let state = shared.lock().expect("ACP shared state");
+    let bootstrap = state
+        .last_bootstrap
+        .clone()
+        .expect("ACP bootstrap should be captured");
+    assert_eq!(
+        bootstrap.initial_prompt.as_deref(),
+        Some("operator supplied initial prompt")
     );
 }
 

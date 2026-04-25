@@ -2178,8 +2178,17 @@ impl ConversationTurnCoordinator {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
         let session_id = address.session_id.as_str();
+        let mut acp_options = *acp_options;
+        let runtime_initial_prompt = if acp_options.initial_prompt.is_none() {
+            resolve_acp_runtime_initial_prompt(config, runtime, session_id, binding).await?
+        } else {
+            None
+        };
+        if runtime_initial_prompt.is_some() {
+            acp_options = acp_options.with_initial_prompt(runtime_initial_prompt.as_deref());
+        }
         let executed =
-            execute_acp_conversation_turn_for_address(config, address, user_input, acp_options)
+            execute_acp_conversation_turn_for_address(config, address, user_input, &acp_options)
                 .await?;
         let persistence_context = &executed.persistence_context;
 
@@ -2241,6 +2250,31 @@ impl ConversationTurnCoordinator {
             }
         }
     }
+}
+
+async fn resolve_acp_runtime_initial_prompt<R: ConversationRuntime + ?Sized>(
+    config: &LoongConfig,
+    runtime: &R,
+    session_id: &str,
+    binding: ConversationRuntimeBinding<'_>,
+) -> CliResult<Option<String>> {
+    if let Some(kernel_ctx) = binding.kernel_context() {
+        runtime.bootstrap(config, session_id, kernel_ctx).await?;
+    }
+
+    let assembled = runtime
+        .build_context(config, session_id, true, binding)
+        .await?;
+    Ok(trimmed_non_empty_string(
+        assembled.system_prompt_addition.as_deref(),
+    ))
+}
+
+fn trimmed_non_empty_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(

@@ -22,9 +22,10 @@ pub(crate) use super::acpx_mcp::{
     probe_mcp_proxy_support,
 };
 use super::backend::{
-    AcpAbortSignal, AcpBackendMetadata, AcpCapability, AcpConfigPatch, AcpDoctorReport,
-    AcpRuntimeBackend, AcpSessionBootstrap, AcpSessionHandle, AcpSessionMode, AcpSessionState,
-    AcpSessionStatus, AcpTurnEventSink, AcpTurnRequest, AcpTurnResult, AcpTurnStopReason,
+    ACP_TURN_METADATA_INITIAL_PROMPT, AcpAbortSignal, AcpBackendMetadata, AcpCapability,
+    AcpConfigPatch, AcpDoctorReport, AcpRuntimeBackend, AcpSessionBootstrap, AcpSessionHandle,
+    AcpSessionMode, AcpSessionState, AcpSessionStatus, AcpTurnEventSink, AcpTurnRequest,
+    AcpTurnResult, AcpTurnStopReason,
 };
 
 pub const ACPX_BACKEND_ID: &str = "acpx";
@@ -38,6 +39,24 @@ const ACPX_DEFAULT_QUEUE_OWNER_TTL_SECONDS: f64 = 0.1;
 const ACPX_PERMISSION_DENIED_EXIT_CODE: i32 = 5;
 const ACPX_SPAWN_RETRY_ATTEMPTS: usize = 5;
 const ACPX_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+fn build_turn_prompt_input(request: &AcpTurnRequest) -> String {
+    let prompt_prefix = request
+        .metadata
+        .get(ACP_TURN_METADATA_INITIAL_PROMPT)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let user_input = request.input.trim();
+
+    match prompt_prefix {
+        Some(prompt_prefix) if !user_input.is_empty() => {
+            format!("{prompt_prefix}\n\n{user_input}")
+        }
+        Some(prompt_prefix) => prompt_prefix.to_owned(),
+        None => request.input.clone(),
+    }
+}
 
 mod command_probe;
 #[path = "acpx_command.rs"]
@@ -244,13 +263,14 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             "-".to_owned(),
         ])
         .collect::<Vec<_>>();
+        let prompt_input = build_turn_prompt_input(request);
 
         run_prompt_process(
             profile.command.as_str(),
             &prompt_args,
             state.cwd.as_str(),
             config.acp.turn_timeout_ms(),
-            request.input.as_str(),
+            prompt_input.as_str(),
             abort,
             sink,
         )
@@ -1598,6 +1618,83 @@ exit 0
             log.contains("sessions close agent:codex:session-42"),
             "expected close command in log: {log}"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn runtime_backend_prefixes_prompt_input_with_initial_prompt_metadata() {
+        let _lock = lock_acpx_runtime_tests().await;
+        let temp_dir = unique_temp_dir("loong-acpx-initial-prompt");
+        let log_path = temp_dir.join("calls.log");
+        let stdin_log_path = temp_dir.join("prompt.stdin.log");
+        let script_body = format!(
+            r#"
+case "$*" in
+  "--version")
+    echo 'acpx 0.1.16'
+    exit 0
+    ;;
+esac
+
+case "$*" in
+  *"sessions ensure --name"*)
+    echo '{{"acpxSessionId":"sess-initial","agentSessionId":"agent-initial","acpxRecordId":"record-initial"}}'
+    exit 0
+    ;;
+esac
+
+case "$*" in
+  *"prompt --session"*)
+    prompt_input="$(cat)"
+    printf '%s\n' "$prompt_input" > "{}"
+    echo '{{"type":"text","content":"ok"}}'
+    echo '{{"type":"done"}}'
+    exit 0
+    ;;
+esac
+
+exit 0
+"#,
+            stdin_log_path.display()
+        );
+        let script_path =
+            write_fake_acpx_script(&temp_dir, "fake-acpx", &log_path, script_body.as_str());
+        let config = fake_acpx_config(&script_path, &temp_dir);
+        let backend = AcpxCliProbeBackend;
+        let bootstrap = AcpSessionBootstrap {
+            session_key: "agent:codex:session-initial".to_owned(),
+            conversation_id: Some("telegram:42".to_owned()),
+            binding: None,
+            working_directory: Some(temp_dir.clone()),
+            initial_prompt: Some("system addition".to_owned()),
+            mode: Some(AcpSessionMode::Interactive),
+            mcp_servers: Vec::new(),
+            metadata: BTreeMap::new(),
+        };
+
+        let handle = backend
+            .ensure_session(&config, &bootstrap)
+            .await
+            .expect("ensure session");
+        let request = AcpTurnRequest {
+            session_key: bootstrap.session_key.clone(),
+            input: "hello runtime".to_owned(),
+            working_directory: None,
+            metadata: BTreeMap::from([(
+                ACP_TURN_METADATA_INITIAL_PROMPT.to_owned(),
+                "system addition".to_owned(),
+            )]),
+        };
+
+        let result = backend
+            .run_turn(&config, &handle, &request)
+            .await
+            .expect("run turn");
+        let prompt_input = std::fs::read_to_string(&stdin_log_path).expect("read prompt stdin log");
+
+        assert_eq!(result.output_text, "ok");
+        assert!(prompt_input.contains("system addition"), "{prompt_input}");
+        assert!(prompt_input.contains("hello runtime"), "{prompt_input}");
     }
 
     #[tokio::test]

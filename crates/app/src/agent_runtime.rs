@@ -11,8 +11,8 @@ use crate::chat::{
 };
 use crate::config::load as load_config;
 use crate::conversation::{
-    ConversationIngressContext, ConversationSessionAddress, PromptFrameEventSummary,
-    load_prompt_frame_event_summary,
+    ConversationIngressContext, ConversationRuntime, ConversationSessionAddress,
+    PromptFrameEventSummary, load_default_conversation_runtime, load_prompt_frame_event_summary,
 };
 use crate::tools;
 use loong_contracts::ToolCoreRequest;
@@ -246,8 +246,16 @@ impl AgentRuntime {
                 Some(manager) => manager,
                 None => crate::acp::shared_acp_session_manager(&turn_config)?,
             };
-            let acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
+            let mut acp_options = acp_turn_options_from_runtime(runtime, event_sink, request)
                 .with_provenance(provenance);
+            let runtime_initial_prompt = if acp_options.initial_prompt.is_none() {
+                resolve_acp_initial_prompt_from_runtime(runtime).await?
+            } else {
+                None
+            };
+            if runtime_initial_prompt.is_some() {
+                acp_options = acp_options.with_initial_prompt(runtime_initial_prompt.as_deref());
+            }
             let execution = crate::acp::execute_acp_conversation_turn_for_address_with_manager(
                 &turn_config,
                 &turn_address,
@@ -650,6 +658,36 @@ async fn load_runtime_prompt_frame_summary(
         let _ = runtime;
         PromptFrameEventSummary::default()
     }
+}
+
+async fn resolve_acp_initial_prompt_from_runtime(
+    runtime: &crate::chat::CliTurnRuntime,
+) -> CliResult<Option<String>> {
+    let conversation_runtime = load_default_conversation_runtime(&runtime.config)?;
+    if let Some(kernel_ctx) = runtime.conversation_binding().kernel_context() {
+        conversation_runtime
+            .bootstrap(&runtime.config, runtime.session_id.as_str(), kernel_ctx)
+            .await?;
+    }
+
+    let assembled = conversation_runtime
+        .build_context(
+            &runtime.config,
+            runtime.session_id.as_str(),
+            true,
+            runtime.conversation_binding(),
+        )
+        .await?;
+    Ok(trimmed_non_empty_string(
+        assembled.system_prompt_addition.as_deref(),
+    ))
+}
+
+fn trimmed_non_empty_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 /// Refresh provider-facing runtime state from disk when a concrete config path

@@ -13,10 +13,11 @@ use crate::conversation::{ConversationSessionAddress, parse_route_session_id};
 use super::AcpSessionManager;
 use super::analytics::PersistedAcpRuntimeEventContext;
 use super::backend::{
-    ACP_SESSION_METADATA_ACTIVATION_ORIGIN, ACP_TURN_METADATA_ROUTING_INTENT,
-    ACP_TURN_METADATA_ROUTING_ORIGIN, AcpBackendMetadata, AcpConversationTurnOptions,
-    AcpRoutingIntent, AcpRoutingOrigin, AcpSessionBootstrap, AcpSessionMode, AcpTurnRequest,
-    AcpTurnResult, BufferedAcpTurnEventSink, CompositeAcpTurnEventSink,
+    ACP_SESSION_METADATA_ACTIVATION_ORIGIN, ACP_TURN_METADATA_INITIAL_PROMPT,
+    ACP_TURN_METADATA_ROUTING_INTENT, ACP_TURN_METADATA_ROUTING_ORIGIN, AcpBackendMetadata,
+    AcpConversationTurnOptions, AcpRoutingIntent, AcpRoutingOrigin, AcpSessionBootstrap,
+    AcpSessionMode, AcpTurnRequest, AcpTurnResult, BufferedAcpTurnEventSink,
+    CompositeAcpTurnEventSink,
 };
 use super::binding::AcpSessionBindingScope;
 use super::merge_turn_events;
@@ -549,6 +550,11 @@ pub fn prepare_acp_conversation_turn_for_address(
         ACP_TURN_METADATA_ROUTING_ORIGIN,
         Some(routing_origin.as_str()),
     );
+    insert_trimmed_metadata(
+        &mut request_metadata,
+        ACP_TURN_METADATA_INITIAL_PROMPT,
+        options.initial_prompt,
+    );
     options
         .provenance
         .extend_request_metadata(&mut request_metadata);
@@ -577,7 +583,7 @@ pub fn prepare_acp_conversation_turn_for_address(
         conversation_id: Some(route.conversation_id.clone()),
         binding: route.binding.clone(),
         working_directory: effective_working_directory.clone(),
-        initial_prompt: None,
+        initial_prompt: trimmed_non_empty(options.initial_prompt),
         mode: Some(AcpSessionMode::Interactive),
         mcp_servers: bootstrap_mcp_servers,
         metadata: bootstrap_metadata,
@@ -1223,6 +1229,38 @@ mod tests {
             prepared.bootstrap.mcp_servers,
             vec!["filesystem".to_owned()]
         );
+    }
+
+    #[test]
+    fn prepare_acp_conversation_turn_preserves_initial_prompt_for_turn_execution() {
+        let config = LoongConfig {
+            acp: AcpConfig {
+                enabled: true,
+                dispatch: crate::config::AcpDispatchConfig {
+                    enabled: true,
+                    conversation_routing: AcpConversationRoutingMode::All,
+                    ..crate::config::AcpDispatchConfig::default()
+                },
+                ..AcpConfig::default()
+            },
+            ..LoongConfig::default()
+        };
+        let address = ConversationSessionAddress::from_session_id("opaque-session");
+        let options = super::super::AcpConversationTurnOptions::default()
+            .with_initial_prompt(Some("extension context addition"));
+
+        let prepared =
+            prepare_acp_conversation_turn_for_address(&config, &address, "hello", &options)
+                .expect("prepare ACP conversation turn");
+        let bootstrap_initial_prompt = prepared.bootstrap.initial_prompt.as_deref();
+        let request_initial_prompt = prepared
+            .request
+            .metadata
+            .get(ACP_TURN_METADATA_INITIAL_PROMPT)
+            .map(String::as_str);
+
+        assert_eq!(bootstrap_initial_prompt, Some("extension context addition"));
+        assert_eq!(request_initial_prompt, Some("extension context addition"));
     }
 
     #[test]
