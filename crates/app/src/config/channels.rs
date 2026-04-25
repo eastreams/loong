@@ -254,6 +254,8 @@ pub struct FeishuAccountConfig {
     #[serde(default)]
     pub ignore_bot_messages: Option<bool>,
     #[serde(default)]
+    pub require_mention: Option<bool>,
+    #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
 }
 
@@ -298,6 +300,7 @@ pub struct ResolvedFeishuChannelConfig {
     pub allowed_sender_ids: Vec<String>,
     pub ack_reactions: bool,
     pub ignore_bot_messages: bool,
+    pub require_mention: bool,
     pub acp: ChannelAcpConfig,
 }
 
@@ -500,6 +503,8 @@ pub struct FeishuChannelConfig {
     pub ack_reactions: bool,
     #[serde(default = "default_true")]
     pub ignore_bot_messages: bool,
+    #[serde(default)]
+    pub require_mention: bool,
     #[serde(default)]
     pub acp: ChannelAcpConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2087,6 +2092,7 @@ impl Default for FeishuChannelConfig {
             allowed_sender_ids: Vec::new(),
             ack_reactions: true,
             ignore_bot_messages: true,
+            require_mention: false,
             acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
         }
@@ -2688,6 +2694,9 @@ impl FeishuChannelConfig {
             ignore_bot_messages: account_override
                 .and_then(|account| account.ignore_bot_messages)
                 .unwrap_or(self.ignore_bot_messages),
+            require_mention: account_override
+                .and_then(|account| account.require_mention)
+                .unwrap_or(self.require_mention),
             acp: resolve_channel_acp_config(
                 &self.acp,
                 account_override.and_then(|account| account.acp.as_ref()),
@@ -2719,6 +2728,7 @@ impl FeishuChannelConfig {
             allowed_sender_ids: merged.allowed_sender_ids,
             ack_reactions: merged.ack_reactions,
             ignore_bot_messages: merged.ignore_bot_messages,
+            require_mention: merged.require_mention,
             acp: merged.acp,
         })
     }
