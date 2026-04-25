@@ -34,6 +34,7 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
 fi
 
 export LOONG_WHATSAPP_PERSONAL_BRIDGE_ROOT="$BRIDGE_DIR"
+export LOONG_WHATSAPP_PERSONAL_RUNTIME_PLUGINS_ROOT="$ROOT_DIR/runtime-plugins"
 export LOONG_WHATSAPP_PERSONAL_BRIDGE_CONFIG="$CONFIG_PATH"
 export LOONG_WHATSAPP_PERSONAL_BRIDGE_ACCOUNT="$ACCOUNT_ID"
 
@@ -82,8 +83,9 @@ host = parsed.hostname or '127.0.0.1'
 port = parsed.port or (443 if parsed.scheme == 'https' else 39731)
 path = parsed.path or '/bridge'
 roots = [str(value).strip() for value in (config.get('runtime_plugins', {}).get('roots') or []) if str(value).strip()]
-root_path = str(Path(os.environ['LOONG_WHATSAPP_PERSONAL_BRIDGE_ROOT']))
-root_configured = any(value in ('.', './runtime-plugins', 'runtime-plugins', root_path) for value in roots)
+bridge_root = str(Path(os.environ['LOONG_WHATSAPP_PERSONAL_BRIDGE_ROOT']))
+runtime_plugins_root = str(Path(os.environ['LOONG_WHATSAPP_PERSONAL_RUNTIME_PLUGINS_ROOT']))
+root_configured = any(value in ('.', './runtime-plugins', 'runtime-plugins', bridge_root, runtime_plugins_root) for value in roots)
 for key, value in {
     'ACCOUNT_ID': configured_account_id,
     'HOST': host,

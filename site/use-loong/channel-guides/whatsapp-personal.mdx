@@ -38,7 +38,7 @@ allowed_chat_ids = ["*"]
 Start the bundled bridge in one terminal. On the first run it will install its Node dependencies if needed, print a QR code, and keep the personal account session alive.
 
 ```bash
-./scripts/whatsapp-personal-bridge-run.sh --config ./loong.toml
+loong whatsapp-personal bridge run --config ./loong.toml
 ```
 
 After the QR-linked bridge is live, run the normal Loong reply loop in another terminal:
@@ -51,7 +51,7 @@ loong channels serve whatsapp-personal --config ./loong.toml
 
 ```bash
 # Terminal 1: keep the bridge running so the QR-linked session stays online
-./scripts/whatsapp-personal-bridge-run.sh --config ./loong.toml
+loong whatsapp-personal bridge run --config ./loong.toml
 
 # Terminal 2: start the Loong reply loop
 loong channels serve whatsapp-personal --config ./loong.toml
@@ -78,7 +78,7 @@ Grouped commands also accept the short form `<kind>:<id>` when one configured ac
 | --- | --- | --- |
 | bridge-backed send | `channels send whatsapp-personal` | requires the bundled bridge to be running |
 | bridge-backed serve | `channels serve whatsapp-personal` | starts the Loong reply loop against the running bundled bridge |
-| bridge helper | `./scripts/whatsapp-personal-bridge-run.sh` | starts the bundled QR bridge and prints the pairing QR when needed |
+| bridge helper | `loong whatsapp-personal bridge run` | starts the bundled QR bridge and prints the pairing QR when needed |
 
 ## Required Fields For Send
 
