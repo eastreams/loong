@@ -671,7 +671,8 @@ fn build_weixin_snapshots(
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = true;
-    let http_policy = http::outbound_http_policy_from_config(config);
+    let mut http_policy = http::outbound_http_policy_from_config(config);
+    http_policy.allow_private_hosts = true;
     let default_selection = config.weixin.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -767,7 +768,8 @@ fn build_whatsapp_personal_snapshots(
     now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = true;
-    let http_policy = http::outbound_http_policy_from_config(config);
+    let mut http_policy = http::outbound_http_policy_from_config(config);
+    http_policy.allow_private_hosts = true;
     let default_selection = config
         .whatsapp_personal
         .default_configured_account_selection();

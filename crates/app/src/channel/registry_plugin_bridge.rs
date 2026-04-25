@@ -523,6 +523,7 @@ fn configured_managed_bridge_plugin_id(config: &LoongConfig, channel_id: &str) -
         "weixin" => config.weixin.managed_bridge_plugin_id.as_deref(),
         "qqbot" => config.qqbot.managed_bridge_plugin_id.as_deref(),
         "onebot" => config.onebot.managed_bridge_plugin_id.as_deref(),
+        "whatsapp-personal" => config.whatsapp_personal.managed_bridge_plugin_id.as_deref(),
         _ => None,
     };
 

@@ -24,6 +24,6 @@
     "docs_urls": [
       "https://github.com/eastreams/loong/blob/dev/site/use-loong/channel-guides/whatsapp-personal.mdx"
     ],
-    "remediation": "Set [runtime_plugins].enabled=true, add ./runtime-plugins to runtime_plugins.roots, then run ./scripts/whatsapp-personal-bridge-run.sh --config <path>"
+    "remediation": "Set [runtime_plugins].enabled=true, add ./runtime-plugins to runtime_plugins.roots, then run loong whatsapp-personal bridge run --config <path>"
   }
 }
