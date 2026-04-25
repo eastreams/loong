@@ -196,3 +196,43 @@ fn runtime_truth_summary_limit(
     let scaled_limit = memory_config.sliding_window.saturating_mul(4);
     scaled_limit.clamp(16, 128)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_turn_checkpoint_summary_reports_checkpoint_fields() {
+        let turn_checkpoint = json!({
+            "available": true,
+            "summary": {
+                "session_state": "recovery_ready",
+                "checkpoint_durable": true,
+                "reply_durable": false,
+                "requires_recovery": true,
+                "latest_stage": "finalized",
+                "latest_after_turn": "completed",
+                "latest_compaction": "failed"
+            }
+        });
+
+        let rendered = render_turn_checkpoint_summary(Some(&turn_checkpoint));
+
+        assert_eq!(
+            rendered,
+            "session_state=recovery_ready durable=yes reply_durable=no requires_recovery=yes stage=finalized after_turn=completed compaction=failed"
+        );
+    }
+
+    #[test]
+    fn render_turn_checkpoint_summary_reports_unavailable_errors() {
+        let turn_checkpoint = json!({
+            "available": false,
+            "error": "kernel window unavailable"
+        });
+
+        let rendered = render_turn_checkpoint_summary(Some(&turn_checkpoint));
+
+        assert_eq!(rendered, "unavailable error=kernel window unavailable");
+    }
+}

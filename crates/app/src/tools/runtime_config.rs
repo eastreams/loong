@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use loong_contracts::{ExecutionSecurityTier, SecretRef};
 use serde::{Deserialize, Serialize};
 
-use super::{bash_rules, shell_policy_ext::ShellPolicyDefault};
+use super::{ToolView, bash_rules, shell_policy_ext::ShellPolicyDefault};
 use crate::config::{AutonomyProfile, LoongConfig};
 #[cfg(feature = "feishu-integration")]
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
@@ -205,6 +205,48 @@ pub(crate) fn merge_runtime_narrowing_sources(
         (Some(primary_runtime_narrowing), None) => Some(primary_runtime_narrowing),
         (None, Some(secondary_runtime_narrowing)) => Some(secondary_runtime_narrowing),
         (None, None) => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct SessionToolRuntimePolicy {
+    pub requested_tool_ids: Vec<String>,
+    pub requested_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    pub delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+}
+
+impl SessionToolRuntimePolicy {
+    #[must_use]
+    pub fn new(
+        requested_tool_ids: Vec<String>,
+        requested_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+        delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    ) -> Self {
+        Self {
+            requested_tool_ids,
+            requested_runtime_narrowing: requested_runtime_narrowing
+                .filter(|runtime_narrowing| !runtime_narrowing.is_empty()),
+            delegate_runtime_narrowing: delegate_runtime_narrowing
+                .filter(|runtime_narrowing| !runtime_narrowing.is_empty()),
+        }
+    }
+
+    #[must_use]
+    pub fn apply_to_tool_view(&self, base_tool_view: &ToolView) -> ToolView {
+        if self.requested_tool_ids.is_empty() {
+            return base_tool_view.clone();
+        }
+
+        let requested_tool_view = ToolView::from_tool_names(self.requested_tool_ids.iter());
+        base_tool_view.intersect(&requested_tool_view)
+    }
+
+    #[must_use]
+    pub fn effective_runtime_narrowing(&self) -> Option<ToolRuntimeNarrowing> {
+        merge_runtime_narrowing_sources(
+            self.delegate_runtime_narrowing.clone(),
+            self.requested_runtime_narrowing.clone(),
+        )
     }
 }
 
@@ -3351,6 +3393,68 @@ mod tests {
             empty_primary_with_secondary_result,
             Some(primary_runtime_narrowing)
         );
+    }
+
+    #[test]
+    fn session_tool_runtime_policy_applies_requested_tool_ids_and_effective_narrowing() {
+        let policy = SessionToolRuntimePolicy::new(
+            vec!["browser.open".to_owned(), "web.search".to_owned()],
+            Some(ToolRuntimeNarrowing {
+                browser: BrowserRuntimeNarrowing {
+                    max_sessions: Some(3),
+                    ..BrowserRuntimeNarrowing::default()
+                },
+                web_fetch: WebFetchRuntimeNarrowing {
+                    blocked_domains: BTreeSet::from(["deny-right.example.com".to_owned()]),
+                    ..WebFetchRuntimeNarrowing::default()
+                },
+            }),
+            Some(ToolRuntimeNarrowing {
+                browser: BrowserRuntimeNarrowing {
+                    max_sessions: Some(1),
+                    ..BrowserRuntimeNarrowing::default()
+                },
+                web_fetch: WebFetchRuntimeNarrowing {
+                    blocked_domains: BTreeSet::from(["deny-left.example.com".to_owned()]),
+                    ..WebFetchRuntimeNarrowing::default()
+                },
+            }),
+        );
+
+        let effective_tool_view = policy.apply_to_tool_view(&ToolView::from_tool_names([
+            "browser.open",
+            "web.search",
+            "shell.exec",
+        ]));
+        let effective_runtime_narrowing = policy
+            .effective_runtime_narrowing()
+            .expect("effective runtime narrowing");
+
+        assert_eq!(
+            effective_tool_view.tool_names().collect::<Vec<_>>(),
+            vec!["browser.open", "web.search"]
+        );
+        assert_eq!(effective_runtime_narrowing.browser.max_sessions, Some(1));
+        assert_eq!(
+            effective_runtime_narrowing.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "deny-left.example.com".to_owned(),
+                "deny-right.example.com".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn session_tool_runtime_policy_ignores_empty_policy_inputs() {
+        let policy = SessionToolRuntimePolicy::new(
+            Vec::new(),
+            Some(ToolRuntimeNarrowing::default()),
+            Some(ToolRuntimeNarrowing::default()),
+        );
+        let base_tool_view = ToolView::from_tool_names(["browser.open", "shell.exec"]);
+
+        assert_eq!(policy.apply_to_tool_view(&base_tool_view), base_tool_view);
+        assert!(policy.effective_runtime_narrowing().is_none());
     }
 
     #[test]

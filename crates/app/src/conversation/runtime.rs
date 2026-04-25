@@ -13,7 +13,7 @@ use crate::operator::delegate_runtime::{
     derive_subagent_profile_from_lineage, resolve_delegate_child_contract,
 };
 use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
-use crate::tools::runtime_config::ToolRuntimeNarrowing;
+use crate::tools::runtime_config::{SessionToolRuntimePolicy, ToolRuntimeNarrowing};
 use crate::tools::{ToolView, delegate_child_tool_view_for_contract};
 
 use super::super::memory;
@@ -386,32 +386,20 @@ fn load_session_tool_policy(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn apply_session_tool_policy_to_tool_view(
-    base_tool_view: ToolView,
+fn session_tool_runtime_policy(
     session_tool_policy: Option<&SessionToolPolicyRecord>,
-) -> ToolView {
-    let Some(session_tool_policy) = session_tool_policy else {
-        return base_tool_view;
-    };
-    if session_tool_policy.requested_tool_ids.is_empty() {
-        return base_tool_view;
-    }
-
-    let policy_tool_view = ToolView::from_tool_names(session_tool_policy.requested_tool_ids.iter());
-    base_tool_view.intersect(&policy_tool_view)
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn merge_effective_runtime_narrowing(
     delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
-    session_tool_policy: Option<&SessionToolPolicyRecord>,
-) -> Option<ToolRuntimeNarrowing> {
-    let policy_runtime_narrowing = session_tool_policy.and_then(|policy| {
+) -> SessionToolRuntimePolicy {
+    let requested_tool_ids = session_tool_policy
+        .map(|policy| policy.requested_tool_ids.clone())
+        .unwrap_or_default();
+    let requested_runtime_narrowing = session_tool_policy.and_then(|policy| {
         (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
     });
-    crate::tools::runtime_config::merge_runtime_narrowing_sources(
+    SessionToolRuntimePolicy::new(
+        requested_tool_ids,
+        requested_runtime_narrowing,
         delegate_runtime_narrowing,
-        policy_runtime_narrowing,
     )
 }
 
@@ -772,17 +760,16 @@ fn build_session_context_from_snapshot(
     snapshot: PersistedSessionSnapshot,
 ) -> CliResult<SessionContext> {
     let visible_external_skill_roots = model_visible_external_skill_roots_from_config(config);
+    let session_tool_policy = session_tool_runtime_policy(
+        snapshot.session_tool_policy.as_ref(),
+        snapshot.delegate_runtime_narrowing.clone(),
+    );
+    let requested_tool_view = session_tool_policy.apply_to_tool_view(&base_tool_view);
     let tool_view = apply_active_external_skill_blocked_tools_to_tool_view(
-        apply_session_tool_policy_to_tool_view(
-            base_tool_view,
-            snapshot.session_tool_policy.as_ref(),
-        ),
+        requested_tool_view,
         snapshot.active_external_skills.as_ref(),
     );
-    let runtime_narrowing = merge_effective_runtime_narrowing(
-        snapshot.delegate_runtime_narrowing.clone(),
-        snapshot.session_tool_policy.as_ref(),
-    );
+    let runtime_narrowing = session_tool_policy.effective_runtime_narrowing();
     let mut session_context = match snapshot.parent_session_id.clone() {
         Some(parent_session_id) => {
             SessionContext::child(snapshot.session_id.clone(), parent_session_id, tool_view)
@@ -2002,12 +1989,13 @@ where
             let snapshot = load_persisted_session_snapshot(&repo, session_id)?;
             let base_tool_view =
                 build_base_tool_view_from_snapshot(config, &repo, session_id, snapshot.as_ref())?;
-            let tool_view = apply_session_tool_policy_to_tool_view(
-                base_tool_view,
+            let session_tool_policy = session_tool_runtime_policy(
                 snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.session_tool_policy.as_ref()),
+                None,
             );
+            let tool_view = session_tool_policy.apply_to_tool_view(&base_tool_view);
             Ok(apply_active_external_skill_blocked_tools_to_tool_view(
                 tool_view,
                 snapshot
