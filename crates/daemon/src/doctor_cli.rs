@@ -6529,6 +6529,7 @@ mod tests {
 
         assert_eq!(payload["available"], json!(true));
         assert_eq!(payload["returned_results"], json!(1));
+        assert!(payload["summary"].is_object());
         assert_eq!(plugin["plugin_id"], json!("demo-extension-plugin"));
         assert!(plugin.get("activation_attestation").is_some());
         assert!(plugin.get("runtime_health").is_some());

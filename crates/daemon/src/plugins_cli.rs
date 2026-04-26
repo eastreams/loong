@@ -483,6 +483,8 @@ pub struct PluginsInventorySummaryView {
     pub blocked_plugins: usize,
     pub deferred_plugins: usize,
     pub loaded_plugins: usize,
+    pub activation_attestation_integrity_distribution: BTreeMap<String, usize>,
+    pub runtime_health_status_distribution: BTreeMap<String, usize>,
     pub source_kind_distribution: BTreeMap<String, usize>,
     pub bridge_kind_distribution: BTreeMap<String, usize>,
     pub source_language_distribution: BTreeMap<String, usize>,
@@ -1434,6 +1436,15 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
         format_rollup_map(&execution.summary.source_language_distribution),
         format_rollup_map(&execution.summary.setup_surface_distribution),
         format_rollup_map(&execution.summary.activation_status_distribution)
+    ));
+    lines.push(format!(
+        "runtime_truth attestation={} runtime_health={}",
+        format_rollup_map(
+            &execution
+                .summary
+                .activation_attestation_integrity_distribution
+        ),
+        format_rollup_map(&execution.summary.runtime_health_status_distribution)
     ));
     for result in &execution.results {
         let activation_status = inventory_result_status_label(result);
@@ -2511,6 +2522,8 @@ fn summarize_plugin_inventory_results(
     let mut blocked_plugins = 0;
     let mut deferred_plugins = 0;
     let mut loaded_plugins = 0;
+    let mut activation_attestation_integrity_distribution = BTreeMap::new();
+    let mut runtime_health_status_distribution = BTreeMap::new();
     let mut source_kind_distribution = BTreeMap::new();
     let mut bridge_kind_distribution = BTreeMap::new();
     let mut source_language_distribution = BTreeMap::new();
@@ -2547,6 +2560,26 @@ fn summarize_plugin_inventory_results(
 
         let status_label = inventory_result_status_label(result);
         increment_rollup_count(&mut activation_status_distribution, status_label);
+
+        let attestation_integrity = result
+            .activation_attestation
+            .as_ref()
+            .map(|attestation| attestation.integrity.as_str())
+            .unwrap_or("unreported");
+        increment_rollup_count(
+            &mut activation_attestation_integrity_distribution,
+            attestation_integrity,
+        );
+
+        let runtime_health_status = result
+            .runtime_health
+            .as_ref()
+            .map(|health| health.status.as_str())
+            .unwrap_or("unreported");
+        increment_rollup_count(
+            &mut runtime_health_status_distribution,
+            runtime_health_status,
+        );
     }
 
     PluginsInventorySummaryView {
@@ -2556,6 +2589,8 @@ fn summarize_plugin_inventory_results(
         blocked_plugins,
         deferred_plugins,
         loaded_plugins,
+        activation_attestation_integrity_distribution,
+        runtime_health_status_distribution,
         source_kind_distribution,
         bridge_kind_distribution,
         source_language_distribution,
@@ -3271,6 +3306,22 @@ mod tests {
         assert_eq!(execution.summary.blocked_plugins, 0);
         assert_eq!(execution.summary.deferred_plugins, 1);
         assert_eq!(execution.summary.loaded_plugins, 0);
+        assert_eq!(
+            execution
+                .summary
+                .activation_attestation_integrity_distribution
+                .get("unreported")
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            execution
+                .summary
+                .runtime_health_status_distribution
+                .get("unreported")
+                .copied(),
+            Some(1)
+        );
         assert_eq!(
             execution
                 .summary
