@@ -2474,6 +2474,8 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub source_kind: String,
     pub package_root: String,
     pub package_manifest_path: Option<String>,
+    pub summary: Option<String>,
+    pub tags: Vec<String>,
     pub bridge_kind: String,
     pub adapter_family: String,
     pub source_language: String,
@@ -3047,6 +3049,19 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
 
     let translator = PluginTranslator::new();
     let translation = translator.translate_scan_report(&combined);
+    let descriptor_by_key = combined
+        .descriptors
+        .iter()
+        .map(|descriptor| {
+            (
+                (
+                    descriptor.path.clone(),
+                    descriptor.manifest.plugin_id.clone(),
+                ),
+                descriptor,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let readiness_context = runtime_plugin_setup_readiness_context(config);
     let activation = translator.plan_activation(&translation, &bridge_matrix, &readiness_context);
     let inventory_entries = activation.inventory_entries(&translation);
@@ -3061,6 +3076,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
         .map(|entry| {
             let entry_key = (entry.source_path.clone(), entry.plugin_id.clone());
             let inventory_entry = inventory_by_key.get(&entry_key);
+            let descriptor = descriptor_by_key.get(&entry_key).copied();
             let setup_mode = entry
                 .setup
                 .as_ref()
@@ -3175,6 +3191,10 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 source_kind: entry.source_kind.as_str().to_owned(),
                 package_root: entry.package_root.clone(),
                 package_manifest_path: entry.package_manifest_path.clone(),
+                summary: descriptor.and_then(|descriptor| descriptor.manifest.summary.clone()),
+                tags: descriptor
+                    .map(|descriptor| descriptor.manifest.tags.clone())
+                    .unwrap_or_default(),
                 bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
                 adapter_family: entry.runtime.adapter_family.clone(),
                 source_language: entry.runtime.source_language.clone(),

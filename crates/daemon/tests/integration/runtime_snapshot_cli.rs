@@ -208,6 +208,8 @@ fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
   "connector_name": "demo-search-http",
   "endpoint": "https://example.com/search",
   "capabilities": ["InvokeConnector"],
+  "summary": "Demo native extension search adapter",
+  "tags": ["search", "demo"],
   "metadata": {
     "bridge_kind": "http_json",
     "adapter_family": "web-search",
@@ -359,6 +361,11 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         serde_json::json!("v1alpha1")
     );
     assert_eq!(plugin["plugin_version"], serde_json::json!("1.0.0"));
+    assert_eq!(
+        plugin["summary"],
+        serde_json::json!("Demo native extension search adapter")
+    );
+    assert_eq!(plugin["tags"], serde_json::json!(["search", "demo"]));
     assert_eq!(
         plugin["dialect"],
         serde_json::json!("loong_package_manifest")
@@ -675,6 +682,8 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("missing_env_vars=RUNTIME_PLUGIN_DEMO_KEY"));
     assert!(rendered.contains("manifest_api_version=v1alpha1"));
     assert!(rendered.contains("plugin_version=1.0.0"));
+    assert!(rendered.contains("summary=\"Demo native extension search adapter\""));
+    assert!(rendered.contains("tags=search,demo"));
     assert!(rendered.contains("dialect=loong_package_manifest"));
     assert!(rendered.contains("compatibility_mode=native"));
     assert!(rendered.contains("compatibility_shim=-"));

@@ -6348,6 +6348,8 @@ mod tests {
   "provider_id": "demo-extension",
   "connector_name": "demo-extension-stdio",
   "capabilities": ["InvokeConnector"],
+  "summary": "Demo native extension search adapter",
+  "tags": ["search", "demo"],
   "metadata": {
     "bridge_kind": "process_stdio",
     "adapter_family": "python-stdio-adapter",
@@ -6377,6 +6379,11 @@ mod tests {
         assert_eq!(payload["enabled"], json!(true));
         assert_eq!(plugin["manifest_api_version"], json!("v1alpha1"));
         assert_eq!(plugin["plugin_version"], json!("1.0.0"));
+        assert_eq!(
+            plugin["summary"],
+            json!("Demo native extension search adapter")
+        );
+        assert_eq!(plugin["tags"], json!(["search", "demo"]));
         assert_eq!(plugin["dialect"], json!("loong_package_manifest"));
         assert_eq!(plugin["compatibility_mode"], json!("native"));
         assert_eq!(plugin["compatibility_shim"], serde_json::Value::Null);

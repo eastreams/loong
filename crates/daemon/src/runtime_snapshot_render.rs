@@ -479,6 +479,8 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
         let source_path = crate::render_line_safe_text_value(plugin.source_path.as_str());
         let package_root = crate::render_line_safe_text_value(plugin.package_root.as_str());
+        let summary = crate::render_line_safe_optional_text_value(plugin.summary.as_deref());
+        let tags = crate::render_line_safe_text_values(plugin.tags.iter().map(String::as_str), ",");
         let provider_id = crate::render_line_safe_text_value(&plugin.provider_id);
         let connector_name = crate::render_line_safe_text_value(&plugin.connector_name);
         let bridge_kind = crate::render_line_safe_text_value(&plugin.bridge_kind);
@@ -537,7 +539,7 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
 
         lines.push(format!(
-            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} compatibility_shim_support_version={} compatibility_shim_supported_dialects={} compatibility_shim_supported_bridges={} compatibility_shim_supported_adapter_families={} compatibility_shim_supported_source_languages={} compatibility_shim_mismatch_reasons={} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
+            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} compatibility_shim_support_version={} compatibility_shim_supported_dialects={} compatibility_shim_supported_bridges={} compatibility_shim_supported_adapter_families={} compatibility_shim_supported_source_languages={} compatibility_shim_mismatch_reasons={} source_path={} package_root={} summary={} tags={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
             plugin_id,
             manifest_api_version,
             plugin_version,
@@ -553,6 +555,8 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             compatibility_shim_mismatch_reasons,
             source_path,
             package_root,
+            summary,
+            tags,
             provider_id,
             connector_name,
             bridge_kind,
@@ -875,6 +879,14 @@ fn runtime_snapshot_runtime_plugin_json(
     object.insert(
         "package_manifest_path".to_owned(),
         serde_json::to_value(&plugin.package_manifest_path).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "summary".to_owned(),
+        serde_json::to_value(&plugin.summary).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "tags".to_owned(),
+        serde_json::to_value(&plugin.tags).unwrap_or(Value::Null),
     );
     object.insert(
         "bridge_kind".to_owned(),
