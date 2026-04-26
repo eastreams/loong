@@ -37,15 +37,19 @@ use loong_protocol::{
     ControlPlaneSessionWorkflowBinding, ControlPlaneSessionWorkflowBindingWorktree,
     ControlPlaneSessionWorkflowContinuity, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
     ControlPlaneStateVersion, ControlPlaneTaskListResponse, ControlPlaneTaskReadResponse,
-    ControlPlaneTaskSummary, ControlPlaneTurnEventEnvelope, ControlPlaneTurnResultResponse,
-    ControlPlaneTurnStatus, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
-    ControlPlaneTurnSummary, ProtocolRouter,
+    ControlPlaneTaskSummary, ControlPlaneTurnSubmitRequest, ControlPlaneTurnSubmitResponse,
+    ProtocolRouter,
 };
 use serde::Deserialize;
 
-use crate::control_plane_turn_runtime::{ControlPlaneTurnRuntime, submit_control_plane_turn};
+use crate::control_plane_turn_runtime::{
+    ControlPlaneTurnRuntime, control_plane_turn_stream, map_turn_result, map_turn_summary,
+    submit_control_plane_turn,
+};
 use crate::{CliResult, mvp};
 
+#[cfg(test)]
+use crate::control_plane_turn_runtime::{initial_turn_stream_state, next_turn_sse_item};
 #[cfg(test)]
 use axum::body::{Body, to_bytes};
 #[cfg(test)]
@@ -53,14 +57,17 @@ use axum::http::Request;
 #[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey};
 #[cfg(test)]
-use loong_protocol::{ControlPlaneClientIdentity, ControlPlaneRole};
+use loong_protocol::{
+    ControlPlaneClientIdentity, ControlPlaneRole, ControlPlaneTurnResultResponse,
+    ControlPlaneTurnStatus,
+};
 #[cfg(test)]
 use tower::ServiceExt;
 
 const CONTROL_PLANE_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 const CONTROL_PLANE_MAX_BUFFERED_BYTES: usize = 256 * 1024;
 const CONTROL_PLANE_TICK_INTERVAL_MS: u64 = 15_000;
-const CONTROL_PLANE_DEFAULT_EVENT_LIMIT: usize = 50;
+pub(crate) const CONTROL_PLANE_DEFAULT_EVENT_LIMIT: usize = 50;
 const CONTROL_PLANE_DEFAULT_LIST_LIMIT: usize = 50;
 const CONTROL_PLANE_DEFAULT_SESSION_RECENT_LIMIT: usize = 20;
 const CONTROL_PLANE_DEFAULT_SESSION_TAIL_LIMIT: usize = 50;
@@ -215,14 +222,6 @@ struct ControlPlaneSubscribeStreamState {
     receiver: tokio::sync::broadcast::Receiver<mvp::control_plane::ControlPlaneEventRecord>,
     last_seq: u64,
     include_targeted: bool,
-}
-
-struct ControlPlaneTurnStreamState {
-    turn_id: String,
-    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
-    pending_events: VecDeque<mvp::control_plane::ControlPlaneTurnEventRecord>,
-    receiver: tokio::sync::broadcast::Receiver<mvp::control_plane::ControlPlaneTurnEventRecord>,
-    last_seq: u64,
 }
 
 impl ControlPlaneKernelAuthority {
@@ -1042,160 +1041,6 @@ fn control_plane_subscribe_stream(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let initial_state = initial_subscribe_state(manager, after_seq, include_targeted);
     stream::unfold(initial_state, next_control_plane_sse_item)
-}
-
-fn map_turn_status(status: mvp::control_plane::ControlPlaneTurnStatus) -> ControlPlaneTurnStatus {
-    match status {
-        mvp::control_plane::ControlPlaneTurnStatus::Running => ControlPlaneTurnStatus::Running,
-        mvp::control_plane::ControlPlaneTurnStatus::Completed => ControlPlaneTurnStatus::Completed,
-        mvp::control_plane::ControlPlaneTurnStatus::Failed => ControlPlaneTurnStatus::Failed,
-        mvp::control_plane::ControlPlaneTurnStatus::Cancelled => ControlPlaneTurnStatus::Cancelled,
-    }
-}
-
-fn map_turn_summary(
-    snapshot: &mvp::control_plane::ControlPlaneTurnSnapshot,
-) -> ControlPlaneTurnSummary {
-    ControlPlaneTurnSummary {
-        turn_id: snapshot.turn_id.clone(),
-        session_id: snapshot.session_id.clone(),
-        status: map_turn_status(snapshot.status),
-        submitted_at_ms: snapshot.submitted_at_ms,
-        completed_at_ms: snapshot.completed_at_ms,
-        event_count: snapshot.event_count,
-    }
-}
-
-fn map_turn_result(
-    snapshot: &mvp::control_plane::ControlPlaneTurnSnapshot,
-) -> ControlPlaneTurnResultResponse {
-    ControlPlaneTurnResultResponse {
-        turn: map_turn_summary(snapshot),
-        output_text: snapshot.output_text.clone(),
-        stop_reason: snapshot.stop_reason.clone(),
-        usage: snapshot.usage.clone(),
-        error: snapshot.error.clone(),
-    }
-}
-
-fn map_turn_event(
-    record: mvp::control_plane::ControlPlaneTurnEventRecord,
-) -> ControlPlaneTurnEventEnvelope {
-    ControlPlaneTurnEventEnvelope {
-        turn_id: record.turn_id,
-        session_id: record.session_id,
-        seq: record.seq,
-        terminal: record.terminal,
-        payload: record.payload,
-    }
-}
-
-fn sse_event_from_turn_record(
-    record: mvp::control_plane::ControlPlaneTurnEventRecord,
-) -> Result<Event, String> {
-    let seq = record.seq;
-    let terminal = record.terminal;
-    let envelope = map_turn_event(record);
-    let event_name = if terminal {
-        "turn.terminal"
-    } else {
-        "turn.event"
-    };
-    let event_id = seq.to_string();
-    let base_event = Event::default();
-    let named_event = base_event.event(event_name);
-    let identified_event = named_event.id(event_id);
-    identified_event
-        .json_data(&envelope)
-        .map_err(|error| format!("control-plane turn SSE event encoding failed: {error}"))
-}
-
-fn fallback_turn_sse_error_event(message: &str) -> Event {
-    let error_message = format!("{{\"error\":\"{message}\"}}");
-    let base_event = Event::default();
-    let named_event = base_event.event("turn.error");
-    named_event.data(error_message)
-}
-
-fn initial_turn_stream_state(
-    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
-    turn_id: &str,
-    after_seq: u64,
-) -> Result<ControlPlaneTurnStreamState, String> {
-    let receiver = registry.subscribe();
-    let pending_events =
-        registry.recent_events_after(turn_id, after_seq, CONTROL_PLANE_DEFAULT_EVENT_LIMIT)?;
-    let pending_events = VecDeque::from(pending_events);
-    Ok(ControlPlaneTurnStreamState {
-        turn_id: turn_id.to_owned(),
-        registry,
-        pending_events,
-        receiver,
-        last_seq: after_seq,
-    })
-}
-
-async fn next_turn_sse_item(
-    mut state: ControlPlaneTurnStreamState,
-) -> Option<(Result<Event, Infallible>, ControlPlaneTurnStreamState)> {
-    loop {
-        let pending_event = state.pending_events.pop_front();
-        if let Some(record) = pending_event {
-            state.last_seq = record.seq;
-            let event = match sse_event_from_turn_record(record) {
-                Ok(event) => event,
-                Err(error) => fallback_turn_sse_error_event(error.as_str()),
-            };
-            return Some((Ok(event), state));
-        }
-
-        let snapshot = match state.registry.read_turn(state.turn_id.as_str()) {
-            Ok(Some(snapshot)) => snapshot,
-            Ok(None) => return None,
-            Err(_) => return None,
-        };
-        if snapshot.status.is_terminal() {
-            return None;
-        }
-
-        let receive_result = state.receiver.recv().await;
-        match receive_result {
-            Ok(record) => {
-                if record.turn_id != state.turn_id {
-                    continue;
-                }
-                if record.seq <= state.last_seq {
-                    continue;
-                }
-                state.last_seq = record.seq;
-                let event = match sse_event_from_turn_record(record) {
-                    Ok(event) => event,
-                    Err(error) => fallback_turn_sse_error_event(error.as_str()),
-                };
-                return Some((Ok(event), state));
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                let refill_result = state.registry.recent_events_after(
-                    state.turn_id.as_str(),
-                    state.last_seq,
-                    CONTROL_PLANE_DEFAULT_EVENT_LIMIT,
-                );
-                let refill = refill_result.unwrap_or_default();
-                state.pending_events = VecDeque::from(refill);
-                continue;
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-        }
-    }
-}
-
-fn control_plane_turn_stream(
-    registry: Arc<mvp::control_plane::ControlPlaneTurnRegistry>,
-    turn_id: String,
-    after_seq: u64,
-) -> Result<impl Stream<Item = Result<Event, Infallible>>, String> {
-    let initial_state = initial_turn_stream_state(registry, turn_id.as_str(), after_seq)?;
-    Ok(stream::unfold(initial_state, next_turn_sse_item))
 }
 
 fn connection_principal_from_connect(
