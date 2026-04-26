@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(super) struct SafeLaneRoundExecution {
+    pub(super) report: PlanRunReport,
+    pub(super) tool_outputs: Vec<String>,
+    pub(super) tool_output_stats: SafeLaneToolOutputStats,
+}
+
 pub(super) struct SafeLanePlanNodeExecutor<'a> {
     pub(super) tool_intents: &'a [ToolIntent],
     pub(super) session_context: &'a SessionContext,
@@ -135,4 +142,145 @@ pub(super) async fn execute_single_tool_intent(
             message: failure.reason,
         }),
     }
+}
+
+pub(super) async fn evaluate_safe_lane_round(
+    config: &LoongConfig,
+    lane_decision: &LaneDecision,
+    turn: &ProviderTurn,
+    session_context: &SessionContext,
+    app_dispatcher: &dyn AppToolDispatcher,
+    binding: ConversationRuntimeBinding<'_>,
+    ingress: Option<&ConversationIngressContext>,
+    state: &SafeLanePlanLoopState,
+) -> SafeLaneRoundExecution {
+    let plan = build_safe_lane_plan_graph(
+        config,
+        lane_decision,
+        turn,
+        state.tool_node_max_attempts(),
+        state.plan_start_tool_index,
+    );
+    let executor = SafeLanePlanNodeExecutor::new(
+        turn.tool_intents.as_slice(),
+        session_context,
+        app_dispatcher,
+        binding,
+        ingress,
+        config.conversation.safe_lane_verify_output_non_empty,
+        state.seed_tool_outputs.clone(),
+        config
+            .conversation
+            .tool_result_payload_summary_limit_chars(),
+    );
+    let report = PlanExecutor::execute(&plan, &executor).await;
+    let tool_outputs = executor.tool_outputs_snapshot().await;
+    let tool_output_stats = summarize_safe_lane_tool_output_stats(tool_outputs.as_slice());
+
+    SafeLaneRoundExecution {
+        report,
+        tool_outputs,
+        tool_output_stats,
+    }
+}
+
+pub(super) fn build_safe_lane_plan_graph(
+    config: &LoongConfig,
+    lane_decision: &LaneDecision,
+    turn: &ProviderTurn,
+    tool_node_max_attempts: u8,
+    start_tool_index: usize,
+) -> PlanGraph {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    let node_risk_tier = select_safe_lane_risk_tier(config, lane_decision);
+    let normalized_start = start_tool_index.min(turn.tool_intents.len());
+    for (index, intent) in turn.tool_intents.iter().enumerate().skip(normalized_start) {
+        let visible_tool_name = effective_followup_visible_tool_name(intent);
+        nodes.push(PlanNode {
+            id: format!("tool-{}", index + 1),
+            kind: PlanNodeKind::Tool,
+            label: format!("invoke `{visible_tool_name}`"),
+            tool_name: Some(visible_tool_name),
+            timeout_ms: 3_000,
+            max_attempts: tool_node_max_attempts,
+            risk_tier: node_risk_tier,
+        });
+    }
+
+    if config.conversation.safe_lane_verify_output_non_empty {
+        nodes.push(PlanNode {
+            id: "verify-1".to_owned(),
+            kind: PlanNodeKind::Verify,
+            label: "verify non-empty tool outputs".to_owned(),
+            tool_name: None,
+            timeout_ms: 500,
+            max_attempts: 1,
+            risk_tier: RiskTier::Medium,
+        });
+    }
+
+    nodes.push(PlanNode {
+        id: "respond-1".to_owned(),
+        kind: PlanNodeKind::Respond,
+        label: "compose final response".to_owned(),
+        tool_name: None,
+        timeout_ms: 500,
+        max_attempts: 1,
+        risk_tier: RiskTier::Low,
+    });
+
+    for pair in nodes.windows(2) {
+        let [from, to] = pair else {
+            continue;
+        };
+        edges.push(PlanEdge {
+            from: from.id.clone(),
+            to: to.id.clone(),
+        });
+    }
+
+    let max_total_attempts = nodes
+        .iter()
+        .map(|node| node.max_attempts as usize)
+        .sum::<usize>()
+        .max(1);
+    PlanGraph {
+        version: PLAN_GRAPH_VERSION.to_owned(),
+        nodes,
+        edges,
+        budget: PlanBudget {
+            max_nodes: 16,
+            max_total_attempts,
+            max_wall_time_ms: config.conversation.safe_lane_plan_max_wall_time_ms.max(1),
+        },
+    }
+}
+
+pub(super) fn verify_safe_lane_final_output(
+    config: &LoongConfig,
+    output: &str,
+    tool_intents: &[ToolIntent],
+    adaptive_policy: SafeLaneAdaptiveVerifyPolicyState,
+) -> PlanVerificationReport {
+    let policy = PlanVerificationPolicy {
+        require_non_empty: config.conversation.safe_lane_verify_output_non_empty,
+        min_output_chars: config.conversation.safe_lane_verify_min_output_chars,
+        require_status_prefix: config.conversation.safe_lane_verify_require_status_prefix,
+        deny_markers: config
+            .conversation
+            .safe_lane_verify_deny_markers
+            .iter()
+            .map(|marker| marker.trim().to_ascii_lowercase())
+            .filter(|marker| !marker.is_empty())
+            .collect(),
+    };
+    let semantic_anchors = collect_semantic_anchors(tool_intents);
+    let context = PlanVerificationContext {
+        expected_result_lines: tool_intents.len().max(1),
+        semantic_anchors,
+        min_anchor_matches: adaptive_policy.min_anchor_matches,
+    };
+    verify_output(output, &context, &policy)
 }
