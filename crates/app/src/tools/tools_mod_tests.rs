@@ -228,17 +228,11 @@ fn capability_snapshot_is_deterministic() {
         "- tool.search: Discover hidden specialized tools relevant to the current task."
     ));
     assert!(snapshot.contains("- tool.invoke: Invoke a discovered hidden specialized tool using a valid lease from tool_search."));
-    assert!(snapshot.contains("Hidden specialized tool tags currently discoverable:"));
-    assert!(snapshot.contains("Additional specialized tools available through tool.search:"));
+    assert!(snapshot.contains("Additional specialized tool surfaces available through tool.search:"));
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Keep tool.search queries short and capability-focused."));
-    assert!(snapshot.contains("Use read for repo inspection before shelling out."));
     assert!(snapshot.contains(
-            "Use `offset` and `limit` to page through large files instead of reading everything at once."
-        ));
-    assert!(snapshot.contains("Use exec for normal command-line work."));
-    assert!(snapshot.contains(
-            "Use agent only for Loong's own approvals, sessions, delegation, provider routing, or config work."
+            "Use the rendered tool lines above for per-surface guidance instead of rediscovering sub-tools."
         ));
     assert!(!snapshot.contains("shell.exec"));
     assert!(!snapshot.contains("file.read"));
@@ -329,11 +323,9 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
         "- tool.search: Discover hidden specialized tools relevant to the current task."
     ));
     assert!(snapshot.contains("- tool.invoke: Invoke a discovered hidden specialized tool using a valid lease from tool_search."));
-    assert!(snapshot.contains("Hidden specialized tool tags currently discoverable:"));
-    assert!(snapshot.contains("Additional specialized tools available through tool.search:"));
+    assert!(snapshot.contains("Additional specialized tool surfaces available through tool.search:"));
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Keep tool.search queries short and capability-focused."));
-    assert!(snapshot.contains("Use write for new files or whole-file rewrites."));
     assert!(!snapshot.contains("claw.migrate"));
     assert!(!snapshot.contains("external_skills.fetch"));
     assert!(!snapshot.contains("file.read"));
@@ -1921,16 +1913,20 @@ fn tool_search_accepts_keywords_array_queries() {
 }
 
 #[test]
-fn capability_snapshot_summarizes_hidden_tags_without_tool_names() {
-    let snapshot = capability_snapshot();
-    let hidden_tag_line = snapshot
-        .lines()
-        .find(|line| line.starts_with("Hidden specialized tool tags currently discoverable:"))
-        .expect("hidden tool tag line");
+fn runtime_discoverable_summary_keeps_hidden_tags_out_of_tool_names() {
+    let config = runtime_config::ToolRuntimeConfig::default();
+    let summary = runtime_discoverable_tool_surface_summary_with_config(
+        &config,
+        Some(&runtime_tool_view_for_runtime_config(&config)),
+    );
 
     assert!(
-        !hidden_tag_line.contains("provider.switch"),
-        "capability summary should expose tags, not tool names: {hidden_tag_line}"
+        !summary
+            .hidden_tags
+            .iter()
+            .any(|tag| tag == "provider.switch"),
+        "hidden tag summary should expose tags, not tool names: {:?}",
+        summary.hidden_tags
     );
 }
 

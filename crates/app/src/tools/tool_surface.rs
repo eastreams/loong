@@ -608,13 +608,6 @@ pub(crate) fn tool_surface_usage_guidance(tool_name: &str) -> Option<&'static st
     Some(surface.prompt_guidance)
 }
 
-pub(crate) fn tool_surface_prompt_guidelines_for_id(
-    surface_id: &str,
-) -> Option<&'static [&'static str]> {
-    let surface = tool_surface_descriptor_for_id(surface_id)?;
-    Some(surface.prompt_guidelines)
-}
-
 pub(crate) fn hidden_surface_search_summary(surface_id: &str) -> Option<&'static str> {
     let surface = tool_surface_descriptor_for_id(surface_id)?;
     surface.hidden_search_summary

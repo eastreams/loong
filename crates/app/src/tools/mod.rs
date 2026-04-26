@@ -1354,34 +1354,20 @@ pub(crate) fn capability_snapshot_for_view_with_config(
 
     let discoverable_summary =
         runtime_discoverable_tool_surface_summary_with_config(config, Some(view));
-    let hidden_tool_count = discoverable_summary.hidden_tool_count;
-
-    if hidden_tool_count == 0 {
+    if discoverable_summary.hidden_tool_count == 0 {
         lines.push(
             "No additional specialized tools are currently available through tool.search."
                 .to_owned(),
         );
     } else {
-        let hidden_count_line = format!(
-            "Additional specialized tools available through tool.search: {hidden_tool_count}."
-        );
-        lines.push(hidden_count_line);
-
+        lines.push("Additional specialized tool surfaces available through tool.search:".to_owned());
         let hidden_surface_lines =
             render_hidden_tool_surface_lines(discoverable_summary.hidden_surfaces.as_slice());
         lines.extend(hidden_surface_lines);
-
-        let hidden_tag_line = hidden_tool_tag_line(discoverable_summary.hidden_tags.as_slice());
-        if let Some(hidden_tag_line) = hidden_tag_line {
-            lines.push(hidden_tag_line);
-        }
     }
 
     lines.push("Guidelines:".to_owned());
-    lines.extend(render_active_tool_guideline_lines(
-        visible_direct_states.as_slice(),
-        discoverable_summary.hidden_surfaces.as_slice(),
-    ));
+    lines.extend(render_tool_discovery_guideline_lines());
     if let Some(skill_catalog_section) =
         external_skills::model_skill_catalog_section_with_config(config)
     {
@@ -1404,35 +1390,16 @@ fn render_visible_direct_tool_lines(states: &[ToolSurfaceState]) -> Vec<String> 
     lines
 }
 
-fn render_active_tool_guideline_lines(
-    visible_direct_states: &[ToolSurfaceState],
-    hidden_surfaces: &[ToolSurfaceState],
-) -> Vec<String> {
-    let mut lines = vec![
+fn render_tool_discovery_guideline_lines() -> Vec<String> {
+    vec![
         "- Prefer a direct tool when one clearly fits.".to_owned(),
-        "- Use tool.search only when you need a specialized capability that is not already direct.".to_owned(),
+        "- Use tool.search only when you need a specialized capability that is not already direct."
+            .to_owned(),
         "- Keep tool.search queries short and capability-focused.".to_owned(),
         "- Use tool.invoke only with a fresh lease returned by tool.search.".to_owned(),
-        "- If the user wants different permissions or guardrails, edit the relevant config or prompt files instead of treating the runtime as fixed.".to_owned(),
-    ];
-    let mut seen = lines.iter().cloned().collect::<BTreeSet<_>>();
-
-    for surface in visible_direct_states.iter().chain(hidden_surfaces.iter()) {
-        let Some(guidelines) =
-            tool_surface::tool_surface_prompt_guidelines_for_id(surface.surface_id.as_str())
-        else {
-            continue;
-        };
-        for guideline in guidelines {
-            let line = format!("- {guideline}");
-            let inserted = seen.insert(line.clone());
-            if inserted {
-                lines.push(line);
-            }
-        }
-    }
-
-    lines
+        "- Use the rendered tool lines above for per-surface guidance instead of rediscovering sub-tools."
+            .to_owned(),
+    ]
 }
 
 fn render_hidden_tool_surface_lines(surfaces: &[ToolSurfaceState]) -> Vec<String> {
@@ -1473,16 +1440,6 @@ fn summarize_discoverable_tool_surface(
         hidden_tags: summarize_hidden_tool_tags(discoverable_entries),
         hidden_surfaces,
     }
-}
-
-fn hidden_tool_tag_line(hidden_tags: &[String]) -> Option<String> {
-    if hidden_tags.is_empty() {
-        return None;
-    }
-
-    let joined_tags = hidden_tags.join(", ");
-    let line = format!("Hidden specialized tool tags currently discoverable: {joined_tags}.");
-    Some(line)
 }
 
 fn summarize_hidden_tool_tags(entries: &[SearchableToolEntry]) -> Vec<String> {

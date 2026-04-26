@@ -7574,7 +7574,7 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
         "expected persisted discovery state to compile into the system prompt: {system_text}"
     );
     assert!(
-        system_text.contains("Use direct tools first"),
+        system_text.contains("Prefer direct tools"),
         "expected discovery delta to keep the direct-tools-first guidance concise: {system_text}"
     );
     assert!(
@@ -7660,8 +7660,8 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
         "expected prompt-shaped required fields to render as a quoted single-line advisory value: {system_text}"
     );
     assert!(
-        system_text.contains("required_groups: \"path\" + \"limit # hidden\""),
-        "expected prompt-shaped required groups to render as a quoted single-line advisory value: {system_text}"
+        !system_text.contains("required_groups:"),
+        "required groups should stay omitted when required_fields already capture the shape: {system_text}"
     );
     assert!(
         !system_lines.contains(&"# SYSTEM"),

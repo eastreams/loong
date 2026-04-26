@@ -121,9 +121,8 @@ impl ToolDiscoveryState {
         let mut entry_lines = Vec::new();
 
         sections.push("[tool_discovery_delta]".to_owned());
-        sections.push("Recent discovery state is advisory context only.".to_owned());
         sections.push(
-            "Use direct tools first; use tool.invoke only for a currently discovered hidden surface."
+            "Recent discovery state is advisory only. Prefer direct tools; use tool.invoke only for a freshly discovered hidden surface with its lease."
                 .to_owned(),
         );
 
@@ -162,34 +161,7 @@ impl ToolDiscoveryState {
             .iter()
             .take(MAX_RENDERED_TOOL_DISCOVERY_ENTRIES);
         for entry in entries_to_render {
-            let rendered_tool_id = crate::advisory_prompt::render_governed_advisory_inline_value(
-                entry.tool_id.as_str(),
-            );
-            let rendered_summary = crate::advisory_prompt::render_governed_advisory_inline_value(
-                entry.summary.as_str(),
-            );
-
-            entry_lines.push(format!("- {rendered_tool_id}: {rendered_summary}"));
-
-            if let Some(argument_hint) = entry.argument_hint.as_deref() {
-                let rendered_argument_hint =
-                    crate::advisory_prompt::render_governed_advisory_inline_value(argument_hint);
-                entry_lines.push(format!("  call_shape: {rendered_argument_hint}"));
-            }
-
-            if !entry.required_fields.is_empty() {
-                let required_fields = crate::advisory_prompt::render_governed_advisory_inline_list(
-                    entry.required_fields.as_slice(),
-                    ", ",
-                );
-                entry_lines.push(format!("  required_fields: {required_fields}"));
-            }
-
-            if !entry.required_field_groups.is_empty() {
-                let required_groups =
-                    render_tool_discovery_advisory_groups(entry.required_field_groups.as_slice());
-                entry_lines.push(format!("  required_groups: {required_groups}"));
-            }
+            entry_lines.extend(render_tool_discovery_entry_lines(entry));
         }
 
         if total_entries > MAX_RENDERED_TOOL_DISCOVERY_ENTRIES {
@@ -469,6 +441,42 @@ fn render_tool_discovery_advisory_groups(groups: &[Vec<String>]) -> String {
     }
 
     rendered_groups.join(" | ")
+}
+
+fn render_tool_discovery_entry_lines(entry: &ToolDiscoveryEntry) -> Vec<String> {
+    let rendered_tool_id =
+        crate::advisory_prompt::render_governed_advisory_inline_value(entry.tool_id.as_str());
+    let rendered_summary =
+        crate::advisory_prompt::render_governed_advisory_inline_value(entry.summary.as_str());
+    let mut lines = vec![format!("- {rendered_tool_id}: {rendered_summary}")];
+
+    if let Some(argument_hint) = entry.argument_hint.as_deref() {
+        let rendered_argument_hint =
+            crate::advisory_prompt::render_governed_advisory_inline_value(argument_hint);
+        lines.push(format!("  call_shape: {rendered_argument_hint}"));
+    } else if let Some(usage_guidance) = entry.usage_guidance.as_deref() {
+        let rendered_usage_guidance =
+            crate::advisory_prompt::render_governed_advisory_inline_value(usage_guidance);
+        lines.push(format!("  use_when: {rendered_usage_guidance}"));
+    } else if let Some(search_hint) = entry.search_hint.as_deref() {
+        let rendered_search_hint =
+            crate::advisory_prompt::render_governed_advisory_inline_value(search_hint);
+        lines.push(format!("  search_hint: {rendered_search_hint}"));
+    }
+
+    if !entry.required_fields.is_empty() {
+        let required_fields = crate::advisory_prompt::render_governed_advisory_inline_list(
+            entry.required_fields.as_slice(),
+            ", ",
+        );
+        lines.push(format!("  required_fields: {required_fields}"));
+    } else if !entry.required_field_groups.is_empty() {
+        let required_groups =
+            render_tool_discovery_advisory_groups(entry.required_field_groups.as_slice());
+        lines.push(format!("  required_groups: {required_groups}"));
+    }
+
+    lines
 }
 
 #[cfg(test)]
@@ -802,8 +810,8 @@ mod tests {
             "expected required fields to render as quoted single-line advisory values: {rendered}"
         );
         assert!(
-            rendered.contains("required_groups: \"path\" + \"limit # hidden\""),
-            "expected required field groups to render as quoted single-line advisory values: {rendered}"
+            !rendered.contains("required_groups:"),
+            "required groups should be omitted when required_fields already cover the shape: {rendered}"
         );
         assert!(
             !rendered.contains("\n# SYSTEM"),
@@ -869,9 +877,34 @@ mod tests {
         let rendered = state.render_delta_prompt();
 
         assert!(rendered.contains("[tool_discovery_delta]"));
-        assert!(rendered.contains("Use direct tools first"));
+        assert!(rendered.contains("Prefer direct tools"));
         assert!(rendered.contains("read"));
         assert!(rendered.contains("call_shape: \"path:string\""));
+    }
+
+    #[test]
+    fn tool_discovery_state_falls_back_to_usage_guidance_without_argument_shape() {
+        let state = ToolDiscoveryState {
+            schema_version: TOOL_DISCOVERY_SCHEMA_VERSION,
+            query: Some("inspect approvals".to_owned()),
+            exact_tool_id: None,
+            entries: vec![ToolDiscoveryEntry {
+                tool_id: "agent".to_owned(),
+                summary: "Inspect Loong runtime control state.".to_owned(),
+                search_hint: Some("Runtime control and setup tasks.".to_owned()),
+                argument_hint: None,
+                surface_id: Some("agent".to_owned()),
+                usage_guidance: Some("Use this when the task is about runtime setup or control flow.".to_owned()),
+                required_fields: Vec::new(),
+                required_field_groups: Vec::new(),
+            }],
+            diagnostics: None,
+        };
+
+        let rendered = state.render_delta_prompt();
+
+        assert!(rendered.contains("use_when: \"Use this when the task is about runtime setup or control flow.\""));
+        assert!(!rendered.contains("search_hint:"));
     }
 
     #[test]
