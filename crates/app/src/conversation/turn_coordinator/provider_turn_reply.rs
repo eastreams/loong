@@ -54,6 +54,192 @@ enum ReplyLoopDecision {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingToolContinuationExpectation {
+    RetryableFailure,
+    RetryableFailureAfterRepair,
+}
+
+impl MissingToolContinuationExpectation {
+    fn from_tool_failure(payload: &ToolDrivenFollowupPayload) -> Option<Self> {
+        match payload {
+            ToolDrivenFollowupPayload::ToolFailure { reason, retryable }
+                if *retryable && reason.starts_with("missing_tool_call_followup:") =>
+            {
+                Some(Self::RetryableFailure)
+            }
+            ToolDrivenFollowupPayload::ToolFailure { .. }
+            | ToolDrivenFollowupPayload::ToolResult { .. }
+            | ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => None,
+        }
+    }
+
+    fn contract_mode(self) -> ToolDrivenFollowupContractMode {
+        match self {
+            Self::RetryableFailure => ToolDrivenFollowupContractMode::RetryableFailure,
+            Self::RetryableFailureAfterRepair => {
+                ToolDrivenFollowupContractMode::RepairRetryableFailure
+            }
+        }
+    }
+
+    fn after_attempt(self) -> Self {
+        match self {
+            Self::RetryableFailure => Self::RetryableFailureAfterRepair,
+            Self::RetryableFailureAfterRepair => Self::RetryableFailureAfterRepair,
+        }
+    }
+
+    fn after_attempted(self) -> bool {
+        matches!(self, Self::RetryableFailureAfterRepair)
+    }
+
+    fn payload_kind(self) -> ToolDrivenFollowupKind {
+        match self {
+            Self::RetryableFailure | Self::RetryableFailureAfterRepair => {
+                ToolDrivenFollowupKind::ToolFailure
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingToolContinuationDecision {
+    Finish {
+        continuation_state: Option<ToolDrivenContinuationState>,
+    },
+    RequestRepair,
+    ForceBlockedReply,
+}
+
+fn evaluate_missing_tool_continuation(
+    expectation: MissingToolContinuationExpectation,
+    parsed_reply: &ParsedToolDrivenContinuationReply,
+) -> MissingToolContinuationDecision {
+    match parsed_reply.state {
+        Some(ToolDrivenContinuationState::Continue) => {
+            if expectation.after_attempted() {
+                MissingToolContinuationDecision::ForceBlockedReply
+            } else {
+                MissingToolContinuationDecision::RequestRepair
+            }
+        }
+        Some(ToolDrivenContinuationState::Done) => {
+            if parsed_reply.reply.is_empty() {
+                if expectation.after_attempted() {
+                    MissingToolContinuationDecision::ForceBlockedReply
+                } else {
+                    MissingToolContinuationDecision::RequestRepair
+                }
+            } else {
+                MissingToolContinuationDecision::Finish {
+                    continuation_state: Some(ToolDrivenContinuationState::Done),
+                }
+            }
+        }
+        Some(ToolDrivenContinuationState::Blocked) => {
+            if parsed_reply.reply.is_empty() {
+                MissingToolContinuationDecision::ForceBlockedReply
+            } else {
+                MissingToolContinuationDecision::Finish {
+                    continuation_state: Some(ToolDrivenContinuationState::Blocked),
+                }
+            }
+        }
+        None => {
+            if expectation.after_attempted() {
+                MissingToolContinuationDecision::ForceBlockedReply
+            } else {
+                MissingToolContinuationDecision::RequestRepair
+            }
+        }
+    }
+}
+
+fn missing_tool_continuation_blocked_reply(
+    expectation: MissingToolContinuationExpectation,
+) -> String {
+    match expectation.payload_kind() {
+        ToolDrivenFollowupKind::ToolFailure => "I couldn't continue because the required retry tool call was never issued. The turn stopped here instead of pretending the retry happened.".to_owned(),
+        ToolDrivenFollowupKind::ToolResult => "I couldn't continue because the required follow-up tool call was never issued. The turn stopped here instead of pretending the work completed.".to_owned(),
+        ToolDrivenFollowupKind::DiscoveryRecovery => "I couldn't continue because the required follow-up tool call was never issued.".to_owned(),
+    }
+}
+
+fn build_missing_tool_continuation_repair_messages(
+    base_messages: &[Value],
+    assistant_reply: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    expectation: MissingToolContinuationExpectation,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    let assistant_reply = assistant_reply.trim();
+    if !assistant_reply.is_empty() {
+        messages.push(json!({
+            "role": "assistant",
+            "content": assistant_reply,
+        }));
+    }
+    let continuation_contract =
+        render_tool_followup_continuation_contract(expectation.contract_mode());
+    messages.push(json!({
+        "role": "user",
+        "content": build_tool_followup_user_prompt_with_context(
+            user_input,
+            loop_warning_reason,
+            None,
+            None,
+            Some(continuation_contract.as_str()),
+        ),
+    }));
+    messages
+}
+
+fn build_turn_reply_followup_messages_with_contract(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    followup: ToolDrivenFollowupPayload,
+    tool_request_summary: Option<&str>,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    continuation_contract: Option<ToolDrivenFollowupContractMode>,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    let continuation_contract =
+        continuation_contract.map(render_tool_followup_continuation_contract);
+    messages.extend(
+        build_tool_driven_followup_tail_with_request_summary_and_contract(
+            assistant_preface,
+            &followup,
+            user_input,
+            loop_warning_reason,
+            tool_request_summary,
+            continuation_contract.as_deref(),
+            |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
+        ),
+    );
+    messages
+}
+
+fn build_turn_reply_guard_messages(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    reason: &str,
+    latest_tool_payload: Option<&ToolDrivenFollowupPayload>,
+    user_input: &str,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    messages.extend(build_tool_loop_guard_tail(
+        assistant_preface,
+        reason,
+        user_input,
+        latest_tool_payload.map(ToolDrivenFollowupPayload::message_context),
+        |label, text| reduce_followup_payload_for_model(label.as_str(), text).into_owned(),
+    ));
+    messages
+}
+
 fn build_reply_loop_decision(state: &mut ProviderReplyLoopState) -> ReplyLoopDecision {
     match state.current_continue_phase.reply_phase.decision() {
         ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
