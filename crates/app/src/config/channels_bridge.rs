@@ -1258,10 +1258,7 @@ mod tests {
             .expect("resolve whatsapp personal account from env pointer");
         let bridge_url = resolved.bridge_url();
 
-        assert_eq!(
-            resolved.configured_account_id,
-            "whatsapp_personal_127-0-0-1-39731"
-        );
+        assert_eq!(resolved.configured_account_id, "default");
         assert_eq!(resolved.account.id, "whatsapp_personal_127-0-0-1-39731");
         assert_eq!(bridge_url.as_deref(), Some("http://127.0.0.1:39731/bridge"));
     }

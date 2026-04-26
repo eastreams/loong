@@ -169,7 +169,9 @@ pub async fn execute_http_json_bridge_call(
             if !success {
                 let reason = match error_detail {
                     Some(detail) => {
-                        format!("http_json bridge request failed with status {status_code}: {detail}")
+                        format!(
+                            "http_json bridge request failed with status {status_code}: {detail}"
+                        )
                     }
                     None => format!("http_json bridge request failed with status {status_code}"),
                 };
