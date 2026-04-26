@@ -12,6 +12,10 @@ use loong_spec::CliResult;
 use serde_json::json;
 
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
+use crate::plugins_cli::{
+    PluginInventoryCommand, PluginScanSourceArgs, PluginsCommandExecution, PluginsCommandOptions,
+    PluginsCommands, execute_plugins_command,
+};
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
 
@@ -222,6 +226,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     );
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
+        let runtime_plugin_inventory = doctor_runtime_plugin_inventory_json_payload(&config).await;
         let payload = json!({
             "ok": summary.fail == 0,
             "config": config_path.display().to_string(),
@@ -232,6 +237,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             },
             "checks": checks,
             "runtime_plugins": doctor_runtime_plugins_json_payload(&runtime_plugins_state),
+            "runtime_plugin_inventory": runtime_plugin_inventory,
             "fix_requested": options.fix,
             "applied_fixes": fixes,
             "next_steps": next_steps,
@@ -429,6 +435,78 @@ fn doctor_runtime_plugins_json_payload(
     state: &crate::RuntimeSnapshotRuntimePluginsState,
 ) -> serde_json::Value {
     crate::runtime_snapshot_runtime_plugins_json(state)
+}
+
+async fn doctor_runtime_plugin_inventory_json_payload(
+    config: &mvp::config::LoongConfig,
+) -> serde_json::Value {
+    if !config.runtime_plugins.enabled {
+        return json!({
+            "available": false,
+            "reason": "runtime_plugins_disabled",
+        });
+    }
+
+    let roots = config
+        .runtime_plugins
+        .resolved_roots()
+        .into_iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        return json!({
+            "available": false,
+            "reason": "no_runtime_plugin_roots",
+        });
+    }
+
+    let options = PluginsCommandOptions {
+        json: false,
+        command: PluginsCommands::Inventory(PluginInventoryCommand {
+            source: PluginScanSourceArgs {
+                roots,
+                query: String::new(),
+                limit: Some(100),
+                bridge_support: None,
+                bridge_profile: None,
+                bridge_support_delta: None,
+                bridge_support_sha256: None,
+                bridge_support_delta_sha256: None,
+            },
+            include_ready: true,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        }),
+    };
+
+    match execute_plugins_command(options).await {
+        Ok(PluginsCommandExecution::Inventory(execution)) => json!({
+            "available": true,
+            "returned_results": execution.returned_results,
+            "summary": execution.summary,
+            "results": execution.results.iter().map(|result| {
+                json!({
+                    "plugin_id": result.plugin_id,
+                    "source_path": result.source_path,
+                    "activation_status": result.activation_status,
+                    "activation_reason": result.activation_reason,
+                    "loaded": result.loaded,
+                    "activation_attestation": result.activation_attestation,
+                    "runtime_health": result.runtime_health,
+                })
+            }).collect::<Vec<_>>(),
+        }),
+        Ok(_) => json!({
+            "available": false,
+            "reason": "unexpected_plugins_command_variant",
+        }),
+        Err(error) => json!({
+            "available": false,
+            "reason": "inventory_execution_failed",
+            "error": error,
+        }),
+    }
 }
 
 fn audit_retention_doctor_check(audit: &mvp::config::AuditConfig) -> DoctorCheck {
@@ -6410,6 +6488,50 @@ mod tests {
         );
         assert_eq!(plugin["diagnostic_codes"], json!([]));
         assert_eq!(plugin["extension_metadata_issues"], json!([]));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn doctor_runtime_plugin_inventory_json_payload_surfaces_runtime_plugin_results() {
+        let root = browser_companion_temp_dir("runtime-plugins-inventory-json-payload");
+        let config = runtime_plugins_test_config(&root, true);
+        let runtime_root = root.join("runtime-plugins");
+        std::fs::create_dir_all(runtime_root.join("search")).expect("create runtime root");
+        std::fs::write(
+            runtime_root.join("search").join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "demo-extension-plugin",
+  "provider_id": "demo-extension",
+  "connector_name": "demo-extension-stdio",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "command": "python3",
+    "entrypoint": "index.py"
+  }
+}"#,
+        )
+        .expect("write runtime plugin manifest");
+
+        let payload = doctor_runtime_plugin_inventory_json_payload(&config).await;
+        let plugin = payload["results"]
+            .as_array()
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|plugin| plugin["plugin_id"].as_str() == Some("demo-extension-plugin"))
+            })
+            .expect("demo extension plugin inventory result should be present");
+
+        assert_eq!(payload["available"], json!(true));
+        assert_eq!(payload["returned_results"], json!(1));
+        assert_eq!(plugin["plugin_id"], json!("demo-extension-plugin"));
+        assert!(plugin.get("activation_attestation").is_some());
+        assert!(plugin.get("runtime_health").is_some());
 
         std::fs::remove_dir_all(&root).ok();
     }
