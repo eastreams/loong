@@ -2455,6 +2455,12 @@ pub struct RuntimeSnapshotRuntimePluginsState {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotRuntimePluginState {
+    pub manifest_api_version: Option<String>,
+    pub plugin_version: Option<String>,
+    pub dialect: String,
+    pub dialect_version: Option<String>,
+    pub compatibility_mode: String,
+    pub compatibility_shim: Option<String>,
     pub plugin_id: String,
     pub provider_id: String,
     pub connector_name: String,
@@ -2464,12 +2470,16 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub package_manifest_path: Option<String>,
     pub bridge_kind: String,
     pub adapter_family: String,
+    pub source_language: String,
+    pub entrypoint_hint: String,
     pub setup_mode: Option<String>,
     pub setup_surface: Option<String>,
     pub slot_claims: Vec<String>,
     pub conflicting_slot_claims: Vec<String>,
     pub status: String,
     pub reason: String,
+    pub bootstrap_hint: Option<String>,
+    pub diagnostic_codes: Vec<String>,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,
     pub extension_contract: Option<String>,
@@ -3071,6 +3081,13 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 .collect::<Vec<_>>();
             let extension_declarations =
                 runtime_plugin_extension_declarations_from_metadata(&entry.metadata);
+            let compatibility_shim = inventory_entry
+                .and_then(|item| item.compatibility_shim.as_ref())
+                .map(|shim| shim.shim_id.clone());
+            let bootstrap_hint = inventory_entry.and_then(|item| item.bootstrap_hint.clone());
+            let diagnostic_codes = inventory_entry
+                .map(|item| runtime_plugin_diagnostic_codes(&item.diagnostic_findings))
+                .unwrap_or_else(|| runtime_plugin_diagnostic_codes(&entry.diagnostic_findings));
             let conflicting_slot_claims = if matches!(
                 activation_status,
                 Some(PluginActivationStatus::BlockedSlotClaimConflict)
@@ -3104,6 +3121,12 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             };
 
             RuntimeSnapshotRuntimePluginState {
+                manifest_api_version: entry.manifest_api_version.clone(),
+                plugin_version: entry.plugin_version.clone(),
+                dialect: entry.dialect.as_str().to_owned(),
+                dialect_version: entry.dialect_version.clone(),
+                compatibility_mode: entry.compatibility_mode.as_str().to_owned(),
+                compatibility_shim,
                 plugin_id: entry.plugin_id.clone(),
                 provider_id: entry.provider_id.clone(),
                 connector_name: entry.connector_name.clone(),
@@ -3113,12 +3136,16 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 package_manifest_path: entry.package_manifest_path.clone(),
                 bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
                 adapter_family: entry.runtime.adapter_family.clone(),
+                source_language: entry.runtime.source_language.clone(),
+                entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
                 setup_mode,
                 setup_surface,
                 slot_claims,
                 conflicting_slot_claims,
                 status,
                 reason,
+                bootstrap_hint,
+                diagnostic_codes,
                 missing_required_env_vars,
                 missing_required_config_keys,
                 extension_contract: extension_declarations.contract,
@@ -3260,6 +3287,15 @@ fn runtime_plugin_metadata_json_string_list(
             )),
         ),
     }
+}
+
+fn runtime_plugin_diagnostic_codes(
+    diagnostic_findings: &[kernel::PluginDiagnosticFinding],
+) -> Vec<String> {
+    diagnostic_findings
+        .iter()
+        .map(|finding| finding.code.as_str().to_owned())
+        .collect()
 }
 
 fn runtime_plugin_setup_readiness_context(

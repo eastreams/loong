@@ -6375,6 +6375,12 @@ mod tests {
             .expect("demo extension plugin should be present");
 
         assert_eq!(payload["enabled"], json!(true));
+        assert_eq!(plugin["manifest_api_version"], json!("v1alpha1"));
+        assert_eq!(plugin["plugin_version"], json!("1.0.0"));
+        assert_eq!(plugin["dialect"], json!("loong_package_manifest"));
+        assert_eq!(plugin["compatibility_mode"], json!("native"));
+        assert_eq!(plugin["source_language"], json!("manifest"));
+        assert_eq!(plugin["entrypoint_hint"], json!("index.py"));
         assert_eq!(
             plugin["extension_contract"],
             json!("process_stdio_json_line_v1")
@@ -6392,6 +6398,7 @@ mod tests {
             plugin["extension_host_actions"],
             json!(["append_entry", "notify"])
         );
+        assert_eq!(plugin["diagnostic_codes"], json!([]));
         assert_eq!(plugin["extension_metadata_issues"], json!([]));
 
         std::fs::remove_dir_all(&root).ok();

@@ -355,6 +355,21 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         serde_json::json!("process_stdio_json_line_v1")
     );
     assert_eq!(
+        plugin["manifest_api_version"],
+        serde_json::json!("v1alpha1")
+    );
+    assert_eq!(plugin["plugin_version"], serde_json::json!("1.0.0"));
+    assert_eq!(
+        plugin["dialect"],
+        serde_json::json!("loong_package_manifest")
+    );
+    assert_eq!(plugin["compatibility_mode"], serde_json::json!("native"));
+    assert_eq!(plugin["source_language"], serde_json::json!("manifest"));
+    assert_eq!(
+        plugin["entrypoint_hint"],
+        serde_json::json!("https://example.com/search")
+    );
+    assert_eq!(
         plugin["extension_facets"],
         serde_json::json!(["tooling", "events"])
     );
@@ -371,6 +386,7 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         serde_json::json!(["append_entry", "notify"])
     );
     assert_eq!(plugin["extension_metadata_issues"], serde_json::json!([]));
+    assert_eq!(plugin["diagnostic_codes"], serde_json::json!([]));
 
     fs::remove_dir_all(&root).ok();
 }
@@ -648,6 +664,12 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("setup_mode=metadata_only"));
     assert!(rendered.contains("setup_surface=web_search"));
     assert!(rendered.contains("missing_env_vars=RUNTIME_PLUGIN_DEMO_KEY"));
+    assert!(rendered.contains("manifest_api_version=v1alpha1"));
+    assert!(rendered.contains("plugin_version=1.0.0"));
+    assert!(rendered.contains("dialect=loong_package_manifest"));
+    assert!(rendered.contains("compatibility_mode=native"));
+    assert!(rendered.contains("source_language=manifest"));
+    assert!(rendered.contains("entrypoint_hint=https://example.com/search"));
     assert!(rendered.contains("extension_contract=process_stdio_json_line_v1"));
     assert!(rendered.contains("extension_facets=tooling,events"));
     assert!(rendered.contains("extension_methods=extension/tool,extension/event"));

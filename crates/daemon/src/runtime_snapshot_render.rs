@@ -429,17 +429,35 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
 
     for plugin in &snapshot.plugins {
         let plugin_id = crate::render_line_safe_text_value(&plugin.plugin_id);
+        let manifest_api_version =
+            crate::render_line_safe_optional_text_value(plugin.manifest_api_version.as_deref());
+        let plugin_version =
+            crate::render_line_safe_optional_text_value(plugin.plugin_version.as_deref());
+        let dialect = crate::render_line_safe_text_value(&plugin.dialect);
+        let dialect_version =
+            crate::render_line_safe_optional_text_value(plugin.dialect_version.as_deref());
+        let compatibility_mode = crate::render_line_safe_text_value(&plugin.compatibility_mode);
+        let compatibility_shim =
+            crate::render_line_safe_optional_text_value(plugin.compatibility_shim.as_deref());
         let source_path = crate::render_line_safe_text_value(plugin.source_path.as_str());
         let package_root = crate::render_line_safe_text_value(plugin.package_root.as_str());
         let provider_id = crate::render_line_safe_text_value(&plugin.provider_id);
         let connector_name = crate::render_line_safe_text_value(&plugin.connector_name);
         let bridge_kind = crate::render_line_safe_text_value(&plugin.bridge_kind);
         let adapter_family = crate::render_line_safe_text_value(&plugin.adapter_family);
+        let source_language = crate::render_line_safe_text_value(&plugin.source_language);
+        let entrypoint_hint = crate::render_line_safe_text_value(&plugin.entrypoint_hint);
         let status = crate::render_line_safe_text_value(&plugin.status);
         let setup_mode = crate::render_line_safe_optional_text_value(plugin.setup_mode.as_deref());
         let setup_surface =
             crate::render_line_safe_optional_text_value(plugin.setup_surface.as_deref());
         let reason = crate::render_line_safe_text_value(&plugin.reason);
+        let bootstrap_hint =
+            crate::render_line_safe_optional_text_value(plugin.bootstrap_hint.as_deref());
+        let diagnostic_codes = crate::render_line_safe_text_values(
+            plugin.diagnostic_codes.iter().map(String::as_str),
+            ",",
+        );
         let missing_required_env_vars = crate::render_line_safe_text_values(
             plugin.missing_required_env_vars.iter().map(String::as_str),
             ",",
@@ -481,18 +499,28 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
 
         lines.push(format!(
-            "  runtime_plugin {} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
+            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
             plugin_id,
+            manifest_api_version,
+            plugin_version,
+            dialect,
+            dialect_version,
+            compatibility_mode,
+            compatibility_shim,
             source_path,
             package_root,
             provider_id,
             connector_name,
             bridge_kind,
             adapter_family,
+            source_language,
+            entrypoint_hint,
             status,
             setup_mode,
             setup_surface,
             reason,
+            bootstrap_hint,
+            diagnostic_codes,
             missing_required_env_vars,
             missing_required_config_keys,
             extension_contract,
@@ -717,34 +745,142 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
         "ready_plugin_count": snapshot.ready_plugin_count,
         "setup_incomplete_plugin_count": snapshot.setup_incomplete_plugin_count,
         "blocked_plugin_count": snapshot.blocked_plugin_count,
-        "plugins": snapshot.plugins.iter().map(|plugin| {
-            json!({
-                "plugin_id": plugin.plugin_id,
-                "provider_id": plugin.provider_id,
-                "connector_name": plugin.connector_name,
-                "source_path": plugin.source_path,
-                "source_kind": plugin.source_kind,
-                "package_root": plugin.package_root,
-                "package_manifest_path": plugin.package_manifest_path,
-                "bridge_kind": plugin.bridge_kind,
-                "adapter_family": plugin.adapter_family,
-                "setup_mode": plugin.setup_mode,
-                "setup_surface": plugin.setup_surface,
-                "slot_claims": plugin.slot_claims,
-                "conflicting_slot_claims": plugin.conflicting_slot_claims,
-                "status": plugin.status,
-                "reason": plugin.reason,
-                "missing_required_env_vars": plugin.missing_required_env_vars,
-                "missing_required_config_keys": plugin.missing_required_config_keys,
-                "extension_contract": plugin.extension_contract,
-                "extension_facets": plugin.extension_facets,
-                "extension_methods": plugin.extension_methods,
-                "extension_events": plugin.extension_events,
-                "extension_host_actions": plugin.extension_host_actions,
-                "extension_metadata_issues": plugin.extension_metadata_issues,
-            })
-        }).collect::<Vec<_>>(),
+        "plugins": snapshot
+            .plugins
+            .iter()
+            .map(runtime_snapshot_runtime_plugin_json)
+            .collect::<Vec<_>>(),
     })
+}
+
+fn runtime_snapshot_runtime_plugin_json(
+    plugin: &crate::RuntimeSnapshotRuntimePluginState,
+) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "manifest_api_version".to_owned(),
+        serde_json::to_value(&plugin.manifest_api_version).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "plugin_version".to_owned(),
+        serde_json::to_value(&plugin.plugin_version).unwrap_or(Value::Null),
+    );
+    object.insert("dialect".to_owned(), Value::String(plugin.dialect.clone()));
+    object.insert(
+        "dialect_version".to_owned(),
+        serde_json::to_value(&plugin.dialect_version).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_mode".to_owned(),
+        Value::String(plugin.compatibility_mode.clone()),
+    );
+    object.insert(
+        "compatibility_shim".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "plugin_id".to_owned(),
+        Value::String(plugin.plugin_id.clone()),
+    );
+    object.insert(
+        "provider_id".to_owned(),
+        Value::String(plugin.provider_id.clone()),
+    );
+    object.insert(
+        "connector_name".to_owned(),
+        Value::String(plugin.connector_name.clone()),
+    );
+    object.insert(
+        "source_path".to_owned(),
+        Value::String(plugin.source_path.clone()),
+    );
+    object.insert(
+        "source_kind".to_owned(),
+        Value::String(plugin.source_kind.clone()),
+    );
+    object.insert(
+        "package_root".to_owned(),
+        Value::String(plugin.package_root.clone()),
+    );
+    object.insert(
+        "package_manifest_path".to_owned(),
+        serde_json::to_value(&plugin.package_manifest_path).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "bridge_kind".to_owned(),
+        Value::String(plugin.bridge_kind.clone()),
+    );
+    object.insert(
+        "adapter_family".to_owned(),
+        Value::String(plugin.adapter_family.clone()),
+    );
+    object.insert(
+        "source_language".to_owned(),
+        Value::String(plugin.source_language.clone()),
+    );
+    object.insert(
+        "entrypoint_hint".to_owned(),
+        Value::String(plugin.entrypoint_hint.clone()),
+    );
+    object.insert(
+        "setup_mode".to_owned(),
+        serde_json::to_value(&plugin.setup_mode).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "setup_surface".to_owned(),
+        serde_json::to_value(&plugin.setup_surface).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "slot_claims".to_owned(),
+        serde_json::to_value(&plugin.slot_claims).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "conflicting_slot_claims".to_owned(),
+        serde_json::to_value(&plugin.conflicting_slot_claims).unwrap_or(Value::Null),
+    );
+    object.insert("status".to_owned(), Value::String(plugin.status.clone()));
+    object.insert("reason".to_owned(), Value::String(plugin.reason.clone()));
+    object.insert(
+        "bootstrap_hint".to_owned(),
+        serde_json::to_value(&plugin.bootstrap_hint).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "diagnostic_codes".to_owned(),
+        serde_json::to_value(&plugin.diagnostic_codes).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "missing_required_env_vars".to_owned(),
+        serde_json::to_value(&plugin.missing_required_env_vars).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "missing_required_config_keys".to_owned(),
+        serde_json::to_value(&plugin.missing_required_config_keys).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_contract".to_owned(),
+        serde_json::to_value(&plugin.extension_contract).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_facets".to_owned(),
+        serde_json::to_value(&plugin.extension_facets).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_methods".to_owned(),
+        serde_json::to_value(&plugin.extension_methods).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_events".to_owned(),
+        serde_json::to_value(&plugin.extension_events).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_host_actions".to_owned(),
+        serde_json::to_value(&plugin.extension_host_actions).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_metadata_issues".to_owned(),
+        serde_json::to_value(&plugin.extension_metadata_issues).unwrap_or(Value::Null),
+    );
+    Value::Object(object)
 }
 
 fn shell_policy_default_str(
