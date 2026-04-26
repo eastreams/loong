@@ -102,7 +102,7 @@ fn parse_env_string_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn normalize_channel_account_id(raw: &str) -> String {
+pub fn normalize_channel_account_id(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return "default".to_owned();

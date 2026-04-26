@@ -7,6 +7,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
 
 use crate::CliResult;
+use crate::configured_account_keys::resolve_raw_configured_account_key;
 use crate::mvp;
 
 const DEFAULT_WEIXIN_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
@@ -121,14 +122,14 @@ fn ensure_selected_account_exists(
     channel: &mut mvp::config::WeixinChannelConfig,
     account: Option<&str>,
 ) -> CliResult<String> {
-    let Some(configured_account_id) = trimmed_opt(account).map(str::to_owned) else {
+    let Some(requested_account_label) = trimmed_opt(account) else {
         return Ok(channel.default_configured_account_id());
     };
 
-    if channel
-        .accounts
-        .contains_key(configured_account_id.as_str())
-    {
+    let configured_account_id = mvp::config::normalize_channel_account_id(requested_account_label);
+    let existing_raw_account_key =
+        resolve_raw_configured_account_key(channel.accounts.keys(), configured_account_id.as_str());
+    if existing_raw_account_key.is_some() {
         return Ok(configured_account_id);
     }
 
@@ -136,11 +137,11 @@ fn ensure_selected_account_exists(
         && channel.default_account.is_none()
         && !root_weixin_account_is_materially_configured(channel);
     channel.accounts.insert(
-        configured_account_id.clone(),
+        requested_account_label.to_owned(),
         mvp::config::WeixinAccountConfig::default(),
     );
     if should_promote_to_default {
-        channel.default_account = Some(configured_account_id.clone());
+        channel.default_account = Some(requested_account_label.to_owned());
     }
 
     Ok(configured_account_id)
@@ -152,8 +153,12 @@ fn apply_registration_to_selected_account(
     result: &WeixinQrRegistrationResult,
 ) -> bool {
     let preferred_runtime_account_id = preferred_runtime_account_id(result);
+    let raw_account_key =
+        resolve_raw_configured_account_key(channel.accounts.keys(), configured_account_id);
 
-    if let Some(account) = channel.accounts.get_mut(configured_account_id) {
+    if let Some(raw_account_key) = raw_account_key.as_deref()
+        && let Some(account) = channel.accounts.get_mut(raw_account_key)
+    {
         account.enabled = Some(true);
         account.bridge_url = Some(result.bridge_url.clone());
         account.bridge_url_env = None;
@@ -742,6 +747,53 @@ mod tests {
                 .and_then(SecretRef::inline_literal_value),
             Some("token-ops")
         );
+        assert_eq!(account.account_id.as_deref(), Some("bot-ops"));
+        assert_eq!(
+            account.allowed_contact_ids.clone().unwrap_or_default(),
+            vec!["wxid-ops".to_owned()]
+        );
+        assert!(applied);
+    }
+
+    #[test]
+    fn ensure_selected_account_exists_reuses_existing_display_label_account() {
+        let mut channel = mvp::config::WeixinChannelConfig::default();
+        channel.accounts.insert(
+            "Ops Team".to_owned(),
+            mvp::config::WeixinAccountConfig::default(),
+        );
+
+        let configured_account_id = ensure_selected_account_exists(&mut channel, Some("ops-team"))
+            .expect("account selection");
+
+        assert_eq!(configured_account_id, "ops-team");
+        assert_eq!(channel.accounts.len(), 1);
+        assert!(channel.accounts.contains_key("Ops Team"));
+    }
+
+    #[test]
+    fn apply_registration_updates_display_label_named_account() {
+        let mut channel = mvp::config::WeixinChannelConfig::default();
+        channel.accounts.insert(
+            "Ops Team".to_owned(),
+            mvp::config::WeixinAccountConfig::default(),
+        );
+
+        let applied = apply_registration_to_selected_account(
+            &mut channel,
+            "ops-team",
+            &WeixinQrRegistrationResult {
+                bridge_url: "https://bridge.example.test".to_owned(),
+                bot_token: "token-ops".to_owned(),
+                bot_id: Some("bot-ops".to_owned()),
+                user_id: Some("wxid-ops".to_owned()),
+                qr_url: "https://scan.example/qr".to_owned(),
+                qr_rendered: false,
+            },
+        );
+
+        let account = channel.accounts.get("Ops Team").expect("named account");
+        assert_eq!(account.enabled, Some(true));
         assert_eq!(account.account_id.as_deref(), Some("bot-ops"));
         assert_eq!(
             account.allowed_contact_ids.clone().unwrap_or_default(),

@@ -51,7 +51,7 @@ pub use channels::{
     TeamsChannelConfig, TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode,
     TlonAccountConfig, TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig,
     WebhookAccountConfig, WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig,
-    WecomChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig,
+    WecomChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig, normalize_channel_account_id,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
@@ -70,8 +70,7 @@ pub(crate) use channels::{
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, WHATSAPP_ACCESS_TOKEN_ENV,
     WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
-    normalize_channel_account_id, parse_email_smtp_endpoint, parse_nostr_private_key_hex,
-    parse_nostr_public_key_hex,
+    parse_email_smtp_endpoint, parse_nostr_private_key_hex, parse_nostr_public_key_hex,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
