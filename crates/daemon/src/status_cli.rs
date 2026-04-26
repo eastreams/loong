@@ -1,6 +1,7 @@
 use loong_contracts::WorkRuntimeHealthSnapshot;
 use loong_spec::CliResult;
 use serde::Serialize;
+use serde_json::Value;
 use std::path::Path;
 
 use crate::gateway::read_models::{
@@ -54,6 +55,8 @@ pub struct StatusCliReadModel {
     pub gateway: GatewayOperatorSummaryReadModel,
     pub acp: StatusCliAcpReadModel,
     pub work_units: StatusCliWorkUnitReadModel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_inventory: Option<Value>,
     pub next_actions: Vec<StatusCliAction>,
     pub recipes: Vec<String>,
 }
@@ -105,6 +108,8 @@ pub async fn collect_status_cli_read_model(
         build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
+    let runtime_plugin_inventory =
+        Some(crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await);
     let next_actions = crate::next_actions::collect_setup_next_actions(&config, config_path_text)
         .into_iter()
         .map(|action| StatusCliAction {
@@ -128,6 +133,7 @@ pub async fn collect_status_cli_read_model(
         gateway,
         acp,
         work_units,
+        runtime_plugin_inventory,
         next_actions,
         recipes,
     })
@@ -767,6 +773,7 @@ mod tests {
         GatewayOperatorRuntimeSummaryReadModel,
     };
     use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
+    use serde_json::json;
 
     #[test]
     fn query_search_checklist_status_treats_disabled_mode_as_non_degraded() {
@@ -903,6 +910,7 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
+            runtime_plugin_inventory: None,
             next_actions: vec![StatusCliAction {
                 label: "first answer".to_owned(),
                 command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
@@ -941,6 +949,117 @@ mod tests {
         assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
         assert!(rendered.contains("deep dives"));
         assert!(rendered.contains("- recipe: loong gateway status"));
+    }
+
+    #[test]
+    fn status_cli_json_serialization_keeps_runtime_plugin_inventory_when_present() {
+        let status = StatusCliReadModel {
+            config: "/tmp/config.toml".to_owned(),
+            schema: StatusCliJsonSchema {
+                version: STATUS_CLI_JSON_SCHEMA_VERSION,
+                surface: "status",
+                purpose: "operator_runtime_summary",
+            },
+            active_provider: "Demo [demo]".to_owned(),
+            active_model: "gpt-4.1-mini".to_owned(),
+            memory_profile: "window_only".to_owned(),
+            gateway: GatewayOperatorSummaryReadModel {
+                owner: GatewayOwnerStatus {
+                    runtime_dir: "/tmp/runtime".to_owned(),
+                    phase: "running".to_owned(),
+                    running: true,
+                    stale: false,
+                    pid: Some(42),
+                    mode: GatewayOwnerMode::GatewayHeadless,
+                    version: "0.0.0-test".to_owned(),
+                    config_path: "/tmp/config.toml".to_owned(),
+                    attached_cli_session: None,
+                    started_at_ms: 1,
+                    last_heartbeat_at: 2,
+                    stopped_at_ms: None,
+                    shutdown_reason: None,
+                    last_error: None,
+                    configured_surface_count: 0,
+                    running_surface_count: 0,
+                    bind_address: None,
+                    port: None,
+                    token_path: None,
+                },
+                control_surface: GatewayOperatorControlSurfaceReadModel {
+                    base_url: None,
+                    loopback_only: true,
+                },
+                channels: GatewayOperatorChannelsSummaryReadModel {
+                    catalog_channel_count: 0,
+                    configured_channel_count: 0,
+                    configured_account_count: 0,
+                    enabled_account_count: 0,
+                    misconfigured_account_count: 0,
+                    runtime_backed_channel_count: 0,
+                    config_backed_channel_count: 0,
+                    plugin_backed_channel_count: 0,
+                    catalog_only_channel_count: 0,
+                    enabled_runtime_backed_channel_count: 0,
+                    enabled_plugin_backed_channel_count: 0,
+                    enabled_outbound_only_channel_count: 0,
+                    enabled_service_channel_count: 0,
+                    ready_service_channel_count: 0,
+                    surfaces: Vec::new(),
+                },
+                runtime: GatewayOperatorRuntimeSummaryReadModel {
+                    enabled_channel_ids: Vec::new(),
+                    enabled_runtime_backed_channel_ids: Vec::new(),
+                    enabled_service_channel_ids: Vec::new(),
+                    enabled_plugin_backed_channel_ids: Vec::new(),
+                    enabled_outbound_only_channel_ids: Vec::new(),
+                    visible_tool_count: 0,
+                    visible_direct_tool_names: Vec::new(),
+                    hidden_tool_surface_ids: Vec::new(),
+                    capability_snapshot_sha256: "digest".to_owned(),
+                    active_provider_profile_id: None,
+                    active_provider_label: None,
+                    tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
+                        availability: "ready".to_owned(),
+                        structured_tool_schema_enabled: true,
+                        effective_tool_schema_mode: "enabled".to_owned(),
+                        active_model: "gpt-4.1-mini".to_owned(),
+                        reason: "ok".to_owned(),
+                    },
+                    web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                        ordinary_network_access_enabled: true,
+                        query_search_enabled: false,
+                        query_search_default_provider: "duckduckgo".to_owned(),
+                        query_search_credential_ready: true,
+                        separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                    },
+                },
+            },
+            acp: StatusCliAcpReadModel {
+                enabled: false,
+                availability: "disabled".to_owned(),
+                error: None,
+                persisted_session_count: Some(0),
+                observability: None,
+            },
+            work_units: StatusCliWorkUnitReadModel {
+                availability: "available".to_owned(),
+                error: None,
+                health: None,
+            },
+            runtime_plugin_inventory: Some(json!({
+                "available": true,
+                "returned_results": 1
+            })),
+            next_actions: Vec::new(),
+            recipes: Vec::new(),
+        };
+
+        let value = serde_json::to_value(&status).expect("status should serialize");
+        assert_eq!(value["runtime_plugin_inventory"]["available"], json!(true));
+        assert_eq!(
+            value["runtime_plugin_inventory"]["returned_results"],
+            json!(1)
+        );
     }
 
     #[test]

@@ -12,10 +12,6 @@ use loong_spec::CliResult;
 use serde_json::json;
 
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
-use crate::plugins_cli::{
-    PluginInventoryCommand, PluginScanSourceArgs, PluginsCommandExecution, PluginsCommandOptions,
-    PluginsCommands, execute_plugins_command,
-};
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
 
@@ -226,7 +222,8 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     );
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
-        let runtime_plugin_inventory = doctor_runtime_plugin_inventory_json_payload(&config).await;
+        let runtime_plugin_inventory =
+            crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
         let payload = json!({
             "ok": summary.fail == 0,
             "config": config_path.display().to_string(),
@@ -435,78 +432,6 @@ fn doctor_runtime_plugins_json_payload(
     state: &crate::RuntimeSnapshotRuntimePluginsState,
 ) -> serde_json::Value {
     crate::runtime_snapshot_runtime_plugins_json(state)
-}
-
-async fn doctor_runtime_plugin_inventory_json_payload(
-    config: &mvp::config::LoongConfig,
-) -> serde_json::Value {
-    if !config.runtime_plugins.enabled {
-        return json!({
-            "available": false,
-            "reason": "runtime_plugins_disabled",
-        });
-    }
-
-    let roots = config
-        .runtime_plugins
-        .resolved_roots()
-        .into_iter()
-        .map(|root| root.display().to_string())
-        .collect::<Vec<_>>();
-    if roots.is_empty() {
-        return json!({
-            "available": false,
-            "reason": "no_runtime_plugin_roots",
-        });
-    }
-
-    let options = PluginsCommandOptions {
-        json: false,
-        command: PluginsCommands::Inventory(PluginInventoryCommand {
-            source: PluginScanSourceArgs {
-                roots,
-                query: String::new(),
-                limit: Some(100),
-                bridge_support: None,
-                bridge_profile: None,
-                bridge_support_delta: None,
-                bridge_support_sha256: None,
-                bridge_support_delta_sha256: None,
-            },
-            include_ready: true,
-            include_blocked: true,
-            include_deferred: true,
-            include_examples: false,
-        }),
-    };
-
-    match execute_plugins_command(options).await {
-        Ok(PluginsCommandExecution::Inventory(execution)) => json!({
-            "available": true,
-            "returned_results": execution.returned_results,
-            "summary": execution.summary,
-            "results": execution.results.iter().map(|result| {
-                json!({
-                    "plugin_id": result.plugin_id,
-                    "source_path": result.source_path,
-                    "activation_status": result.activation_status,
-                    "activation_reason": result.activation_reason,
-                    "loaded": result.loaded,
-                    "activation_attestation": result.activation_attestation,
-                    "runtime_health": result.runtime_health,
-                })
-            }).collect::<Vec<_>>(),
-        }),
-        Ok(_) => json!({
-            "available": false,
-            "reason": "unexpected_plugins_command_variant",
-        }),
-        Err(error) => json!({
-            "available": false,
-            "reason": "inventory_execution_failed",
-            "error": error,
-        }),
-    }
 }
 
 fn audit_retention_doctor_check(audit: &mvp::config::AuditConfig) -> DoctorCheck {
@@ -6517,7 +6442,7 @@ mod tests {
         )
         .expect("write runtime plugin manifest");
 
-        let payload = doctor_runtime_plugin_inventory_json_payload(&config).await;
+        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
         let plugin = payload["results"]
             .as_array()
             .and_then(|plugins| {
