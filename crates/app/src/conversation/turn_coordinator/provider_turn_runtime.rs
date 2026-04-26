@@ -248,6 +248,179 @@ pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime +
 }
 
 #[derive(Debug, Clone)]
+pub(super) struct ProviderTurnLanePlan {
+    pub(super) decision: LaneDecision,
+    pub(super) max_tool_steps: usize,
+}
+
+impl ProviderTurnLanePlan {
+    pub(super) fn from_user_input(config: &LoongConfig, user_input: &str) -> Self {
+        let hybrid_lane_available = config.conversation.hybrid_lane_enabled;
+        let safe_lane_plan_available = config.conversation.safe_lane_plan_execution_enabled;
+        let use_lane_arbiter = hybrid_lane_available && safe_lane_plan_available;
+
+        let decision = if use_lane_arbiter {
+            lane_policy_from_config(config).decide(user_input)
+        } else {
+            let reason_key = if hybrid_lane_available {
+                "safe_lane_plan_disabled"
+            } else {
+                "hybrid_lane_disabled"
+            };
+            fast_only_lane_decision(user_input, reason_key)
+        };
+        let max_tool_steps = match decision.lane {
+            ExecutionLane::Fast => config.conversation.fast_lane_max_tool_steps(),
+            ExecutionLane::Safe => config.conversation.safe_lane_max_tool_steps(),
+        };
+
+        Self {
+            decision,
+            max_tool_steps,
+        }
+    }
+
+    pub(super) fn should_use_safe_lane_plan_path(
+        &self,
+        config: &LoongConfig,
+        turn: &ProviderTurn,
+    ) -> bool {
+        config.conversation.safe_lane_plan_execution_enabled
+            && matches!(self.decision.lane, ExecutionLane::Safe)
+            && !turn.tool_intents.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ProviderTurnLaneExecution {
+    pub(super) lane: ExecutionLane,
+    pub(super) assistant_preface: String,
+    pub(super) provider_usage: Option<Value>,
+    pub(super) had_tool_intents: bool,
+    pub(super) tool_request_summary: Option<String>,
+    pub(super) discovery_search_turn: bool,
+    pub(super) search_tool_intents: usize,
+    pub(super) malformed_parse_followup_turn: bool,
+    pub(super) supports_provider_turn_followup: bool,
+    pub(super) raw_tool_output_requested: bool,
+    pub(super) turn_result: TurnResult,
+    pub(super) safe_lane_terminal_route: Option<SafeLaneFailureRoute>,
+    pub(super) tool_events: Vec<ConversationTurnToolEvent>,
+}
+
+impl ProviderTurnLaneExecution {
+    pub(super) fn checkpoint(&self) -> TurnLaneExecutionSnapshot {
+        TurnLaneExecutionSnapshot {
+            lane: self.lane,
+            had_tool_intents: self.had_tool_intents,
+            tool_request_summary: self.tool_request_summary.clone(),
+            raw_tool_output_requested: self.raw_tool_output_requested,
+            result_kind: turn_checkpoint_result_kind(&self.turn_result),
+            safe_lane_terminal_route: self.safe_lane_terminal_route,
+        }
+    }
+
+    pub(super) fn reply_phase(&self) -> ToolDrivenReplyPhase {
+        ToolDrivenReplyPhase::new(
+            self.assistant_preface.as_str(),
+            self.had_tool_intents,
+            self.raw_tool_output_requested,
+            &self.turn_result,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ProviderTurnLoopPolicy {
+    pub(super) max_total_tool_calls: usize,
+    pub(super) max_consecutive_same_tool: usize,
+}
+
+impl ProviderTurnLoopPolicy {
+    pub(super) fn from_config(config: &LoongConfig) -> Self {
+        let turn_loop = &config.conversation.turn_loop;
+        Self {
+            max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
+            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ProviderTurnLoopState {
+    pub(super) total_tool_calls: usize,
+    pub(super) consecutive_same_tool: usize,
+    pub(super) last_tool_name: Option<String>,
+    pub(super) warned_same_tool_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum ProviderTurnLoopVerdict {
+    Continue,
+    InjectWarning { reason: String },
+    HardStop { reason: String },
+}
+
+impl ProviderTurnLoopState {
+    pub(super) fn circuit_breaker_reply(
+        &self,
+        policy: &ProviderTurnLoopPolicy,
+        next_tool_calls: usize,
+    ) -> Option<String> {
+        let prospective_total = self.total_tool_calls.saturating_add(next_tool_calls);
+        tool_loop_circuit_breaker_reply(prospective_total, policy.max_total_tool_calls)
+    }
+
+    pub(super) fn observe_turn(
+        &mut self,
+        policy: &ProviderTurnLoopPolicy,
+        turn: &ProviderTurn,
+    ) -> Option<ProviderTurnLoopVerdict> {
+        let tool_intent_count = turn.tool_intents.len();
+        self.total_tool_calls = self.total_tool_calls.saturating_add(tool_intent_count);
+        if tool_intent_count == 0 {
+            self.warned_same_tool_key = None;
+            return None;
+        }
+
+        let tool_name_signature = provider_turn_tool_name_signature(&turn.tool_intents);
+        if self.last_tool_name.as_deref() == Some(tool_name_signature.as_str()) {
+            self.consecutive_same_tool += 1;
+        } else {
+            self.last_tool_name = Some(tool_name_signature.clone());
+            self.consecutive_same_tool = 1;
+            self.warned_same_tool_key = None;
+        }
+
+        if self.consecutive_same_tool < policy.max_consecutive_same_tool {
+            self.warned_same_tool_key = None;
+            return Some(ProviderTurnLoopVerdict::Continue);
+        }
+
+        let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
+        let reason = format!(
+            "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
+            self.consecutive_same_tool, policy.max_consecutive_same_tool
+        );
+
+        if self.warned_same_tool_key.as_deref() == Some(reason_key.as_str()) {
+            Some(ProviderTurnLoopVerdict::HardStop { reason })
+        } else {
+            self.warned_same_tool_key = Some(reason_key);
+            Some(ProviderTurnLoopVerdict::InjectWarning { reason })
+        }
+    }
+}
+
+pub(super) fn provider_turn_tool_name_signature(intents: &[ToolIntent]) -> String {
+    intents
+        .iter()
+        .map(|intent| intent.tool_name.trim())
+        .collect::<Vec<_>>()
+        .join("||")
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct ProviderTurnContinuePhase {
     request: TurnCheckpointRequest,
     pub(super) lane_execution: ProviderTurnLaneExecution,
