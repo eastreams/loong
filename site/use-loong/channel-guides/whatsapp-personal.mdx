@@ -35,7 +35,7 @@ allowed_chat_ids = ["*"]
 
 ## First-Time Pairing
 
-Start the bundled bridge in one terminal. On the first run it will install its Node dependencies if needed, print a QR code, and keep the personal account session alive.
+Start the bundled bridge in one terminal. On the first run it will install its Node dependencies if needed, print a QR code by default, and keep the personal account session alive. If you cannot scan, the same helper can also request a pairing code fallback for your phone number.
 
 ```bash
 loong whatsapp-personal bridge run --config ./loong.toml
@@ -72,6 +72,23 @@ loong channels send whatsapp-personal \
 
 Grouped commands also accept the short form `<kind>:<id>` when one configured account is already selected.
 
+## Pairing-Code Fallback
+
+QR remains the primary pairing path. If scanning is not possible, request a pairing code for the phone number that should own the linked personal session:
+
+```bash
+loong whatsapp-personal bridge run \
+  --config ./loong.toml \
+  --pairing-code 15551234567
+```
+
+Notes:
+
+- The number can be entered in E.164 form or digits only; the helper normalizes it before calling Baileys.
+- Baileys expects the country code to be included.
+- The bridge still prints the QR first, then requests the pairing code fallback a few seconds later.
+- `--custom-pairing-code ABCD1234` is available when you need to request one exact 8-character code.
+
 ## Command Surface
 
 | Operation | Command | Usage or status |
@@ -79,6 +96,7 @@ Grouped commands also accept the short form `<kind>:<id>` when one configured ac
 | bridge-backed send | `channels send whatsapp-personal` | requires the bundled bridge to be running |
 | bridge-backed serve | `channels serve whatsapp-personal` | starts the Loong reply loop against the running bundled bridge |
 | bridge helper | `loong whatsapp-personal bridge run` | starts the bundled QR bridge and prints the pairing QR when needed |
+| pairing-code fallback | `loong whatsapp-personal bridge run --pairing-code <phone>` | still shows QR first, then requests a linking code for the given phone number if scanning is not possible |
 
 ## Required Fields For Send
 

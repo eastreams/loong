@@ -26,6 +26,9 @@ function parseCli() {
       port: { type: 'string', default: '39731' },
       path: { type: 'string', default: '/bridge' },
       'auth-dir': { type: 'string' },
+      'pairing-code': { type: 'string' },
+      'pairing-code-phone': { type: 'string' },
+      'custom-pairing-code': { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -37,12 +40,21 @@ function parseCli() {
   if (!authDir) {
     throw new Error('--auth-dir is required');
   }
+  const pairingCodePhone = `${values['pairing-code-phone'] ?? values['pairing-code'] ?? ''}`.trim();
+  const customPairingCode = `${values['custom-pairing-code'] ?? ''}`.trim();
   return {
     host: values.host,
     port,
     path: values.path.startsWith('/') ? values.path : `/${values.path}`,
     authDir,
+    pairingCodePhone,
+    customPairingCode,
   };
+}
+
+function normalizePairingCodePhone(rawPhone) {
+  const digits = `${rawPhone ?? ''}`.replace(/[^0-9]/g, '');
+  return digits || null;
 }
 
 function normalizeRouteId(routeKind, rawRouteId) {
@@ -128,14 +140,18 @@ function outboundText(messagePayload) {
 }
 
 class WhatsAppBridge {
-  constructor({ authDir }) {
+  constructor({ authDir, pairingCodePhone, customPairingCode }) {
     this.authDir = authDir;
+    this.pairingCodePhone = normalizePairingCodePhone(pairingCodePhone);
+    this.customPairingCode = customPairingCode || null;
     this.logger = pino({ level: 'silent' });
     this.sock = null;
     this.queue = [];
     this.recentMessageIds = new Set();
     this.connectionState = 'starting';
     this.lastQr = null;
+    this.lastPairingCode = null;
+    this.pairingCodeRequested = false;
     this.reconnecting = false;
   }
 
@@ -160,6 +176,12 @@ class WhatsAppBridge {
     this.sock.ev.on('creds.update', saveCreds);
     this.sock.ev.on('connection.update', (update) => this.onConnectionUpdate(update));
     this.sock.ev.on('messages.upsert', (event) => this.onMessagesUpsert(event));
+
+    if (this.pairingCodePhone && !this.sock.authState?.creds?.registered) {
+      setTimeout(() => {
+        void this.requestPairingCodeIfNeeded();
+      }, 3000);
+    }
   }
 
   async stop() {
@@ -183,6 +205,7 @@ class WhatsAppBridge {
 
     if (connection === 'open') {
       this.connectionState = 'connected';
+      this.pairingCodeRequested = false;
       console.log('✅ Connected to WhatsApp Personal bridge');
       return;
     }
@@ -248,6 +271,32 @@ class WhatsAppBridge {
       if (this.queue.length > MAX_QUEUE_SIZE) {
         this.queue.shift();
       }
+    }
+  }
+
+  async requestPairingCodeIfNeeded() {
+    if (!this.pairingCodePhone || this.pairingCodeRequested) {
+      return;
+    }
+    if (!this.sock || this.connectionState === 'connected') {
+      return;
+    }
+    if (this.sock.authState?.creds?.registered) {
+      return;
+    }
+
+    this.pairingCodeRequested = true;
+    try {
+      const code = await this.sock.requestPairingCode(
+        this.pairingCodePhone,
+        this.customPairingCode ?? undefined,
+      );
+      this.lastPairingCode = code;
+      console.log(`\n🔢 Pairing code for ${this.pairingCodePhone}: ${code}\n`);
+      console.log('Use this as a fallback only when scanning the QR is not possible.\n');
+    } catch (error) {
+      this.pairingCodeRequested = false;
+      console.error(`Pairing-code fallback request failed: ${error}`);
     }
   }
 
@@ -342,7 +391,11 @@ function successResponse(body, payload) {
 
 async function main() {
   const cli = parseCli();
-  const bridge = new WhatsAppBridge({ authDir: cli.authDir });
+  const bridge = new WhatsAppBridge({
+    authDir: cli.authDir,
+    pairingCodePhone: cli.pairingCodePhone,
+    customPairingCode: cli.customPairingCode,
+  });
   await bridge.start();
 
   const server = http.createServer(async (req, res) => {

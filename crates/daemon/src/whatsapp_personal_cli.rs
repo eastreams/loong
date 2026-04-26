@@ -26,6 +26,19 @@ pub struct WhatsappPersonalBridgeRunArgs {
     pub config: Option<String>,
     #[arg(long)]
     pub account: Option<String>,
+    #[arg(
+        long = "pairing-code",
+        alias = "pairing-code-phone",
+        value_name = "PHONE",
+        help = "Fallback only: request a WhatsApp pairing code for this phone number (digits only or E.164). QR remains the default path."
+    )]
+    pub pairing_code_phone: Option<String>,
+    #[arg(
+        long = "custom-pairing-code",
+        value_name = "CODE",
+        help = "Optional 8-character custom pairing code to request together with --pairing-code."
+    )]
+    pub custom_pairing_code: Option<String>,
     #[arg(long, default_value_t = false)]
     pub skip_install: bool,
 }
@@ -46,6 +59,14 @@ fn run_whatsapp_personal_bridge_run(args: WhatsappPersonalBridgeRunArgs) -> CliR
     }
     if let Some(account) = args.account.as_deref() {
         command.arg("--account").arg(account);
+    }
+    if let Some(pairing_code_phone) = args.pairing_code_phone.as_deref() {
+        command.arg("--pairing-code").arg(pairing_code_phone);
+    }
+    if let Some(custom_pairing_code) = args.custom_pairing_code.as_deref() {
+        command
+            .arg("--custom-pairing-code")
+            .arg(custom_pairing_code);
     }
     if args.skip_install {
         command.arg("--skip-install");

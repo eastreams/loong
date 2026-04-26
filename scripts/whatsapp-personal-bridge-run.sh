@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRIDGE_DIR="$ROOT_DIR/runtime-plugins/whatsapp-personal-bridge"
 CONFIG_PATH="${LOONG_CONFIG_PATH:-$HOME/.loong/config.toml}"
 ACCOUNT_ID=""
+PAIRING_CODE_PHONE=""
+CUSTOM_PAIRING_CODE=""
 SKIP_INSTALL=0
 
 while [[ $# -gt 0 ]]; do
@@ -15,6 +17,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --account)
       ACCOUNT_ID="$2"
+      shift 2
+      ;;
+    --pairing-code|--pairing-code-phone)
+      PAIRING_CODE_PHONE="$2"
+      shift 2
+      ;;
+    --custom-pairing-code)
+      CUSTOM_PAIRING_CODE="$2"
       shift 2
       ;;
     --skip-install)
@@ -120,6 +130,23 @@ echo "Starting WhatsApp Personal bridge"
 echo "  account : $ACCOUNT_ID"
 echo "  listen  : http://$HOST:$PORT$PATH_NAME"
 echo "  auth_dir: $AUTH_DIR"
+if [[ -n "$PAIRING_CODE_PHONE" ]]; then
+  echo "  fallback: pairing code for $PAIRING_CODE_PHONE"
+fi
 echo
 
-exec node "$BRIDGE_DIR/bridge.mjs" --host "$HOST" --port "$PORT" --path "$PATH_NAME" --auth-dir "$AUTH_DIR"
+NODE_ARGS=(
+  "$BRIDGE_DIR/bridge.mjs"
+  --host "$HOST"
+  --port "$PORT"
+  --path "$PATH_NAME"
+  --auth-dir "$AUTH_DIR"
+)
+if [[ -n "$PAIRING_CODE_PHONE" ]]; then
+  NODE_ARGS+=(--pairing-code-phone "$PAIRING_CODE_PHONE")
+fi
+if [[ -n "$CUSTOM_PAIRING_CODE" ]]; then
+  NODE_ARGS+=(--custom-pairing-code "$CUSTOM_PAIRING_CODE")
+fi
+
+exec node "${NODE_ARGS[@]}"
