@@ -69,7 +69,8 @@ pub(crate) fn bootstrap_test_kernel_context(
 /// does not export `LOONG_*` environment variables, resolve chat session
 /// ids, or prepare channel/conversation state. Callers that need those side
 /// effects should compose it with `runtime_env::initialize_runtime_environment`
-/// or a surface-specific bootstrap such as `chat::initialize_cli_turn_runtime`.
+/// or a surface-specific bootstrap such as
+/// `turn_runtime::initialize_cli_turn_runtime`.
 pub fn bootstrap_kernel_context_with_config(
     agent_id: &str,
     ttl_s: u64,

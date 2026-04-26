@@ -2,14 +2,13 @@ use std::path::Path;
 
 use crate::config::LoongConfig;
 
-/// Mirror config-backed runtime knobs into process environment and singleton
-/// runtime caches.
+/// Mirror config-backed runtime knobs into process environment.
 ///
 /// Use this before spawning child processes or surfaces that still consume
 /// `LOONG_*` environment variables. This helper intentionally does not
 /// bootstrap a kernel token, choose a chat session, or validate durable chat
 /// state; higher-level entrypoints compose those steps separately.
-pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path: Option<&Path>) {
+pub fn export_runtime_environment(config: &LoongConfig, resolved_config_path: Option<&Path>) {
     match resolved_config_path {
         Some(path) => {
             let value = path.display().to_string();
@@ -177,7 +176,14 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
         "LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
         bool_env(config.external_skills.auto_expose_installed),
     );
+}
 
+/// Initialize process-wide runtime config singletons from the current config.
+///
+/// This keeps in-process tool and memory surfaces aligned with the resolved
+/// config snapshot even when a caller intentionally skips `LOONG_*`
+/// environment export.
+pub fn initialize_runtime_singletons(config: &LoongConfig, resolved_config_path: Option<&Path>) {
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         config,
         resolved_config_path,
@@ -187,6 +193,18 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
     let memory_rt =
         crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     let _ = crate::memory::runtime_config::init_memory_runtime_config(memory_rt);
+}
+
+/// Mirror config-backed runtime knobs into process environment and singleton
+/// runtime caches.
+///
+/// Use this before spawning child processes or surfaces that still consume
+/// `LOONG_*` environment variables. This helper intentionally does not
+/// bootstrap a kernel token, choose a chat session, or validate durable chat
+/// state; higher-level entrypoints compose those steps separately.
+pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path: Option<&Path>) {
+    export_runtime_environment(config, resolved_config_path);
+    initialize_runtime_singletons(config, resolved_config_path);
 }
 
 fn bool_env(value: bool) -> &'static str {

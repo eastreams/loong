@@ -129,6 +129,7 @@ mod cli_json;
 mod command_kind;
 pub mod completions_cli;
 mod control_plane_server;
+mod control_plane_turn_runtime;
 mod copilot_onboarding;
 pub mod debug_cli;
 mod delegate_child_cli;

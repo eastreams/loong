@@ -58,24 +58,25 @@ Several important seams are already converged and should stay intact:
   that contract stable.
 
 In other words: the main problem is no longer "every host has a different turn
-engine." The main problem is that some oversized files still mix runtime
-assembly, loop ownership, tool/config projection, and host shell code.
+engine." The remaining problem is that some oversized files still mix loop
+ownership, tool/config projection, and host shell code even after the shared
+turn-runtime seam is made explicit.
 
 ## Current Hotspot Inventory
 
 | Area | Current evidence | Why it is still a hotspot |
 | --- | --- | --- |
-| CLI loop + runtime assembly | [`crates/app/src/chat.rs`](../../crates/app/src/chat.rs) is about 6k lines and still contains missing-config onboarding, CLI loop control, render helpers, plus `initialize_cli_turn_runtime*` assembly helpers | CLI shell concerns and reusable runtime assembly still live in one file, which makes follow-up refactors feel riskier than they need to be |
-| Shared turn host seam | [`crates/app/src/agent_runtime.rs`](../../crates/app/src/agent_runtime.rs) is about 1k lines and contains `TurnExecutionService`, `RuntimeTurnExecutionService`, config refresh, and prompt-summary reporting | This seam is good, but it still depends on chat-owned runtime assembly helpers, so its boundaries are only partially visible |
-| Runtime environment projection | [`crates/app/src/runtime_env.rs`](../../crates/app/src/runtime_env.rs) exports `LOONG_*` variables and also initializes singleton tool/memory runtime caches from the same helper | Process-env compatibility and in-process config projection are coupled even though callers may need only one of those behaviors |
-| Control-plane host shell | [`crates/daemon/src/control_plane_server.rs`](../../crates/daemon/src/control_plane_server.rs) is about 5k lines and contains router setup, auth, runtime shell structs, per-turn event forwarding, and `/turn/submit` execution | The control-plane turn path is converged logically, but the host file still hides that good shape inside a very large server module |
+| CLI loop shell | [`crates/app/src/chat.rs`](../../crates/app/src/chat.rs) is about 6k lines and still contains missing-config onboarding, CLI loop control, and render helpers | The reusable runtime assembly already moved out, but the user-facing CLI shell is still a very large surface that mixes multiple operator concerns |
+| Shared turn host seam | [`crates/app/src/agent_runtime.rs`](../../crates/app/src/agent_runtime.rs) is about 1k lines and contains `TurnExecutionService`, `RuntimeTurnExecutionService`, config refresh, and prompt-summary reporting | This seam is much clearer now that it points at [`crates/app/src/turn_runtime.rs`](../../crates/app/src/turn_runtime.rs), but it still carries transport shaping and prompt-summary reporting in one file |
+| Runtime environment projection | [`crates/app/src/runtime_env.rs`](../../crates/app/src/runtime_env.rs) now exposes separate env-export and singleton-init helpers plus the compatibility wrapper | The internal split is in place, but many hosts still call only the compatibility wrapper, so the narrower side-effect contract is not yet visible at every call site |
+| Control-plane host shell | [`crates/daemon/src/control_plane_server.rs`](../../crates/daemon/src/control_plane_server.rs) is still about 5k lines, while the extracted turn shell now lives in [`crates/daemon/src/control_plane_turn_runtime.rs`](../../crates/daemon/src/control_plane_turn_runtime.rs) | The turn runtime shell is clearer now, but the top-level server file still owns a lot of route glue and result/stream handling in one place |
 
 ## Highest-Leverage Next Slices
 
 These are the next slices that best reduce complexity without changing product
 behavior or the 7-crate DAG.
 
-### Slice 1: move reusable runtime assembly out of `chat.rs`
+### Slice 1: move reusable runtime assembly out of `chat.rs` (landed)
 
 Target:
 
@@ -84,15 +85,13 @@ Target:
 - `initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx`
 - session-requirement helpers that only exist to support those entrypoints
 
-Why this is the highest-leverage slice:
+What landed:
 
-- `TurnExecutionService` already gives gateway and control-plane hosts a shared
-  execution seam.
-- The remaining reuse bottleneck is that those hosts still depend on runtime
-  assembly helpers that sit beside CLI REPL and onboarding logic in
-  `chat.rs`.
-- Extracting a small runtime-assembly module would make the existing
-  convergence visible without changing behavior.
+- the extracted helpers now live in
+  [`crates/app/src/turn_runtime.rs`](../../crates/app/src/turn_runtime.rs)
+- `agent_runtime.rs` depends on that runtime seam directly instead of importing
+  runtime assembly from `chat.rs`
+- `chat.rs` keeps the CLI shell and reuses the new seam instead of owning it
 
 Non-goals:
 
@@ -100,7 +99,7 @@ Non-goals:
   into a generic runtime module
 - do not create a new crate only for this extraction
 
-### Slice 2: narrow the control-plane turn shell
+### Slice 2: narrow the control-plane turn shell (partially landed)
 
 Target:
 
@@ -108,21 +107,21 @@ Target:
 - `ControlPlaneTurnEventForwarder`
 - the `/turn/submit` execution helper path
 
-Why this matters:
+What landed:
 
-- the runtime path itself is already good because it delegates through
-  `TurnExecutionService`
-- the remaining cost is discoverability: turn execution is buried inside a
-  large server/router file
+- [`crates/daemon/src/control_plane_turn_runtime.rs`](../../crates/daemon/src/control_plane_turn_runtime.rs)
+  now owns `ControlPlaneTurnRuntime`, the event forwarder, and the spawned turn
+  execution helper
+- `control_plane_server.rs` keeps the HTTP handler, request validation, and
+  response mapping while delegating the runtime shell work outward
 
 Recommended shape:
 
-- move the turn-runtime shell into a dedicated control-plane submodule or
-  include file
+- keep moving route-specific turn helpers out of the top-level server file
 - keep the top-level server file focused on routing, authorization, and shared
   control-plane lifecycle
 
-### Slice 3: split runtime-env export from runtime-config initialization
+### Slice 3: split runtime-env export from runtime-config initialization (landed internally)
 
 Today, `initialize_runtime_environment(...)` does two different jobs:
 
@@ -137,11 +136,14 @@ Why this matters:
 - that is a signal that "runtime environment" is still carrying more than one
   concern
 
-Recommended shape:
+What landed:
 
-- keep the current public behavior stable
-- internally separate env export from singleton runtime-config projection so
-  hosts can opt into the exact side effects they need
+- [`crates/app/src/runtime_env.rs`](../../crates/app/src/runtime_env.rs) now
+  exposes `export_runtime_environment(...)` and
+  `initialize_runtime_singletons(...)`
+- `initialize_runtime_environment(...)` remains as the compatibility wrapper
+- the extracted turn-runtime seam now skips env export when requested while
+  still initializing in-process runtime singletons
 
 ### Slice 4: keep tool-surface simplification documentation-first
 
@@ -167,13 +169,13 @@ It should avoid:
 
 When working this lane, prefer the following order:
 
-1. extract reusable runtime assembly from `chat.rs`
-2. narrow the control-plane host shell
-3. split runtime-env side effects
-4. only then consider deeper file-size cleanup in tool surfaces
+1. narrow the control-plane host shell
+2. make more callers use the narrower runtime-env side-effect helpers directly
+3. only then consider deeper file-size cleanup in tool surfaces
 
-That order matters because it preserves the already-correct shared execution
-seam before touching policy-sensitive tool exposure behavior.
+That order matters because the shared execution seam is now explicit, so the
+next wins come from shrinking the remaining host shells without touching
+policy-sensitive tool exposure behavior.
 
 ## Related Documents
 

@@ -8,16 +8,18 @@ use std::sync::Arc;
 
 use crate::CliResult;
 use crate::acp::{AcpTurnEventSink, AcpTurnProvenance, JsonlAcpTurnEventSink};
-use crate::chat::{
-    CliChatOptions, initialize_cli_turn_runtime, initialize_cli_turn_runtime_with_loaded_config,
-    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
-};
+use crate::chat::CliChatOptions;
 use crate::config::load as load_config;
 use crate::conversation::{
     ConversationIngressContext, ConversationSessionAddress, PromptFrameEventSummary,
     load_prompt_frame_event_summary,
 };
 use crate::tools;
+use crate::turn_runtime::{
+    CliSessionRequirement, CliTurnRuntime, initialize_cli_turn_runtime,
+    initialize_cli_turn_runtime_with_loaded_config,
+    initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx,
+};
 use loong_contracts::ToolCoreRequest;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +123,7 @@ pub struct TurnExecutionOptions<'a> {
 }
 
 pub(crate) struct RuntimeTurnExecutionService<'a> {
-    runtime: &'a crate::chat::CliTurnRuntime,
+    runtime: &'a CliTurnRuntime,
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 }
 
@@ -139,7 +141,7 @@ impl Default for TurnExecutionOptions<'_> {
 }
 
 impl<'a> RuntimeTurnExecutionService<'a> {
-    pub(crate) fn new(runtime: &'a crate::chat::CliTurnRuntime) -> Self {
+    pub(crate) fn new(runtime: &'a CliTurnRuntime) -> Self {
         Self {
             runtime,
             acp_manager: None,
@@ -321,7 +323,7 @@ impl TurnExecutionService {
                     session_hint,
                     &cli_options,
                     kernel_ctx,
-                    crate::chat::CliSessionRequirement::AllowImplicitDefault,
+                    CliSessionRequirement::AllowImplicitDefault,
                 )?,
                 None => initialize_cli_turn_runtime_with_loaded_config(
                     resolved_path,
@@ -329,7 +331,7 @@ impl TurnExecutionService {
                     session_hint,
                     &cli_options,
                     kernel_scope_for_turn_mode(request.turn_mode),
-                    crate::chat::CliSessionRequirement::AllowImplicitDefault,
+                    CliSessionRequirement::AllowImplicitDefault,
                     initialize_runtime_environment,
                 )?,
             };
@@ -394,7 +396,7 @@ impl AgentRuntime {
 
     pub(crate) async fn run_turn_with_runtime(
         &self,
-        runtime: &crate::chat::CliTurnRuntime,
+        runtime: &CliTurnRuntime,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
     ) -> CliResult<AgentTurnResult> {
@@ -414,7 +416,7 @@ impl AgentRuntime {
     #[allow(dead_code)]
     pub(crate) async fn run_turn_with_runtime_and_observer(
         &self,
-        runtime: &crate::chat::CliTurnRuntime,
+        runtime: &CliTurnRuntime,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
         observer: Option<crate::conversation::ConversationTurnObserverHandle>,
@@ -433,7 +435,7 @@ impl AgentRuntime {
     #[allow(dead_code)]
     pub(crate) async fn run_turn_with_runtime_and_observer_and_context(
         &self,
-        runtime: &crate::chat::CliTurnRuntime,
+        runtime: &CliTurnRuntime,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
         observer: Option<crate::conversation::ConversationTurnObserverHandle>,
@@ -454,7 +456,7 @@ impl AgentRuntime {
 
     pub(crate) async fn run_turn_with_runtime_and_observer_and_context_and_error_mode(
         &self,
-        runtime: &crate::chat::CliTurnRuntime,
+        runtime: &CliTurnRuntime,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
         observer: Option<crate::conversation::ConversationTurnObserverHandle>,
@@ -477,7 +479,7 @@ impl AgentRuntime {
 
     async fn run_turn_with_runtime_and_context_and_manager(
         &self,
-        runtime: &crate::chat::CliTurnRuntime,
+        runtime: &CliTurnRuntime,
         request: &AgentTurnRequest,
         event_sink: Option<&dyn AcpTurnEventSink>,
         observer: Option<crate::conversation::ConversationTurnObserverHandle>,
@@ -542,7 +544,7 @@ impl AgentRuntime {
             session_hint,
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            CliSessionRequirement::AllowImplicitDefault,
             false,
         )?;
 
@@ -571,7 +573,7 @@ impl AgentRuntime {
             session_hint,
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            CliSessionRequirement::AllowImplicitDefault,
             false,
         )?;
 
@@ -613,7 +615,7 @@ impl AgentRuntime {
             session_hint,
             &options,
             kernel_scope_for_turn_mode(request.turn_mode),
-            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            CliSessionRequirement::AllowImplicitDefault,
             false,
         )?;
 
@@ -740,7 +742,7 @@ fn normalized_turn_working_directory(value: Option<&str>) -> Option<std::path::P
 /// helper only projects the structured conversation address used by dispatch
 /// and ACP routing.
 fn resolved_session_address(
-    runtime: &crate::chat::CliTurnRuntime,
+    runtime: &CliTurnRuntime,
     request: &AgentTurnRequest,
 ) -> ConversationSessionAddress {
     let mut address = ConversationSessionAddress::from_session_id(runtime.session_id.clone());
@@ -763,7 +765,7 @@ fn resolved_session_address(
 }
 
 fn acp_turn_options_from_runtime<'a>(
-    runtime: &'a crate::chat::CliTurnRuntime,
+    runtime: &'a CliTurnRuntime,
     event_sink: Option<&'a dyn AcpTurnEventSink>,
     request: &'a AgentTurnRequest,
 ) -> crate::acp::AcpConversationTurnOptions<'a> {
@@ -823,9 +825,7 @@ fn effective_turn_context<'a>(
     (ingress, effective_provenance)
 }
 
-async fn load_runtime_prompt_frame_summary(
-    runtime: &crate::chat::CliTurnRuntime,
-) -> PromptFrameEventSummary {
+async fn load_runtime_prompt_frame_summary(runtime: &CliTurnRuntime) -> PromptFrameEventSummary {
     #[cfg(feature = "memory-sqlite")]
     {
         return load_prompt_frame_event_summary(
@@ -852,9 +852,7 @@ async fn load_runtime_prompt_frame_summary(
 /// credential/profile changes between turns without rebuilding the surrounding
 /// runtime. If the runtime was created from an in-memory config snapshot only,
 /// the existing config is reused as-is.
-fn load_runtime_turn_config(
-    runtime: &crate::chat::CliTurnRuntime,
-) -> CliResult<crate::config::LoongConfig> {
+fn load_runtime_turn_config(runtime: &CliTurnRuntime) -> CliResult<crate::config::LoongConfig> {
     if runtime.resolved_path.as_os_str().is_empty() {
         return Ok(runtime.config.clone());
     }
@@ -922,7 +920,7 @@ pub async fn load_agent_runtime(
         session_hint,
         &CliChatOptions::default(),
         "agent-runtime-load",
-        crate::chat::CliSessionRequirement::AllowImplicitDefault,
+        CliSessionRequirement::AllowImplicitDefault,
         true,
     )?;
     Ok((resolved_path, config, runtime.session_id))
