@@ -2461,6 +2461,12 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub dialect_version: Option<String>,
     pub compatibility_mode: String,
     pub compatibility_shim: Option<String>,
+    pub compatibility_shim_support_version: Option<String>,
+    pub compatibility_shim_supported_dialects: Vec<String>,
+    pub compatibility_shim_supported_bridges: Vec<String>,
+    pub compatibility_shim_supported_adapter_families: Vec<String>,
+    pub compatibility_shim_supported_source_languages: Vec<String>,
+    pub compatibility_shim_mismatch_reasons: Vec<String>,
     pub plugin_id: String,
     pub provider_id: String,
     pub connector_name: String,
@@ -3084,6 +3090,35 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             let compatibility_shim = inventory_entry
                 .and_then(|item| item.compatibility_shim.as_ref())
                 .map(|shim| shim.shim_id.clone());
+            let compatibility_shim_support =
+                inventory_entry.and_then(|item| item.compatibility_shim_support.as_ref());
+            let compatibility_shim_support_version =
+                compatibility_shim_support.and_then(|support| support.version.clone());
+            let compatibility_shim_supported_dialects =
+                compatibility_shim_support_dialect_labels(compatibility_shim_support);
+            let compatibility_shim_supported_bridges =
+                compatibility_shim_support_bridge_labels(compatibility_shim_support);
+            let compatibility_shim_supported_adapter_families = compatibility_shim_support
+                .map(|support| {
+                    support
+                        .supported_adapter_families
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let compatibility_shim_supported_source_languages = compatibility_shim_support
+                .map(|support| {
+                    support
+                        .supported_source_languages
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let compatibility_shim_mismatch_reasons = inventory_entry
+                .map(|item| item.compatibility_shim_support_mismatch_reasons.clone())
+                .unwrap_or_default();
             let bootstrap_hint = inventory_entry.and_then(|item| item.bootstrap_hint.clone());
             let diagnostic_codes = inventory_entry
                 .map(|item| runtime_plugin_diagnostic_codes(&item.diagnostic_findings))
@@ -3127,6 +3162,12 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 dialect_version: entry.dialect_version.clone(),
                 compatibility_mode: entry.compatibility_mode.as_str().to_owned(),
                 compatibility_shim,
+                compatibility_shim_support_version,
+                compatibility_shim_supported_dialects,
+                compatibility_shim_supported_bridges,
+                compatibility_shim_supported_adapter_families,
+                compatibility_shim_supported_source_languages,
+                compatibility_shim_mismatch_reasons,
                 plugin_id: entry.plugin_id.clone(),
                 provider_id: entry.provider_id.clone(),
                 connector_name: entry.connector_name.clone(),
@@ -3296,6 +3337,34 @@ fn runtime_plugin_diagnostic_codes(
         .iter()
         .map(|finding| finding.code.as_str().to_owned())
         .collect()
+}
+
+fn compatibility_shim_support_dialect_labels(
+    support: Option<&kernel::PluginCompatibilityShimSupport>,
+) -> Vec<String> {
+    support
+        .map(|support| {
+            support
+                .supported_dialects
+                .iter()
+                .map(|dialect| dialect.as_str().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn compatibility_shim_support_bridge_labels(
+    support: Option<&kernel::PluginCompatibilityShimSupport>,
+) -> Vec<String> {
+    support
+        .map(|support| {
+            support
+                .supported_bridges
+                .iter()
+                .map(|bridge| bridge.as_str().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn runtime_plugin_setup_readiness_context(

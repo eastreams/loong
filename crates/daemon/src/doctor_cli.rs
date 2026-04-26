@@ -6379,6 +6379,9 @@ mod tests {
         assert_eq!(plugin["plugin_version"], json!("1.0.0"));
         assert_eq!(plugin["dialect"], json!("loong_package_manifest"));
         assert_eq!(plugin["compatibility_mode"], json!("native"));
+        assert_eq!(plugin["compatibility_shim"], serde_json::Value::Null);
+        assert_eq!(plugin["compatibility_shim_supported_dialects"], json!([]));
+        assert_eq!(plugin["compatibility_shim_mismatch_reasons"], json!([]));
         assert_eq!(plugin["source_language"], json!("manifest"));
         assert_eq!(plugin["entrypoint_hint"], json!("index.py"));
         assert_eq!(

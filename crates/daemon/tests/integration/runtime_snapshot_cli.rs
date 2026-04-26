@@ -364,6 +364,15 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         serde_json::json!("loong_package_manifest")
     );
     assert_eq!(plugin["compatibility_mode"], serde_json::json!("native"));
+    assert_eq!(plugin["compatibility_shim"], serde_json::Value::Null);
+    assert_eq!(
+        plugin["compatibility_shim_supported_dialects"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        plugin["compatibility_shim_mismatch_reasons"],
+        serde_json::json!([])
+    );
     assert_eq!(plugin["source_language"], serde_json::json!("manifest"));
     assert_eq!(
         plugin["entrypoint_hint"],
@@ -668,6 +677,9 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("plugin_version=1.0.0"));
     assert!(rendered.contains("dialect=loong_package_manifest"));
     assert!(rendered.contains("compatibility_mode=native"));
+    assert!(rendered.contains("compatibility_shim=-"));
+    assert!(rendered.contains("compatibility_shim_supported_dialects=-"));
+    assert!(rendered.contains("compatibility_shim_mismatch_reasons=-"));
     assert!(rendered.contains("source_language=manifest"));
     assert!(rendered.contains("entrypoint_hint=https://example.com/search"));
     assert!(rendered.contains("extension_contract=process_stdio_json_line_v1"));

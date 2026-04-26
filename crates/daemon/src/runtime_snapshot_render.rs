@@ -439,6 +439,44 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         let compatibility_mode = crate::render_line_safe_text_value(&plugin.compatibility_mode);
         let compatibility_shim =
             crate::render_line_safe_optional_text_value(plugin.compatibility_shim.as_deref());
+        let compatibility_shim_support_version = crate::render_line_safe_optional_text_value(
+            plugin.compatibility_shim_support_version.as_deref(),
+        );
+        let compatibility_shim_supported_dialects = crate::render_line_safe_text_values(
+            plugin
+                .compatibility_shim_supported_dialects
+                .iter()
+                .map(String::as_str),
+            ",",
+        );
+        let compatibility_shim_supported_bridges = crate::render_line_safe_text_values(
+            plugin
+                .compatibility_shim_supported_bridges
+                .iter()
+                .map(String::as_str),
+            ",",
+        );
+        let compatibility_shim_supported_adapter_families = crate::render_line_safe_text_values(
+            plugin
+                .compatibility_shim_supported_adapter_families
+                .iter()
+                .map(String::as_str),
+            ",",
+        );
+        let compatibility_shim_supported_source_languages = crate::render_line_safe_text_values(
+            plugin
+                .compatibility_shim_supported_source_languages
+                .iter()
+                .map(String::as_str),
+            ",",
+        );
+        let compatibility_shim_mismatch_reasons = crate::render_line_safe_text_values(
+            plugin
+                .compatibility_shim_mismatch_reasons
+                .iter()
+                .map(String::as_str),
+            ",",
+        );
         let source_path = crate::render_line_safe_text_value(plugin.source_path.as_str());
         let package_root = crate::render_line_safe_text_value(plugin.package_root.as_str());
         let provider_id = crate::render_line_safe_text_value(&plugin.provider_id);
@@ -499,7 +537,7 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
 
         lines.push(format!(
-            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
+            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} compatibility_shim_support_version={} compatibility_shim_supported_dialects={} compatibility_shim_supported_bridges={} compatibility_shim_supported_adapter_families={} compatibility_shim_supported_source_languages={} compatibility_shim_mismatch_reasons={} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
             plugin_id,
             manifest_api_version,
             plugin_version,
@@ -507,6 +545,12 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             dialect_version,
             compatibility_mode,
             compatibility_shim,
+            compatibility_shim_support_version,
+            compatibility_shim_supported_dialects,
+            compatibility_shim_supported_bridges,
+            compatibility_shim_supported_adapter_families,
+            compatibility_shim_supported_source_languages,
+            compatibility_shim_mismatch_reasons,
             source_path,
             package_root,
             provider_id,
@@ -777,6 +821,32 @@ fn runtime_snapshot_runtime_plugin_json(
     object.insert(
         "compatibility_shim".to_owned(),
         serde_json::to_value(&plugin.compatibility_shim).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_shim_support_version".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim_support_version).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_shim_supported_dialects".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim_supported_dialects).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_shim_supported_bridges".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim_supported_bridges).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_shim_supported_adapter_families".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim_supported_adapter_families)
+            .unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_shim_supported_source_languages".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim_supported_source_languages)
+            .unwrap_or(Value::Null),
+    );
+    object.insert(
+        "compatibility_shim_mismatch_reasons".to_owned(),
+        serde_json::to_value(&plugin.compatibility_shim_mismatch_reasons).unwrap_or(Value::Null),
     );
     object.insert(
         "plugin_id".to_owned(),
