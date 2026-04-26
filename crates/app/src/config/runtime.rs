@@ -1832,8 +1832,7 @@ impl LoongConfig {
                 .as_deref()
                 .and_then(normalize_provider_profile_id)
                 .unwrap_or_else(|| self.provider.inferred_profile_id());
-            let mut active_profile = ProviderProfileConfig::from_provider(self.provider.clone());
-            active_profile.default_for_kind = true;
+            let active_profile = project_provider_profile(None, self.provider.clone(), true);
             self.providers
                 .insert(active_provider.clone(), active_profile);
             self.active_provider = Some(active_provider);
@@ -1952,18 +1951,12 @@ impl LoongConfig {
             .as_deref()
             .and_then(normalize_provider_profile_id)
             .unwrap_or_else(|| cloned.provider.inferred_profile_id());
-        let mut active_profile = cloned
-            .providers
-            .remove(&active_provider)
-            .unwrap_or_else(|| ProviderProfileConfig::from_provider(cloned.provider.clone()));
-        active_profile.provider = cloned.provider.clone();
-        if !cloned
-            .providers
-            .values()
-            .any(|profile| profile.provider.kind == active_profile.provider.kind)
-        {
-            active_profile.default_for_kind = true;
-        }
+        let active_profile = cloned.providers.remove(&active_provider);
+        let mut active_profile = project_provider_profile(
+            active_profile,
+            cloned.provider.clone(),
+            !provider_kind_has_saved_profile(&cloned.providers, cloned.provider.kind),
+        );
         canonicalize_provider_profile_for_encoding(&mut active_profile);
         for profile in cloned.providers.values_mut() {
             canonicalize_provider_profile_for_encoding(profile);
@@ -1984,6 +1977,29 @@ impl LoongConfig {
 fn normalized_inferred_profile_id(provider: &ProviderConfig) -> String {
     normalize_provider_profile_id(provider.inferred_profile_id().as_str())
         .unwrap_or_else(|| provider.inferred_profile_id())
+}
+
+fn provider_kind_has_saved_profile(
+    providers: &BTreeMap<String, ProviderProfileConfig>,
+    kind: ProviderKind,
+) -> bool {
+    providers
+        .values()
+        .any(|profile| profile.provider.kind == kind)
+}
+
+fn project_provider_profile(
+    existing_profile: Option<ProviderProfileConfig>,
+    provider: ProviderConfig,
+    default_for_kind: bool,
+) -> ProviderProfileConfig {
+    let mut profile =
+        existing_profile.unwrap_or_else(|| ProviderProfileConfig::from_provider(provider.clone()));
+    profile.provider = provider;
+    if default_for_kind {
+        profile.default_for_kind = true;
+    }
+    profile
 }
 
 fn matching_legacy_provider_profile_id(
@@ -2038,10 +2054,11 @@ fn recover_active_provider_from_legacy_config(
         providers,
         normalized_inferred_profile_id(legacy_provider).as_str(),
     );
-    let mut recovered_profile = ProviderProfileConfig::from_provider(legacy_provider.clone());
-    recovered_profile.default_for_kind = !providers
-        .values()
-        .any(|profile| profile.provider.kind == recovered_profile.provider.kind);
+    let recovered_profile = project_provider_profile(
+        None,
+        legacy_provider.clone(),
+        !provider_kind_has_saved_profile(providers, legacy_provider.kind),
+    );
     providers.insert(profile_id.clone(), recovered_profile);
     (profile_id, true)
 }
