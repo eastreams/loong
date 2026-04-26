@@ -6374,8 +6374,17 @@ mod tests {
 
         assert_eq!(weixin.onboarding.strategy.as_str(), "plugin_bridge");
         assert_eq!(weixin.onboarding.status_command, "loong doctor");
-        assert_eq!(weixin.onboarding.repair_command, None);
+        assert_eq!(
+            weixin.onboarding.repair_command,
+            Some("loong weixin onboard")
+        );
         assert!(weixin.onboarding.setup_hint.contains("ClawBot"));
+        assert!(
+            weixin
+                .onboarding
+                .setup_hint
+                .contains("loong weixin onboard")
+        );
 
         assert_eq!(qqbot.onboarding.strategy.as_str(), "manual_config");
         assert_eq!(qqbot.onboarding.status_command, "loong doctor");

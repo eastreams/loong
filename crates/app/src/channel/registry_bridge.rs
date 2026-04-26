@@ -145,9 +145,9 @@ const WEIXIN_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 
 const WEIXIN_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native Loong adapter exists",
+    setup_hint: "plugin-bridge weixin surface; run `loong weixin onboard` to provision bridge_url and bridge_access_token through the WeChat ClawBot / iLink QR flow, then let the external bridge or managed plugin keep owning the upstream listener lifecycle",
     status_command: "loong doctor",
-    repair_command: None,
+    repair_command: Some("loong weixin onboard"),
 };
 
 const ONEBOT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =

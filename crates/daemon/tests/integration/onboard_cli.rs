@@ -9031,6 +9031,12 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("repair_command=\"loong feishu onboard\"")
     }));
     assert!(lines.iter().any(|line| {
+        line.contains("Weixin [weixin]")
+            && line.contains("strategy=plugin_bridge")
+            && line.contains("repair_command=\"loong weixin onboard\"")
+            && line.contains("ClawBot")
+    }));
+    assert!(lines.iter().any(|line| {
         line.contains("Discord [discord]")
             && line.contains("selection_order=40")
             && line.contains("selection_label=\"community server bot\"")
