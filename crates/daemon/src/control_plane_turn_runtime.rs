@@ -64,6 +64,41 @@ impl ControlPlaneTurnRuntime {
             registry: Arc::new(mvp::control_plane::ControlPlaneTurnRegistry::new()),
         }
     }
+
+    pub(crate) fn acp_enabled(&self) -> bool {
+        self.config.acp.enabled
+    }
+
+    pub(crate) fn submit(
+        self: &Arc<Self>,
+        manager: Arc<mvp::control_plane::ControlPlaneManager>,
+        session_id: String,
+        input: String,
+        request: ControlPlaneTurnSubmitRequest,
+    ) -> mvp::control_plane::ControlPlaneTurnSnapshot {
+        submit_control_plane_turn(self.clone(), manager, session_id, input, request)
+    }
+
+    pub(crate) fn read_turn(
+        &self,
+        turn_id: &str,
+    ) -> Result<Option<mvp::control_plane::ControlPlaneTurnSnapshot>, String> {
+        self.registry.read_turn(turn_id)
+    }
+
+    pub(crate) fn stream(
+        &self,
+        turn_id: String,
+        after_seq: u64,
+    ) -> Result<impl Stream<Item = Result<Event, Infallible>> + 'static, String> {
+        control_plane_turn_stream(self.registry.clone(), turn_id, after_seq)
+    }
+
+    pub(crate) fn snapshot_has_streamable_events(
+        snapshot: &mvp::control_plane::ControlPlaneTurnSnapshot,
+    ) -> bool {
+        !(snapshot.status.is_terminal() && snapshot.event_count == 0)
+    }
 }
 
 impl mvp::acp::AcpTurnEventSink for ControlPlaneTurnEventForwarder {

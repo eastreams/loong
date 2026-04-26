@@ -43,8 +43,7 @@ use loong_protocol::{
 use serde::Deserialize;
 
 use crate::control_plane_turn_runtime::{
-    ControlPlaneTurnRuntime, control_plane_turn_stream, map_turn_result, map_turn_summary,
-    submit_control_plane_turn,
+    ControlPlaneTurnRuntime, map_turn_result, map_turn_summary,
 };
 use crate::{CliResult, mvp};
 
@@ -2103,7 +2102,7 @@ async fn turn_submit(
         );
     };
 
-    if !turn_runtime.config.acp.enabled {
+    if !turn_runtime.acp_enabled() {
         return error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "turn/submit requires ACP to be enabled (`acp.enabled=true`)",
@@ -2133,13 +2132,7 @@ async fn turn_submit(
         return error_response(StatusCode::BAD_REQUEST, error);
     }
 
-    let turn_snapshot = submit_control_plane_turn(
-        turn_runtime.clone(),
-        state.manager.clone(),
-        session_id,
-        input,
-        request,
-    );
+    let turn_snapshot = turn_runtime.submit(state.manager.clone(), session_id, input, request);
 
     let response = ControlPlaneTurnSubmitResponse {
         turn: map_turn_summary(&turn_snapshot),
@@ -2168,7 +2161,7 @@ async fn turn_result(
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
-    let snapshot = match turn_runtime.registry.read_turn(turn_id.as_str()) {
+    let snapshot = match turn_runtime.read_turn(turn_id.as_str()) {
         Ok(Some(snapshot)) => snapshot,
         Ok(None) => {
             let message = format!("turn `{}` not found", turn_id);
@@ -2204,7 +2197,7 @@ async fn turn_stream(
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
 
-    let snapshot = match turn_runtime.registry.read_turn(turn_id.as_str()) {
+    let snapshot = match turn_runtime.read_turn(turn_id.as_str()) {
         Ok(Some(snapshot)) => snapshot,
         Ok(None) => {
             let message = format!("turn `{}` not found", turn_id);
@@ -2215,7 +2208,7 @@ async fn turn_stream(
     if let Some(response) = ensure_turn_session_visible(&state, snapshot.session_id.as_str()) {
         return response;
     }
-    if snapshot.status.is_terminal() && snapshot.event_count == 0 {
+    if !ControlPlaneTurnRuntime::snapshot_has_streamable_events(&snapshot) {
         return error_response(
             StatusCode::CONFLICT,
             format!("turn `{}` completed without any streamable events", turn_id),
@@ -2223,9 +2216,7 @@ async fn turn_stream(
     }
 
     let after_seq = query.after_seq.unwrap_or(0);
-    let stream_result =
-        control_plane_turn_stream(turn_runtime.registry.clone(), turn_id, after_seq);
-    let stream = match stream_result {
+    let stream = match turn_runtime.stream(turn_id, after_seq) {
         Ok(stream) => stream,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
