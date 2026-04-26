@@ -37,7 +37,9 @@ use self::operator_surfaces::ManualCompactionResult;
 use self::operator_surfaces::ManualCompactionStatus;
 #[cfg(test)]
 use self::operator_surfaces::build_cli_chat_startup_summary;
+#[cfg(test)]
 use self::operator_surfaces::is_cli_chat_status_command;
+#[cfg(test)]
 use self::operator_surfaces::is_manual_compaction_command;
 use self::operator_surfaces::is_turn_checkpoint_repair_command;
 #[cfg(test)]
@@ -263,6 +265,250 @@ enum CliChatLoopControl {
     AssistantText(String),
 }
 
+enum CliChatBuiltinCommand {
+    Help,
+    Status,
+    Compact,
+    History,
+    FastLaneSummary(usize),
+    SafeLaneSummary(usize),
+    TurnCheckpointSummary(usize),
+    TurnCheckpointRepair,
+}
+
+enum CliChatParsedInput<'a> {
+    Builtin(CliChatBuiltinCommand),
+    UsageLines(Vec<String>),
+    Prompt(&'a str),
+}
+
+fn render_cli_chat_usage_lines(usage: &str) -> Vec<String> {
+    let render_width = detect_cli_chat_render_width();
+    render_cli_chat_command_usage_lines_with_width(usage, render_width)
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+fn print_cli_chat_assistant_text(assistant_text: &str) {
+    let render_width = detect_cli_chat_render_width();
+    let rendered_lines = render_cli_chat_assistant_lines_with_width(assistant_text, render_width);
+    print_rendered_cli_chat_lines(&rendered_lines);
+}
+
+fn parse_exact_cli_chat_builtin_command(
+    input: &str,
+    aliases: &[&str],
+    usage: &str,
+    command: CliChatBuiltinCommand,
+) -> CliResult<Option<CliChatBuiltinCommand>> {
+    match classify_chat_command_match_result(parse_exact_chat_command(input, aliases, usage))? {
+        ChatCommandMatchResult::Matched => Ok(Some(command)),
+        ChatCommandMatchResult::NotMatched => Ok(None),
+        ChatCommandMatchResult::UsageError(usage) => Err(usage),
+    }
+}
+
+fn parse_cli_chat_builtin_command_error<'a>(error: String) -> CliResult<CliChatParsedInput<'a>> {
+    if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
+        return Ok(CliChatParsedInput::UsageLines(usage_lines));
+    }
+
+    Err(error)
+}
+
+fn parse_cli_chat_input<'a>(
+    input: &'a str,
+    summary_limit: usize,
+) -> CliResult<CliChatParsedInput<'a>> {
+    match parse_exact_cli_chat_builtin_command(
+        input,
+        &[CLI_CHAT_HELP_COMMAND],
+        "usage: /help",
+        CliChatBuiltinCommand::Help,
+    ) {
+        Ok(Some(command)) => return Ok(CliChatParsedInput::Builtin(command)),
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match parse_exact_cli_chat_builtin_command(
+        input,
+        &[CLI_CHAT_STATUS_COMMAND],
+        "usage: /status",
+        CliChatBuiltinCommand::Status,
+    ) {
+        Ok(Some(command)) => return Ok(CliChatParsedInput::Builtin(command)),
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match parse_exact_cli_chat_builtin_command(
+        input,
+        &[CLI_CHAT_COMPACT_COMMAND],
+        "usage: /compact",
+        CliChatBuiltinCommand::Compact,
+    ) {
+        Ok(Some(command)) => return Ok(CliChatParsedInput::Builtin(command)),
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match parse_exact_cli_chat_builtin_command(
+        input,
+        &[CLI_CHAT_HISTORY_COMMAND],
+        "usage: /history",
+        CliChatBuiltinCommand::History,
+    ) {
+        Ok(Some(command)) => return Ok(CliChatParsedInput::Builtin(command)),
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match parse_fast_lane_summary_limit(input, summary_limit) {
+        Ok(Some(limit)) => {
+            return Ok(CliChatParsedInput::Builtin(
+                CliChatBuiltinCommand::FastLaneSummary(limit),
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match parse_safe_lane_summary_limit(input, summary_limit) {
+        Ok(Some(limit)) => {
+            return Ok(CliChatParsedInput::Builtin(
+                CliChatBuiltinCommand::SafeLaneSummary(limit),
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match parse_turn_checkpoint_summary_limit(input, summary_limit) {
+        Ok(Some(limit)) => {
+            return Ok(CliChatParsedInput::Builtin(
+                CliChatBuiltinCommand::TurnCheckpointSummary(limit),
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => return parse_cli_chat_builtin_command_error(error),
+    }
+
+    match classify_chat_command_match_result(is_turn_checkpoint_repair_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            return Ok(CliChatParsedInput::Builtin(
+                CliChatBuiltinCommand::TurnCheckpointRepair,
+            ));
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            return Ok(CliChatParsedInput::UsageLines(render_cli_chat_usage_lines(
+                &usage,
+            )));
+        }
+        ChatCommandMatchResult::NotMatched => {}
+    }
+
+    Ok(CliChatParsedInput::Prompt(input))
+}
+
+async fn execute_cli_chat_builtin_command(
+    runtime: &CliTurnRuntime,
+    options: &CliChatOptions,
+    command: CliChatBuiltinCommand,
+) -> CliResult<CliChatLoopControl> {
+    match command {
+        CliChatBuiltinCommand::Help => {
+            print_help();
+        }
+        CliChatBuiltinCommand::Status => {
+            print_cli_chat_status(runtime, options).await?;
+        }
+        CliChatBuiltinCommand::Compact => {
+            print_manual_compaction(runtime).await?;
+        }
+        CliChatBuiltinCommand::History => {
+            #[cfg(feature = "memory-sqlite")]
+            print_history(
+                &runtime.session_id,
+                runtime.config.memory.sliding_window,
+                runtime.conversation_binding(),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_history(
+                &runtime.session_id,
+                runtime.config.memory.sliding_window,
+                runtime.conversation_binding(),
+            )
+            .await?;
+        }
+        CliChatBuiltinCommand::FastLaneSummary(limit) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_fast_lane_summary(
+                &runtime.session_id,
+                limit,
+                runtime.conversation_binding(),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_fast_lane_summary(&runtime.session_id, limit, runtime.conversation_binding())
+                .await?;
+        }
+        CliChatBuiltinCommand::SafeLaneSummary(limit) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_safe_lane_summary(
+                &runtime.session_id,
+                limit,
+                &runtime.config.conversation,
+                runtime.conversation_binding(),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_safe_lane_summary(
+                &runtime.session_id,
+                limit,
+                &runtime.config.conversation,
+                runtime.conversation_binding(),
+            )
+            .await?;
+        }
+        CliChatBuiltinCommand::TurnCheckpointSummary(limit) => {
+            #[cfg(feature = "memory-sqlite")]
+            print_turn_checkpoint_summary(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                limit,
+                runtime.conversation_binding(),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_turn_checkpoint_summary(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                limit,
+                runtime.conversation_binding(),
+            )
+            .await?;
+        }
+        CliChatBuiltinCommand::TurnCheckpointRepair => {
+            print_turn_checkpoint_repair(
+                &runtime.turn_coordinator,
+                &runtime.config,
+                &runtime.session_id,
+                runtime.conversation_binding(),
+            )
+            .await?;
+        }
+    }
+
+    Ok(CliChatLoopControl::Continue)
+}
+
 #[allow(clippy::print_stdout)] // CLI REPL output
 pub async fn run_cli_chat(
     config_path: Option<&str>,
@@ -363,10 +609,7 @@ async fn run_cli_chat_repl(
             CliChatLoopControl::Continue => continue,
             CliChatLoopControl::Exit => break,
             CliChatLoopControl::AssistantText(assistant_text) => {
-                let render_width = detect_cli_chat_render_width();
-                let rendered_lines =
-                    render_cli_chat_assistant_lines_with_width(&assistant_text, render_width);
-                print_rendered_cli_chat_lines(&rendered_lines);
+                print_cli_chat_assistant_text(&assistant_text);
             }
         }
     }
@@ -512,10 +755,7 @@ async fn run_concurrent_cli_host_loop(
             CliChatLoopControl::Continue => continue,
             CliChatLoopControl::Exit => break,
             CliChatLoopControl::AssistantText(assistant_text) => {
-                let render_width = detect_cli_chat_render_width();
-                let rendered_lines =
-                    render_cli_chat_assistant_lines_with_width(&assistant_text, render_width);
-                print_rendered_cli_chat_lines(&rendered_lines);
+                print_cli_chat_assistant_text(&assistant_text);
             }
         }
     }
@@ -536,231 +776,43 @@ async fn process_cli_chat_input(
     if is_exit_command(&runtime.config, input) {
         return Ok(CliChatLoopControl::Exit);
     }
-    match classify_chat_command_match_result(parse_exact_chat_command(
-        input,
-        &[CLI_CHAT_HELP_COMMAND],
-        "usage: /help",
-    ))? {
-        ChatCommandMatchResult::Matched => {
-            print_help();
+    match parse_cli_chat_input(input, runtime.config.memory.sliding_window)? {
+        CliChatParsedInput::Builtin(command) => {
+            return execute_cli_chat_builtin_command(runtime, options, command).await;
+        }
+        CliChatParsedInput::UsageLines(lines) => {
+            print_rendered_cli_chat_lines(&lines);
             return Ok(CliChatLoopControl::Continue);
         }
-        ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = render_cli_chat_command_usage_lines_with_width(
-                &usage,
-                detect_cli_chat_render_width(),
-            );
-            print_rendered_cli_chat_lines(&usage_lines);
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::NotMatched => {}
-    }
-    match classify_chat_command_match_result(is_cli_chat_status_command(input))? {
-        ChatCommandMatchResult::Matched => {
-            print_cli_chat_status(runtime, options).await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = render_cli_chat_command_usage_lines_with_width(
-                &usage,
-                detect_cli_chat_render_width(),
-            );
-            print_rendered_cli_chat_lines(&usage_lines);
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::NotMatched => {}
-    }
-    match classify_chat_command_match_result(is_manual_compaction_command(input))? {
-        ChatCommandMatchResult::Matched => {
-            print_manual_compaction(runtime).await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = render_cli_chat_command_usage_lines_with_width(
-                &usage,
-                detect_cli_chat_render_width(),
-            );
-            print_rendered_cli_chat_lines(&usage_lines);
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::NotMatched => {}
-    }
-    match classify_chat_command_match_result(parse_exact_chat_command(
-        input,
-        &[CLI_CHAT_HISTORY_COMMAND],
-        "usage: /history",
-    ))? {
-        ChatCommandMatchResult::Matched => {
-            #[cfg(feature = "memory-sqlite")]
-            print_history(
-                &runtime.session_id,
-                runtime.config.memory.sliding_window,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_history(
-                &runtime.session_id,
-                runtime.config.memory.sliding_window,
-                runtime.conversation_binding(),
-            )
-            .await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::UsageError(usage) => {
-            let usage_lines = render_cli_chat_command_usage_lines_with_width(
-                &usage,
-                detect_cli_chat_render_width(),
-            );
-            print_rendered_cli_chat_lines(&usage_lines);
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::NotMatched => {}
-    }
-    let fast_lane_limit_result =
-        parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window);
-    match fast_lane_limit_result {
-        Ok(Some(limit)) => {
-            #[cfg(feature = "memory-sqlite")]
-            print_fast_lane_summary(
-                &runtime.session_id,
-                limit,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_fast_lane_summary(&runtime.session_id, limit, runtime.conversation_binding())
-                .await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
-                print_rendered_cli_chat_lines(&usage_lines);
-                return Ok(CliChatLoopControl::Continue);
-            }
+        CliChatParsedInput::Prompt(input) => {
+            let turn_request = crate::agent_runtime::AgentTurnRequest {
+                message: input.to_owned(),
+                turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                channel_id: runtime.session_address.channel_id.clone(),
+                account_id: runtime.session_address.account_id.clone(),
+                conversation_id: runtime.session_address.conversation_id.clone(),
+                participant_id: runtime.session_address.participant_id.clone(),
+                thread_id: runtime.session_address.thread_id.clone(),
+                metadata: BTreeMap::new(),
+                acp: runtime.explicit_acp_request,
+                acp_event_stream: event_sink.is_some(),
+                acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
+                acp_cwd: runtime
+                    .effective_working_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                live_surface_enabled: true,
+            };
+            let turn_options = crate::agent_runtime::TurnExecutionOptions {
+                event_sink,
+                ..Default::default()
+            };
+            let turn_service = crate::agent_runtime::RuntimeTurnExecutionService::new(runtime);
+            let turn_result = turn_service.execute(&turn_request, turn_options).await?;
 
-            return Err(error);
+            return Ok(CliChatLoopControl::AssistantText(turn_result.output_text));
         }
     }
-
-    let safe_lane_limit_result =
-        parse_safe_lane_summary_limit(input, runtime.config.memory.sliding_window);
-    match safe_lane_limit_result {
-        Ok(Some(limit)) => {
-            #[cfg(feature = "memory-sqlite")]
-            print_safe_lane_summary(
-                &runtime.session_id,
-                limit,
-                &runtime.config.conversation,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_safe_lane_summary(
-                &runtime.session_id,
-                limit,
-                &runtime.config.conversation,
-                runtime.conversation_binding(),
-            )
-            .await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
-                print_rendered_cli_chat_lines(&usage_lines);
-                return Ok(CliChatLoopControl::Continue);
-            }
-
-            return Err(error);
-        }
-    }
-
-    let turn_checkpoint_limit_result =
-        parse_turn_checkpoint_summary_limit(input, runtime.config.memory.sliding_window);
-    match turn_checkpoint_limit_result {
-        Ok(Some(limit)) => {
-            #[cfg(feature = "memory-sqlite")]
-            print_turn_checkpoint_summary(
-                &runtime.turn_coordinator,
-                &runtime.config,
-                &runtime.session_id,
-                limit,
-                runtime.conversation_binding(),
-                &runtime.memory_config,
-            )
-            .await?;
-            #[cfg(not(feature = "memory-sqlite"))]
-            print_turn_checkpoint_summary(
-                &runtime.turn_coordinator,
-                &runtime.config,
-                &runtime.session_id,
-                limit,
-                runtime.conversation_binding(),
-            )
-            .await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            if let Some(usage_lines) = maybe_render_nonfatal_usage_error(error.as_str()) {
-                print_rendered_cli_chat_lines(&usage_lines);
-                return Ok(CliChatLoopControl::Continue);
-            }
-
-            return Err(error);
-        }
-    }
-    match classify_chat_command_match_result(is_turn_checkpoint_repair_command(input))? {
-        ChatCommandMatchResult::Matched => {
-            print_turn_checkpoint_repair(
-                &runtime.turn_coordinator,
-                &runtime.config,
-                &runtime.session_id,
-                runtime.conversation_binding(),
-            )
-            .await?;
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::UsageError(usage) => {
-            let render_width = detect_cli_chat_render_width();
-            let usage_lines = render_cli_chat_command_usage_lines_with_width(&usage, render_width);
-            print_rendered_cli_chat_lines(&usage_lines);
-            return Ok(CliChatLoopControl::Continue);
-        }
-        ChatCommandMatchResult::NotMatched => {}
-    }
-
-    let turn_request = crate::agent_runtime::AgentTurnRequest {
-        message: input.to_owned(),
-        turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-        channel_id: runtime.session_address.channel_id.clone(),
-        account_id: runtime.session_address.account_id.clone(),
-        conversation_id: runtime.session_address.conversation_id.clone(),
-        participant_id: runtime.session_address.participant_id.clone(),
-        thread_id: runtime.session_address.thread_id.clone(),
-        metadata: BTreeMap::new(),
-        acp: runtime.explicit_acp_request,
-        acp_event_stream: event_sink.is_some(),
-        acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
-        acp_cwd: runtime
-            .effective_working_directory
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        live_surface_enabled: true,
-    };
-    let turn_options = crate::agent_runtime::TurnExecutionOptions {
-        event_sink,
-        ..Default::default()
-    };
-    let turn_service = crate::agent_runtime::RuntimeTurnExecutionService::new(runtime);
-    let turn_result = turn_service.execute(&turn_request, turn_options).await?;
-
-    Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
 }
 
 pub(crate) async fn run_cli_turn(
@@ -5336,6 +5388,44 @@ allowed_decisions: yes / auto / full / esc";
                 .iter()
                 .any(|line| line.contains("/fast_lane_summary [limit]")),
             "embedded usage text should still render the usage card: {usage_lines:#?}"
+        );
+    }
+
+    #[test]
+    fn parse_cli_chat_input_routes_builtin_commands_and_prompts() {
+        assert!(matches!(
+            parse_cli_chat_input("/help", 20).expect("help should parse"),
+            CliChatParsedInput::Builtin(CliChatBuiltinCommand::Help)
+        ));
+        assert!(matches!(
+            parse_cli_chat_input("/fast_lane_summary 12", 20)
+                .expect("fast lane summary should parse"),
+            CliChatParsedInput::Builtin(CliChatBuiltinCommand::FastLaneSummary(12))
+        ));
+        assert!(matches!(
+            parse_cli_chat_input("ship it", 20).expect("plain prompt should parse"),
+            CliChatParsedInput::Prompt("ship it")
+        ));
+    }
+
+    #[test]
+    fn parse_cli_chat_input_preserves_nonfatal_usage_cards() {
+        let parsed = parse_cli_chat_input("/help now", 20).expect("usage should stay non-fatal");
+        let CliChatParsedInput::UsageLines(lines) = parsed else {
+            panic!("expected usage lines for /help extra args");
+        };
+        assert!(
+            lines.iter().any(|line| line.contains("usage")),
+            "usage lines should mention usage: {lines:#?}"
+        );
+
+        let parsed = parse_cli_chat_input("/history now", 20).expect("usage should stay non-fatal");
+        let CliChatParsedInput::UsageLines(lines) = parsed else {
+            panic!("expected usage lines for /history extra args");
+        };
+        assert!(
+            lines.iter().any(|line| line.contains("/history")),
+            "usage lines should mention /history: {lines:#?}"
         );
     }
 
