@@ -782,7 +782,7 @@ async fn process_cli_chat_input(
         }
         CliChatParsedInput::UsageLines(lines) => {
             print_rendered_cli_chat_lines(&lines);
-            return Ok(CliChatLoopControl::Continue);
+            Ok(CliChatLoopControl::Continue)
         }
         CliChatParsedInput::Prompt(input) => {
             let turn_request = crate::agent_runtime::AgentTurnRequest {
@@ -810,7 +810,7 @@ async fn process_cli_chat_input(
             let turn_service = crate::agent_runtime::RuntimeTurnExecutionService::new(runtime);
             let turn_result = turn_service.execute(&turn_request, turn_options).await?;
 
-            return Ok(CliChatLoopControl::AssistantText(turn_result.output_text));
+            Ok(CliChatLoopControl::AssistantText(turn_result.output_text))
         }
     }
 }
