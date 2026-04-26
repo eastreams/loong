@@ -213,21 +213,392 @@ pub(super) async fn request_provider_turn_with_observer<R: ConversationRuntime +
     tool_view: &crate::tools::ToolView,
     binding: ConversationRuntimeBinding<'_>,
     observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<ProviderTurn> {
     if let Some(observer) = observer
         && provider_turn_observer_supports_streaming(config, Some(observer))
     {
-        let on_token = build_observer_streaming_token_callback(observer);
+        let request_started_at = std::time::Instant::now();
+        let on_token = build_observer_streaming_token_callback(observer, request_started_at);
         return runtime
-            .request_turn_streaming(
-                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            .request_turn_streaming_with_retry_progress(
+                config,
+                session_id,
+                turn_id,
+                messages,
+                tool_view,
+                binding,
+                on_token,
+                retry_progress,
             )
             .await;
     }
 
     runtime
-        .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+        .request_turn_with_retry_progress(
+            config,
+            session_id,
+            turn_id,
+            messages,
+            tool_view,
+            binding,
+            retry_progress,
+        )
         .await
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ProviderTurnContinuePhase {
+    request: TurnCheckpointRequest,
+    pub(super) lane_execution: ProviderTurnLaneExecution,
+    pub(super) reply_phase: ToolDrivenReplyPhase,
+    pub(super) loop_verdict: Option<ProviderTurnLoopVerdict>,
+    pub(super) followup_config: LoongConfig,
+    pub(super) ingress: Option<ConversationIngressContext>,
+}
+
+impl ProviderTurnContinuePhase {
+    pub(super) fn new(
+        tool_intents: usize,
+        lane_execution: ProviderTurnLaneExecution,
+        loop_verdict: Option<ProviderTurnLoopVerdict>,
+        followup_config: LoongConfig,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> Self {
+        let reply_phase = lane_execution.reply_phase();
+        Self {
+            request: TurnCheckpointRequest::Continue { tool_intents },
+            lane_execution,
+            reply_phase,
+            loop_verdict,
+            followup_config,
+            ingress: ingress.cloned(),
+        }
+    }
+
+    pub(super) fn checkpoint(
+        &self,
+        preparation: &ProviderTurnPreparation,
+        user_input: &str,
+        reply: &str,
+    ) -> TurnCheckpointSnapshot {
+        self.checkpoint_with_continuation_state(preparation, user_input, reply, None)
+    }
+
+    pub(super) fn checkpoint_with_continuation_state(
+        &self,
+        preparation: &ProviderTurnPreparation,
+        user_input: &str,
+        reply: &str,
+        continuation_state: Option<ToolDrivenContinuationState>,
+    ) -> TurnCheckpointSnapshot {
+        let reply_checkpoint = if continuation_state.is_some() {
+            TurnReplyCheckpoint::from_phase_with_continuation_state(
+                &self.reply_phase,
+                continuation_state,
+            )
+        } else {
+            TurnReplyCheckpoint::from_phase(&self.reply_phase)
+        };
+        build_resolved_provider_checkpoint(
+            preparation,
+            user_input,
+            Some(reply),
+            self.request.clone(),
+            Some(self.lane_execution.checkpoint()),
+            Some(reply_checkpoint),
+            TurnFinalizationCheckpoint::persist_reply(ReplyPersistenceMode::Success),
+        )
+    }
+
+    pub(super) fn tool_intent_count(&self) -> usize {
+        match self.request {
+            TurnCheckpointRequest::Continue { tool_intents } => tool_intents,
+            TurnCheckpointRequest::FinalizeInlineProviderError
+            | TurnCheckpointRequest::ReturnError => 0,
+        }
+    }
+
+    pub(super) fn loop_warning_reason(&self) -> Option<&str> {
+        match self.loop_verdict.as_ref() {
+            Some(ProviderTurnLoopVerdict::InjectWarning { reason }) => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn hard_stop_reason(&self) -> Option<&str> {
+        match self.loop_verdict.as_ref() {
+            Some(ProviderTurnLoopVerdict::HardStop { reason }) => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    pub(super) async fn resolve<R: ConversationRuntime + ?Sized>(
+        &self,
+        runtime: &R,
+        session_id: &str,
+        preparation: &ProviderTurnPreparation,
+        user_input: &str,
+        turn_loop_policy: &ProviderTurnLoopPolicy,
+        turn_loop_state: &mut ProviderTurnLoopState,
+        remaining_provider_rounds: usize,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
+        retry_progress: crate::provider::ProviderRetryProgressCallback,
+    ) -> ResolvedProviderTurn {
+        resolve_provider_turn_reply(
+            runtime,
+            &self.followup_config,
+            session_id,
+            preparation,
+            self,
+            user_input,
+            turn_loop_policy,
+            turn_loop_state,
+            remaining_provider_rounds,
+            binding,
+            self.ingress.as_ref(),
+            observer,
+            retry_progress,
+        )
+        .await
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ResolvedProviderTurn {
+    PersistReply(ResolvedProviderReply),
+    ReturnError(ResolvedProviderError),
+}
+
+impl ResolvedProviderTurn {
+    pub(super) fn persist_reply(
+        reply: String,
+        usage: Option<Value>,
+        checkpoint: TurnCheckpointSnapshot,
+    ) -> Self {
+        Self::PersistReply(ResolvedProviderReply {
+            reply,
+            usage,
+            checkpoint,
+        })
+    }
+
+    pub(super) fn return_error(error: String, checkpoint: TurnCheckpointSnapshot) -> Self {
+        Self::ReturnError(ResolvedProviderError { error, checkpoint })
+    }
+
+    #[cfg(test)]
+    pub(super) fn checkpoint(&self) -> &TurnCheckpointSnapshot {
+        match self {
+            Self::PersistReply(reply) => &reply.checkpoint,
+            Self::ReturnError(error) => &error.checkpoint,
+        }
+    }
+
+    pub(super) fn terminal_phase<'a>(
+        &'a self,
+        session: &ProviderTurnSessionState,
+    ) -> ProviderTurnTerminalPhase<'a> {
+        match self {
+            Self::PersistReply(reply) => {
+                ProviderTurnTerminalPhase::PersistReply(ProviderTurnPersistReplyPhase {
+                    checkpoint: &reply.checkpoint,
+                    tail_phase: ProviderTurnReplyTailPhase::from_session(
+                        session,
+                        reply.reply.as_str(),
+                    ),
+                    usage: reply.usage.clone(),
+                })
+            }
+            Self::ReturnError(error) => {
+                ProviderTurnTerminalPhase::ReturnError(ProviderTurnReturnErrorPhase {
+                    checkpoint: &error.checkpoint,
+                    error: error.error.as_str(),
+                })
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn reply_text(&self) -> Option<&str> {
+        match self {
+            Self::PersistReply(reply) => Some(reply.reply.as_str()),
+            Self::ReturnError(_) => None,
+        }
+    }
+
+    pub(super) fn provider_error_text(&self) -> Option<&str> {
+        match self {
+            Self::PersistReply(reply) => provider_error_reply_body(reply.reply.as_str()),
+            Self::ReturnError(error) => Some(error.error.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedProviderReply {
+    pub(super) reply: String,
+    pub(super) usage: Option<Value>,
+    pub(super) checkpoint: TurnCheckpointSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedProviderError {
+    pub(super) error: String,
+    pub(super) checkpoint: TurnCheckpointSnapshot,
+}
+
+#[derive(Debug)]
+pub(super) enum ProviderTurnTerminalPhase<'a> {
+    PersistReply(ProviderTurnPersistReplyPhase<'a>),
+    ReturnError(ProviderTurnReturnErrorPhase<'a>),
+}
+
+impl<'a> ProviderTurnTerminalPhase<'a> {
+    pub(super) async fn apply<R: ConversationRuntime + ?Sized>(
+        self,
+        config: &LoongConfig,
+        runtime: &R,
+        session_id: &str,
+        user_input: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ConversationTurnOutcome> {
+        match self {
+            Self::PersistReply(phase) => {
+                finalize_provider_turn_reply(
+                    config,
+                    runtime,
+                    session_id,
+                    user_input,
+                    &phase.tail_phase,
+                    phase.usage,
+                    phase.checkpoint,
+                    binding,
+                )
+                .await
+            }
+            Self::ReturnError(phase) => {
+                persist_resolved_provider_error_checkpoint(
+                    runtime,
+                    session_id,
+                    phase.checkpoint,
+                    binding,
+                )
+                .await?;
+                Err(phase.error.to_owned())
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ProviderTurnPersistReplyPhase<'a> {
+    pub(super) checkpoint: &'a TurnCheckpointSnapshot,
+    pub(super) tail_phase: ProviderTurnReplyTailPhase,
+    pub(super) usage: Option<Value>,
+}
+
+#[derive(Debug)]
+pub(super) struct ProviderTurnReturnErrorPhase<'a> {
+    pub(super) checkpoint: &'a TurnCheckpointSnapshot,
+    pub(super) error: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProviderTurnRequestTerminalPhase {
+    PersistInlineProviderError { reply: String },
+    ReturnError { error: String },
+}
+
+impl ProviderTurnRequestTerminalPhase {
+    pub(super) fn persist_inline_provider_error(reply: String) -> Self {
+        Self::PersistInlineProviderError { reply }
+    }
+
+    pub(super) fn return_error(error: String) -> Self {
+        Self::ReturnError { error }
+    }
+
+    pub(super) fn resolve(
+        self,
+        preparation: &ProviderTurnPreparation,
+        user_input: &str,
+    ) -> ResolvedProviderTurn {
+        match self {
+            Self::PersistInlineProviderError { reply } => {
+                let checkpoint = build_resolved_provider_checkpoint(
+                    preparation,
+                    user_input,
+                    Some(reply.as_str()),
+                    TurnCheckpointRequest::FinalizeInlineProviderError,
+                    None,
+                    None,
+                    TurnFinalizationCheckpoint::persist_reply(
+                        ReplyPersistenceMode::InlineProviderError,
+                    ),
+                );
+                ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
+            }
+            Self::ReturnError { error } => {
+                let checkpoint = build_resolved_provider_checkpoint(
+                    preparation,
+                    user_input,
+                    None,
+                    TurnCheckpointRequest::ReturnError,
+                    None,
+                    None,
+                    TurnFinalizationCheckpoint::ReturnError,
+                );
+                ResolvedProviderTurn::return_error(error, checkpoint)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SafeLaneTurnOutcome {
+    pub(super) result: TurnResult,
+    pub(super) terminal_route: Option<SafeLaneFailureRoute>,
+}
+
+impl SafeLaneTurnOutcome {
+    pub(super) fn without_terminal_route(result: TurnResult) -> Self {
+        Self {
+            result,
+            terminal_route: None,
+        }
+    }
+
+    pub(super) fn with_terminal_route(
+        result: TurnResult,
+        terminal_route: SafeLaneFailureRoute,
+    ) -> Self {
+        Self {
+            result,
+            terminal_route: Some(terminal_route),
+        }
+    }
+}
+
+pub(super) fn build_resolved_provider_checkpoint(
+    preparation: &ProviderTurnPreparation,
+    user_input: &str,
+    reply_text: Option<&str>,
+    request: TurnCheckpointRequest,
+    lane: Option<TurnLaneExecutionSnapshot>,
+    reply: Option<TurnReplyCheckpoint>,
+    finalization: TurnFinalizationCheckpoint,
+) -> TurnCheckpointSnapshot {
+    TurnCheckpointSnapshot {
+        identity: reply_text
+            .map(|assistant_reply| TurnCheckpointIdentity::from_turn(user_input, assistant_reply)),
+        preparation: preparation.checkpoint(),
+        request,
+        lane,
+        reply,
+        finalization,
+    }
 }
 
 pub(super) async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
@@ -241,6 +612,7 @@ pub(super) async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
+    retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> ResolvedProviderTurn {
     let turn_loop_policy = ProviderTurnLoopPolicy::from_config(config);
     let mut turn_loop_state = ProviderTurnLoopState::default();
@@ -290,6 +662,7 @@ pub(super) async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                         .max(1),
                     binding,
                     observer,
+                    retry_progress,
                 )
                 .await
         }
@@ -326,6 +699,10 @@ pub(super) fn scope_provider_turn_tool_intents(
     turn
 }
 
+pub(super) fn provider_turn_usage(turn: &ProviderTurn) -> Option<Value> {
+    turn.raw_meta.get("usage").cloned()
+}
+
 pub(super) fn build_turn_loop_circuit_breaker_resolved_turn(
     preparation: &ProviderTurnPreparation,
     user_input: &str,
@@ -341,7 +718,7 @@ pub(super) fn build_turn_loop_circuit_breaker_resolved_turn(
         None,
         TurnFinalizationCheckpoint::persist_reply(ReplyPersistenceMode::Success),
     );
-    ResolvedProviderTurn::persist_reply(reply, checkpoint)
+    ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
 }
 
 pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
@@ -400,441 +777,4 @@ pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime 
         followup_config,
         ingress,
     )
-}
-
-pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    config: &LoongConfig,
-    session_id: &str,
-    preparation: &ProviderTurnPreparation,
-    continue_phase: &ProviderTurnContinuePhase,
-    user_input: &str,
-    turn_loop_policy: &ProviderTurnLoopPolicy,
-    turn_loop_state: &mut ProviderTurnLoopState,
-    remaining_provider_rounds: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    ingress: Option<&ConversationIngressContext>,
-    observer: Option<&ConversationTurnObserverHandle>,
-) -> ResolvedProviderTurn {
-    enum ReplyLoopDecision {
-        FinalizeDirect(String),
-        Followup {
-            raw_reply: String,
-            payload: ToolDrivenFollowupPayload,
-            requires_completion_pass: bool,
-            loop_warning_reason: Option<String>,
-        },
-        GuardFollowup {
-            raw_reply: String,
-            reason: String,
-            latest_tool_payload: Option<ToolDrivenFollowupPayload>,
-        },
-    }
-
-    let mut current_preparation = preparation.clone();
-    let mut current_continue_phase = continue_phase.clone();
-    let mut remaining_provider_rounds = remaining_provider_rounds.max(1);
-    let mut provider_round_index = 0usize;
-
-    loop {
-        let current_provider_round = provider_round_index.saturating_add(1);
-        if current_continue_phase.lane_execution.discovery_search_turn {
-            emit_discovery_first_event(
-                runtime,
-                session_id,
-                "discovery_first_search_round",
-                json!({
-                    "provider_round": current_provider_round,
-                    "search_tool_calls": current_continue_phase
-                        .lane_execution
-                        .search_tool_intents,
-                    "raw_tool_output_requested": current_continue_phase
-                        .lane_execution
-                        .raw_tool_output_requested,
-                    "initial_estimated_tokens": estimate_tokens_for_messages(
-                        current_preparation.session.estimated_tokens,
-                        &current_preparation.session.messages,
-                    ),
-                }),
-                binding,
-            )
-            .await;
-        }
-
-        let reply_decision = match current_continue_phase.reply_phase.decision() {
-            ToolDrivenReplyBaseDecision::FinalizeDirect { reply } => {
-                let latest_tool_payload = tool_driven_followup_payload(
-                    current_continue_phase.lane_execution.had_tool_intents,
-                    &current_continue_phase.lane_execution.turn_result,
-                );
-                if let Some(reason) = current_continue_phase.hard_stop_reason() {
-                    ReplyLoopDecision::GuardFollowup {
-                        raw_reply: reply.clone(),
-                        reason: reason.to_owned(),
-                        latest_tool_payload,
-                    }
-                } else if current_continue_phase
-                    .lane_execution
-                    .supports_provider_turn_followup
-                    && (!current_continue_phase
-                        .lane_execution
-                        .raw_tool_output_requested
-                        || current_continue_phase.lane_execution.discovery_search_turn
-                        || assistant_preface_signals_provider_turn_followup(
-                            current_continue_phase
-                                .lane_execution
-                                .assistant_preface
-                                .as_str(),
-                        ))
-                    && let Some(payload) = latest_tool_payload
-                {
-                    ReplyLoopDecision::Followup {
-                        raw_reply: reply.clone(),
-                        payload,
-                        requires_completion_pass: false,
-                        loop_warning_reason: current_continue_phase
-                            .loop_warning_reason()
-                            .map(ToOwned::to_owned),
-                    }
-                } else {
-                    ReplyLoopDecision::FinalizeDirect(reply.clone())
-                }
-            }
-            ToolDrivenReplyBaseDecision::RequireFollowup {
-                raw_reply,
-                payload: followup,
-            } => {
-                if let Some(reason) = current_continue_phase.hard_stop_reason() {
-                    ReplyLoopDecision::GuardFollowup {
-                        raw_reply: raw_reply.clone(),
-                        reason: reason.to_owned(),
-                        latest_tool_payload: Some(followup.clone()),
-                    }
-                } else {
-                    ReplyLoopDecision::Followup {
-                        raw_reply: raw_reply.clone(),
-                        payload: followup.clone(),
-                        requires_completion_pass: true,
-                        loop_warning_reason: current_continue_phase
-                            .loop_warning_reason()
-                            .map(ToOwned::to_owned),
-                    }
-                }
-            }
-        };
-
-        match reply_decision {
-            ReplyLoopDecision::FinalizeDirect(reply) => {
-                let checkpoint = current_continue_phase.checkpoint(preparation, user_input, &reply);
-                return ResolvedProviderTurn::persist_reply(reply, checkpoint);
-            }
-            ReplyLoopDecision::Followup {
-                raw_reply,
-                payload: followup,
-                requires_completion_pass,
-                loop_warning_reason,
-            } => {
-                let follow_up_messages = build_turn_reply_followup_messages_with_warning(
-                    &current_preparation.session.messages,
-                    current_continue_phase
-                        .lane_execution
-                        .assistant_preface
-                        .as_str(),
-                    followup.clone(),
-                    current_continue_phase
-                        .lane_execution
-                        .tool_request_summary
-                        .as_deref(),
-                    user_input,
-                    loop_warning_reason.as_deref(),
-                );
-                if current_continue_phase
-                    .lane_execution
-                    .supports_provider_turn_followup
-                    && remaining_provider_rounds > 1
-                {
-                    let next_provider_round = current_provider_round.saturating_add(1);
-                    remaining_provider_rounds -= 1;
-                    let initial_estimated_tokens = estimate_tokens_for_messages(
-                        current_preparation.session.estimated_tokens,
-                        &current_preparation.session.messages,
-                    );
-                    let followup_request_estimated_tokens = estimate_tokens(&follow_up_messages);
-                    let followup_added_estimated_tokens = initial_estimated_tokens
-                        .zip(followup_request_estimated_tokens)
-                        .map(|(initial, followup)| followup.saturating_sub(initial));
-                    let followup_preparation =
-                        current_preparation.for_followup_messages(follow_up_messages);
-                    let followup_tool_view = match runtime.tool_view(
-                        &current_continue_phase.followup_config,
-                        session_id,
-                        binding,
-                    ) {
-                        Ok(tool_view) => tool_view,
-                        Err(_error) => {
-                            let checkpoint = current_continue_phase.checkpoint(
-                                preparation,
-                                user_input,
-                                raw_reply.as_str(),
-                            );
-                            return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
-                        }
-                    };
-                    let followup_message_count = followup_preparation.session.messages.len();
-                    let followup_context_estimated_tokens =
-                        followup_preparation.session.estimated_tokens;
-                    let followup_request_event =
-                        ConversationTurnPhaseEvent::requesting_followup_provider(
-                            next_provider_round,
-                            current_continue_phase.lane_execution.lane,
-                            current_continue_phase.tool_intent_count(),
-                            followup_message_count,
-                            followup_context_estimated_tokens,
-                        );
-                    observe_turn_phase(observer, followup_request_event);
-                    emit_prompt_frame_event(
-                        runtime,
-                        session_id,
-                        next_provider_round,
-                        "followup",
-                        followup_preparation.session.prompt_frame_summary(),
-                        binding,
-                    )
-                    .await;
-                    if current_continue_phase.lane_execution.discovery_search_turn {
-                        emit_discovery_first_event(
-                            runtime,
-                            session_id,
-                            "discovery_first_followup_requested",
-                            json!({
-                                "provider_round": provider_round_index.saturating_add(1),
-                                "raw_tool_output_requested": current_continue_phase
-                                    .lane_execution
-                                    .raw_tool_output_requested,
-                                "initial_estimated_tokens": initial_estimated_tokens,
-                                "followup_estimated_tokens": followup_request_estimated_tokens,
-                                "followup_added_estimated_tokens": followup_added_estimated_tokens,
-                            }),
-                            binding,
-                        )
-                        .await;
-                    }
-                    match decide_provider_turn_request_action(
-                        request_provider_turn_with_observer(
-                            &current_continue_phase.followup_config,
-                            runtime,
-                            session_id,
-                            followup_preparation.turn_id.as_str(),
-                            &followup_preparation.session.messages,
-                            &followup_tool_view,
-                            binding,
-                            observer,
-                        )
-                        .await,
-                        ProviderErrorMode::Propagate,
-                    ) {
-                        ProviderTurnRequestAction::Continue { turn } => {
-                            let turn = scope_provider_turn_tool_intents(
-                                turn,
-                                session_id,
-                                followup_preparation.turn_id.as_str(),
-                            );
-                            let followup_result = summarize_discovery_first_followup_turn(&turn);
-                            if current_continue_phase.lane_execution.discovery_search_turn {
-                                emit_discovery_first_event(
-                                    runtime,
-                                    session_id,
-                                    "discovery_first_followup_result",
-                                    json!({
-                                        "provider_round": provider_round_index.saturating_add(1),
-                                        "outcome": followup_result.outcome,
-                                        "followup_tool_name": followup_result.followup_tool_name,
-                                        "followup_target_tool_id": followup_result.followup_target_tool_id,
-                                        "resolved_to_tool_invoke": followup_result
-                                            .resolved_to_tool_invoke,
-                                        "raw_tool_output_requested": current_continue_phase
-                                            .lane_execution
-                                            .raw_tool_output_requested,
-                                    }),
-                                    binding,
-                                )
-                                .await;
-                            }
-                            if let Some(reply) = turn_loop_state
-                                .circuit_breaker_reply(turn_loop_policy, turn.tool_intents.len())
-                            {
-                                return build_turn_loop_circuit_breaker_resolved_turn(
-                                    preparation,
-                                    user_input,
-                                    turn.tool_intents.len(),
-                                    reply,
-                                );
-                            }
-                            current_continue_phase = prepare_provider_turn_continue_phase(
-                                &current_continue_phase.followup_config,
-                                runtime,
-                                session_id,
-                                &followup_preparation,
-                                turn,
-                                turn_loop_policy,
-                                turn_loop_state,
-                                binding,
-                                ingress,
-                                observer,
-                                next_provider_round,
-                                current_continue_phase
-                                    .lane_execution
-                                    .supports_provider_turn_followup,
-                            )
-                            .await;
-                            current_preparation = followup_preparation;
-                            provider_round_index = provider_round_index.saturating_add(1);
-                            continue;
-                        }
-                        ProviderTurnRequestAction::FinalizeInlineProviderError {
-                            reply: provider_error_text,
-                        }
-                        | ProviderTurnRequestAction::ReturnError {
-                            error: provider_error_text,
-                        } => {
-                            if current_continue_phase.lane_execution.discovery_search_turn {
-                                emit_discovery_first_event(
-                                    runtime,
-                                    session_id,
-                                    "discovery_first_followup_result",
-                                    json!({
-                                        "provider_round": provider_round_index.saturating_add(1),
-                                        "outcome": "provider_error",
-                                        "followup_tool_name": Value::Null,
-                                        "followup_target_tool_id": Value::Null,
-                                        "resolved_to_tool_invoke": false,
-                                        "raw_tool_output_requested": current_continue_phase
-                                            .lane_execution
-                                            .raw_tool_output_requested,
-                                    }),
-                                    binding,
-                                )
-                                .await;
-                            }
-                            emit_provider_failover_trust_event_if_needed(
-                                config,
-                                runtime,
-                                session_id,
-                                provider_error_text.as_str(),
-                                binding,
-                            )
-                            .await;
-                            let checkpoint = current_continue_phase.checkpoint(
-                                preparation,
-                                user_input,
-                                raw_reply.as_str(),
-                            );
-                            return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
-                        }
-                    }
-                }
-                if requires_completion_pass {
-                    let reply = request_completion_with_raw_fallback(
-                        runtime,
-                        &current_continue_phase.followup_config,
-                        &follow_up_messages,
-                        binding,
-                        raw_reply.as_str(),
-                        None,
-                    )
-                    .await;
-                    let checkpoint =
-                        current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                    return ResolvedProviderTurn::persist_reply(reply, checkpoint);
-                }
-
-                let checkpoint =
-                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
-                return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
-            }
-            ReplyLoopDecision::GuardFollowup {
-                raw_reply,
-                reason,
-                latest_tool_payload,
-            } => {
-                let guard_messages = build_turn_reply_guard_messages(
-                    &current_preparation.session.messages,
-                    current_continue_phase
-                        .lane_execution
-                        .assistant_preface
-                        .as_str(),
-                    reason.as_str(),
-                    latest_tool_payload.as_ref(),
-                    user_input,
-                );
-                let reply = request_completion_with_raw_fallback(
-                    runtime,
-                    &current_continue_phase.followup_config,
-                    &guard_messages,
-                    binding,
-                    raw_reply.as_str(),
-                    None,
-                )
-                .await;
-                let checkpoint =
-                    current_continue_phase.checkpoint(preparation, user_input, reply.as_str());
-                return ResolvedProviderTurn::persist_reply(reply, checkpoint);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn build_turn_reply_followup_messages(
-    base_messages: &[Value],
-    assistant_preface: &str,
-    followup: ToolDrivenFollowupPayload,
-    user_input: &str,
-) -> Vec<Value> {
-    build_turn_reply_followup_messages_with_warning(
-        base_messages,
-        assistant_preface,
-        followup,
-        None,
-        user_input,
-        None,
-    )
-}
-
-pub(super) fn build_turn_reply_followup_messages_with_warning(
-    base_messages: &[Value],
-    assistant_preface: &str,
-    followup: ToolDrivenFollowupPayload,
-    tool_request_summary: Option<&str>,
-    user_input: &str,
-    loop_warning_reason: Option<&str>,
-) -> Vec<Value> {
-    let mut messages = base_messages.to_vec();
-    messages.extend(build_tool_driven_followup_tail_with_request_summary(
-        assistant_preface,
-        &followup,
-        user_input,
-        loop_warning_reason,
-        tool_request_summary,
-        |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
-    ));
-    messages
-}
-
-pub(super) fn build_turn_reply_guard_messages(
-    base_messages: &[Value],
-    assistant_preface: &str,
-    reason: &str,
-    latest_tool_payload: Option<&ToolDrivenFollowupPayload>,
-    user_input: &str,
-) -> Vec<Value> {
-    let mut messages = base_messages.to_vec();
-    messages.extend(build_tool_loop_guard_tail(
-        assistant_preface,
-        reason,
-        user_input,
-        latest_tool_payload.map(ToolDrivenFollowupPayload::message_context),
-        |label, text| reduce_followup_payload_for_model(label.as_str(), text).into_owned(),
-    ));
-    messages
 }
