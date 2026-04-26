@@ -62,6 +62,10 @@ engine." The remaining problem is that some oversized files still mix loop
 ownership, tool/config projection, and host shell code even after the shared
 turn-runtime seam is made explicit.
 
+The same pattern now exists inside conversation turn coordination: the
+provider-turn helpers have been split into adjacent modules, but the top-level
+coordinator still owns lane-planning/state carriers and most seam-local tests.
+
 ## Current Hotspot Inventory
 
 | Area | Current evidence | Why it is still a hotspot |
@@ -70,6 +74,7 @@ turn-runtime seam is made explicit.
 | Shared turn host seam | [`crates/app/src/agent_runtime.rs`](../../crates/app/src/agent_runtime.rs) is about 1k lines and contains `TurnExecutionService`, `RuntimeTurnExecutionService`, config refresh, and prompt-summary reporting | This seam is much clearer now that it points at [`crates/app/src/turn_runtime.rs`](../../crates/app/src/turn_runtime.rs), but it still carries transport shaping and prompt-summary reporting in one file |
 | Runtime environment projection | [`crates/app/src/runtime_env.rs`](../../crates/app/src/runtime_env.rs) now exposes separate env-export and singleton-init helpers plus the compatibility wrapper | The internal split is in place, but many hosts still call only the compatibility wrapper, so the narrower side-effect contract is not yet visible at every call site |
 | Control-plane host shell | [`crates/daemon/src/control_plane_server.rs`](../../crates/daemon/src/control_plane_server.rs) is still about 5k lines, while the extracted turn shell now lives in [`crates/daemon/src/control_plane_turn_runtime.rs`](../../crates/daemon/src/control_plane_turn_runtime.rs) | The turn runtime shell is clearer now, but the top-level server file still owns a lot of route glue and result/stream handling in one place |
+| Provider-turn coordinator shell | [`crates/app/src/conversation/turn_coordinator.rs`](../../crates/app/src/conversation/turn_coordinator.rs) is still about 8.6k lines even after extracting [`turn_coordinator_support.rs`](../../crates/app/src/conversation/turn_coordinator_support.rs), [`provider_turn_runtime.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_runtime.rs), [`provider_turn_reply.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_reply.rs), [`provider_turn_lane.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_lane.rs), and [`provider_turn_apply.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_apply.rs) | The provider-turn seam is clearer now, but lane-planning/state carriers and most regression coverage still live in the monolith instead of next to the extracted helpers |
 
 ## Highest-Leverage Next Slices
 
@@ -121,7 +126,36 @@ Recommended shape:
 - keep the top-level server file focused on routing, authorization, and shared
   control-plane lifecycle
 
-### Slice 3: split runtime-env export from runtime-config initialization (landed internally)
+### Slice 3: follow through on provider-turn coordinator extraction (partially landed)
+
+Target:
+
+- `ProviderTurnSessionState` / `ProviderTurnPreparation`
+- provider-turn runtime / reply / lane / apply helpers
+- the remaining provider-turn lane-plan, lane-execution, and loop-state carriers
+- seam-local regression coverage for the extracted files
+
+What landed:
+
+- the provider-turn helper surface now lives across
+  [`crates/app/src/conversation/turn_coordinator_support.rs`](../../crates/app/src/conversation/turn_coordinator_support.rs),
+  [`provider_turn_runtime.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_runtime.rs),
+  [`provider_turn_reply.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_reply.rs),
+  [`provider_turn_lane.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_lane.rs),
+  and [`provider_turn_apply.rs`](../../crates/app/src/conversation/turn_coordinator/provider_turn_apply.rs)
+- `turn_coordinator.rs` now imports those helpers instead of keeping the whole
+  provider-turn path inline
+
+Recommended shape:
+
+- keep moving provider-turn-only state carriers next to the extracted helper
+  files instead of leaving them in the top-level coordinator shell
+- keep moving seam-local regression tests beside the extracted files so the
+  module boundaries and their verification surface line up
+- leave the top-level `turn_coordinator.rs` focused on orchestration and
+  cross-lane coordination rather than helper internals
+
+### Slice 4: split runtime-env export from runtime-config initialization (landed internally)
 
 Today, `initialize_runtime_environment(...)` does two different jobs:
 
@@ -145,7 +179,7 @@ What landed:
 - the extracted turn-runtime seam now skips env export when requested while
   still initializing in-process runtime singletons
 
-### Slice 4: keep tool-surface simplification documentation-first
+### Slice 5: keep tool-surface simplification documentation-first
 
 The tool plane should stay aligned with
 [`tool-surface-exposure.md`](tool-surface-exposure.md):
@@ -170,12 +204,15 @@ It should avoid:
 When working this lane, prefer the following order:
 
 1. narrow the control-plane host shell
-2. make more callers use the narrower runtime-env side-effect helpers directly
-3. only then consider deeper file-size cleanup in tool surfaces
+2. finish the provider-turn coordinator seam so state carriers and tests move
+   with the extracted helper files
+3. make more callers use the narrower runtime-env side-effect helpers directly
+4. only then consider deeper file-size cleanup in tool surfaces
 
-That order matters because the shared execution seam is now explicit, so the
-next wins come from shrinking the remaining host shells without touching
-policy-sensitive tool exposure behavior.
+That order matters because the shared execution seam is now explicit, and the
+next wins come from shrinking the remaining host shells plus finishing the
+already-started coordinator seam work without touching policy-sensitive tool
+exposure behavior.
 
 ## Related Documents
 
