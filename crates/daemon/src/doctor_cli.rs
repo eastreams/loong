@@ -189,7 +189,10 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         "create tool file root",
     ));
     checks.extend(collect_browser_companion_doctor_checks(&config).await);
-    checks.extend(collect_runtime_plugins_doctor_checks(&config));
+    let runtime_plugins_state = crate::collect_runtime_snapshot_runtime_plugins_state(&config);
+    checks.extend(collect_runtime_plugins_doctor_checks_from_state(
+        &runtime_plugins_state,
+    ));
 
     checks.extend(check_feishu_integration(&config, options.fix, &mut fixes));
     let channel_inventory = mvp::channel::channel_inventory(&config);
@@ -228,6 +231,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 "fail": summary.fail
             },
             "checks": checks,
+            "runtime_plugins": doctor_runtime_plugins_json_payload(&runtime_plugins_state),
             "fix_requested": options.fix,
             "applied_fixes": fixes,
             "next_steps": next_steps,
@@ -324,8 +328,15 @@ fn collect_channel_surface_checks(inventory: &mvp::channel::ChannelInventory) ->
     checks
 }
 
+#[cfg(test)]
 fn collect_runtime_plugins_doctor_checks(config: &mvp::config::LoongConfig) -> Vec<DoctorCheck> {
     let state = crate::collect_runtime_snapshot_runtime_plugins_state(config);
+    collect_runtime_plugins_doctor_checks_from_state(&state)
+}
+
+fn collect_runtime_plugins_doctor_checks_from_state(
+    state: &crate::RuntimeSnapshotRuntimePluginsState,
+) -> Vec<DoctorCheck> {
     let runtime_level = if !state.enabled || state.scanned_root_count == 0 {
         DoctorCheckLevel::Warn
     } else {
@@ -412,6 +423,12 @@ fn collect_runtime_plugins_doctor_checks(config: &mvp::config::LoongConfig) -> V
     });
 
     checks
+}
+
+fn doctor_runtime_plugins_json_payload(
+    state: &crate::RuntimeSnapshotRuntimePluginsState,
+) -> serde_json::Value {
+    crate::runtime_snapshot_runtime_plugins_json(state)
 }
 
 fn audit_retention_doctor_check(audit: &mvp::config::AuditConfig) -> DoctorCheck {
@@ -6312,6 +6329,70 @@ mod tests {
             }),
             "runtime plugins inventory should fail when roots resolve to nothing: {checks:#?}"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn doctor_runtime_plugins_json_payload_exposes_structured_runtime_plugin_truth() {
+        let root = browser_companion_temp_dir("runtime-plugins-json-payload");
+        let config = runtime_plugins_test_config(&root, true);
+        let runtime_root = root.join("runtime-plugins");
+        std::fs::create_dir_all(runtime_root.join("search")).expect("create runtime root");
+        std::fs::write(
+            runtime_root.join("search").join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "demo-extension-plugin",
+  "provider_id": "demo-extension",
+  "connector_name": "demo-extension-stdio",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "command": "python3",
+    "entrypoint": "index.py",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"tooling\",\"events\"]",
+    "loong_extension_methods_json": "[\"extension/tool\",\"extension/event\"]",
+    "loong_extension_events_json": "[\"session_start\",\"tool_result\"]",
+    "loong_extension_host_actions_json": "[\"append_entry\",\"notify\"]"
+  }
+}"#,
+        )
+        .expect("write runtime plugin manifest");
+
+        let state = crate::collect_runtime_snapshot_runtime_plugins_state(&config);
+        let payload = doctor_runtime_plugins_json_payload(&state);
+        let plugin = payload["plugins"]
+            .as_array()
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|plugin| plugin["plugin_id"].as_str() == Some("demo-extension-plugin"))
+            })
+            .expect("demo extension plugin should be present");
+
+        assert_eq!(payload["enabled"], json!(true));
+        assert_eq!(
+            plugin["extension_contract"],
+            json!("process_stdio_json_line_v1")
+        );
+        assert_eq!(plugin["extension_facets"], json!(["tooling", "events"]));
+        assert_eq!(
+            plugin["extension_methods"],
+            json!(["extension/tool", "extension/event"])
+        );
+        assert_eq!(
+            plugin["extension_events"],
+            json!(["session_start", "tool_result"])
+        );
+        assert_eq!(
+            plugin["extension_host_actions"],
+            json!(["append_entry", "notify"])
+        );
+        assert_eq!(plugin["extension_metadata_issues"], json!([]));
 
         std::fs::remove_dir_all(&root).ok();
     }
