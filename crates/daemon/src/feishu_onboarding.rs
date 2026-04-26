@@ -7,6 +7,7 @@ use qrcode::render::unicode;
 use serde_json::Value;
 
 use crate::CliResult;
+use crate::configured_account_keys::resolve_raw_configured_account_key;
 use crate::feishu_support::load_feishu_daemon_context;
 use crate::mvp;
 
@@ -252,8 +253,11 @@ fn apply_credentials_to_selected_account(
     credentials: &FeishuOnboardCredentials,
     options: FeishuOnboardApplyOptions,
 ) {
-    let account_override = channel.accounts.get_mut(configured_account_id);
-    if let Some(account) = account_override {
+    let raw_account_key =
+        resolve_raw_configured_account_key(channel.accounts.keys(), configured_account_id);
+    if let Some(raw_account_key) = raw_account_key.as_deref()
+        && let Some(account) = channel.accounts.get_mut(raw_account_key)
+    {
         account.enabled = Some(true);
         account.app_id = Some(SecretRef::Inline(credentials.app_id.clone()));
         account.app_secret = Some(SecretRef::Inline(credentials.app_secret.clone()));
@@ -307,8 +311,11 @@ fn apply_owner_bootstrap_access(
         return false;
     };
 
-    let account_override = channel.accounts.get_mut(configured_account_id);
-    if let Some(account) = account_override {
+    let raw_account_key =
+        resolve_raw_configured_account_key(channel.accounts.keys(), configured_account_id);
+    if let Some(raw_account_key) = raw_account_key.as_deref()
+        && let Some(account) = channel.accounts.get_mut(raw_account_key)
+    {
         let chats_unset = account
             .allowed_chat_ids
             .as_ref()
@@ -877,6 +884,78 @@ mod tests {
 
         assert!(applied);
         let account = config.accounts.get("work").expect("named account");
+        assert_eq!(
+            account.allowed_chat_ids.clone().unwrap_or_default(),
+            vec!["*".to_owned()]
+        );
+        assert_eq!(
+            account.allowed_sender_ids.clone().unwrap_or_default(),
+            vec!["ou_owner_1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn apply_credentials_to_selected_account_updates_display_label_named_account() {
+        let mut config = mvp::config::FeishuChannelConfig {
+            accounts: BTreeMap::from([(
+                "Work Bot".to_owned(),
+                mvp::config::FeishuAccountConfig::default(),
+            )]),
+            ..mvp::config::FeishuChannelConfig::default()
+        };
+
+        apply_credentials_to_selected_account(
+            &mut config,
+            "work-bot",
+            &FeishuOnboardCredentials {
+                app_id: "cli_work_123".to_owned(),
+                app_secret: "work_secret_123".to_owned(),
+                verification_token: None,
+                encrypt_key: None,
+            },
+            FeishuOnboardApplyOptions {
+                domain: mvp::config::FeishuDomain::Feishu,
+                mode: mvp::config::FeishuChannelServeMode::Websocket,
+            },
+        );
+
+        let account = config.accounts.get("Work Bot").expect("named account");
+        assert_eq!(account.enabled, Some(true));
+        assert_eq!(
+            account
+                .app_id
+                .as_ref()
+                .and_then(SecretRef::inline_literal_value),
+            Some("cli_work_123")
+        );
+        assert_eq!(
+            account
+                .app_secret
+                .as_ref()
+                .and_then(SecretRef::inline_literal_value),
+            Some("work_secret_123")
+        );
+    }
+
+    #[test]
+    fn apply_owner_bootstrap_access_updates_display_label_named_account() {
+        let mut config = mvp::config::FeishuChannelConfig {
+            accounts: BTreeMap::from([(
+                "Work Bot".to_owned(),
+                mvp::config::FeishuAccountConfig::default(),
+            )]),
+            ..mvp::config::FeishuChannelConfig::default()
+        };
+
+        let applied = apply_owner_bootstrap_access(
+            &mut config,
+            "work-bot",
+            FeishuOnboardCredentialSource::QrRegistration,
+            Some("ou_owner_1"),
+        );
+
+        assert!(applied);
+        let account = config.accounts.get("Work Bot").expect("named account");
         assert_eq!(
             account.allowed_chat_ids.clone().unwrap_or_default(),
             vec!["*".to_owned()]

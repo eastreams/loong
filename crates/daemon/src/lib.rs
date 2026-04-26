@@ -128,6 +128,7 @@ mod cli_handoff;
 mod cli_json;
 mod command_kind;
 pub mod completions_cli;
+mod configured_account_keys;
 mod control_plane_server;
 mod copilot_onboarding;
 pub mod debug_cli;

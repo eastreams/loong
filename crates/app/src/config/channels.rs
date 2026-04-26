@@ -45,7 +45,7 @@ use account_resolution::*;
 mod validation_support;
 
 use self::validation_support::*;
-pub(crate) use account_resolution::normalize_channel_account_id;
+pub use account_resolution::normalize_channel_account_id;
 #[allow(unused_imports)]
 pub use bridge::{
     OnebotAccountConfig, OnebotChannelConfig, ResolvedOnebotChannelConfig,
