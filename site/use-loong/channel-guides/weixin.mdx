@@ -5,7 +5,23 @@ description: Configure the Weixin plugin-backed bridge surface in Loong.
 
 # Weixin
 
-This is a shipped plugin-backed bridge surface. The channel contract is real and operator-visible, but the active listener and login lifecycle stay in an external bridge or managed plugin rather than a built-in Loong `*-serve` runtime.
+This is a shipped plugin-backed bridge surface. The channel contract is real and operator-visible, and Loong now ships a QR bootstrap flow for provisioning the sanctioned iLink bridge token and base URL. The long-lived listener still stays in an external bridge or managed plugin rather than a built-in Loong `*-serve` runtime.
+
+## Recommended First Run
+
+```bash
+loong weixin onboard
+```
+
+What this does:
+
+- requests a fresh WeChat / iLink QR code
+- renders the QR directly in the terminal when possible
+- polls until iLink returns the `bot_token`, `baseurl`, and bound bot or user ids
+- writes `weixin.bridge_url` plus `weixin.bridge_access_token` into `loong.toml`
+- bootstraps `allowed_contact_ids = ["<ilink_user_id>"]` when that trust boundary is still empty
+
+Use `loong weixin onboard --account ops` when you want the credentials written into `weixin.accounts.ops`.
 
 ## At A Glance
 
@@ -43,6 +59,7 @@ allowed_contact_ids = ["wxid_ops"]
 ## Smoke Test
 
 ```bash
+loong weixin onboard
 loong channels
 loong channels --json
 loong doctor
@@ -51,6 +68,7 @@ loong doctor
 What success looks like:
 
 - `loong channels` lists `Weixin [weixin]` under the plugin-backed section
+- `loong weixin onboard` prints the saved bridge url plus the next `channels serve weixin` command
 - the managed bridge discovery line selects one compatible plugin or explains exactly why discovery is incomplete or ambiguous
 - `loong doctor` reports the bridge contract as ready, or gives a bounded remediation path
 
@@ -58,6 +76,7 @@ What success looks like:
 
 | Operation | Current path | Usage or status |
 | --- | --- | --- |
+| QR bridge bootstrap | `weixin onboard` | provisions `bridge_url` and `bridge_access_token` through the sanctioned iLink QR flow |
 | managed bridge contract check | `loong doctor` | current readiness and remediation surface |
 | inventory + discovery inspection | `loong channels` | current operator inventory surface |
 | bridge-backed send | `channels send weixin` | executes through the selected managed bridge runtime; target contract stays `weixin:<account>:contact:<id>` or `weixin:<account>:room:<id>` |
@@ -111,12 +130,15 @@ Use Loong here for:
 ## Operator Notes
 
 - Keep `allowed_contact_ids` tight. Treat it as the trust boundary, not a convenience list.
+- `loong weixin onboard` is the recommended first-run path because it provisions the sanctioned `bridge_url` and `bridge_access_token` pair without asking operators to copy the raw iLink response by hand.
 - Loong validates `allowed_contact_ids` locally before forwarding a contact send through the managed bridge runtime.
+- If `allowed_contact_ids` is still empty during QR onboarding, Loong bootstraps it with the scanned `ilink_user_id` so the onboarding account can validate the lane immediately.
 - `channels serve weixin` retries transient managed bridge runtime failures with bounded backoff; repeated failures still surface as a hard error so the bridge can be inspected.
 - `channels serve weixin --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
 - When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
 - `channels serve weixin --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
 - While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
+- QR onboarding does not install the bridge plugin for you. Managed bridge execution still needs `[runtime_plugins].enabled = true`, one or more `runtime_plugins.roots`, and either one compatible bridge or an explicit `managed_bridge_plugin_id`.
 - Prefer one explicit managed bridge per environment. If discovery is ambiguous, fix the ambiguity instead of relying on accidental selection.
 - If you need multiple bridge identities, move to `default_account` plus `accounts.<id>` before inventing ad-hoc routes.
 

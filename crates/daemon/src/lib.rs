@@ -187,6 +187,8 @@ mod tool_calling_readiness;
 pub mod trajectory_cli;
 mod turn_cli;
 pub mod update_cli;
+pub mod weixin_cli;
+mod weixin_onboarding;
 pub mod work_unit_cli;
 pub use self::acp_cli::{
     acp_backend_metadata_json, acp_binding_scope_json, acp_control_plane_json,
@@ -942,6 +944,11 @@ pub enum Commands {
     Feishu {
         #[command(subcommand)]
         command: feishu_cli::FeishuCommand,
+    },
+    /// Run the Weixin bridge onboarding namespace
+    Weixin {
+        #[command(subcommand)]
+        command: weixin_cli::WeixinCommand,
     },
     /// Print a shell completion script to stdout
     Completions {

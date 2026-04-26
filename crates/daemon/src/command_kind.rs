@@ -40,6 +40,7 @@ impl Commands {
             Self::Chat { .. } => "chat",
             Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
+            Self::Weixin { .. } => "weixin",
             Self::Completions { .. } => "completions",
         }
     }
@@ -105,6 +106,22 @@ mod tests {
             }
             .command_kind_for_logging(),
             "runtime"
+        );
+        assert_eq!(
+            Commands::Weixin {
+                command: crate::weixin_cli::WeixinCommand::Onboard(
+                    crate::weixin_cli::WeixinOnboardArgs {
+                        common: crate::weixin_cli::WeixinCommonArgs {
+                            config: None,
+                            account: None,
+                            json: false,
+                        },
+                        timeout_s: None,
+                    }
+                )
+            }
+            .command_kind_for_logging(),
+            "weixin"
         );
     }
 }
