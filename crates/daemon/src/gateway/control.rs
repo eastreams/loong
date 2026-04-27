@@ -441,6 +441,20 @@ pub async fn start_gateway_control_surface(
         port_source: port_resolution.source,
         token_path: token_path.clone(),
     };
+    let gateway_ingress = match mvp::channel::build_gateway_ingress(
+        loaded_config.resolved_path.as_path(),
+        &loaded_config.config,
+    )
+    .await
+    {
+        Ok(gateway_ingress) => gateway_ingress,
+        Err(error) => {
+            let cleanup_result = remove_gateway_control_token_file(token_path.as_path());
+            let final_error = merge_gateway_control_errors(error, cleanup_result.err());
+            return Err(final_error);
+        }
+    };
+    let (gateway_ingress_router, gateway_ingress_runtimes) = gateway_ingress.into_parts();
 
     let connection_registry = Arc::new(mvp::control_plane::ControlPlaneConnectionRegistry::new());
     if let Some(persisted_pairing_runtime) = persisted_pairing_runtime.as_ref() {
@@ -472,12 +486,13 @@ pub async fn start_gateway_control_surface(
     let app_state = Arc::new(app_state);
     attach_gateway_pairing_runtime_persist_hook(app_state.clone());
     let app_state_for_task = app_state.clone();
-    let router = build_gateway_control_router(app_state);
+    let router = build_gateway_control_router(app_state).merge(gateway_ingress_router);
 
     let (shutdown_sender, shutdown_receiver) = oneshot::channel();
     let (exit_sender, _) = watch::channel::<Option<CliResult<()>>>(None);
     let exit_sender_for_task = exit_sender.clone();
     let token_path_for_task = token_path;
+    let gateway_ingress_runtimes_for_task = gateway_ingress_runtimes;
     let join_handle = tokio::spawn(async move {
         let server = axum::serve(listener, router);
         let server = server.with_graceful_shutdown(async move {
@@ -486,6 +501,11 @@ pub async fn start_gateway_control_surface(
         let server_result = server
             .await
             .map_err(|error| format!("gateway control surface server failed: {error}"));
+        let ingress_shutdown_result =
+            mvp::channel::shutdown_gateway_ingress_runtimes(gateway_ingress_runtimes_for_task)
+                .await;
+        let server_result =
+            combine_gateway_control_task_results(server_result, ingress_shutdown_result);
         let persist_result = persist_gateway_pairing_runtime_state(app_state_for_task.as_ref());
         let server_result = combine_gateway_control_task_results(server_result, persist_result);
         let cleanup_result = remove_gateway_control_token_file(token_path_for_task.as_path());

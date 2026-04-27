@@ -10,6 +10,7 @@ use axum::{Router, routing::post};
 use hmac::{KeyInit, Mac};
 use serde_json::json;
 
+use crate::config::normalize_channel_account_id;
 use crate::{
     CliResult, KernelContext, config::ChannelDefaultAccountSelectionSource, config::LoongConfig,
     config::ResolvedLineChannelConfig,
@@ -19,6 +20,7 @@ use super::dispatch::{
     ChannelCommandContext, ChannelServeCommandSpec, process_inbound_with_provider,
     run_channel_serve_command_with_stop,
 };
+use super::http_ingress::{ChannelHttpServeSpec, serve_channel_http_router};
 use super::{
     ChannelDelivery, ChannelInboundMessage, ChannelOutboundTarget, ChannelOutboundTargetKind,
     ChannelPlatform, ChannelSession, ChannelTurnFeedbackPolicy, LINE_COMMAND_FAMILY_DESCRIPTOR,
@@ -58,7 +60,7 @@ impl LineServeError {
 }
 
 #[derive(Clone)]
-struct LineServeState {
+pub(super) struct LineServeState {
     config: LoongConfig,
     resolved_path: PathBuf,
     resolved: ResolvedLineChannelConfig,
@@ -158,12 +160,7 @@ pub(super) async fn run_line_channel(
     let bind = resolve_line_bind(bind_override)?;
     let path = resolve_line_path(path_override);
     let state = LineServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
-    let router = Router::new()
-        .route(path.as_str(), post(line_webhook_handler))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind(bind.as_str())
-        .await
-        .map_err(|error| format!("bind line webhook listener failed: {error}"))?;
+    let router = build_line_webhook_router(state, path.as_str());
 
     println!(
         "line channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, bind={}, path={})",
@@ -176,12 +173,42 @@ pub(super) async fn run_line_channel(
         path
     );
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            stop.wait().await;
-        })
-        .await
-        .map_err(|error| format!("line webhook server stopped: {error}"))
+    serve_channel_http_router(
+        bind.as_str(),
+        router,
+        stop,
+        ChannelHttpServeSpec {
+            bind_error_context: "line webhook listener",
+            serve_error_context: "line webhook server",
+        },
+    )
+    .await
+}
+
+pub(super) fn build_line_webhook_router(state: LineServeState, path: &str) -> Router {
+    Router::new()
+        .route(path, post(line_webhook_handler))
+        .with_state(state)
+}
+
+pub(in crate::channel) fn gateway_line_ingress_path(
+    resolved: &ResolvedLineChannelConfig,
+) -> String {
+    let configured_account_id =
+        normalize_channel_account_id(resolved.configured_account_id.as_str());
+    format!("/ingress/line/{configured_account_id}")
+}
+
+pub(in crate::channel) fn build_gateway_line_ingress_router(
+    config: &LoongConfig,
+    resolved: &ResolvedLineChannelConfig,
+    resolved_path: &Path,
+    kernel_ctx: KernelContext,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
+) -> CliResult<Router> {
+    let state = LineServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
+    let path = gateway_line_ingress_path(resolved);
+    Ok(build_line_webhook_router(state, path.as_str()))
 }
 
 pub(super) async fn run_line_channel_with_context(

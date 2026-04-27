@@ -28,6 +28,7 @@ pub(crate) mod task_progress;
 pub mod tools;
 pub(crate) mod trust;
 pub mod tui_surface;
+pub mod turn_gateway;
 pub mod work;
 pub mod workspace_guidance;
 

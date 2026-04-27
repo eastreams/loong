@@ -11,6 +11,7 @@ use super::dispatch::{
     ChannelCommandContext, ChannelServeCommandSpec, build_whatsapp_command_context,
     run_channel_serve_command_with_stop,
 };
+use super::http_ingress::{ChannelHttpServeSpec, serve_channel_http_router};
 use super::runtime::serve::ChannelServeStopHandle;
 use super::{ChannelOutboundTargetKind, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR};
 use super::{
@@ -141,16 +142,7 @@ pub(super) async fn run_whatsapp_channel(
         kernel_ctx,
         runtime,
     )?;
-    let app = Router::new()
-        .route(
-            path.as_str(),
-            get(whatsapp_verify_handler).post(whatsapp_webhook_handler),
-        )
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(bind.as_str())
-        .await
-        .map_err(|error| format!("bind whatsapp webhook listener failed: {error}"))?;
+    let app = build_whatsapp_webhook_router(state, path.as_str());
 
     println!(
         "whatsapp channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, bind={}, path={})",
@@ -163,12 +155,43 @@ pub(super) async fn run_whatsapp_channel(
         path
     );
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            stop.wait().await;
-        })
-        .await
-        .map_err(|error| format!("whatsapp webhook server stopped: {error}"))
+    serve_channel_http_router(
+        bind.as_str(),
+        app,
+        stop,
+        ChannelHttpServeSpec {
+            bind_error_context: "whatsapp webhook listener",
+            serve_error_context: "whatsapp webhook server",
+        },
+    )
+    .await
+}
+
+pub(super) fn build_whatsapp_webhook_router(state: WhatsappWebhookState, path: &str) -> Router {
+    Router::new()
+        .route(
+            path,
+            get(whatsapp_verify_handler).post(whatsapp_webhook_handler),
+        )
+        .with_state(state)
+}
+
+pub(in crate::channel) fn build_gateway_whatsapp_ingress_router(
+    config: &LoongConfig,
+    resolved: &ResolvedWhatsappChannelConfig,
+    resolved_path: &Path,
+    kernel_ctx: KernelContext,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
+) -> CliResult<Router> {
+    let path = resolved.resolved_webhook_path();
+    let state = WhatsappWebhookState::new(
+        config.clone(),
+        resolved_path.to_path_buf(),
+        resolved,
+        kernel_ctx,
+        runtime,
+    )?;
+    Ok(build_whatsapp_webhook_router(state, path.as_str()))
 }
 
 async fn read_whatsapp_json_response(response: reqwest::Response) -> CliResult<Value> {
