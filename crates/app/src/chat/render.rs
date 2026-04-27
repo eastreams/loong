@@ -1,5 +1,4 @@
 use super::*;
-
 #[cfg(not(feature = "memory-sqlite"))]
 pub(super) fn render_cli_chat_feature_unavailable_lines_with_width(
     role: &str,
@@ -85,4 +84,49 @@ pub(super) fn safe_lane_health_tone(severity: &str) -> TuiCalloutTone {
     }
 
     TuiCalloutTone::Info
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+pub(super) fn format_milli_ratio(value: Option<u32>) -> String {
+    value
+        .map(|raw| format!("{:.3}", (raw as f64) / 1000.0))
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+pub(super) fn format_ratio(numerator: u64, denominator: u64) -> String {
+    if denominator == 0 {
+        return "-".to_owned();
+    }
+    format!("{:.3}", numerator as f64 / denominator as f64)
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+pub(super) fn format_average(sum: u64, samples: u32) -> String {
+    if samples == 0 {
+        return "-".to_owned();
+    }
+    format!("{:.3}", sum as f64 / f64::from(samples))
+}
+
+#[cfg(test)]
+pub(super) fn format_rollup_counts(counts: &std::collections::BTreeMap<String, u32>) -> String {
+    if counts.is_empty() {
+        return "-".to_owned();
+    }
+    counts
+        .iter()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+pub(super) fn format_fast_lane_summary_optional<T>(value: Option<T>) -> String
+where
+    T: std::fmt::Display,
+{
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned())
 }
