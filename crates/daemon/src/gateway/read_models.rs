@@ -356,6 +356,20 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub active_provider_label: Option<String>,
     pub tool_calling: GatewayToolCallingReadModel,
     pub web_access: GatewayWebAccessReadModel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_inventory: Option<GatewayRuntimePluginInventorySummaryReadModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GatewayRuntimePluginInventorySummaryReadModel {
+    pub available: bool,
+    pub reason: Option<String>,
+    pub returned_results: Option<usize>,
+    pub loaded_plugins: Option<usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub activation_attestation_integrity_distribution: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub runtime_health_status_distribution: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1133,6 +1147,10 @@ fn build_operator_runtime_summary_read_model(
     let active_provider_label = json_string_field(&runtime_snapshot.provider, "active_label");
     let tool_calling = runtime_snapshot.tools.tool_calling.clone();
     let web_access = runtime_snapshot.tools.web_access.clone();
+    let runtime_plugin_inventory = runtime_snapshot
+        .runtime_plugin_inventory
+        .as_ref()
+        .map(build_runtime_plugin_inventory_summary_read_model);
 
     GatewayOperatorRuntimeSummaryReadModel {
         enabled_channel_ids,
@@ -1148,6 +1166,39 @@ fn build_operator_runtime_summary_read_model(
         active_provider_label,
         tool_calling,
         web_access,
+        runtime_plugin_inventory,
+    }
+}
+
+fn build_runtime_plugin_inventory_summary_read_model(
+    inventory: &crate::plugins_cli::RuntimePluginInventoryReadModel,
+) -> GatewayRuntimePluginInventorySummaryReadModel {
+    let loaded_plugins = inventory
+        .summary
+        .as_ref()
+        .map(|summary| summary.loaded_plugins);
+    let activation_attestation_integrity_distribution = inventory
+        .summary
+        .as_ref()
+        .map(|summary| {
+            summary
+                .activation_attestation_integrity_distribution
+                .clone()
+        })
+        .unwrap_or_default();
+    let runtime_health_status_distribution = inventory
+        .summary
+        .as_ref()
+        .map(|summary| summary.runtime_health_status_distribution.clone())
+        .unwrap_or_default();
+
+    GatewayRuntimePluginInventorySummaryReadModel {
+        available: inventory.available,
+        reason: inventory.reason.clone(),
+        returned_results: inventory.returned_results,
+        loaded_plugins,
+        activation_attestation_integrity_distribution,
+        runtime_health_status_distribution,
     }
 }
 

@@ -342,9 +342,19 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     };
     let tool_calling = &runtime.tool_calling;
     let web_access = &runtime.web_access;
+    let runtime_plugin_inventory = runtime.runtime_plugin_inventory.as_ref();
     let ordinary_network_detail = render_web_ordinary_network_detail(web_access);
     let query_search_detail = render_web_query_search_detail(web_access);
     let web_boundary_note = web_access.separation_note.clone();
+    let runtime_plugin_inventory_summary =
+        render_status_runtime_plugin_inventory_summary(runtime_plugin_inventory);
+    let runtime_plugin_attestation = render_status_runtime_plugin_distribution(
+        runtime_plugin_inventory
+            .map(|inventory| &inventory.activation_attestation_integrity_distribution),
+    );
+    let runtime_plugin_health = render_status_runtime_plugin_distribution(
+        runtime_plugin_inventory.map(|inventory| &inventory.runtime_health_status_distribution),
+    );
     let mut sections = Vec::new();
 
     if let Some(primary_action) = status.next_actions.first() {
@@ -623,6 +633,18 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 key: "work units".to_owned(),
                 value: render_status_cli_work_units_text(&status.work_units),
             },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "runtime plugin inventory".to_owned(),
+                value: runtime_plugin_inventory_summary,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "plugin attestation".to_owned(),
+                value: runtime_plugin_attestation,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "plugin runtime health".to_owned(),
+                value: runtime_plugin_health,
+            },
         ],
     });
 
@@ -728,6 +750,39 @@ fn render_status_cli_work_units_text(work_units: &StatusCliWorkUnitReadModel) ->
     let error_option = work_units.error.as_deref();
     let error = error_option.unwrap_or("-");
     format!("work_units availability={} error={}", availability, error)
+}
+
+fn render_status_runtime_plugin_inventory_summary(
+    inventory: Option<&crate::gateway::read_models::GatewayRuntimePluginInventorySummaryReadModel>,
+) -> String {
+    let Some(inventory) = inventory else {
+        return "-".to_owned();
+    };
+    let returned_results = render_optional_usize(inventory.returned_results);
+    let loaded_plugins = render_optional_usize(inventory.loaded_plugins);
+    let reason = inventory.reason.as_deref().unwrap_or("-");
+
+    format!(
+        "available={} returned_results={} loaded_plugins={} reason={}",
+        inventory.available, returned_results, loaded_plugins, reason
+    )
+}
+
+fn render_status_runtime_plugin_distribution(
+    distribution: Option<&std::collections::BTreeMap<String, usize>>,
+) -> String {
+    let Some(distribution) = distribution else {
+        return "-".to_owned();
+    };
+    if distribution.is_empty() {
+        return "-".to_owned();
+    }
+
+    distribution
+        .iter()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn render_optional_u32(value: Option<u32>) -> String {
@@ -877,6 +932,20 @@ mod tests {
                     query_search_credential_ready: true,
                     separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
+                runtime_plugin_inventory: Some(
+                    crate::gateway::read_models::GatewayRuntimePluginInventorySummaryReadModel {
+                        available: true,
+                        reason: None,
+                        returned_results: Some(1),
+                        loaded_plugins: Some(0),
+                        activation_attestation_integrity_distribution:
+                            std::collections::BTreeMap::from([("unreported".to_owned(), 1)]),
+                        runtime_health_status_distribution: std::collections::BTreeMap::from([(
+                            "unreported".to_owned(),
+                            1,
+                        )]),
+                    },
+                ),
             },
         };
         let status = StatusCliReadModel {
@@ -912,7 +981,14 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
-            runtime_plugin_inventory: None,
+            runtime_plugin_inventory: Some(crate::plugins_cli::RuntimePluginInventoryReadModel {
+                available: true,
+                reason: None,
+                error: None,
+                returned_results: Some(1),
+                summary: None,
+                results: Vec::new(),
+            }),
             next_actions: vec![StatusCliAction {
                 label: "first answer".to_owned(),
                 command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
@@ -944,6 +1020,11 @@ mod tests {
         assert!(rendered.contains("credential_ready=true"));
         assert!(rendered.contains("web boundary"));
         assert!(rendered.contains("ordinary network access stays separately governed"));
+        assert!(rendered.contains("runtime plugin inventory"));
+        assert!(rendered.contains("returned_results=1"));
+        assert!(rendered.contains("plugin attestation"));
+        assert!(rendered.contains("unreported:1"));
+        assert!(rendered.contains("plugin runtime health"));
         assert!(rendered.contains("channel and recovery detail"));
         assert!(rendered.contains("enabled channels: telegram"));
         assert!(rendered.contains("service enabled ids: telegram"));
@@ -1034,6 +1115,7 @@ mod tests {
                         query_search_credential_ready: true,
                         separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                     },
+                    runtime_plugin_inventory: None,
                 },
             },
             acp: StatusCliAcpReadModel {
