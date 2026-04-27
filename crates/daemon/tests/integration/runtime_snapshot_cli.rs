@@ -408,6 +408,51 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
 }
 
 #[test]
+fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
+    let root = unique_temp_dir("loong-runtime-snapshot-artifact-inventory");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let metadata = loong_daemon::RuntimeSnapshotArtifactMetadata {
+        created_at: "2026-04-27T00:00:00Z".to_owned(),
+        label: Some("artifact".to_owned()),
+        experiment_id: None,
+        parent_snapshot_id: None,
+    };
+
+    let payload = loong_daemon::build_runtime_snapshot_artifact_json_payload_with_inventory(
+        &snapshot,
+        &metadata,
+        Some(loong_daemon::plugins_cli::RuntimePluginInventoryReadModel {
+            available: true,
+            reason: None,
+            error: None,
+            returned_results: Some(1),
+            summary: None,
+            results: Vec::new(),
+        }),
+    )
+    .expect("build runtime snapshot artifact");
+
+    assert_eq!(
+        payload["runtime_plugin_inventory"]["available"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        payload["runtime_plugin_inventory"]["returned_results"],
+        serde_json::json!(1)
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved() {
     let root = unique_temp_dir("loong-runtime-snapshot-x-api-key");
     let _env = RuntimeSnapshotEnvGuard::set(&[

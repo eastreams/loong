@@ -477,7 +477,7 @@ pub struct PluginsBridgeSupportProvenanceView {
     pub delta_sha256: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginsInventorySummaryView {
     pub returned_plugins: usize,
     pub ready_plugins: usize,
@@ -512,7 +512,7 @@ pub struct PluginsInventoryExecution {
     pub results: Vec<PluginInventoryResult>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePluginInventoryResultView {
     pub plugin_id: String,
     pub source_path: String,
@@ -523,7 +523,7 @@ pub struct RuntimePluginInventoryResultView {
     pub runtime_health: Option<PluginRuntimeHealthResult>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePluginInventoryReadModel {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

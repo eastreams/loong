@@ -514,14 +514,17 @@ async fn run_command(command: Commands) -> CliResult<()> {
             label,
             experiment_id,
             parent_snapshot_id,
-        } => run_runtime_snapshot_cli(
-            config.as_deref(),
-            json,
-            output.as_deref(),
-            label.as_deref(),
-            experiment_id.as_deref(),
-            parent_snapshot_id.as_deref(),
-        ),
+        } => {
+            run_runtime_snapshot_cli(
+                config.as_deref(),
+                json,
+                output.as_deref(),
+                label.as_deref(),
+                experiment_id.as_deref(),
+                parent_snapshot_id.as_deref(),
+            )
+            .await
+        }
         Commands::RuntimeRestore {
             config,
             snapshot,

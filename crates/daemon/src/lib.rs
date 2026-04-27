@@ -2633,11 +2633,13 @@ pub struct RuntimeSnapshotArtifactDocument {
     pub tools: Value,
     #[serde(default)]
     pub runtime_plugins: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_inventory: Option<crate::plugins_cli::RuntimePluginInventoryReadModel>,
     pub external_skills: Value,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
 }
 
-pub fn run_runtime_snapshot_cli(
+pub async fn run_runtime_snapshot_cli(
     config_path: Option<&str>,
     as_json: bool,
     output_path: Option<&str>,
@@ -2645,10 +2647,17 @@ pub fn run_runtime_snapshot_cli(
     experiment_id: Option<&str>,
     parent_snapshot_id: Option<&str>,
 ) -> CliResult<()> {
-    let snapshot = collect_runtime_snapshot_cli_state(config_path)?;
+    let (resolved_path, config) = mvp::config::load(config_path)?;
+    let snapshot = collect_runtime_snapshot_cli_state_from_parts(resolved_path.as_path(), &config)?;
+    let runtime_plugin_inventory =
+        crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await;
     let metadata =
         runtime_snapshot_artifact_metadata_now(label, experiment_id, parent_snapshot_id)?;
-    let artifact_payload = build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)?;
+    let artifact_payload = build_runtime_snapshot_artifact_json_payload_with_inventory(
+        &snapshot,
+        &metadata,
+        Some(runtime_plugin_inventory),
+    )?;
 
     if let Some(output_path) = output_path {
         persist_json_artifact(output_path, &artifact_payload, "runtime snapshot artifact")?;
@@ -3947,6 +3956,14 @@ pub fn build_runtime_snapshot_artifact_json_payload(
     snapshot: &RuntimeSnapshotCliState,
     metadata: &RuntimeSnapshotArtifactMetadata,
 ) -> CliResult<Value> {
+    build_runtime_snapshot_artifact_json_payload_with_inventory(snapshot, metadata, None)
+}
+
+pub fn build_runtime_snapshot_artifact_json_payload_with_inventory(
+    snapshot: &RuntimeSnapshotCliState,
+    metadata: &RuntimeSnapshotArtifactMetadata,
+    runtime_plugin_inventory: Option<crate::plugins_cli::RuntimePluginInventoryReadModel>,
+) -> CliResult<Value> {
     let base_payload = cli_json::build_runtime_snapshot_cli_json_payload(snapshot)?;
     let lineage = runtime_snapshot_artifact_lineage(snapshot, metadata)?;
     let document = RuntimeSnapshotArtifactDocument {
@@ -3977,6 +3994,7 @@ pub fn build_runtime_snapshot_artifact_json_payload(
             .get("runtime_plugins")
             .cloned()
             .unwrap_or(Value::Null),
+        runtime_plugin_inventory,
         external_skills: base_payload
             .get("external_skills")
             .cloned()
