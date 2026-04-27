@@ -810,12 +810,22 @@ pub(crate) fn model_visible_tool_name(raw: &str) -> String {
     user_visible_tool_name(canonical_name)
 }
 
-pub(crate) fn tool_surface_visible_in_view(surface_id: &str, view: &ToolView) -> bool {
-    tool_surface::tool_surface_visible_in_view(surface_id, view)
-}
-
 pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {
     tool_surface::is_tool_surface_id(surface_id)
+}
+
+pub(crate) fn tool_id_visible_in_view(tool_id: &str, view: &ToolView) -> bool {
+    let canonical_tool_id = canonical_tool_name(tool_id);
+    if view.contains(canonical_tool_id) {
+        return true;
+    }
+
+    if tool_surface::is_tool_surface_id(tool_id) {
+        return tool_surface::tool_surface_visible_in_view(tool_id, view);
+    }
+
+    tool_surface::tool_surface_id_for_name(canonical_tool_id)
+        .is_some_and(|surface_id| tool_surface::tool_surface_visible_in_view(surface_id, view))
 }
 
 pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) -> ToolView {

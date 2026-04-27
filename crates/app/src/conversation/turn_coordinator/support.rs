@@ -227,6 +227,215 @@ pub(super) fn summarize_discovery_first_followup_turn(
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn persist_task_progress_event_best_effort(
+    config: &LoongConfig,
+    session_id: &str,
+    source: &str,
+    task_progress: TaskProgressRecord,
+) {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return;
+    };
+    let _ = repo.append_event(NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: TASK_PROGRESS_EVENT_KIND.to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: task_progress_event_payload(source, &task_progress),
+    });
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_canonical_task_id(config: &LoongConfig, session_id: &str) -> String {
+    let memory_config = store::session_store_config_from_memory_config(&config.memory);
+    let Ok(repo) = SessionRepository::new(&memory_config) else {
+        return session_id.to_owned();
+    };
+
+    resolve_canonical_task_id_for_session(&repo, session_id)
+        .unwrap_or_else(|| session_id.to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn active_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
+    TaskProgressRecord {
+        task_id,
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Active,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::NotStarted),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "conversation_turn".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "running".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "terminal_reply_or_error".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "task_status".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Inspect task_status, task_wait, or task_history for durable task progress."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn verifying_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
+    TaskProgressRecord {
+        task_id,
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Verifying,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Pending),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "turn_finalization".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "verifying".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "after_turn_and_compaction_complete".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "task_status".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Check task_status to see whether finalization verification has completed."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn waiting_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
+    TaskProgressRecord {
+        task_id,
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Waiting,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Pending),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "approval_gate".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "waiting".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "approval_decision".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "task_status".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Use task_status or the approval control path to resolve the waiting task."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn completed_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
+    TaskProgressRecord {
+        task_id: resolve_canonical_task_id(config, session_id),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Completed,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Passed),
+        active_handles: Vec::new(),
+        resume_recipe: None,
+        updated_at: unix_ts_now(),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn failed_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
+    TaskProgressRecord {
+        task_id: resolve_canonical_task_id(config, session_id),
+        owner_kind: "conversation_turn".to_owned(),
+        status: TaskProgressStatus::Failed,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::Failed),
+        active_handles: Vec::new(),
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "task_history".to_owned(),
+            session_id: session_id.to_owned(),
+            note: Some(
+                "Inspect recent task_history and task_status to diagnose the failed task."
+                    .to_owned(),
+            ),
+        }),
+        updated_at: unix_ts_now(),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn summarize_task_progress_intent(user_input: &str) -> Option<String> {
+    let normalized = user_input.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    const MAX_CHARS: usize = 160;
+    if normalized.chars().count() <= MAX_CHARS {
+        return Some(normalized.to_owned());
+    }
+
+    let mut truncated = normalized
+        .chars()
+        .take(MAX_CHARS.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('…');
+    Some(truncated)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn checkpoint_waits_for_external_resolution(
+    checkpoint: &TurnCheckpointSnapshot,
+) -> bool {
+    matches!(
+        checkpoint.lane.as_ref().map(|lane| lane.result_kind),
+        Some(TurnCheckpointResultKind::NeedsApproval)
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(super) fn checkpoint_requires_verification_phase(checkpoint: &TurnCheckpointSnapshot) -> bool {
+    !checkpoint_waits_for_external_resolution(checkpoint)
+        && (checkpoint.finalization.runs_after_turn()
+            || checkpoint.finalization.attempts_context_compaction())
+}
+
 pub(super) fn estimate_tokens_for_messages(
     estimated_tokens: Option<usize>,
     messages: &[Value],
@@ -315,7 +524,7 @@ pub(super) async fn emit_async_delegate_child_queued_event<R: ConversationRuntim
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
+pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     parent_session_id: &str,
     child_session_id: &str,

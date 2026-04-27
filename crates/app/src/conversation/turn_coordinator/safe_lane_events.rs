@@ -97,44 +97,18 @@ pub(super) async fn emit_turn_ingress_event<R: ConversationRuntime + ?Sized>(
 }
 
 pub(super) fn should_emit_safe_lane_event(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     event_name: &str,
     payload: &Value,
 ) -> bool {
-    if !config.conversation.safe_lane_emit_runtime_events {
+    if event_name == "plan_round_completed"
+        && payload.get("status").and_then(Value::as_str) == Some("succeeded")
+        && safe_lane_failure_pressure(payload) == 0
+    {
         return false;
     }
 
-    if is_safe_lane_critical_event(event_name) {
-        return true;
-    }
-
-    let sample_every = config.conversation.safe_lane_event_sample_every();
-    if sample_every <= 1 {
-        return true;
-    }
-
-    if config.conversation.safe_lane_event_adaptive_sampling
-        && safe_lane_failure_pressure(payload)
-            >= config
-                .conversation
-                .safe_lane_event_adaptive_failure_threshold() as u64
-    {
-        return true;
-    }
-
-    let round = payload
-        .get("round")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    round.is_multiple_of(sample_every as u64)
-}
-
-fn is_safe_lane_critical_event(event_name: &str) -> bool {
-    matches!(
-        event_name,
-        "lane_selected" | "verify_failed" | "final_status"
-    )
+    true
 }
 
 pub(super) fn safe_lane_failure_pressure(payload: &Value) -> u64 {

@@ -2406,7 +2406,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_template_includes_tool_result_payload_summary_limit_default() {
+    fn write_template_omits_tool_result_payload_summary_limit_knob() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
@@ -2421,11 +2421,40 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
         let raw = std::fs::read_to_string(&config_path).expect("read template");
         assert!(raw.contains("[conversation]"));
-        assert!(raw.contains("tool_result_payload_summary_limit_chars = 2048"));
-        assert!(raw.contains("safe_lane_health_truncation_warn_threshold = 0.3"));
-        assert!(raw.contains("safe_lane_health_truncation_critical_threshold = 0.6"));
-        assert!(raw.contains("safe_lane_health_verify_failure_warn_threshold = 0.4"));
-        assert!(raw.contains("safe_lane_health_replan_warn_threshold = 0.5"));
+        assert!(!raw.contains("tool_result_payload_summary_limit_chars"));
+        assert!(!raw.contains("safe_lane_health_truncation_warn_threshold"));
+        assert!(!raw.contains("safe_lane_health_truncation_critical_threshold"));
+        assert!(!raw.contains("safe_lane_health_verify_failure_warn_threshold"));
+        assert!(!raw.contains("safe_lane_health_replan_warn_threshold"));
+        assert!(!raw.contains("safe_lane_session_governor_enabled"));
+        assert!(!raw.contains("safe_lane_session_governor_window_turns"));
+        assert!(!raw.contains("safe_lane_session_governor_failed_final_status_threshold"));
+        assert!(!raw.contains("safe_lane_session_governor_backpressure_failure_threshold"));
+        assert!(!raw.contains("safe_lane_session_governor_trend_enabled"));
+        assert!(!raw.contains("safe_lane_session_governor_recovery_success_streak"));
+        assert!(!raw.contains("safe_lane_session_governor_force_no_replan"));
+        assert!(!raw.contains("safe_lane_session_governor_force_node_max_attempts"));
+        assert!(!raw.contains("safe_lane_backpressure_guard_enabled"));
+        assert!(!raw.contains("safe_lane_backpressure_max_total_attempts"));
+        assert!(!raw.contains("safe_lane_backpressure_max_replans"));
+        assert!(!raw.contains("safe_lane_risk_threshold"));
+        assert!(!raw.contains("safe_lane_complexity_threshold"));
+        assert!(!raw.contains("safe_lane_verify_output_non_empty"));
+        assert!(!raw.contains("safe_lane_verify_min_output_chars"));
+        assert!(!raw.contains("safe_lane_verify_require_status_prefix"));
+        assert!(!raw.contains("safe_lane_verify_adaptive_anchor_escalation"));
+        assert!(!raw.contains("safe_lane_verify_anchor_escalation_after_failures"));
+        assert!(!raw.contains("safe_lane_verify_anchor_escalation_min_matches"));
+        assert!(!raw.contains("safe_lane_verify_deny_markers"));
+        assert!(!raw.contains("fast_lane_max_input_chars"));
+        assert!(!raw.contains("hybrid_lane_enabled"));
+        assert!(!raw.contains("fast_lane_max_tool_steps_per_turn"));
+        assert!(!raw.contains("safe_lane_plan_execution_enabled"));
+        assert!(!raw.contains("safe_lane_plan_max_wall_time_ms"));
+        assert!(!raw.contains("safe_lane_replan_max_node_attempts"));
+        assert!(!raw.contains("safe_lane_max_tool_steps_per_turn"));
+        assert!(!raw.contains("safe_lane_node_max_attempts"));
+        assert!(!raw.contains("safe_lane_replan_max_rounds"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -2433,7 +2462,7 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_template_includes_fast_lane_parallel_tool_execution_defaults() {
+    fn write_template_omits_fast_lane_parallel_tool_execution_knobs() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock before unix epoch")
@@ -2449,8 +2478,8 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
 
         let raw = std::fs::read_to_string(&config_path).expect("read template");
         assert!(raw.contains("[conversation]"));
-        assert!(raw.contains("fast_lane_parallel_tool_execution_enabled = false"));
-        assert!(raw.contains("fast_lane_parallel_tool_execution_max_in_flight = 4"));
+        assert!(!raw.contains("fast_lane_parallel_tool_execution_enabled"));
+        assert!(!raw.contains("fast_lane_parallel_tool_execution_max_in_flight"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();

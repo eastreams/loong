@@ -1,5 +1,25 @@
 use super::*;
 
+const SAFE_LANE_SESSION_GOVERNOR_WINDOW_TURNS: usize = 96;
+const SAFE_LANE_SESSION_GOVERNOR_FAILED_FINAL_STATUS_THRESHOLD: u32 = 3;
+const SAFE_LANE_SESSION_GOVERNOR_BACKPRESSURE_FAILURE_THRESHOLD: u32 = 1;
+const SAFE_LANE_SESSION_GOVERNOR_TREND_MIN_SAMPLES: usize = 4;
+const SAFE_LANE_SESSION_GOVERNOR_TREND_EWMA_ALPHA: f64 = 0.35;
+const SAFE_LANE_SESSION_GOVERNOR_TREND_FAILURE_EWMA_THRESHOLD: f64 = 0.60;
+const SAFE_LANE_SESSION_GOVERNOR_TREND_BACKPRESSURE_EWMA_THRESHOLD: f64 = 0.20;
+const SAFE_LANE_SESSION_GOVERNOR_RECOVERY_SUCCESS_STREAK: u32 = 3;
+const SAFE_LANE_SESSION_GOVERNOR_RECOVERY_MAX_FAILURE_EWMA: f64 = 0.25;
+const SAFE_LANE_SESSION_GOVERNOR_RECOVERY_MAX_BACKPRESSURE_EWMA: f64 = 0.10;
+const SAFE_LANE_SESSION_GOVERNOR_FORCE_NO_REPLAN: bool = true;
+const SAFE_LANE_SESSION_GOVERNOR_FORCE_NODE_MAX_ATTEMPTS: u8 = 1;
+const SAFE_LANE_BACKPRESSURE_MAX_TOTAL_ATTEMPTS: u64 = 32;
+const SAFE_LANE_BACKPRESSURE_MAX_REPLANS: u32 = 8;
+const SAFE_LANE_RISK_THRESHOLD: u32 = 4;
+const SAFE_LANE_COMPLEXITY_THRESHOLD: u32 = 6;
+const SAFE_LANE_VERIFY_ADAPTIVE_ANCHOR_ESCALATION: bool = true;
+const SAFE_LANE_VERIFY_ANCHOR_ESCALATION_AFTER_FAILURES: u32 = 2;
+const SAFE_LANE_VERIFY_ANCHOR_MIN_MATCHES: usize = 1;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct SafeLaneAdaptiveVerifyPolicyState {
     pub(super) min_anchor_matches: usize,
@@ -158,7 +178,7 @@ pub(super) fn summarize_safe_lane_tool_output_stats(outputs: &[String]) -> SafeL
 }
 
 pub(super) fn derive_safe_lane_runtime_health_signal(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     metrics: SafeLaneExecutionMetrics,
     final_status_failed: bool,
     final_failure_code: Option<&str>,
@@ -177,16 +197,10 @@ pub(super) fn derive_safe_lane_runtime_health_signal(
     let aggregate_truncation_ratio = metrics
         .aggregate_tool_truncation_ratio_milli()
         .map(|milli| (milli as f64) / 1000.0);
-    let truncation_warn_threshold = config
-        .conversation
-        .safe_lane_health_truncation_warn_threshold();
-    let truncation_critical_threshold = config
-        .conversation
-        .safe_lane_health_truncation_critical_threshold();
-    let verify_failure_warn_threshold = config
-        .conversation
-        .safe_lane_health_verify_failure_warn_threshold();
-    let replan_warn_threshold = config.conversation.safe_lane_health_replan_warn_threshold();
+    let truncation_warn_threshold = 0.30;
+    let truncation_critical_threshold = 0.60;
+    let verify_failure_warn_threshold = 0.40;
+    let replan_warn_threshold = 0.50;
 
     let mut flags = Vec::new();
     let mut has_critical = false;
@@ -233,17 +247,11 @@ pub(super) fn derive_safe_lane_runtime_health_signal(
 }
 
 pub(super) fn select_safe_lane_risk_tier(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     lane_decision: &LaneDecision,
 ) -> RiskTier {
-    let high_risk_bar = config
-        .conversation
-        .safe_lane_risk_threshold
-        .saturating_mul(2);
-    let high_complexity_bar = config
-        .conversation
-        .safe_lane_complexity_threshold
-        .saturating_mul(2);
+    let high_risk_bar = SAFE_LANE_RISK_THRESHOLD.saturating_mul(2);
+    let high_complexity_bar = SAFE_LANE_COMPLEXITY_THRESHOLD.saturating_mul(2);
     if lane_decision.risk_score >= high_risk_bar
         || lane_decision.complexity_score >= high_complexity_bar
     {
@@ -256,60 +264,38 @@ pub(super) fn select_safe_lane_risk_tier(
 }
 
 pub(super) fn compute_safe_lane_verify_min_anchor_matches(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     verify_failures: u32,
 ) -> usize {
-    if !config
-        .conversation
-        .safe_lane_verify_adaptive_anchor_escalation
-    {
+    if !SAFE_LANE_VERIFY_ADAPTIVE_ANCHOR_ESCALATION {
         return 0;
     }
-    if verify_failures
-        < config
-            .conversation
-            .safe_lane_verify_anchor_escalation_after_failures()
-    {
+    if verify_failures < SAFE_LANE_VERIFY_ANCHOR_ESCALATION_AFTER_FAILURES {
         return 0;
     }
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_min_matches()
+    SAFE_LANE_VERIFY_ANCHOR_MIN_MATCHES
 }
 
 pub(super) fn decide_safe_lane_session_governor(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     history: &SafeLaneGovernorHistorySignals,
 ) -> SafeLaneSessionGovernorDecision {
     let summary = &history.summary;
-    let history_window_turns = config
-        .conversation
-        .safe_lane_session_governor_window_turns();
+    let history_window_turns = SAFE_LANE_SESSION_GOVERNOR_WINDOW_TURNS;
     let failed_final_status_events = summary.failed_final_status_events();
     let backpressure_failure_events = summary.backpressure_failure_events();
-    let failed_final_status_threshold = config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold();
-    let backpressure_failure_threshold = config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold();
+    let failed_final_status_threshold = SAFE_LANE_SESSION_GOVERNOR_FAILED_FINAL_STATUS_THRESHOLD;
+    let backpressure_failure_threshold = SAFE_LANE_SESSION_GOVERNOR_BACKPRESSURE_FAILURE_THRESHOLD;
     let failed_threshold_triggered = failed_final_status_events >= failed_final_status_threshold;
     let backpressure_threshold_triggered =
         backpressure_failure_events >= backpressure_failure_threshold;
-    let trend_enabled = config.conversation.safe_lane_session_governor_trend_enabled;
+    let trend_enabled = true;
     let trend_samples = history.final_status_failed_samples.len();
-    let trend_min_samples = config
-        .conversation
-        .safe_lane_session_governor_trend_min_samples();
-    let trend_failure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_trend_failure_ewma_threshold();
-    let trend_backpressure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_trend_backpressure_ewma_threshold();
-    let trend_ewma_alpha = config
-        .conversation
-        .safe_lane_session_governor_trend_ewma_alpha();
+    let trend_min_samples = SAFE_LANE_SESSION_GOVERNOR_TREND_MIN_SAMPLES;
+    let trend_failure_ewma_threshold = SAFE_LANE_SESSION_GOVERNOR_TREND_FAILURE_EWMA_THRESHOLD;
+    let trend_backpressure_ewma_threshold =
+        SAFE_LANE_SESSION_GOVERNOR_TREND_BACKPRESSURE_EWMA_THRESHOLD;
+    let trend_ewma_alpha = SAFE_LANE_SESSION_GOVERNOR_TREND_EWMA_ALPHA;
     let trend_ready = trend_enabled && trend_samples >= trend_min_samples;
     let trend_failure_ewma = if trend_ready {
         compute_ewma_bool(
@@ -339,15 +325,10 @@ pub(super) fn decide_safe_lane_session_governor(
     } else {
         0
     };
-    let recovery_success_streak_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_success_streak();
-    let recovery_failure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_max_failure_ewma();
-    let recovery_backpressure_ewma_threshold = config
-        .conversation
-        .safe_lane_session_governor_recovery_max_backpressure_ewma();
+    let recovery_success_streak_threshold = SAFE_LANE_SESSION_GOVERNOR_RECOVERY_SUCCESS_STREAK;
+    let recovery_failure_ewma_threshold = SAFE_LANE_SESSION_GOVERNOR_RECOVERY_MAX_FAILURE_EWMA;
+    let recovery_backpressure_ewma_threshold =
+        SAFE_LANE_SESSION_GOVERNOR_RECOVERY_MAX_BACKPRESSURE_EWMA;
     let recovery_threshold_triggered = trend_ready
         && recovery_success_streak >= recovery_success_streak_threshold
         && trend_failure_ewma
@@ -357,10 +338,9 @@ pub(super) fn decide_safe_lane_session_governor(
             .map(|value| value <= recovery_backpressure_ewma_threshold)
             .unwrap_or(false);
 
-    let engaged = config.conversation.safe_lane_session_governor_enabled
-        && (failed_threshold_triggered
-            || backpressure_threshold_triggered
-            || trend_threshold_triggered)
+    let engaged = (failed_threshold_triggered
+        || backpressure_threshold_triggered
+        || trend_threshold_triggered)
         && !recovery_threshold_triggered;
 
     SafeLaneSessionGovernorDecision {
@@ -387,15 +367,9 @@ pub(super) fn decide_safe_lane_session_governor(
         recovery_failure_ewma_threshold,
         recovery_backpressure_ewma_threshold,
         recovery_threshold_triggered,
-        force_no_replan: engaged
-            && config
-                .conversation
-                .safe_lane_session_governor_force_no_replan,
-        forced_node_max_attempts: engaged.then(|| {
-            config
-                .conversation
-                .safe_lane_session_governor_force_node_max_attempts()
-        }),
+        force_no_replan: engaged && SAFE_LANE_SESSION_GOVERNOR_FORCE_NO_REPLAN,
+        forced_node_max_attempts: engaged
+            .then_some(SAFE_LANE_SESSION_GOVERNOR_FORCE_NODE_MAX_ATTEMPTS),
     }
 }
 
@@ -404,13 +378,7 @@ pub(super) async fn load_safe_lane_history_signals_for_governor(
     session_id: &str,
     binding: ConversationRuntimeBinding<'_>,
 ) -> SafeLaneGovernorHistorySignals {
-    if !config.conversation.safe_lane_session_governor_enabled {
-        return SafeLaneGovernorHistorySignals::default();
-    }
-
-    let window_turns = config
-        .conversation
-        .safe_lane_session_governor_window_turns();
+    let window_turns = SAFE_LANE_SESSION_GOVERNOR_WINDOW_TURNS;
     #[cfg(feature = "memory-sqlite")]
     {
         let memory_config =
@@ -479,17 +447,10 @@ fn trailing_success_streak(failed_samples: &[bool]) -> u32 {
 }
 
 pub(super) fn safe_lane_backpressure_budget(
-    config: &LoongConfig,
+    _config: &LoongConfig,
 ) -> Option<SafeLaneBackpressureBudget> {
-    config
-        .conversation
-        .safe_lane_backpressure_guard_enabled
-        .then(|| {
-            SafeLaneBackpressureBudget::new(
-                config
-                    .conversation
-                    .safe_lane_backpressure_max_total_attempts(),
-                config.conversation.safe_lane_backpressure_max_replans(),
-            )
-        })
+    Some(SafeLaneBackpressureBudget::new(
+        SAFE_LANE_BACKPRESSURE_MAX_TOTAL_ATTEMPTS,
+        SAFE_LANE_BACKPRESSURE_MAX_REPLANS,
+    ))
 }
