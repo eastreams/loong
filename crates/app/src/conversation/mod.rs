@@ -39,6 +39,22 @@ mod turn_observer;
 mod turn_shared;
 pub(crate) mod workspace_isolation;
 
+pub(crate) const FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED: bool = true;
+pub(crate) const FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT: usize = 4;
+pub(crate) const FAST_LANE_MAX_TOOL_STEPS_PER_TURN: usize = 5;
+pub(crate) const SAFE_LANE_MAX_TOOL_STEPS_PER_TURN: usize = 2;
+pub(crate) const SAFE_LANE_NODE_MAX_ATTEMPTS: u8 = 1;
+pub(crate) const SAFE_LANE_REPLAN_MAX_ROUNDS: u8 = 16;
+pub(crate) const SAFE_LANE_REPLAN_MAX_NODE_ATTEMPTS: u8 = 4;
+pub(crate) const TURN_LOOP_MAX_CONSECUTIVE_SAME_TOOL: usize = 10;
+pub(crate) const TURN_LOOP_MAX_DISCOVERY_FOLLOWUP_ROUNDS: usize = 12;
+pub(crate) const TURN_LOOP_MAX_PING_PONG_CYCLES: usize = 2;
+pub(crate) const TURN_LOOP_MAX_REPEATED_TOOL_CALL_ROUNDS: usize = 2;
+pub(crate) const TURN_LOOP_MAX_ROUNDS: usize = 6;
+pub(crate) const TURN_LOOP_MAX_SAME_TOOL_FAILURE_ROUNDS: usize = 3;
+pub(crate) const TURN_LOOP_MAX_TOTAL_TOOL_CALLS: usize = 200;
+pub(crate) const TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 2_048;
+
 pub use analytics::{
     ConversationEventRecord, DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary,
     FastLaneToolBatchSegmentSnapshot, PromptFrameEventSummary, SafeLaneEventSummary,

@@ -28,6 +28,10 @@ use super::turn_shared::{
     reduce_followup_payload_for_model, request_completion_with_raw_fallback,
     tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
 };
+use super::{
+    FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED, FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT,
+    TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+};
 
 #[derive(Default)]
 pub struct ConversationTurnLoop;
@@ -378,7 +382,7 @@ fn initialize_turn_loop_session(
 }
 
 async fn evaluate_round_kernel(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     policy: &TurnLoopPolicy,
     turn: &ProviderTurn,
     session_context: &super::runtime::SessionContext,
@@ -393,15 +397,9 @@ async fn evaluate_round_kernel(
 
     let engine = TurnEngine::with_parallel_tool_execution(
         policy.max_tool_steps_per_round,
-        config
-            .conversation
-            .tool_result_payload_summary_limit_chars(),
-        config
-            .conversation
-            .fast_lane_parallel_tool_execution_enabled,
-        config
-            .conversation
-            .fast_lane_parallel_tool_execution_max_in_flight(),
+        TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED,
+        FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT,
     );
     let (turn_result, _turn_trace) = match engine.validate_turn_in_context(turn, session_context) {
         Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None),
@@ -624,17 +622,17 @@ impl TurnLoopPolicy {
     fn from_config(config: &LoongConfig) -> Self {
         let turn_loop = &config.conversation.turn_loop;
         Self {
-            max_rounds: turn_loop.max_rounds.max(1),
-            max_tool_steps_per_round: turn_loop.max_tool_steps_per_round.max(1),
-            max_repeated_tool_call_rounds: turn_loop.max_repeated_tool_call_rounds.max(1),
-            max_ping_pong_cycles: turn_loop.max_ping_pong_cycles.max(1),
-            max_same_tool_failure_rounds: turn_loop.max_same_tool_failure_rounds.max(1),
+            max_rounds: super::TURN_LOOP_MAX_ROUNDS,
+            max_tool_steps_per_round: super::FAST_LANE_MAX_TOOL_STEPS_PER_TURN,
+            max_repeated_tool_call_rounds: super::TURN_LOOP_MAX_REPEATED_TOOL_CALL_ROUNDS,
+            max_ping_pong_cycles: super::TURN_LOOP_MAX_PING_PONG_CYCLES,
+            max_same_tool_failure_rounds: super::TURN_LOOP_MAX_SAME_TOOL_FAILURE_ROUNDS,
             max_followup_tool_payload_chars: turn_loop.max_followup_tool_payload_chars.max(256),
             max_followup_tool_payload_chars_total: turn_loop
                 .max_followup_tool_payload_chars_total
                 .max(1),
-            max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
-            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+            max_total_tool_calls: super::TURN_LOOP_MAX_TOTAL_TOOL_CALLS,
+            max_consecutive_same_tool: super::TURN_LOOP_MAX_CONSECUTIVE_SAME_TOOL,
         }
     }
 

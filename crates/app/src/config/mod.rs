@@ -2398,17 +2398,6 @@ bot_token = { file = "/run/secrets/telegram" }
     #[test]
     fn turn_loop_policy_defaults_are_stable() {
         let config = LoongConfig::default();
-        assert_eq!(config.conversation.turn_loop.max_rounds, 4);
-        assert_eq!(config.conversation.turn_loop.max_tool_steps_per_round, 1);
-        assert_eq!(
-            config.conversation.turn_loop.max_repeated_tool_call_rounds,
-            2
-        );
-        assert_eq!(config.conversation.turn_loop.max_ping_pong_cycles, 2);
-        assert_eq!(
-            config.conversation.turn_loop.max_same_tool_failure_rounds,
-            3
-        );
         assert_eq!(
             config
                 .conversation
@@ -2430,27 +2419,11 @@ bot_token = { file = "/run/secrets/telegram" }
     fn turn_loop_policy_can_be_overridden_from_toml() {
         let raw = r#"
 [conversation.turn_loop]
-max_rounds = 6
-max_tool_steps_per_round = 3
-max_repeated_tool_call_rounds = 5
-max_ping_pong_cycles = 4
-max_same_tool_failure_rounds = 7
 max_followup_tool_payload_chars = 1200
 max_followup_tool_payload_chars_total = 3200
 "#;
         let parsed =
             toml::from_str::<LoongConfig>(raw).expect("parse turn-loop config should pass");
-        assert_eq!(parsed.conversation.turn_loop.max_rounds, 6);
-        assert_eq!(parsed.conversation.turn_loop.max_tool_steps_per_round, 3);
-        assert_eq!(
-            parsed.conversation.turn_loop.max_repeated_tool_call_rounds,
-            5
-        );
-        assert_eq!(parsed.conversation.turn_loop.max_ping_pong_cycles, 4);
-        assert_eq!(
-            parsed.conversation.turn_loop.max_same_tool_failure_rounds,
-            7
-        );
         assert_eq!(
             parsed
                 .conversation
@@ -2464,184 +2437,6 @@ max_followup_tool_payload_chars_total = 3200
                 .turn_loop
                 .max_followup_tool_payload_chars_total,
             3200
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn conversation_tool_result_payload_summary_limit_can_be_overridden_from_toml() {
-        let raw = r#"
-[conversation]
-tool_result_payload_summary_limit_chars = 4096
-"#;
-        let parsed =
-            toml::from_str::<LoongConfig>(raw).expect("parse conversation config should pass");
-        assert_eq!(
-            parsed.conversation.tool_result_payload_summary_limit_chars,
-            4096
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .tool_result_payload_summary_limit_chars(),
-            4096
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn conversation_fast_lane_parallel_tool_execution_can_be_overridden_from_toml() {
-        let raw = r#"
-[conversation]
-fast_lane_parallel_tool_execution_enabled = true
-fast_lane_parallel_tool_execution_max_in_flight = 7
-"#;
-        let parsed =
-            toml::from_str::<LoongConfig>(raw).expect("parse conversation config should pass");
-        assert!(
-            parsed
-                .conversation
-                .fast_lane_parallel_tool_execution_enabled
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .fast_lane_parallel_tool_execution_max_in_flight,
-            7
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .fast_lane_parallel_tool_execution_max_in_flight(),
-            7
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn conversation_health_thresholds_can_be_overridden_from_toml() {
-        let raw = r#"
-[conversation]
-safe_lane_health_truncation_warn_threshold = 0.25
-safe_lane_health_truncation_critical_threshold = 0.75
-safe_lane_health_verify_failure_warn_threshold = 0.45
-safe_lane_health_replan_warn_threshold = 0.55
-"#;
-        let parsed =
-            toml::from_str::<LoongConfig>(raw).expect("parse conversation config should pass");
-        assert_eq!(
-            parsed
-                .conversation
-                .safe_lane_health_truncation_warn_threshold,
-            0.25
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .safe_lane_health_truncation_critical_threshold,
-            0.75
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .safe_lane_health_verify_failure_warn_threshold,
-            0.45
-        );
-        assert_eq!(
-            parsed.conversation.safe_lane_health_replan_warn_threshold,
-            0.55
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .safe_lane_health_truncation_warn_threshold(),
-            0.25
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .safe_lane_health_truncation_critical_threshold(),
-            0.75
-        );
-    }
-
-    #[test]
-    fn conversation_defaults_are_stable() {
-        let config = ConversationConfig::default();
-        assert!(config.hybrid_lane_enabled);
-        assert!(!config.safe_lane_plan_execution_enabled);
-        assert_eq!(config.fast_lane_max_tool_steps_per_turn, 1);
-        assert!(!config.fast_lane_parallel_tool_execution_enabled);
-        assert_eq!(config.fast_lane_parallel_tool_execution_max_in_flight, 4);
-        assert_eq!(config.safe_lane_max_tool_steps_per_turn, 1);
-        assert_eq!(config.safe_lane_node_max_attempts, 2);
-        assert_eq!(config.safe_lane_plan_max_wall_time_ms, 30_000);
-        assert!(config.safe_lane_verify_output_non_empty);
-        assert_eq!(config.safe_lane_verify_min_output_chars, 8);
-        assert!(config.safe_lane_verify_require_status_prefix);
-        assert!(config.safe_lane_verify_adaptive_anchor_escalation);
-        assert_eq!(config.safe_lane_verify_anchor_escalation_after_failures, 2);
-        assert_eq!(config.safe_lane_verify_anchor_escalation_min_matches, 1);
-        assert!(config.safe_lane_emit_runtime_events);
-        assert_eq!(config.safe_lane_event_sample_every, 1);
-        assert!(config.safe_lane_event_adaptive_sampling);
-        assert_eq!(config.safe_lane_event_adaptive_failure_threshold, 1);
-        assert!(
-            config
-                .safe_lane_verify_deny_markers
-                .iter()
-                .any(|marker| marker == "tool_failure")
-        );
-        assert_eq!(config.safe_lane_replan_max_rounds, 1);
-        assert_eq!(config.safe_lane_replan_max_node_attempts, 4);
-        assert!(config.safe_lane_session_governor_enabled);
-        assert_eq!(config.safe_lane_session_governor_window_turns, 96);
-        assert_eq!(
-            config.safe_lane_session_governor_failed_final_status_threshold,
-            3
-        );
-        assert_eq!(
-            config.safe_lane_session_governor_backpressure_failure_threshold,
-            1
-        );
-        assert!(config.safe_lane_session_governor_trend_enabled);
-        assert_eq!(config.safe_lane_session_governor_trend_min_samples, 4);
-        assert_eq!(config.safe_lane_session_governor_trend_ewma_alpha, 0.35);
-        assert_eq!(
-            config.safe_lane_session_governor_trend_failure_ewma_threshold,
-            0.60
-        );
-        assert_eq!(
-            config.safe_lane_session_governor_trend_backpressure_ewma_threshold,
-            0.20
-        );
-        assert_eq!(config.safe_lane_session_governor_recovery_success_streak, 3);
-        assert_eq!(
-            config.safe_lane_session_governor_recovery_max_failure_ewma,
-            0.25
-        );
-        assert_eq!(
-            config.safe_lane_session_governor_recovery_max_backpressure_ewma,
-            0.10
-        );
-        assert!(config.safe_lane_session_governor_force_no_replan);
-        assert_eq!(config.safe_lane_session_governor_force_node_max_attempts, 1);
-        assert!(config.safe_lane_backpressure_guard_enabled);
-        assert_eq!(config.safe_lane_backpressure_max_total_attempts, 32);
-        assert_eq!(config.safe_lane_backpressure_max_replans, 8);
-        assert_eq!(config.safe_lane_risk_threshold, 4);
-        assert_eq!(config.safe_lane_complexity_threshold, 6);
-        assert_eq!(config.fast_lane_max_input_chars, 400);
-        assert_eq!(config.tool_result_payload_summary_limit_chars, 2_048);
-        assert_eq!(config.safe_lane_health_truncation_warn_threshold, 0.30);
-        assert_eq!(config.safe_lane_health_truncation_critical_threshold, 0.60);
-        assert_eq!(config.safe_lane_health_verify_failure_warn_threshold, 0.40);
-        assert_eq!(config.safe_lane_health_replan_warn_threshold, 0.50);
-        assert!(
-            config
-                .high_risk_keywords
-                .iter()
-                .any(|keyword| keyword == "production")
         );
     }
 
