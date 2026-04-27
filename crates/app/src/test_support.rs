@@ -28,6 +28,21 @@ fn subprocess_lock() -> &'static Mutex<()> {
     SUBPROCESS_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+#[cfg(test)]
+thread_local! {
+    static SUBPROCESS_TEST_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+fn subprocess_test_depth() -> usize {
+    SUBPROCESS_TEST_DEPTH.with(|depth| depth.get())
+}
+
+#[cfg(test)]
+fn set_subprocess_test_depth(value: usize) {
+    SUBPROCESS_TEST_DEPTH.with(|depth| depth.set(value));
+}
+
 pub struct ScopedEnv {
     originals: Vec<(&'static str, Option<OsString>)>,
     guard: Option<MutexGuard<'static, ()>>,
@@ -176,35 +191,53 @@ pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-pub(crate) fn acquire_subprocess_test_guard() -> MutexGuard<'static, ()> {
-    subprocess_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+pub(crate) struct SubprocessTestGuard {
+    guard: Option<MutexGuard<'static, ()>>,
 }
 
 #[cfg(test)]
-fn current_dir_test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+pub(crate) fn acquire_subprocess_test_guard() -> SubprocessTestGuard {
+    let depth_before = subprocess_test_depth();
+    let guard = if depth_before == 0 {
+        let guard = subprocess_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(guard)
+    } else {
+        None
+    };
+    set_subprocess_test_depth(depth_before.saturating_add(1));
+    SubprocessTestGuard { guard }
+}
+
+#[cfg(test)]
+impl Drop for SubprocessTestGuard {
+    fn drop(&mut self) {
+        let depth_before = subprocess_test_depth();
+        let depth_after = depth_before.saturating_sub(1);
+        set_subprocess_test_depth(depth_after);
+
+        if depth_after == 0 {
+            self.guard.take();
+        }
+    }
 }
 
 #[cfg(test)]
 pub(crate) struct ScopedCurrentDir {
     original: PathBuf,
-    _lock: MutexGuard<'static, ()>,
+    _guard: SubprocessTestGuard,
 }
 
 #[cfg(test)]
 impl ScopedCurrentDir {
     pub(crate) fn new(path: &Path) -> Self {
-        let lock = current_dir_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let guard = acquire_subprocess_test_guard();
         let original = std::env::current_dir().expect("read current dir");
         std::env::set_current_dir(path).expect("set current dir");
         Self {
             original,
-            _lock: lock,
+            _guard: guard,
         }
     }
 }

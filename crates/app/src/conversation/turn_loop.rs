@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -25,6 +23,10 @@ use super::turn_shared::{
     build_tool_loop_guard_tail, decide_provider_turn_request_action,
     reduce_followup_payload_for_model, request_completion_with_raw_fallback,
     tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
+};
+use super::{
+    FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED, FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT,
+    TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
 };
 
 #[derive(Default)]
@@ -376,7 +378,7 @@ fn initialize_turn_loop_session(
 }
 
 async fn evaluate_round_kernel(
-    config: &LoongConfig,
+    _config: &LoongConfig,
     policy: &TurnLoopPolicy,
     turn: &ProviderTurn,
     session_context: &super::runtime::SessionContext,
@@ -385,21 +387,14 @@ async fn evaluate_round_kernel(
     loop_supervisor: &mut ToolLoopSupervisor,
 ) -> RoundKernelEvaluation {
     let had_tool_intents = !turn.tool_intents.is_empty();
-    let current_tool_signature = had_tool_intents.then(|| tool_intent_signature_for_turn(turn));
     let current_tool_name_signature =
         had_tool_intents.then(|| tool_name_signature(&turn.tool_intents));
 
     let engine = TurnEngine::with_parallel_tool_execution(
         policy.max_tool_steps_per_round,
-        config
-            .conversation
-            .tool_result_payload_summary_limit_chars(),
-        config
-            .conversation
-            .fast_lane_parallel_tool_execution_enabled,
-        config
-            .conversation
-            .fast_lane_parallel_tool_execution_max_in_flight(),
+        TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED,
+        FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT,
     );
     let (turn_result, _turn_trace) = match engine.validate_turn_in_context(turn, session_context) {
         Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None),
@@ -417,19 +412,9 @@ async fn evaluate_round_kernel(
                 .await
         }
     };
-    let loop_verdict = if let (Some(signature), Some(name_signature)) = (
-        current_tool_signature.as_deref(),
-        current_tool_name_signature.as_deref(),
-    ) {
-        tool_round_outcome(&turn_result).map(|outcome| {
-            loop_supervisor.observe_round(
-                policy,
-                signature,
-                name_signature,
-                outcome.fingerprint.as_str(),
-                outcome.failed,
-            )
-        })
+    let loop_verdict = if let Some(name_signature) = current_tool_name_signature.as_deref() {
+        tool_round_has_observable_outcome(&turn_result)
+            .then(|| loop_supervisor.observe_round(policy, name_signature))
     } else {
         None
     };
@@ -654,64 +639,8 @@ impl FollowupPayloadBudget {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ToolRoundOutcome {
-    fingerprint: String,
-    failed: bool,
-}
-
-fn tool_round_outcome(turn_result: &TurnResult) -> Option<ToolRoundOutcome> {
-    match turn_result {
-        TurnResult::FinalText(text)
-        | TurnResult::StreamingText(text)
-        | TurnResult::StreamingDone(text) => Some(ToolRoundOutcome {
-            fingerprint: text_fingerprint("tool_final_text", text),
-            failed: false,
-        }),
-        TurnResult::NeedsApproval(requirement) => Some(ToolRoundOutcome {
-            fingerprint: text_fingerprint(
-                "tool_approval_required",
-                requirement
-                    .approval_request_id
-                    .as_deref()
-                    .unwrap_or(requirement.reason.as_str()),
-            ),
-            failed: false,
-        }),
-        TurnResult::ToolDenied(reason) => Some(ToolRoundOutcome {
-            fingerprint: text_fingerprint("tool_denied", reason),
-            failed: true,
-        }),
-        TurnResult::ToolError(reason) => Some(ToolRoundOutcome {
-            fingerprint: text_fingerprint("tool_error", reason),
-            failed: true,
-        }),
-        TurnResult::ProviderError(_) => None,
-    }
-}
-
-fn text_fingerprint(label: &str, text: &str) -> String {
-    let normalized = text.trim();
-    let mut hasher = DefaultHasher::new();
-    normalized.hash(&mut hasher);
-    let digest = hasher.finish();
-    format!("{label}:{digest:016x}")
-}
-
-fn tool_intent_signature_for_turn(turn: &ProviderTurn) -> String {
-    tool_intent_signature(&turn.tool_intents)
-}
-
-fn tool_intent_signature(intents: &[ToolIntent]) -> String {
-    intents
-        .iter()
-        .map(|intent| {
-            let args = serde_json::to_string(&intent.args_json)
-                .unwrap_or_else(|_| "<invalid_tool_args_json>".to_owned());
-            format!("{}:{args}", intent.tool_name.trim())
-        })
-        .collect::<Vec<_>>()
-        .join("||")
+fn tool_round_has_observable_outcome(turn_result: &TurnResult) -> bool {
+    !matches!(turn_result, TurnResult::ProviderError(_))
 }
 
 fn tool_name_signature(intents: &[ToolIntent]) -> String {
@@ -726,9 +655,6 @@ fn tool_name_signature(intents: &[ToolIntent]) -> String {
 struct TurnLoopPolicy {
     max_rounds: usize,
     max_tool_steps_per_round: usize,
-    max_repeated_tool_call_rounds: usize,
-    max_ping_pong_cycles: usize,
-    max_same_tool_failure_rounds: usize,
     max_followup_tool_payload_chars: usize,
     max_followup_tool_payload_chars_total: usize,
     max_total_tool_calls: usize,
@@ -739,27 +665,21 @@ impl TurnLoopPolicy {
     fn from_config(config: &LoongConfig) -> Self {
         let turn_loop = &config.conversation.turn_loop;
         Self {
-            max_rounds: turn_loop.max_rounds.max(1),
-            max_tool_steps_per_round: turn_loop.max_tool_steps_per_round.max(1),
-            max_repeated_tool_call_rounds: turn_loop.max_repeated_tool_call_rounds.max(1),
-            max_ping_pong_cycles: turn_loop.max_ping_pong_cycles.max(1),
-            max_same_tool_failure_rounds: turn_loop.max_same_tool_failure_rounds.max(1),
+            max_rounds: super::TURN_LOOP_MAX_ROUNDS,
+            max_tool_steps_per_round: super::FAST_LANE_MAX_TOOL_STEPS_PER_TURN,
             max_followup_tool_payload_chars: turn_loop.max_followup_tool_payload_chars.max(256),
             max_followup_tool_payload_chars_total: turn_loop
                 .max_followup_tool_payload_chars_total
                 .max(1),
-            max_total_tool_calls: turn_loop.max_total_tool_calls.max(1),
-            max_consecutive_same_tool: turn_loop.max_consecutive_same_tool.max(1),
+            max_total_tool_calls: super::TURN_LOOP_MAX_TOTAL_TOOL_CALLS,
+            max_consecutive_same_tool: super::TURN_LOOP_MAX_CONSECUTIVE_SAME_TOOL,
         }
     }
 }
 
 #[derive(Debug, Clone, Default)]
 struct ToolLoopSupervisor {
-    last_pattern: Option<String>,
-    last_pattern_streak: usize,
-    warned_reason_key: Option<String>,
-    recent_rounds: VecDeque<ToolLoopObservation>,
+    warned_same_tool_key: Option<String>,
     consecutive_same_tool: usize,
     last_tool_name: Option<String>,
 }
@@ -771,197 +691,37 @@ enum ToolLoopSupervisorVerdict {
     HardStop { reason: String },
 }
 
-#[derive(Debug, Clone)]
-struct ToolLoopObservation {
-    pattern: String,
-    tool_name_signature: String,
-    failed: bool,
-}
-
-#[derive(Debug, Clone)]
-struct LoopDetectionReason {
-    key: String,
-    text: String,
-}
-
 impl ToolLoopSupervisor {
-    const MAX_RECENT_ROUNDS: usize = 24;
-
     fn observe_round(
         &mut self,
         policy: &TurnLoopPolicy,
-        tool_signature: &str,
         tool_name_signature: &str,
-        outcome_fingerprint: &str,
-        failed: bool,
     ) -> ToolLoopSupervisorVerdict {
-        // Consecutive same-tool-name detection (tool-name only, not full signature).
-        // Fires at exactly max_consecutive_same_tool occurrences (>= threshold).
         if self.last_tool_name.as_deref() == Some(tool_name_signature) {
             self.consecutive_same_tool += 1;
         } else {
             self.last_tool_name = Some(tool_name_signature.to_owned());
             self.consecutive_same_tool = 1;
-        }
-        if self.consecutive_same_tool >= policy.max_consecutive_same_tool {
-            let reason = LoopDetectionReason {
-                key: format!("consecutive_same_tool:{tool_name_signature}"),
-                text: format!(
-                    "consecutive_same_tool: {tool_name_signature} called {} times in a row \
-                     (limit={})",
-                    self.consecutive_same_tool, policy.max_consecutive_same_tool
-                ),
-            };
-            // Update pattern history before returning so other detectors see this round.
-            let pattern = format!("{tool_signature}::{outcome_fingerprint}");
-            if self.last_pattern.as_deref() == Some(pattern.as_str()) {
-                self.last_pattern_streak += 1;
-            } else {
-                self.last_pattern = Some(pattern.clone());
-                self.last_pattern_streak = 1;
-            }
-            self.recent_rounds.push_back(ToolLoopObservation {
-                pattern,
-                tool_name_signature: tool_name_signature.to_owned(),
-                failed,
-            });
-            if self.recent_rounds.len() > Self::MAX_RECENT_ROUNDS {
-                self.recent_rounds.pop_front();
-            }
-            return if self.warned_reason_key.as_deref() == Some(reason.key.as_str()) {
-                ToolLoopSupervisorVerdict::HardStop {
-                    reason: reason.text,
-                }
-            } else {
-                self.warned_reason_key = Some(reason.key);
-                ToolLoopSupervisorVerdict::InjectWarning {
-                    reason: reason.text,
-                }
-            };
+            self.warned_same_tool_key = None;
         }
 
-        let pattern = format!("{tool_signature}::{outcome_fingerprint}");
-        if self.last_pattern.as_deref() == Some(pattern.as_str()) {
-            self.last_pattern_streak += 1;
+        if self.consecutive_same_tool < policy.max_consecutive_same_tool {
+            self.warned_same_tool_key = None;
+            return ToolLoopSupervisorVerdict::Continue;
+        }
+
+        let reason_key = format!("consecutive_same_tool:{tool_name_signature}");
+        let reason = format!(
+            "consecutive_same_tool: {tool_name_signature} called {} times in a row (limit={})",
+            self.consecutive_same_tool, policy.max_consecutive_same_tool
+        );
+
+        if self.warned_same_tool_key.as_deref() == Some(reason_key.as_str()) {
+            ToolLoopSupervisorVerdict::HardStop { reason }
         } else {
-            self.last_pattern = Some(pattern.clone());
-            self.last_pattern_streak = 1;
+            self.warned_same_tool_key = Some(reason_key);
+            ToolLoopSupervisorVerdict::InjectWarning { reason }
         }
-
-        self.recent_rounds.push_back(ToolLoopObservation {
-            pattern,
-            tool_name_signature: tool_name_signature.to_owned(),
-            failed,
-        });
-        if self.recent_rounds.len() > Self::MAX_RECENT_ROUNDS {
-            self.recent_rounds.pop_front();
-        }
-
-        let detection = self
-            .check_no_progress(policy.max_repeated_tool_call_rounds)
-            .or_else(|| self.check_ping_pong(policy.max_ping_pong_cycles))
-            .or_else(|| self.check_failure_streak(policy.max_same_tool_failure_rounds));
-
-        match detection {
-            Some(reason) => {
-                if self.warned_reason_key.as_deref() == Some(reason.key.as_str()) {
-                    ToolLoopSupervisorVerdict::HardStop {
-                        reason: reason.text,
-                    }
-                } else {
-                    self.warned_reason_key = Some(reason.key);
-                    ToolLoopSupervisorVerdict::InjectWarning {
-                        reason: reason.text,
-                    }
-                }
-            }
-            None => {
-                self.warned_reason_key = None;
-                ToolLoopSupervisorVerdict::Continue
-            }
-        }
-    }
-
-    fn check_no_progress(&self, threshold: usize) -> Option<LoopDetectionReason> {
-        let pattern = self.last_pattern.as_deref()?;
-        if self.last_pattern_streak <= threshold {
-            return None;
-        }
-        Some(LoopDetectionReason {
-            key: format!("no_progress:{pattern}"),
-            text: format!(
-                "repeated_tool_call_no_progress signature_streak={} threshold={threshold}",
-                self.last_pattern_streak
-            ),
-        })
-    }
-
-    fn check_ping_pong(&self, cycles: usize) -> Option<LoopDetectionReason> {
-        let minimum_rounds = cycles.saturating_mul(2);
-        if cycles == 0 || self.recent_rounds.len() < minimum_rounds {
-            return None;
-        }
-
-        let tail = self
-            .recent_rounds
-            .iter()
-            .rev()
-            .take(minimum_rounds)
-            .collect::<Vec<_>>();
-        let first = tail.first()?.pattern.as_str();
-        let second = tail.get(1)?.pattern.as_str();
-        if first == second {
-            return None;
-        }
-
-        let alternating = tail.iter().enumerate().all(|(index, round)| {
-            if index % 2 == 0 {
-                round.pattern == first
-            } else {
-                round.pattern == second
-            }
-        });
-        if !alternating {
-            return None;
-        }
-
-        let (left, right) = if first <= second {
-            (first, second)
-        } else {
-            (second, first)
-        };
-        Some(LoopDetectionReason {
-            key: format!("ping_pong:{left}<->{right}"),
-            text: format!(
-                "ping_pong_tool_patterns cycles={} threshold={cycles}",
-                minimum_rounds / 2
-            ),
-        })
-    }
-
-    fn check_failure_streak(&self, threshold: usize) -> Option<LoopDetectionReason> {
-        let last = self.recent_rounds.back()?;
-        if !last.failed {
-            return None;
-        }
-        let streak = self
-            .recent_rounds
-            .iter()
-            .rev()
-            .take_while(|round| {
-                round.failed && round.tool_name_signature == last.tool_name_signature
-            })
-            .count();
-        if streak < threshold {
-            return None;
-        }
-        Some(LoopDetectionReason {
-            key: format!("failure_streak:{}", last.tool_name_signature),
-            text: format!(
-                "tool_failure_streak rounds={streak} threshold={threshold} tool={}",
-                last.tool_name_signature
-            ),
-        })
     }
 }
 
@@ -1824,9 +1584,6 @@ mod tests {
         TurnLoopPolicy {
             max_rounds: 100,
             max_tool_steps_per_round: 1,
-            max_repeated_tool_call_rounds: 100,
-            max_ping_pong_cycles: 100,
-            max_same_tool_failure_rounds: 100,
             max_followup_tool_payload_chars: 8_000,
             max_followup_tool_payload_chars_total: 20_000,
             max_total_tool_calls: 200,
@@ -1839,7 +1596,7 @@ mod tests {
         policy: &TurnLoopPolicy,
         tool_name: &str,
     ) -> ToolLoopSupervisorVerdict {
-        supervisor.observe_round(policy, tool_name, tool_name, "ok", false)
+        supervisor.observe_round(policy, tool_name)
     }
 
     #[test]

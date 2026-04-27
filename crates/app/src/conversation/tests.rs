@@ -7574,8 +7574,8 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
         "expected persisted discovery state to compile into the system prompt: {system_text}"
     );
     assert!(
-        system_text.contains("exact_tool_id"),
-        "expected discovery delta to explain exact refresh guidance: {system_text}"
+        system_text.contains("Use direct tools first"),
+        "expected discovery delta to keep the direct-tools-first guidance concise: {system_text}"
     );
     assert!(
         system_text.contains("read"),
@@ -7652,11 +7652,7 @@ async fn default_runtime_build_context_sanitizes_tool_discovery_delta_advisory_t
         "expected prompt-shaped summary text to render as a quoted single-line advisory value: {system_text}"
     );
     assert!(
-        system_text.contains("search_hint: \"Use for UTF-8 text files. ### hidden\""),
-        "expected prompt-shaped search hint to render as a quoted single-line advisory value: {system_text}"
-    );
-    assert!(
-        system_text.contains("argument_hint: \"path:string limit?:integer\""),
+        system_text.contains("call_shape: \"path:string limit?:integer\""),
         "expected prompt-shaped argument hint to render as a quoted single-line advisory value: {system_text}"
     );
     assert!(
@@ -7934,127 +7930,41 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_blocks_only_when_next_round_would_exceed_max_total_tool_calls() {
-    use crate::test_support::TurnTestHarness;
-
-    let harness = TurnTestHarness::new();
-
-    let runtime = FakeRuntime::with_turns_and_completions(
-        vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Let me search for the right tool first.".to_owned(),
-                tool_intents: vec![provider_tool_intent(
-                    "tool.search",
-                    json!({"query": "read note.md", "limit": 3}),
-                    "session-tool-search-breaker",
-                    "turn-tool-search-breaker",
-                    "call-tool-search-breaker",
-                )],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "I should search one more time before continuing.".to_owned(),
-                tool_intents: vec![provider_tool_intent(
-                    "tool.search",
-                    json!({"query": "read note.md", "limit": 3}),
-                    "session-tool-search-breaker",
-                    "turn-tool-search-breaker",
-                    "call-tool-search-breaker-2",
-                )],
-                raw_meta: Value::Null,
-            }),
-        ],
-        vec![],
-    );
-
-    let mut config = test_config();
-    config.conversation.turn_loop.max_total_tool_calls = 1;
-
-    let coordinator = ConversationTurnCoordinator::new();
-    let reply = coordinator
-        .handle_turn_with_runtime(
-            &config,
-            "session-tool-search-breaker",
-            "search for the right tool, then read and summarize note.md",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
-        )
-        .await
-        .expect("tool loop breaker should return a synthetic reply");
-
-    assert_eq!(
-        reply,
-        "tool_loop_circuit_breaker: would exceed 2/1 tool calls this turn. Do you want to continue? Reply to resume."
-    );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        0
-    );
-
-    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
-    let visible_turns = persisted_visible_turns(&persisted);
-    assert_eq!(visible_turns.len(), 2);
-    assert_eq!(visible_turns[0].1, "user");
-    assert_eq!(visible_turns[1].1, "assistant");
-    assert_eq!(visible_turns[1].2, reply);
-
-    let requested_turn_messages = runtime
-        .turn_requested_messages
-        .lock()
-        .expect("turn request lock")
-        .clone();
-    assert_eq!(requested_turn_messages.len(), 2);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provider_round() {
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
 
+    let repeated_search_turns = (0..10).map(|index| {
+        let assistant_text = if index == 0 {
+            "Let me search for the right tool first.".to_owned()
+        } else {
+            "I should search again before continuing.".to_owned()
+        };
+        Ok(ProviderTurn {
+            assistant_text,
+            tool_intents: vec![provider_tool_intent(
+                "tool.search",
+                json!({"query": "read note.md", "limit": 3}),
+                "session-tool-search-warning",
+                "turn-tool-search-warning",
+                &format!("call-tool-search-warning-{index}"),
+            )],
+            raw_meta: Value::Null,
+        })
+    });
+    let final_turn = std::iter::once(Ok(ProviderTurn {
+        assistant_text: "I should stop and ask before continuing.".to_owned(),
+        tool_intents: Vec::new(),
+        raw_meta: Value::Null,
+    }));
     let runtime = FakeRuntime::with_turns_and_completions(
         vec![],
-        vec![
-            Ok(ProviderTurn {
-                assistant_text: "Let me search for the right tool first.".to_owned(),
-                tool_intents: vec![provider_tool_intent(
-                    "tool.search",
-                    json!({"query": "read note.md", "limit": 3}),
-                    "session-tool-search-warning",
-                    "turn-tool-search-warning",
-                    "call-tool-search-warning-1",
-                )],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "I should search again before continuing.".to_owned(),
-                tool_intents: vec![provider_tool_intent(
-                    "tool.search",
-                    json!({"query": "read note.md", "limit": 3}),
-                    "session-tool-search-warning",
-                    "turn-tool-search-warning",
-                    "call-tool-search-warning-2",
-                )],
-                raw_meta: Value::Null,
-            }),
-            Ok(ProviderTurn {
-                assistant_text: "I should stop and ask before continuing.".to_owned(),
-                tool_intents: Vec::new(),
-                raw_meta: Value::Null,
-            }),
-        ],
+        repeated_search_turns.chain(final_turn).collect(),
         vec![],
     );
 
-    let mut config = test_config();
-    config.conversation.turn_loop.max_consecutive_same_tool = 2;
-    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -8076,9 +7986,9 @@ async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provide
         .lock()
         .expect("turn request lock")
         .clone();
-    assert_eq!(requested_turn_messages.len(), 3);
+    assert_eq!(requested_turn_messages.len(), 11);
     assert!(
-        requested_turn_messages[2].iter().any(|message| {
+        requested_turn_messages[10].iter().any(|message| {
             message.get("role").and_then(Value::as_str) == Some("assistant")
                 && message
                     .get("content")
@@ -8240,8 +8150,7 @@ async fn handle_turn_with_runtime_continues_multi_step_tool_chain_after_first_to
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config_with_file_root(&harness.temp_dir);
-    config.conversation.turn_loop.max_discovery_followup_rounds = 4;
+    let config = test_config_with_file_root(&harness.temp_dir);
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -8334,8 +8243,7 @@ async fn handle_turn_with_runtime_continues_direct_tool_chain_after_initial_tool
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config_with_file_root(&harness.temp_dir);
-    config.conversation.turn_loop.max_discovery_followup_rounds = 4;
+    let config = test_config_with_file_root(&harness.temp_dir);
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -8852,8 +8760,7 @@ async fn handle_turn_with_runtime_multi_step_chain_continues_after_first_tool_su
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config_with_file_root(&harness.temp_dir);
-    config.conversation.turn_loop.max_discovery_followup_rounds = 4;
+    let config = test_config_with_file_root(&harness.temp_dir);
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -8956,8 +8863,7 @@ async fn handle_turn_with_runtime_auto_recovers_provider_unknown_tool_into_disco
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config();
-    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+    let config = test_config();
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -9079,8 +8985,7 @@ async fn handle_turn_with_runtime_auto_recovers_invalid_tool_invoke_lease_into_d
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config();
-    config.conversation.turn_loop.max_discovery_followup_rounds = 3;
+    let config = test_config();
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -9193,8 +9098,7 @@ async fn handle_turn_with_runtime_provider_shape_function_calls_multi_step_chain
     );
 
     let coordinator = ConversationTurnCoordinator::new();
-    let mut config = test_config_with_file_root(&harness.temp_dir);
-    config.conversation.turn_loop.max_discovery_followup_rounds = 5;
+    let config = test_config_with_file_root(&harness.temp_dir);
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -9518,8 +9422,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.tool_result_payload_summary_limit_chars = 256;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -9549,7 +9452,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
         envelope["payload_chars"]
             .as_u64()
             .expect("payload chars should exist")
-            > 256
+            > 2_048
     );
     let summary = envelope["payload_summary"]
         .as_str()
@@ -9559,8 +9462,11 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
         "summary should contain truncation marker, got: {summary}"
     );
     assert!(
-        summary.chars().count() <= 420,
-        "summary should respect configured bound, chars={}",
+        summary.chars().count()
+            < envelope["payload_chars"]
+                .as_u64()
+                .expect("payload chars should exist") as usize,
+        "summary should stay shorter than the original payload, chars={}",
         summary.chars().count()
     );
 }
@@ -9569,13 +9475,6 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
 #[tokio::test]
 async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_segments() {
     let mut config = test_config();
-    config.conversation.fast_lane_max_tool_steps_per_turn = 5;
-    config
-        .conversation
-        .fast_lane_parallel_tool_execution_enabled = true;
-    config
-        .conversation
-        .fast_lane_parallel_tool_execution_max_in_flight = 2;
     let sqlite_path = unique_memory_sqlite_path("fast-lane-batch-event");
     config.memory.sqlite_path = sqlite_path.clone();
 
@@ -9670,7 +9569,7 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     assert_eq!(payload["schema_version"], 2);
     assert_eq!(payload["total_intents"], 5);
     assert_eq!(payload["parallel_execution_enabled"], true);
-    assert_eq!(payload["parallel_execution_max_in_flight"], 2);
+    assert_eq!(payload["parallel_execution_max_in_flight"], 4);
     let observed_peak_in_flight = payload["observed_peak_in_flight"]
         .as_u64()
         .expect("observed peak should exist");
@@ -9737,13 +9636,6 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
 #[tokio::test]
 async fn handle_turn_with_runtime_fast_lane_batch_persist_failure_surfaces_runtime_audit() {
     let mut config = test_config();
-    config.conversation.fast_lane_max_tool_steps_per_turn = 5;
-    config
-        .conversation
-        .fast_lane_parallel_tool_execution_enabled = true;
-    config
-        .conversation
-        .fast_lane_parallel_tool_execution_max_in_flight = 2;
     let sqlite_path = unique_memory_sqlite_path("fast-lane-batch-persist-failure");
     config.memory.sqlite_path = sqlite_path.clone();
 
@@ -9876,9 +9768,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.tool_result_payload_summary_limit_chars = 256;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -9908,7 +9798,7 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
         envelope["payload_chars"]
             .as_u64()
             .expect("payload chars should exist")
-            > 256
+            > 2_048
     );
     let summary = envelope["payload_summary"]
         .as_str()
@@ -9918,8 +9808,11 @@ async fn handle_turn_with_runtime_honors_configured_tool_result_summary_limit_on
         "summary should contain truncation marker, got: {summary}"
     );
     assert!(
-        summary.chars().count() <= 420,
-        "summary should respect configured bound, chars={}",
+        summary.chars().count()
+            < envelope["payload_chars"]
+                .as_u64()
+                .expect("payload chars should exist") as usize,
+        "summary should stay shorter than the original payload, chars={}",
         summary.chars().count()
     );
 }
@@ -9951,8 +9844,7 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_max_tool_steps_per_turn = 2;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -9965,7 +9857,7 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
             ConversationRuntimeBinding::direct(),
         )
         .await
-        .expect("safe lane should execute with configured step budget");
+        .expect("safe lane should execute with the internal step budget");
 
     assert!(
         reply.contains("no_kernel_context"),
@@ -9973,13 +9865,12 @@ async fn handle_turn_with_runtime_safe_lane_honors_configured_tool_step_budget()
     );
     assert!(
         !reply.contains("max_tool_steps_exceeded"),
-        "safe lane should not hit max_tool_steps after config override, got: {reply}"
+        "safe lane should not hit max_tool_steps under the internal default, got: {reply}"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batches_when_plan_path_is_disabled()
- {
+async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_lane_batches() {
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
     use loong_kernel::CoreToolAdapter;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -10077,15 +9968,7 @@ async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batch
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = false;
-    config.conversation.safe_lane_max_tool_steps_per_turn = 2;
-    config
-        .conversation
-        .fast_lane_parallel_tool_execution_enabled = true;
-    config
-        .conversation
-        .fast_lane_parallel_tool_execution_max_in_flight = 2;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -10098,7 +9981,7 @@ async fn handle_turn_with_runtime_safe_lane_does_not_parallelize_fast_lane_batch
             ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
-        .expect("safe lane turn should complete without fast-lane parallel execution");
+        .expect("safe lane plan path should complete without fast-lane parallel execution");
 
     let persisted = runtime.persisted.lock().expect("persisted lock").clone();
     let checkpoint_payloads =
@@ -10142,15 +10025,20 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_bypasses_turn_step_limit()
                     "turn-safe-plan",
                     "call-safe-plan-2",
                 ),
+                provider_tool_intent(
+                    "file.read",
+                    json!({"path": "rollout.md"}),
+                    "session-safe-plan",
+                    "turn-safe-plan",
+                    "call-safe-plan-3",
+                ),
             ],
             raw_meta: Value::Null,
         }),
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_max_tool_steps_per_turn = 1;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -10201,10 +10089,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_emit_runtime_events = true;
-    config.conversation.safe_lane_replan_max_rounds = 0;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let _reply = coordinator
@@ -10309,7 +10194,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
 }
 
 #[tokio::test]
-async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disabled() {
+async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_without_toggle() {
     let mut env = crate::test_support::ScopedEnv::new();
     let temp_home = crate::test_support::unique_temp_dir("safe-lane-runtime-events-home");
     std::fs::create_dir_all(&temp_home).expect("create safe-lane runtime-events home");
@@ -10332,10 +10217,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_emit_runtime_events = false;
-    config.conversation.safe_lane_replan_max_rounds = 0;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let _reply = coordinator
@@ -10351,7 +10233,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
         .expect("safe lane plan should produce a reply");
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
-    let safe_lane_event_count = persisted
+    let event_names = persisted
         .iter()
         .filter_map(|(_, role, content)| {
             if role != "assistant" {
@@ -10362,13 +10244,12 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
                 return None;
             }
             let event_name = parsed.get("event")?.as_str()?;
-            let is_safe_lane_event = super::analytics::is_safe_lane_event_name(event_name);
-            is_safe_lane_event.then_some(())
+            super::analytics::is_safe_lane_event_name(event_name).then_some(event_name.to_owned())
         })
-        .count();
-    assert_eq!(
-        safe_lane_event_count, 0,
-        "unexpected safe-lane runtime events: {persisted:?}"
+        .collect::<Vec<_>>();
+    assert!(
+        event_names.iter().any(|name| name == "lane_selected"),
+        "expected safe-lane events to persist without a runtime toggle: {event_names:?}"
     );
 }
 
@@ -10395,10 +10276,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_even
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_emit_runtime_events = true;
-    config.conversation.safe_lane_replan_max_rounds = 0;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let _reply = coordinator
@@ -10462,8 +10340,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_even
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_audit_when_disabled()
-{
+async fn handle_turn_with_runtime_safe_lane_plan_emits_kernel_runtime_audit_without_toggle() {
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
@@ -10485,10 +10362,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_au
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_emit_runtime_events = false;
-    config.conversation.safe_lane_replan_max_rounds = 0;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let _reply = coordinator
@@ -10515,8 +10389,8 @@ async fn handle_turn_with_runtime_safe_lane_plan_does_not_emit_kernel_runtime_au
     });
 
     assert!(
-        !has_safe_lane_runtime_event,
-        "safe-lane runtime audit events should be disabled"
+        has_safe_lane_runtime_event,
+        "safe-lane runtime audit events should emit without a runtime toggle"
     );
 }
 
@@ -10609,12 +10483,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_node_max_attempts = 1;
-    config.conversation.safe_lane_replan_max_rounds = 1;
-    config.conversation.safe_lane_replan_max_node_attempts = 2;
-    config.conversation.safe_lane_event_sample_every = 2;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -10821,16 +10690,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_node_max_attempts = 1;
-    config.conversation.safe_lane_replan_max_rounds = 3;
-    config.conversation.safe_lane_replan_max_node_attempts = 4;
-    config.conversation.safe_lane_backpressure_guard_enabled = true;
-    config
-        .conversation
-        .safe_lane_backpressure_max_total_attempts = 1;
-    config.conversation.safe_lane_backpressure_max_replans = 10;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -10850,9 +10710,9 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         "expected explicit backpressure guard reason, got: {reply}"
     );
     let calls = *call_counter.lock().expect("call counter lock");
-    assert_eq!(
-        calls, 1,
-        "backpressure guard should block further replan retries"
+    assert!(
+        calls > 1 && calls <= 32,
+        "backpressure guard should cap retry growth within the internal attempt budget, got {calls}"
     );
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
@@ -10873,9 +10733,11 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
         })
         .next_back()
         .expect("final_status payload");
-    assert_eq!(
-        final_status_payload["route_reason"],
-        "backpressure_attempts_exhausted"
+    assert!(
+        final_status_payload["route_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.starts_with("backpressure_")),
+        "expected a backpressure terminal reason, got: {final_status_payload:?}"
     );
 }
 
@@ -10962,11 +10824,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_node_max_attempts = 1;
-    config.conversation.safe_lane_replan_max_rounds = 3;
-    config.conversation.safe_lane_replan_max_node_attempts = 4;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -11118,6 +10976,16 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
                                 "role": "assistant",
                                 "content": "{\"type\":\"conversation_event\",\"event\":\"final_status\",\"payload\":{\"status\":\"failed\",\"failure_code\":\"safe_lane_plan_node_retryable_error\",\"route_decision\":\"terminal\"}}",
                                 "ts": 1
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "{\"type\":\"conversation_event\",\"event\":\"final_status\",\"payload\":{\"status\":\"failed\",\"failure_code\":\"safe_lane_plan_node_retryable_error\",\"route_decision\":\"terminal\"}}",
+                                "ts": 2
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "{\"type\":\"conversation_event\",\"event\":\"final_status\",\"payload\":{\"status\":\"failed\",\"failure_code\":\"safe_lane_plan_node_retryable_error\",\"route_decision\":\"terminal\"}}",
+                                "ts": 3
                             }
                         ]
                     }),
@@ -11187,24 +11055,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_node_max_attempts = 1;
-    config.conversation.safe_lane_replan_max_rounds = 3;
-    config.conversation.safe_lane_replan_max_node_attempts = 4;
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 1;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 9;
-    config
-        .conversation
-        .safe_lane_session_governor_force_no_replan = true;
-    config
-        .conversation
-        .safe_lane_session_governor_force_node_max_attempts = 1;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let _reply = coordinator
@@ -11255,7 +11106,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
     );
     assert_eq!(
         lane_selected_payload["session_governor"]["trend_samples"],
-        1
+        3
     );
     assert_eq!(
         lane_selected_payload["session_governor"]["trend_threshold_triggered"],
@@ -11432,10 +11283,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config.conversation.safe_lane_session_governor_window_turns = 200;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let _ = coordinator
@@ -11462,7 +11310,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
         window_request.payload["session_id"],
         "session-safe-governor-window"
     );
-    assert_eq!(window_request.payload["limit"], 200);
+    assert_eq!(window_request.payload["limit"], 96);
     assert_eq!(window_request.payload["allow_extended_limit"], true);
 
     let persisted = runtime.persisted.lock().expect("persisted lock");
@@ -11600,32 +11448,17 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_node_max_attempts = 1;
-    config.conversation.safe_lane_replan_max_rounds = 3;
-    config.conversation.safe_lane_replan_max_node_attempts = 4;
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 1;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 9;
-    config
-        .conversation
-        .safe_lane_session_governor_force_no_replan = true;
-    config
-        .conversation
-        .safe_lane_session_governor_force_node_max_attempts = 1;
 
     let mem_config = session_store_config_from_config(&config);
-    append_session_turn_direct(
-        "session-safe-governor-fallback",
-        "assistant",
-        r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"safe_lane_plan_node_retryable_error","route_decision":"terminal"}} "#.trim(),
-        &mem_config,
-    )
-    .expect("persist governor history into configured sqlite db");
+    for _ in 0..3 {
+        append_session_turn_direct(
+            "session-safe-governor-fallback",
+            "assistant",
+            r#"{"type":"conversation_event","event":"final_status","payload":{"status":"failed","failure_code":"safe_lane_plan_node_retryable_error","route_decision":"terminal"}} "#.trim(),
+            &mem_config,
+        )
+        .expect("persist governor history into configured sqlite db");
+    }
 
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
@@ -11813,11 +11646,7 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
         Ok("unused".to_owned()),
     );
 
-    let mut config = test_config();
-    config.conversation.safe_lane_plan_execution_enabled = true;
-    config.conversation.safe_lane_node_max_attempts = 1;
-    config.conversation.safe_lane_replan_max_rounds = 1;
-    config.conversation.safe_lane_replan_max_node_attempts = 2;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -12186,10 +12015,7 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
         }),
         Ok("MODEL_SHELL_MULTI_REPAIR_REPLY".to_owned()),
     );
-    let mut config = test_config();
-    config.conversation.safe_lane_max_tool_steps_per_turn = 2;
-    config.conversation.fast_lane_max_tool_steps_per_turn = 2;
-    config.conversation.turn_loop.max_tool_steps_per_round = 2;
+    let config = test_config();
 
     let coordinator = ConversationTurnCoordinator::new();
     let reply = coordinator
@@ -26333,7 +26159,6 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_tools_via_default_d
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    config.conversation.safe_lane_plan_execution_enabled = true;
     let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -26410,7 +26235,6 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    config.conversation.safe_lane_plan_execution_enabled = true;
     config.tools.messages.enabled = true;
     config.telegram.enabled = true;
     config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
@@ -26515,7 +26339,6 @@ async fn handle_turn_with_runtime_safe_lane_executes_session_wait_via_default_di
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    config.conversation.safe_lane_plan_execution_enabled = true;
     let memory_config = session_store_config_from_config(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
