@@ -53,7 +53,6 @@ fn compact_tool_search_payload_result(result: &Value) -> Value {
 
     clone_field_if_present(result_object, &mut compacted, "tool_id");
     clone_field_if_present(result_object, &mut compacted, "summary");
-    clone_field_if_present(result_object, &mut compacted, "search_hint");
     clone_field_if_present(result_object, &mut compacted, "argument_hint");
     clone_array_field_if_present(result_object, &mut compacted, "required_fields");
     clone_array_field_if_present(result_object, &mut compacted, "required_field_groups");
@@ -141,21 +140,18 @@ mod tests {
             Some(&json!("Read a file."))
         );
         assert_eq!(
-            compacted_result.get("search_hint"),
-            Some(&json!("Use for UTF-8 text files."))
-        );
-        assert_eq!(
             compacted_result.get("argument_hint"),
             Some(&json!("path:string"))
         );
         assert!(!compacted_result.contains_key("schema_preview"));
         assert!(!compacted_result.contains_key("why"));
+        assert!(!compacted_result.contains_key("search_hint"));
         assert_eq!(recovered_state.exact_tool_id.as_deref(), Some("read"));
         assert_eq!(recovered_state.entries.len(), 1);
         assert_eq!(recovered_state.entries[0].tool_id.as_str(), "read");
         assert_eq!(
-            recovered_state.entries[0].search_hint.as_deref(),
-            Some("Use for UTF-8 text files.")
+            recovered_state.entries[0].argument_hint.as_deref(),
+            Some("path:string")
         );
     }
 }

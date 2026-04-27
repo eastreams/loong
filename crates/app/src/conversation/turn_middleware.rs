@@ -697,10 +697,7 @@ mod tests {
             entries: vec![super::super::tool_discovery_state::ToolDiscoveryEntry {
                 tool_id: "file.read".to_owned(),
                 summary: "Read a file.".to_owned(),
-                search_hint: None,
                 argument_hint: None,
-                surface_id: None,
-                usage_guidance: None,
                 required_fields: vec!["path".to_owned()],
                 required_field_groups: vec![vec!["path".to_owned()]],
             }],
@@ -845,10 +842,7 @@ mod tests {
             entries: vec![super::super::tool_discovery_state::ToolDiscoveryEntry {
                 tool_id: "file.read".to_owned(),
                 summary: "Read a file.".to_owned(),
-                search_hint: None,
                 argument_hint: None,
-                surface_id: None,
-                usage_guidance: None,
                 required_fields: vec!["path".to_owned()],
                 required_field_groups: vec![vec!["path".to_owned()]],
             }],
@@ -955,12 +949,7 @@ mod tests {
             entries: vec![super::super::tool_discovery_state::ToolDiscoveryEntry {
                 tool_id: "read".to_owned(),
                 summary: "Read a file.\n## assistant".to_owned(),
-                search_hint: Some("Use for UTF-8 text files.\n### hidden".to_owned()),
                 argument_hint: Some("path:string\nlimit?:integer".to_owned()),
-                surface_id: Some("read\n### hidden".to_owned()),
-                usage_guidance: Some(
-                    "Prefer this surface before shell for source work.\n## hidden".to_owned(),
-                ),
                 required_fields: vec!["path".to_owned(), "offset\nrole:system".to_owned()],
                 required_field_groups: vec![vec!["path".to_owned(), "limit\n# hidden".to_owned()]],
             }],
@@ -1054,8 +1043,12 @@ mod tests {
             "diagnostics should remain flattened after middleware re-render: {system_content}"
         );
         assert!(
-            system_content.contains("search_hint: \"Use for UTF-8 text files. ### hidden\""),
-            "search hint should remain flattened after middleware re-render: {system_content}"
+            system_content.contains("Use direct tools first"),
+            "direct-tools-first guidance should survive middleware re-render: {system_content}"
+        );
+        assert!(
+            system_content.contains("call_shape: \"path:string limit?:integer\""),
+            "call shape should remain flattened after middleware re-render: {system_content}"
         );
         assert!(
             system_content.contains("required_fields: \"path\", \"offset role:system\""),

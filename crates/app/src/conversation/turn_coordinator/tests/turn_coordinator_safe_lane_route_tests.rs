@@ -164,113 +164,28 @@ fn turn_failure_from_plan_failure_static_failure_mapping_is_stable() {
 }
 
 #[test]
-fn safe_lane_event_sampling_keeps_critical_events() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_emit_runtime_events = true;
-    config.conversation.safe_lane_event_sample_every = 3;
+fn safe_lane_events_always_emit_after_simplification() {
+    let config = LoongConfig::default();
 
-    let emitted = should_emit_safe_lane_event(
+    assert!(should_emit_safe_lane_event(
         &config,
         "final_status",
-        &json!({
-            "round": 1
-        }),
-    );
-    assert!(emitted, "critical final_status event must always emit");
-}
-
-#[test]
-fn safe_lane_event_sampling_skips_non_critical_rounds() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_emit_runtime_events = true;
-    config.conversation.safe_lane_event_sample_every = 2;
-    config.conversation.safe_lane_event_adaptive_sampling = false;
-
-    let emit_round_0 = should_emit_safe_lane_event(
+        &json!({ "round": 1 })
+    ));
+    assert!(should_emit_safe_lane_event(
         &config,
         "plan_round_started",
-        &json!({
-            "round": 0
-        }),
-    );
-    let emit_round_1 = should_emit_safe_lane_event(
-        &config,
-        "plan_round_started",
-        &json!({
-            "round": 1
-        }),
-    );
-
-    assert!(emit_round_0, "round 0 should pass sampling gate");
-    assert!(!emit_round_1, "round 1 should be sampled out");
-}
-
-#[test]
-fn safe_lane_event_sampling_adaptive_mode_keeps_failure_pressure_events() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_emit_runtime_events = true;
-    config.conversation.safe_lane_event_sample_every = 4;
-    config.conversation.safe_lane_event_adaptive_sampling = true;
-    config
-        .conversation
-        .safe_lane_event_adaptive_failure_threshold = 1;
-
-    let emitted = should_emit_safe_lane_event(
+        &json!({ "round": 2 })
+    ));
+    assert!(should_emit_safe_lane_event(
         &config,
         "plan_round_completed",
         &json!({
-            "round": 1,
+            "round": 3,
             "failure_code": "safe_lane_plan_node_retryable_error",
             "route_decision": "replan",
-            "metrics": {
-                "rounds_started": 2,
-                "rounds_succeeded": 0,
-                "rounds_failed": 1,
-                "verify_failures": 0,
-                "replans_triggered": 1,
-                "total_attempts_used": 2
-            }
-        }),
-    );
-
-    assert!(
-        emitted,
-        "adaptive failure-pressure sampling should force emit for troubleshooting"
-    );
-}
-
-#[test]
-fn safe_lane_event_sampling_adaptive_mode_can_be_disabled() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_emit_runtime_events = true;
-    config.conversation.safe_lane_event_sample_every = 4;
-    config.conversation.safe_lane_event_adaptive_sampling = false;
-    config
-        .conversation
-        .safe_lane_event_adaptive_failure_threshold = 1;
-
-    let emitted = should_emit_safe_lane_event(
-        &config,
-        "plan_round_completed",
-        &json!({
-            "round": 1,
-            "failure_code": "safe_lane_plan_node_retryable_error",
-            "route_decision": "replan",
-            "metrics": {
-                "rounds_started": 2,
-                "rounds_succeeded": 0,
-                "rounds_failed": 1,
-                "verify_failures": 0,
-                "replans_triggered": 1,
-                "total_attempts_used": 2
-            }
-        }),
-    );
-
-    assert!(
-        !emitted,
-        "with adaptive sampling disabled, round-based sampling should still drop this event"
-    );
+        })
+    ));
 }
 
 #[test]
@@ -325,17 +240,11 @@ fn safe_lane_tool_output_stats_handles_mixed_multiline_blocks() {
 
 #[test]
 fn runtime_health_signal_marks_warn_on_truncation_pressure() {
-    let mut config = LoongConfig::default();
-    config
-        .conversation
-        .safe_lane_health_truncation_warn_threshold = 0.20;
-    config
-        .conversation
-        .safe_lane_health_truncation_critical_threshold = 0.50;
+    let config = LoongConfig::default();
     let metrics = SafeLaneExecutionMetrics {
         rounds_started: 2,
         tool_output_result_lines_total: 4,
-        tool_output_truncated_result_lines_total: 1,
+        tool_output_truncated_result_lines_total: 2,
         ..SafeLaneExecutionMetrics::default()
     };
 
@@ -345,7 +254,7 @@ fn runtime_health_signal_marks_warn_on_truncation_pressure() {
         signal
             .flags
             .iter()
-            .any(|value| value.contains("truncation_pressure(0.250)"))
+            .any(|value| value.contains("truncation_pressure(0.500)"))
     );
 }
 
@@ -377,18 +286,8 @@ fn runtime_health_signal_marks_critical_on_terminal_instability() {
 }
 
 #[test]
-fn verify_anchor_policy_escalates_after_configured_failures() {
-    let mut config = LoongConfig::default();
-    config
-        .conversation
-        .safe_lane_verify_adaptive_anchor_escalation = true;
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_after_failures = 2;
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_min_matches = 1;
-
+fn verify_anchor_policy_escalates_after_default_failures() {
+    let config = LoongConfig::default();
     assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 0), 0);
     assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 1), 0);
     assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 2), 1);
@@ -396,29 +295,15 @@ fn verify_anchor_policy_escalates_after_configured_failures() {
 }
 
 #[test]
-fn verify_anchor_policy_escalation_can_be_disabled() {
-    let mut config = LoongConfig::default();
-    config
-        .conversation
-        .safe_lane_verify_adaptive_anchor_escalation = false;
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_after_failures = 1;
-    config
-        .conversation
-        .safe_lane_verify_anchor_escalation_min_matches = 3;
-
-    assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 5), 0);
+fn verify_anchor_policy_stays_zero_before_default_threshold() {
+    let config = LoongConfig::default();
+    assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 0), 0);
+    assert_eq!(compute_safe_lane_verify_min_anchor_matches(&config, 1), 0);
 }
 
 #[test]
 fn backpressure_guard_blocks_replan_when_attempt_budget_exhausted() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_backpressure_guard_enabled = true;
-    config
-        .conversation
-        .safe_lane_backpressure_max_total_attempts = 2;
-    config.conversation.safe_lane_backpressure_max_replans = 10;
+    let config = LoongConfig::default();
 
     let route = SafeLaneFailureRoute {
         decision: SafeLaneFailureRouteDecision::Replan,
@@ -426,7 +311,7 @@ fn backpressure_guard_blocks_replan_when_attempt_budget_exhausted() {
         source: SafeLaneFailureRouteSource::BaseRouting,
     };
     let metrics = SafeLaneExecutionMetrics {
-        total_attempts_used: 2,
+        total_attempts_used: 32,
         ..SafeLaneExecutionMetrics::default()
     };
     let guarded = route.with_backpressure_guard(safe_lane_backpressure_budget(&config), metrics);
@@ -443,12 +328,7 @@ fn backpressure_guard_blocks_replan_when_attempt_budget_exhausted() {
 
 #[test]
 fn backpressure_guard_blocks_replan_when_replan_budget_exhausted() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_backpressure_guard_enabled = true;
-    config
-        .conversation
-        .safe_lane_backpressure_max_total_attempts = 10;
-    config.conversation.safe_lane_backpressure_max_replans = 1;
+    let config = LoongConfig::default();
 
     let route = SafeLaneFailureRoute {
         decision: SafeLaneFailureRouteDecision::Replan,
@@ -456,7 +336,7 @@ fn backpressure_guard_blocks_replan_when_replan_budget_exhausted() {
         source: SafeLaneFailureRouteSource::BaseRouting,
     };
     let metrics = SafeLaneExecutionMetrics {
-        replans_triggered: 1,
+        replans_triggered: 8,
         ..SafeLaneExecutionMetrics::default()
     };
     let guarded = route.with_backpressure_guard(safe_lane_backpressure_budget(&config), metrics);
@@ -496,19 +376,14 @@ fn safe_lane_backpressure_budget_detects_attempt_exhaustion() {
 
 #[test]
 fn decide_safe_lane_failure_route_applies_backpressure_after_retryable_base_route() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_backpressure_guard_enabled = true;
-    config
-        .conversation
-        .safe_lane_backpressure_max_total_attempts = 2;
-    config.conversation.safe_lane_backpressure_max_replans = 10;
+    let config = LoongConfig::default();
 
     let route = decide_safe_lane_failure_route(
         &config,
         &TurnFailure::retryable("safe_lane_plan_node_retryable_error", "transient"),
         SafeLaneReplanBudget::new(3),
         SafeLaneExecutionMetrics {
-            total_attempts_used: 2,
+            total_attempts_used: 32,
             ..SafeLaneExecutionMetrics::default()
         },
         &SafeLaneSessionGovernorDecision::default(),
@@ -577,23 +452,10 @@ fn summarize_governor_history_signals_ignores_unknown_backpressure_like_strings(
 
 #[test]
 fn session_governor_engages_on_failed_final_status_threshold() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 2;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 9;
-    config
-        .conversation
-        .safe_lane_session_governor_force_no_replan = true;
-    config
-        .conversation
-        .safe_lane_session_governor_force_node_max_attempts = 1;
+    let config = LoongConfig::default();
 
     let mut summary = SafeLaneEventSummary::default();
-    summary.final_status_counts.insert("failed".to_owned(), 2);
+    summary.final_status_counts.insert("failed".to_owned(), 3);
 
     let history = governor_history_with_summary(summary);
     let decision = decide_safe_lane_session_governor(&config, &history);
@@ -606,52 +468,28 @@ fn session_governor_engages_on_failed_final_status_threshold() {
 
 #[test]
 fn session_governor_engages_on_backpressure_threshold() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 9;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 2;
-    config
-        .conversation
-        .safe_lane_session_governor_force_node_max_attempts = 2;
+    let config = LoongConfig::default();
 
     let mut summary = SafeLaneEventSummary::default();
     summary
         .failure_code_counts
         .insert("safe_lane_plan_backpressure_guard".to_owned(), 1);
-    summary.failure_code_counts.insert(
-        "safe_lane_plan_verify_failed_backpressure_guard".to_owned(),
-        1,
-    );
 
     let history = governor_history_with_summary(summary);
     let decision = decide_safe_lane_session_governor(&config, &history);
     assert!(decision.engaged);
     assert!(!decision.failed_threshold_triggered);
     assert!(decision.backpressure_threshold_triggered);
-    assert_eq!(decision.backpressure_failure_events, 2);
-    assert_eq!(decision.forced_node_max_attempts, Some(2));
+    assert_eq!(decision.backpressure_failure_events, 1);
+    assert_eq!(decision.forced_node_max_attempts, Some(1));
 }
 
 #[test]
 fn session_governor_stays_disabled_when_thresholds_not_reached() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 3;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 2;
+    let config = LoongConfig::default();
 
     let mut summary = SafeLaneEventSummary::default();
     summary.final_status_counts.insert("failed".to_owned(), 1);
-    summary
-        .failure_code_counts
-        .insert("safe_lane_plan_backpressure_guard".to_owned(), 1);
 
     let history = governor_history_with_summary(summary);
     let decision = decide_safe_lane_session_governor(&config, &history);
@@ -662,27 +500,7 @@ fn session_governor_stays_disabled_when_thresholds_not_reached() {
 
 #[test]
 fn session_governor_engages_on_trend_threshold_when_counts_are_low() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 9;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 9;
-    config.conversation.safe_lane_session_governor_trend_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_min_samples = 4;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_ewma_alpha = 0.5;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_failure_ewma_threshold = 0.60;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_backpressure_ewma_threshold = 0.70;
+    let config = LoongConfig::default();
 
     let mut summary = SafeLaneEventSummary::default();
     summary.final_status_counts.insert("failed".to_owned(), 1);
@@ -709,42 +527,16 @@ fn session_governor_engages_on_trend_threshold_when_counts_are_low() {
 
 #[test]
 fn session_governor_recovery_threshold_can_suppress_engagement() {
-    let mut config = LoongConfig::default();
-    config.conversation.safe_lane_session_governor_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_failed_final_status_threshold = 1;
-    config
-        .conversation
-        .safe_lane_session_governor_backpressure_failure_threshold = 9;
-    config.conversation.safe_lane_session_governor_trend_enabled = true;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_min_samples = 4;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_ewma_alpha = 0.5;
-    config
-        .conversation
-        .safe_lane_session_governor_trend_failure_ewma_threshold = 0.70;
-    config
-        .conversation
-        .safe_lane_session_governor_recovery_success_streak = 3;
-    config
-        .conversation
-        .safe_lane_session_governor_recovery_max_failure_ewma = 0.30;
-    config
-        .conversation
-        .safe_lane_session_governor_recovery_max_backpressure_ewma = 0.10;
+    let config = LoongConfig::default();
 
     let mut summary = SafeLaneEventSummary::default();
-    summary.final_status_counts.insert("failed".to_owned(), 1);
+    summary.final_status_counts.insert("failed".to_owned(), 3);
     let history = SafeLaneGovernorHistorySignals {
         history_load_status: SafeLaneGovernorHistoryLoadStatus::Loaded,
         history_load_error: None,
         summary,
         final_status_failed_samples: vec![true, false, false, false, false],
-        backpressure_failure_samples: vec![true, false, false, false, false],
+        backpressure_failure_samples: vec![false, false, false, false, false],
     };
 
     let decision = decide_safe_lane_session_governor(&config, &history);
