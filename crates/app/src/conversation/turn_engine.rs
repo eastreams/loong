@@ -6300,8 +6300,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn browser_companion_click_turn_executes_when_approval_is_disabled() {
-        let mut env = crate::test_support::ScopedEnv::new();
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let mut env = crate::test_support::ScopedEnv::new();
         let memory_config = isolated_memory_config("browser-companion-click-exec");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
@@ -6401,8 +6401,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn browser_companion_click_turn_uses_runtime_visible_readiness_without_env_recheck() {
-        let mut env = crate::test_support::ScopedEnv::new();
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let mut env = crate::test_support::ScopedEnv::new();
         let memory_config = isolated_memory_config("browser-companion-click-runtime-ready");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
@@ -6502,8 +6502,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn browser_companion_click_turn_uses_runtime_visible_policy_when_app_config_is_default() {
-        let mut env = crate::test_support::ScopedEnv::new();
         let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+        let mut env = crate::test_support::ScopedEnv::new();
         let memory_config = isolated_memory_config("browser-companion-click-runtime-policy");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {

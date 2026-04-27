@@ -1227,6 +1227,19 @@ fn canonical_tool_name_maps_known_aliases() {
     assert_eq!(canonical_tool_name("file.read"), "file.read");
 }
 
+#[test]
+fn tool_id_visible_in_view_supports_direct_aliases_and_grouped_surfaces() {
+    let view = ToolView::from_tool_names(["file.read", "feishu.messages.send"]);
+
+    assert!(tool_id_visible_in_view("file.read", &view));
+    assert!(tool_id_visible_in_view("read", &view));
+    assert!(tool_id_visible_in_view("feishu.messages.send", &view));
+    assert!(tool_id_visible_in_view("feishu_messages_send", &view));
+    assert!(tool_id_visible_in_view("channel", &view));
+    assert!(!tool_id_visible_in_view("skills", &view));
+    assert!(!tool_id_visible_in_view("external_skills.install", &view));
+}
+
 #[cfg(feature = "tool-file")]
 #[test]
 fn runtime_tool_view_hides_memory_tools_when_memory_corpus_is_empty() {
@@ -2342,8 +2355,8 @@ fn browser_companion_protocol_times_out_stalled_command() {
 #[cfg(feature = "tool-browser")]
 #[test]
 fn browser_companion_app_tool_click_uses_current_session_scope() {
-    let mut env = ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let mut env = ScopedEnv::new();
     let root = unique_tool_temp_dir("loongclaw-browser-companion-app-click");
     std::fs::create_dir_all(&root).expect("create fixture root");
     let log_path = root.join("request.json");

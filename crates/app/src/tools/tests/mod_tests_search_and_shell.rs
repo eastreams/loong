@@ -399,8 +399,8 @@ async fn framework_timeout_supports_async_core_tool_calls() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
-    let _env = crate::test_support::ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let _env = crate::test_support::ScopedEnv::new();
     #[cfg(unix)]
     let config = test_tool_runtime_config(std::env::temp_dir());
     #[cfg(windows)]
@@ -437,8 +437,8 @@ fn shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn tool_invoke_shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
-    let _env = crate::test_support::ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let _env = crate::test_support::ScopedEnv::new();
     #[cfg(unix)]
     let config = test_tool_runtime_config(std::env::temp_dir());
     #[cfg(windows)]
@@ -547,8 +547,8 @@ fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_times_out_when_timeout_ms_is_small() {
-    let _env = crate::test_support::ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let _env = crate::test_support::ScopedEnv::new();
     let mut config = test_tool_runtime_config(std::env::temp_dir());
     #[cfg(unix)]
     {
@@ -586,8 +586,8 @@ fn shell_exec_times_out_when_timeout_ms_is_small() {
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn shell_exec_timeout_returns_without_waiting_for_descendant_pipe_holders() {
-    let _env = crate::test_support::ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let _env = crate::test_support::ScopedEnv::new();
     let mut config = test_tool_runtime_config(std::env::temp_dir());
     let args = vec!["-c", "/bin/sleep 5 & wait"];
     let started_at = std::time::Instant::now();
@@ -622,8 +622,8 @@ fn shell_exec_timeout_returns_without_waiting_for_descendant_pipe_holders() {
 #[cfg(feature = "tool-shell")]
 #[test]
 fn shell_exec_succeeds_when_fast_command_receives_timeout_ms() {
-    let _env = crate::test_support::ScopedEnv::new();
     let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let _env = crate::test_support::ScopedEnv::new();
     #[cfg(unix)]
     let config = test_tool_runtime_config(std::env::temp_dir());
     #[cfg(windows)]
