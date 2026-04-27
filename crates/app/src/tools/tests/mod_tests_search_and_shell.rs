@@ -1,4 +1,6 @@
 use super::*;
+use std::sync::mpsc;
+use std::time::Duration;
 
 #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
 #[test]
