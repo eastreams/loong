@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -56,8 +55,16 @@ use super::turn_shared::effective_followup_visible_tool_name;
 
 #[path = "turn_engine_payload.rs"]
 mod payload;
+#[path = "turn_engine_support.rs"]
+mod support;
 use payload::augment_tool_payload_for_kernel;
 pub(crate) use payload::render_kernel_error_reason;
+pub(crate) use support::classify_kernel_error;
+use support::{
+    RepairableToolPreflight, approval_required_tool_decision, denied_tool_decision,
+    generic_allow_tool_decision, render_app_tool_denied_reason,
+    with_runtime_ready_browser_companion_tools,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -437,39 +444,6 @@ pub(crate) enum KernelFailureClass {
     PolicyDenied,
     RetryableExecution,
     NonRetryable,
-}
-
-pub(crate) fn classify_kernel_error(error: &KernelError) -> KernelFailureClass {
-    #[allow(clippy::wildcard_enum_match_arm)]
-    match error {
-        KernelError::Policy(_)
-        | KernelError::PackCapabilityBoundary { .. }
-        | KernelError::ConnectorNotAllowed { .. } => KernelFailureClass::PolicyDenied,
-        KernelError::ToolPlane(ToolPlaneError::Execution(reason)) => {
-            classify_tool_execution_reason(reason)
-        }
-        _ => KernelFailureClass::NonRetryable,
-    }
-}
-
-fn generic_allow_tool_decision(tool_name: &str) -> ToolDecisionTelemetry {
-    let reason = format!("tool preflight allowed `{tool_name}`");
-    ToolDecisionTelemetry::allow(tool_name, reason, TOOL_PREFLIGHT_ALLOW_RULE_ID)
-}
-
-fn approval_required_tool_decision(
-    tool_name: &str,
-    requirement: &ApprovalRequirement,
-) -> ToolDecisionTelemetry {
-    let reason = requirement.reason.clone();
-    let rule_id = requirement.rule_id.clone();
-    ToolDecisionTelemetry::approval_required(tool_name, reason, rule_id)
-}
-
-fn denied_tool_decision(tool_name: &str, failure: &TurnFailure) -> ToolDecisionTelemetry {
-    let reason = failure.reason.clone();
-    let rule_id = failure.code.clone();
-    ToolDecisionTelemetry::deny(tool_name, reason, rule_id)
 }
 
 #[async_trait]
@@ -1791,53 +1765,6 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             &effective_tool_config,
         )
     }
-}
-
-fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
-    if reason.starts_with("policy_denied: ") {
-        KernelFailureClass::PolicyDenied
-    } else {
-        KernelFailureClass::RetryableExecution
-    }
-}
-
-struct RepairableToolPreflight;
-
-impl RepairableToolPreflight {
-    const PREFIX: &str = "tool_preflight_repairable: ";
-
-    fn encode(reason: &str) -> String {
-        format!("{}{reason}", Self::PREFIX)
-    }
-
-    fn parse(encoded: &str) -> Option<&str> {
-        encoded.strip_prefix(Self::PREFIX)
-    }
-
-    fn render(reason: &str) -> String {
-        format!("tool_preflight_denied: tool input needs repair: {reason}")
-    }
-}
-
-fn render_app_tool_denied_reason(reason: &str) -> String {
-    reason
-        .strip_prefix("app_tool_denied: ")
-        .unwrap_or(reason)
-        .to_owned()
-}
-
-fn with_runtime_ready_browser_companion_tools(
-    base_view: ToolView,
-    session_tool_view: &ToolView,
-) -> ToolView {
-    let mut names: BTreeSet<String> = base_view.tool_names().map(str::to_owned).collect();
-    names.extend(
-        session_tool_view
-            .tool_names()
-            .filter(|name| name.starts_with("browser.companion."))
-            .map(str::to_owned),
-    );
-    ToolView::from_tool_names(names)
 }
 
 fn turn_result_from_tool_execution_failure(failure: TurnFailure) -> TurnResult {
