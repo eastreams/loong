@@ -12,13 +12,15 @@ use std::{
 use loong_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+pub(crate) use tool_lease::merge_trusted_internal_tool_context_into_arguments;
 #[cfg(test)]
 use tool_search::searchable_entry_from_provider_definition;
+pub(crate) use tool_search::tool_id_visible_in_view;
 use tool_search::{
-    SearchableToolEntry, collapse_hidden_surface_search_entries,
-    execute_tool_search_tool_with_config, searchable_entry_from_descriptor,
-    tool_search_entry_is_runtime_usable,
+    SearchableToolEntry, execute_tool_search_tool_with_config, runtime_discoverable_tool_entries,
 };
+#[cfg(test)]
+use tool_search::{runtime_tool_search_entries, searchable_entry_from_descriptor};
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
@@ -814,20 +816,6 @@ pub(crate) fn is_tool_surface_id(surface_id: &str) -> bool {
     tool_surface::is_tool_surface_id(surface_id)
 }
 
-pub(crate) fn tool_id_visible_in_view(tool_id: &str, view: &ToolView) -> bool {
-    let canonical_tool_id = canonical_tool_name(tool_id);
-    if view.contains(canonical_tool_id) {
-        return true;
-    }
-
-    if tool_surface::is_tool_surface_id(tool_id) {
-        return tool_surface::tool_surface_visible_in_view(tool_id, view);
-    }
-
-    tool_surface::tool_surface_id_for_name(canonical_tool_id)
-        .is_some_and(|surface_id| tool_surface::tool_surface_visible_in_view(surface_id, view))
-}
-
 pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) -> ToolView {
     let runtime_config = runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     runtime_tool_view_with_runtime_config(&config.tools, &runtime_config)
@@ -1081,23 +1069,6 @@ fn trusted_workspace_root_from_payload(payload: &Value) -> Result<Option<PathBuf
         return Err("invalid_internal_workspace_root: path must be a directory".to_owned());
     }
     Ok(Some(canonical_workspace_root))
-}
-
-pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
-    arguments: &mut serde_json::Map<String, Value>,
-    internal_context: &Value,
-) -> Result<(), String> {
-    let trusted_context = internal_context.as_object().cloned().ok_or_else(|| {
-        format!("tool.invoke payload.{LOONG_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
-    })?;
-    if let Some(offending_key) = reserved_internal_tool_context_key_in_map(arguments) {
-        return Err(format!(
-            "tool.invoke payload.arguments.{offending_key} is reserved for trusted internal tool context"
-        ));
-    }
-    let merged_context = Value::Object(trusted_context);
-    arguments.insert(LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(), merged_context);
-    Ok(())
 }
 
 fn execute_discoverable_tool_core_with_config(
@@ -1588,130 +1559,6 @@ fn effective_runtime_visible_tool_view(
         }
         None => runtime_view,
     }
-}
-
-fn runtime_tool_search_entries(
-    config: &runtime_config::ToolRuntimeConfig,
-    visible_tool_view: Option<&ToolView>,
-    collapse_hidden_surfaces: bool,
-) -> Vec<SearchableToolEntry> {
-    let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
-    let mut entries = Vec::new();
-
-    for descriptor in catalog::tool_catalog().descriptors().iter() {
-        let runtime_available = descriptor.availability == ToolAvailability::Runtime;
-        if !runtime_available {
-            continue;
-        }
-
-        if descriptor.is_direct() {
-            let direct_tool_visible =
-                tool_surface::direct_tool_visible_in_view(descriptor.name, &visible_tool_view);
-            if !direct_tool_visible {
-                continue;
-            }
-            let entry = tool_search::searchable_entry_from_descriptor_for_runtime_view(
-                descriptor,
-                &visible_tool_view,
-            );
-            entries.push(entry);
-        }
-    }
-
-    let hidden_entries = runtime_discoverable_tool_entries(config, Some(&visible_tool_view), true);
-    let hidden_entries = if collapse_hidden_surfaces {
-        let collapsible_surface_ids =
-            provider_visible_collapsible_hidden_surface_ids(config, &visible_tool_view);
-        collapse_hidden_surface_search_entries(hidden_entries, &collapsible_surface_ids)
-    } else {
-        hidden_entries
-    };
-    entries.extend(hidden_entries);
-    entries
-}
-
-fn runtime_discoverable_tool_entries(
-    config: &runtime_config::ToolRuntimeConfig,
-    visible_tool_view: Option<&ToolView>,
-    provider_invokable_only: bool,
-) -> Vec<SearchableToolEntry> {
-    let visible_tool_view = effective_runtime_visible_tool_view(config, visible_tool_view);
-    catalog::tool_catalog()
-        .descriptors()
-        .iter()
-        .filter(|descriptor| {
-            let is_discoverable = descriptor.is_discoverable();
-            if !is_discoverable {
-                return false;
-            }
-
-            if !provider_invokable_only {
-                return true;
-            }
-
-            descriptor.is_provider_invokable_discoverable()
-        })
-        .filter(|descriptor| visible_tool_view.contains(descriptor.name))
-        .filter(|descriptor| {
-            descriptor.name == SHELL_EXEC_TOOL_NAME
-                || tool_search_entry_is_runtime_usable(descriptor.name, config)
-        })
-        .filter(|descriptor| {
-            !tool_surface::hidden_tool_is_covered_by_visible_direct_tool(
-                descriptor.name,
-                &visible_tool_view,
-            )
-        })
-        .map(searchable_entry_from_descriptor)
-        .collect::<Vec<_>>()
-}
-
-fn hidden_surface_entry_counts(entries: &[SearchableToolEntry]) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-
-    for entry in entries {
-        let Some(surface_id) = entry.surface_id.as_deref() else {
-            continue;
-        };
-        let is_grouped_surface = matches!(surface_id, "agent" | "skills" | "channel");
-        if !is_grouped_surface {
-            continue;
-        }
-
-        let entry_count = counts.entry(surface_id.to_owned()).or_insert(0);
-        *entry_count += 1;
-    }
-
-    counts
-}
-
-pub(super) fn provider_visible_collapsible_hidden_surface_ids(
-    config: &runtime_config::ToolRuntimeConfig,
-    visible_tool_view: &ToolView,
-) -> BTreeSet<String> {
-    let all_discoverable_entries =
-        runtime_discoverable_tool_entries(config, Some(visible_tool_view), false);
-    let provider_discoverable_entries =
-        runtime_discoverable_tool_entries(config, Some(visible_tool_view), true);
-    let all_entry_counts = hidden_surface_entry_counts(all_discoverable_entries.as_slice());
-    let provider_entry_counts =
-        hidden_surface_entry_counts(provider_discoverable_entries.as_slice());
-    let mut surface_ids = BTreeSet::new();
-
-    for (surface_id, all_entry_count) in all_entry_counts {
-        let Some(provider_entry_count) = provider_entry_counts.get(surface_id.as_str()).copied()
-        else {
-            continue;
-        };
-        let surface_is_fully_provider_visible = provider_entry_count == all_entry_count;
-        if !surface_is_fully_provider_visible {
-            continue;
-        }
-
-        surface_ids.insert(surface_id);
-    }
-
-    surface_ids
 }
 
 #[cfg(test)]

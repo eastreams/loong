@@ -79,18 +79,17 @@ pub(super) fn execute_tool_search_tool_with_config(
         .cloned()
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
-    let exact_match_entries =
-        super::runtime_tool_search_entries(config, Some(&visible_tool_view), false)
-            .into_iter()
-            .filter(|entry| {
-                tool_search_entry_is_capability_usable(
-                    entry.canonical_name.as_str(),
-                    granted_capabilities.as_ref(),
-                )
-            })
-            .collect::<Vec<_>>();
+    let exact_match_entries = runtime_tool_search_entries(config, Some(&visible_tool_view), false)
+        .into_iter()
+        .filter(|entry| {
+            tool_search_entry_is_capability_usable(
+                entry.canonical_name.as_str(),
+                granted_capabilities.as_ref(),
+            )
+        })
+        .collect::<Vec<_>>();
     let collapsible_surface_ids =
-        super::provider_visible_collapsible_hidden_surface_ids(config, &visible_tool_view);
+        provider_visible_collapsible_hidden_surface_ids(config, &visible_tool_view);
     let skill_query_hints = query
         .as_deref()
         .map(|value| super::external_skills::ranked_model_visible_skill_hints(config, value, 3))
@@ -217,6 +216,61 @@ pub(super) fn execute_tool_search_tool_with_config(
     })
 }
 
+pub(crate) fn tool_id_visible_in_view(tool_id: &str, view: &ToolView) -> bool {
+    let canonical_tool_id = canonical_tool_name(tool_id);
+    if view.contains(canonical_tool_id) {
+        return true;
+    }
+
+    if super::tool_surface::is_tool_surface_id(tool_id) {
+        return super::tool_surface::tool_surface_visible_in_view(tool_id, view);
+    }
+
+    super::tool_surface::tool_surface_id_for_name(canonical_tool_id).is_some_and(|surface_id| {
+        super::tool_surface::tool_surface_visible_in_view(surface_id, view)
+    })
+}
+
+pub(super) fn runtime_tool_search_entries(
+    config: &runtime_config::ToolRuntimeConfig,
+    visible_tool_view: Option<&ToolView>,
+    collapse_hidden_surfaces: bool,
+) -> Vec<SearchableToolEntry> {
+    let visible_tool_view = super::effective_runtime_visible_tool_view(config, visible_tool_view);
+    let mut entries = Vec::new();
+
+    for descriptor in super::catalog::tool_catalog().descriptors().iter() {
+        let runtime_available = descriptor.availability == super::ToolAvailability::Runtime;
+        if !runtime_available {
+            continue;
+        }
+
+        if descriptor.is_direct() {
+            let direct_tool_visible = super::tool_surface::direct_tool_visible_in_view(
+                descriptor.name,
+                &visible_tool_view,
+            );
+            if !direct_tool_visible {
+                continue;
+            }
+            let entry =
+                searchable_entry_from_descriptor_for_runtime_view(descriptor, &visible_tool_view);
+            entries.push(entry);
+        }
+    }
+
+    let hidden_entries = runtime_discoverable_tool_entries(config, Some(&visible_tool_view), true);
+    let hidden_entries = if collapse_hidden_surfaces {
+        let collapsible_surface_ids =
+            provider_visible_collapsible_hidden_surface_ids(config, &visible_tool_view);
+        collapse_hidden_surface_search_entries(hidden_entries, &collapsible_surface_ids)
+    } else {
+        hidden_entries
+    };
+    entries.extend(hidden_entries);
+    entries
+}
+
 fn tool_search_result_entry_json(
     entry: &SearchableToolEntry,
     why: Vec<String>,
@@ -253,6 +307,90 @@ fn tool_search_result_entry_json(
         );
     }
     Ok(Value::Object(result))
+}
+
+pub(super) fn runtime_discoverable_tool_entries(
+    config: &runtime_config::ToolRuntimeConfig,
+    visible_tool_view: Option<&ToolView>,
+    provider_invokable_only: bool,
+) -> Vec<SearchableToolEntry> {
+    let visible_tool_view = super::effective_runtime_visible_tool_view(config, visible_tool_view);
+    super::catalog::tool_catalog()
+        .descriptors()
+        .iter()
+        .filter(|descriptor| {
+            let is_discoverable = descriptor.is_discoverable();
+            if !is_discoverable {
+                return false;
+            }
+
+            if !provider_invokable_only {
+                return true;
+            }
+
+            descriptor.is_provider_invokable_discoverable()
+        })
+        .filter(|descriptor| visible_tool_view.contains(descriptor.name))
+        .filter(|descriptor| {
+            descriptor.name == super::SHELL_EXEC_TOOL_NAME
+                || tool_search_entry_is_runtime_usable(descriptor.name, config)
+        })
+        .filter(|descriptor| {
+            !super::tool_surface::hidden_tool_is_covered_by_visible_direct_tool(
+                descriptor.name,
+                &visible_tool_view,
+            )
+        })
+        .map(searchable_entry_from_descriptor)
+        .collect::<Vec<_>>()
+}
+
+fn hidden_surface_entry_counts(entries: &[SearchableToolEntry]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+
+    for entry in entries {
+        let Some(surface_id) = entry.surface_id.as_deref() else {
+            continue;
+        };
+        let is_grouped_surface = matches!(surface_id, "agent" | "skills" | "channel");
+        if !is_grouped_surface {
+            continue;
+        }
+
+        let entry_count = counts.entry(surface_id.to_owned()).or_insert(0);
+        *entry_count += 1;
+    }
+
+    counts
+}
+
+pub(super) fn provider_visible_collapsible_hidden_surface_ids(
+    config: &runtime_config::ToolRuntimeConfig,
+    visible_tool_view: &ToolView,
+) -> BTreeSet<String> {
+    let all_discoverable_entries =
+        runtime_discoverable_tool_entries(config, Some(visible_tool_view), false);
+    let provider_discoverable_entries =
+        runtime_discoverable_tool_entries(config, Some(visible_tool_view), true);
+    let all_entry_counts = hidden_surface_entry_counts(all_discoverable_entries.as_slice());
+    let provider_entry_counts =
+        hidden_surface_entry_counts(provider_discoverable_entries.as_slice());
+    let mut surface_ids = BTreeSet::new();
+
+    for (surface_id, all_entry_count) in all_entry_counts {
+        let Some(provider_entry_count) = provider_entry_counts.get(surface_id.as_str()).copied()
+        else {
+            continue;
+        };
+        let surface_is_fully_provider_visible = provider_entry_count == all_entry_count;
+        if !surface_is_fully_provider_visible {
+            continue;
+        }
+
+        surface_ids.insert(surface_id);
+    }
+
+    surface_ids
 }
 
 fn tool_search_diagnostics_json(

@@ -1,5 +1,22 @@
 use super::*;
 
+pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
+    arguments: &mut serde_json::Map<String, Value>,
+    internal_context: &Value,
+) -> Result<(), String> {
+    let trusted_context = internal_context.as_object().cloned().ok_or_else(|| {
+        format!("tool.invoke payload.{LOONG_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
+    })?;
+    if let Some(offending_key) = reserved_internal_tool_context_key_in_map(arguments) {
+        return Err(format!(
+            "tool.invoke payload.arguments.{offending_key} is reserved for trusted internal tool context"
+        ));
+    }
+    let merged_context = Value::Object(trusted_context);
+    arguments.insert(LOONG_INTERNAL_TOOL_CONTEXT_KEY.to_owned(), merged_context);
+    Ok(())
+}
+
 pub(crate) fn resolve_tool_invoke_request(
     request: &ToolCoreRequest,
 ) -> Result<(ResolvedToolExecution, ToolCoreRequest), String> {
