@@ -1,4 +1,8 @@
 use super::*;
+use crate::conversation::{
+    FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED, FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT,
+    TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+};
 
 pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     config: &LoongConfig,
@@ -18,7 +22,10 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .filter(|intent| effective_followup_tool_name(intent) == "tool.search")
         .count();
     let discovery_search_turn = search_tool_intents > 0;
-    let supports_provider_turn_followup = followup_chain_active || discovery_search_turn;
+    let malformed_parse_followup_turn =
+        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
+    let supports_provider_turn_followup =
+        followup_chain_active || discovery_search_turn || malformed_parse_followup_turn;
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
     let session_context = match runtime.session_context(config, session_id, binding) {
@@ -31,10 +38,12 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             return ProviderTurnLaneExecution {
                 lane,
                 assistant_preface,
+                provider_usage: provider_turn_usage(turn),
                 had_tool_intents,
                 tool_request_summary,
                 discovery_search_turn,
                 search_tool_intents,
+                malformed_parse_followup_turn,
                 supports_provider_turn_followup,
                 raw_tool_output_requested: preparation.raw_tool_output_requested,
                 turn_result,
@@ -52,17 +61,11 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         runtime,
         fallback: &base_app_dispatcher,
     };
-    let payload_summary_limit_chars = config
-        .conversation
-        .tool_result_payload_summary_limit_chars();
-    let parallel_tool_execution_enabled = matches!(lane, ExecutionLane::Fast)
-        && config
-            .conversation
-            .fast_lane_parallel_tool_execution_enabled;
+    let payload_summary_limit_chars = TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS;
+    let parallel_tool_execution_enabled =
+        matches!(lane, ExecutionLane::Fast) && FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED;
     let parallel_tool_execution_max_in_flight = if parallel_tool_execution_enabled {
-        config
-            .conversation
-            .fast_lane_parallel_tool_execution_max_in_flight()
+        FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT
     } else {
         1
     };
@@ -166,27 +169,51 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         &turn_result,
         fast_lane_tool_batch_trace.as_ref(),
     );
+    let recovery_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
+        .is_some_and(|payload| {
+            matches!(payload, ToolDrivenFollowupPayload::DiscoveryRecovery { .. })
+        });
+    let malformed_parse_followup_turn =
+        provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
     let runtime_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
         .is_some_and(|payload| payload.requests_runtime_followup_chain());
     let preface_signals_provider_turn_followup =
         assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
     let supports_provider_turn_followup = followup_chain_active
         || discovery_search_turn
+        || recovery_followup_turn
+        || malformed_parse_followup_turn
         || runtime_followup_turn
         || preface_signals_provider_turn_followup;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
+        provider_usage: provider_turn_usage(turn),
         had_tool_intents,
         tool_request_summary,
         discovery_search_turn,
         search_tool_intents,
+        malformed_parse_followup_turn,
         supports_provider_turn_followup,
         raw_tool_output_requested: preparation.raw_tool_output_requested,
         turn_result,
         safe_lane_terminal_route,
         tool_events,
     }
+}
+
+pub(super) fn provider_turn_has_malformed_parse_followup_signal(raw_meta: &Value) -> bool {
+    let Some(parse_meta) = raw_meta.get("loong_provider_parse") else {
+        return false;
+    };
+    let Some(parse_meta_object) = parse_meta.as_object() else {
+        return false;
+    };
+
+    parse_meta_object.values().any(|entry| {
+        let status = entry.get("status").and_then(Value::as_str);
+        status == Some("malformed")
+    })
 }
 
 pub(super) fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> bool {
