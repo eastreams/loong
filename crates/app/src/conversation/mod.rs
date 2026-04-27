@@ -32,6 +32,7 @@ mod turn_checkpoint;
 mod turn_coordinator;
 pub mod turn_engine;
 mod turn_loop;
+mod turn_loop_followup;
 mod turn_middleware;
 mod turn_middleware_registry;
 mod turn_observer;

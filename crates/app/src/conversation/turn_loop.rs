@@ -15,14 +15,16 @@ use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
     DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
 };
+use super::turn_loop_followup::{
+    FollowupPayloadBudget, append_repeated_tool_guard_followup_messages,
+    append_tool_driven_followup_messages, round_tool_payload_context,
+};
 use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
-    ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupLabel,
-    ToolDrivenFollowupPayload, ToolDrivenFollowupTextRef, ToolDrivenReplyBaseDecision,
-    ToolDrivenReplyPhase, build_tool_driven_followup_tail_with_request_summary,
-    build_tool_loop_guard_tail, decide_provider_turn_request_action,
-    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
-    tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
+    ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
+    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, decide_provider_turn_request_action,
+    request_completion_with_raw_fallback, tool_loop_circuit_breaker_reply,
+    user_requested_raw_tool_output,
 };
 use super::{
     FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED, FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT,
@@ -532,113 +534,6 @@ fn append_round_followup_messages(
     }
 }
 
-fn round_tool_payload_context(
-    payload: &ToolDrivenFollowupPayload,
-) -> ToolDrivenFollowupTextRef<'_> {
-    payload.message_context()
-}
-
-fn append_tool_driven_followup_messages(
-    messages: &mut Vec<Value>,
-    assistant_preface: &str,
-    payload: &ToolDrivenFollowupPayload,
-    user_input: &str,
-    followup_payload_budget: &mut FollowupPayloadBudget,
-    loop_warning_reason: Option<&str>,
-    tool_request_summary: Option<&str>,
-) {
-    messages.extend(build_tool_driven_followup_tail_with_request_summary(
-        assistant_preface,
-        payload,
-        user_input,
-        loop_warning_reason,
-        tool_request_summary,
-        |label, text| {
-            let reduced = reduce_followup_payload_for_model(label, text);
-            followup_payload_budget.truncate_payload_text_label(label, reduced.as_ref())
-        },
-    ));
-}
-
-fn append_repeated_tool_guard_followup_messages(
-    messages: &mut Vec<Value>,
-    assistant_preface: &str,
-    reason: &str,
-    user_input: &str,
-    latest_tool_context: Option<ToolDrivenFollowupTextRef<'_>>,
-    followup_payload_budget: &mut FollowupPayloadBudget,
-) {
-    messages.extend(build_tool_loop_guard_tail(
-        assistant_preface,
-        reason,
-        user_input,
-        latest_tool_context,
-        |label, text| {
-            let reduced = reduce_followup_payload_for_model(label.as_str(), text);
-            followup_payload_budget.truncate_payload(label, reduced.as_ref())
-        },
-    ));
-}
-
-fn truncate_followup_tool_payload(label: &str, text: &str, max_chars: usize) -> String {
-    let normalized = text.trim();
-    let total_chars = normalized.chars().count();
-    if total_chars <= max_chars {
-        return normalized.to_owned();
-    }
-
-    let reserved_chars = 80usize;
-    let keep_chars = max_chars.saturating_sub(reserved_chars).max(1);
-    let truncated = normalized.chars().take(keep_chars).collect::<String>();
-    let removed = total_chars.saturating_sub(keep_chars);
-    format!("{truncated}\n[{label}_truncated] removed_chars={removed}")
-}
-
-#[derive(Debug, Clone)]
-struct FollowupPayloadBudget {
-    per_round_max_chars: usize,
-    remaining_total_chars: usize,
-}
-
-impl FollowupPayloadBudget {
-    fn new(per_round_max_chars: usize, total_max_chars: usize) -> Self {
-        Self {
-            per_round_max_chars: per_round_max_chars.max(1),
-            remaining_total_chars: total_max_chars,
-        }
-    }
-
-    fn truncate_payload(&mut self, label: ToolDrivenFollowupLabel, text: &str) -> String {
-        let label_text = label.as_str();
-        self.truncate_payload_text_label(label_text, text)
-    }
-
-    fn truncate_payload_text_label(&mut self, label_text: &str, text: &str) -> String {
-        let per_round_allowed = self
-            .per_round_max_chars
-            .min(self.remaining_total_chars.max(1));
-        if self.remaining_total_chars == 0 {
-            let removed = text.trim().chars().count();
-            return format!(
-                "[{label_text}_truncated] removed_chars={removed} budget_exhausted=true"
-            );
-        }
-
-        let bounded = truncate_followup_tool_payload(label_text, text, per_round_allowed);
-        let normalized = text.trim();
-        let total_chars = normalized.chars().count();
-        let consumed_chars = if total_chars <= per_round_allowed {
-            total_chars
-        } else if per_round_allowed > 80 {
-            per_round_allowed - 80
-        } else {
-            per_round_allowed
-        };
-        self.remaining_total_chars = self.remaining_total_chars.saturating_sub(consumed_chars);
-        bounded
-    }
-}
-
 fn tool_round_has_observable_outcome(turn_result: &TurnResult) -> bool {
     !matches!(turn_result, TurnResult::ProviderError(_))
 }
@@ -729,6 +624,7 @@ impl ToolLoopSupervisor {
 mod tests {
     use super::*;
     use crate::conversation::turn_engine::TurnFailure;
+    use crate::conversation::turn_shared::{ToolDrivenFollowupLabel, ToolDrivenFollowupTextRef};
 
     fn build_large_file_read_tool_result() -> String {
         let content = (0..96)
