@@ -33,6 +33,7 @@ mod turn_coordinator;
 pub mod turn_engine;
 mod turn_loop;
 mod turn_loop_followup;
+mod turn_loop_round;
 mod turn_loop_state;
 mod turn_middleware;
 mod turn_middleware_registry;
