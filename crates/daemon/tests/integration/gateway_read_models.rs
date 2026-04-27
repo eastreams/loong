@@ -508,10 +508,14 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
         .expect("collect runtime snapshot");
     let payload = gateway::read_models::build_runtime_snapshot_read_model_with_inventory(
         &snapshot,
-        Some(serde_json::json!({
-            "available": true,
-            "returned_results": 1
-        })),
+        Some(loong_daemon::plugins_cli::RuntimePluginInventoryReadModel {
+            available: true,
+            reason: None,
+            error: None,
+            returned_results: Some(1),
+            summary: None,
+            results: Vec::new(),
+        }),
     );
     let encoded = serde_json::to_value(&payload).expect("serialize runtime snapshot read model");
 

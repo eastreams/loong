@@ -755,9 +755,8 @@ async fn build_gateway_runtime_snapshot_read_model(
     loaded_config: &LoadedSupervisorConfig,
 ) -> CliResult<GatewayRuntimeSnapshotReadModel> {
     let snapshot = collect_runtime_snapshot_cli_state_from_loaded_config(loaded_config)?;
-    let runtime_plugin_inventory = Some(
-        crate::plugins_cli::runtime_plugin_inventory_json_payload(&loaded_config.config).await,
-    );
+    let runtime_plugin_inventory =
+        Some(crate::plugins_cli::runtime_plugin_inventory_read_model(&loaded_config.config).await);
     let read_model =
         build_runtime_snapshot_read_model_with_inventory(&snapshot, runtime_plugin_inventory);
     Ok(read_model)

@@ -6,7 +6,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use loong_app as mvp;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::kernel::{
     CURRENT_PLUGIN_HOST_API, CURRENT_PLUGIN_MANIFEST_API_VERSION, Capability, ExecutionRoute,
@@ -15,10 +15,11 @@ use crate::kernel::{
 };
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
-    MaterializedBridgeSupportDeltaArtifact, OperationSpec, PluginInventoryResult,
-    PluginPreflightBridgeProfileRecommendation, PluginPreflightProfile, PluginPreflightResult,
-    PluginScanSpec, ResolvedBridgeSupportSelection, RunnerSpec, SecurityProfileSignatureSpec,
-    SpecRunReport, default_plugin_inventory_limit, default_plugin_preflight_limit, execute_spec,
+    MaterializedBridgeSupportDeltaArtifact, OperationSpec, PluginActivationAttestationResult,
+    PluginInventoryResult, PluginPreflightBridgeProfileRecommendation, PluginPreflightProfile,
+    PluginPreflightResult, PluginRuntimeHealthResult, PluginScanSpec,
+    ResolvedBridgeSupportSelection, RunnerSpec, SecurityProfileSignatureSpec, SpecRunReport,
+    default_plugin_inventory_limit, default_plugin_preflight_limit, execute_spec,
     json_schema_descriptor, materialize_bridge_support_delta_artifact,
     materialize_bridge_support_template, resolve_bridge_support_policy,
     resolve_bridge_support_selection,
@@ -509,6 +510,32 @@ pub struct PluginsInventoryExecution {
     pub summary: PluginsInventorySummaryView,
     pub returned_results: usize,
     pub results: Vec<PluginInventoryResult>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimePluginInventoryResultView {
+    pub plugin_id: String,
+    pub source_path: String,
+    pub activation_status: Option<String>,
+    pub activation_reason: Option<String>,
+    pub loaded: bool,
+    pub activation_attestation: Option<PluginActivationAttestationResult>,
+    pub runtime_health: Option<PluginRuntimeHealthResult>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimePluginInventoryReadModel {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub returned_results: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<PluginsInventorySummaryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<RuntimePluginInventoryResultView>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1036,14 +1063,18 @@ pub async fn execute_plugins_command(
     }
 }
 
-pub(crate) async fn runtime_plugin_inventory_json_payload(
+pub(crate) async fn runtime_plugin_inventory_read_model(
     config: &mvp::config::LoongConfig,
-) -> serde_json::Value {
+) -> RuntimePluginInventoryReadModel {
     if !config.runtime_plugins.enabled {
-        return json!({
-            "available": false,
-            "reason": "runtime_plugins_disabled",
-        });
+        return RuntimePluginInventoryReadModel {
+            available: false,
+            reason: Some("runtime_plugins_disabled".to_owned()),
+            error: None,
+            returned_results: None,
+            summary: None,
+            results: Vec::new(),
+        };
     }
 
     let roots = config
@@ -1053,10 +1084,14 @@ pub(crate) async fn runtime_plugin_inventory_json_payload(
         .map(|root| root.display().to_string())
         .collect::<Vec<_>>();
     if roots.is_empty() {
-        return json!({
-            "available": false,
-            "reason": "no_runtime_plugin_roots",
-        });
+        return RuntimePluginInventoryReadModel {
+            available: false,
+            reason: Some("no_runtime_plugin_roots".to_owned()),
+            error: None,
+            returned_results: None,
+            summary: None,
+            results: Vec::new(),
+        };
     }
 
     let options = PluginsCommandOptions {
@@ -1080,32 +1115,49 @@ pub(crate) async fn runtime_plugin_inventory_json_payload(
     };
 
     match execute_plugins_command(options).await {
-        Ok(PluginsCommandExecution::Inventory(execution)) => json!({
-            "available": true,
-            "returned_results": execution.returned_results,
-            "summary": execution.summary,
-            "results": execution.results.iter().map(|result| {
-                json!({
-                    "plugin_id": result.plugin_id,
-                    "source_path": result.source_path,
-                    "activation_status": result.activation_status,
-                    "activation_reason": result.activation_reason,
-                    "loaded": result.loaded,
-                    "activation_attestation": result.activation_attestation,
-                    "runtime_health": result.runtime_health,
+        Ok(PluginsCommandExecution::Inventory(execution)) => RuntimePluginInventoryReadModel {
+            available: true,
+            reason: None,
+            error: None,
+            returned_results: Some(execution.returned_results),
+            summary: Some(execution.summary),
+            results: execution
+                .results
+                .into_iter()
+                .map(|result| RuntimePluginInventoryResultView {
+                    plugin_id: result.plugin_id,
+                    source_path: result.source_path,
+                    activation_status: result.activation_status,
+                    activation_reason: result.activation_reason,
+                    loaded: result.loaded,
+                    activation_attestation: result.activation_attestation,
+                    runtime_health: result.runtime_health,
                 })
-            }).collect::<Vec<_>>(),
-        }),
-        Ok(_) => json!({
-            "available": false,
-            "reason": "unexpected_plugins_command_variant",
-        }),
-        Err(error) => json!({
-            "available": false,
-            "reason": "inventory_execution_failed",
-            "error": error,
-        }),
+                .collect(),
+        },
+        Ok(_) => RuntimePluginInventoryReadModel {
+            available: false,
+            reason: Some("unexpected_plugins_command_variant".to_owned()),
+            error: None,
+            returned_results: None,
+            summary: None,
+            results: Vec::new(),
+        },
+        Err(error) => RuntimePluginInventoryReadModel {
+            available: false,
+            reason: Some("inventory_execution_failed".to_owned()),
+            error: Some(error),
+            returned_results: None,
+            summary: None,
+            results: Vec::new(),
+        },
     }
+}
+
+pub(crate) async fn runtime_plugin_inventory_json_payload(
+    config: &mvp::config::LoongConfig,
+) -> serde_json::Value {
+    serde_json::to_value(runtime_plugin_inventory_read_model(config).await).unwrap_or(Value::Null)
 }
 
 const PLUGINS_INIT_README_FILE_NAME: &str = "README.md";

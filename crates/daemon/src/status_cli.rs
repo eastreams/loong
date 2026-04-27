@@ -1,7 +1,6 @@
 use loong_contracts::WorkRuntimeHealthSnapshot;
 use loong_spec::CliResult;
 use serde::Serialize;
-use serde_json::Value;
 use std::path::Path;
 
 use crate::gateway::read_models::{
@@ -56,7 +55,7 @@ pub struct StatusCliReadModel {
     pub acp: StatusCliAcpReadModel,
     pub work_units: StatusCliWorkUnitReadModel,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime_plugin_inventory: Option<Value>,
+    pub runtime_plugin_inventory: Option<crate::plugins_cli::RuntimePluginInventoryReadModel>,
     pub next_actions: Vec<StatusCliAction>,
     pub recipes: Vec<String>,
 }
@@ -97,7 +96,7 @@ pub async fn collect_status_cli_read_model(
     let channel_inventory =
         crate::build_channels_cli_json_payload(config_path_text, &snapshot.channels);
     let runtime_plugin_inventory =
-        crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+        crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await;
     let runtime_snapshot = build_runtime_snapshot_read_model_with_inventory(
         &snapshot,
         Some(runtime_plugin_inventory.clone()),
@@ -1049,10 +1048,14 @@ mod tests {
                 error: None,
                 health: None,
             },
-            runtime_plugin_inventory: Some(json!({
-                "available": true,
-                "returned_results": 1
-            })),
+            runtime_plugin_inventory: Some(crate::plugins_cli::RuntimePluginInventoryReadModel {
+                available: true,
+                reason: None,
+                error: None,
+                returned_results: Some(1),
+                summary: None,
+                results: Vec::new(),
+            }),
             next_actions: Vec::new(),
             recipes: Vec::new(),
         };

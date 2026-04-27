@@ -293,7 +293,7 @@ pub struct GatewayRuntimeSnapshotReadModel {
     pub tools: GatewayRuntimeSnapshotToolsReadModel,
     pub runtime_plugins: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub runtime_plugin_inventory: Option<Value>,
+    pub runtime_plugin_inventory: Option<crate::plugins_cli::RuntimePluginInventoryReadModel>,
     pub external_skills: Value,
 }
 
@@ -543,7 +543,7 @@ pub fn build_runtime_snapshot_read_model(
 
 pub fn build_runtime_snapshot_read_model_with_inventory(
     snapshot: &RuntimeSnapshotCliState,
-    runtime_plugin_inventory: Option<Value>,
+    runtime_plugin_inventory: Option<crate::plugins_cli::RuntimePluginInventoryReadModel>,
 ) -> GatewayRuntimeSnapshotReadModel {
     let config = snapshot.config.clone();
     let schema = GatewayRuntimeSnapshotSchema {
