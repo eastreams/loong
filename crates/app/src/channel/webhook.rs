@@ -11,6 +11,7 @@ use hmac::{KeyInit, Mac};
 use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 
+use crate::config::normalize_channel_account_id;
 use crate::{
     CliResult, KernelContext,
     config::ChannelDefaultAccountSelectionSource,
@@ -29,6 +30,7 @@ use super::{
         ChannelOutboundHttpPolicy, build_outbound_http_client, response_body_detail,
         validate_outbound_http_target,
     },
+    http_ingress::{ChannelHttpServeSpec, serve_channel_http_router},
     runtime::serve::ChannelServeStopHandle,
     runtime::state::ChannelOperationRuntimeTracker,
 };
@@ -63,7 +65,7 @@ struct WebhookRequestBody {
 }
 
 #[derive(Clone)]
-struct WebhookServeState {
+pub(super) struct WebhookServeState {
     config: LoongConfig,
     resolved_path: PathBuf,
     resolved: ResolvedWebhookChannelConfig,
@@ -243,13 +245,7 @@ pub(super) async fn run_webhook_channel(
     let bind = resolve_webhook_bind(bind_override)?;
     let path = resolve_webhook_path(resolved, path_override)?;
     let state = WebhookServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
-    let router = Router::new()
-        .route(path.as_str(), post(webhook_serve_handler))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(bind.as_str())
-        .await
-        .map_err(|error| format!("bind webhook listener failed: {error}"))?;
+    let router = build_webhook_router(state, path.as_str());
 
     println!(
         "webhook channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, bind={}, path={})",
@@ -262,12 +258,47 @@ pub(super) async fn run_webhook_channel(
         path
     );
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            stop.wait().await;
-        })
-        .await
-        .map_err(|error| format!("webhook server stopped: {error}"))
+    serve_channel_http_router(
+        bind.as_str(),
+        router,
+        stop,
+        ChannelHttpServeSpec {
+            bind_error_context: "webhook listener",
+            serve_error_context: "webhook server",
+        },
+    )
+    .await
+}
+
+pub(super) fn build_webhook_router(state: WebhookServeState, path: &str) -> Router {
+    Router::new()
+        .route(path, post(webhook_serve_handler))
+        .with_state(state)
+}
+
+pub(in crate::channel) fn gateway_webhook_ingress_path(
+    resolved: &ResolvedWebhookChannelConfig,
+) -> CliResult<String> {
+    let resolved_path = resolve_webhook_path(resolved, None)?;
+    if resolved_path != "/" {
+        return Ok(resolved_path);
+    }
+
+    let configured_account_id =
+        normalize_channel_account_id(resolved.configured_account_id.as_str());
+    Ok(format!("/ingress/webhook/{configured_account_id}"))
+}
+
+pub(in crate::channel) fn build_gateway_webhook_ingress_router(
+    config: &LoongConfig,
+    resolved: &ResolvedWebhookChannelConfig,
+    resolved_path: &Path,
+    kernel_ctx: KernelContext,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
+) -> CliResult<Router> {
+    let state = WebhookServeState::new(config, resolved_path, resolved, kernel_ctx, runtime)?;
+    let path = gateway_webhook_ingress_path(resolved)?;
+    Ok(build_webhook_router(state, path.as_str()))
 }
 
 pub(super) async fn run_webhook_channel_with_context(

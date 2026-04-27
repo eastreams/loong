@@ -14,10 +14,10 @@ mod tools;
 pub use crate::channel::{ChannelDescriptor, ChannelOperationalModel, ChannelRuntimeKind};
 #[allow(unused_imports)]
 pub use crate::channel::{
-    catalog_only_channel_descriptors, channel_descriptor, gateway_supervised_channel_descriptors,
-    outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
-    runtime_backed_channel_descriptors, service_channel_descriptors,
-    standalone_runtime_channel_descriptors,
+    catalog_only_channel_descriptors, channel_descriptor, gateway_ingress_channel_descriptors,
+    gateway_supervised_channel_descriptors, outbound_only_channel_descriptors,
+    plugin_backed_channel_descriptors, runtime_backed_channel_descriptors,
+    service_channel_descriptors, standalone_runtime_channel_descriptors,
 };
 pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
@@ -191,6 +191,10 @@ mod tests {
 
     fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
         vec!["telegram", "feishu", "matrix", "wecom", "qqbot", "whatsapp"]
+    }
+
+    fn expected_gateway_ingress_channel_ids() -> Vec<&'static str> {
+        vec!["feishu", "line", "whatsapp", "webhook"]
     }
 
     fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
@@ -518,6 +522,10 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
+        let gateway_ingress_ids = gateway_ingress_channel_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
         let standalone_runtime_ids = standalone_runtime_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
@@ -540,6 +548,7 @@ mod tests {
             gateway_supervised_ids,
             expected_gateway_supervised_channel_ids()
         );
+        assert_eq!(gateway_ingress_ids, expected_gateway_ingress_channel_ids());
         assert_eq!(
             standalone_runtime_ids,
             expected_standalone_runtime_channel_ids()

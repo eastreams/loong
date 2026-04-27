@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use super::control::{GatewayControlAppState, authorize_request_from_state};
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct GatewayTurnRequest {
+pub(crate) struct GatewayHttpTurnRequest {
     pub session_id: String,
     pub input: String,
     #[serde(default)]
@@ -34,7 +34,7 @@ pub(crate) struct GatewayTurnRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct GatewayTurnResponse {
+pub(crate) struct GatewayHttpTurnResponse {
     pub output_text: String,
     pub state: String,
     pub stop_reason: Option<String>,
@@ -42,7 +42,7 @@ pub(crate) struct GatewayTurnResponse {
     pub event_count: usize,
 }
 
-impl GatewayTurnResponse {
+impl GatewayHttpTurnResponse {
     fn from_agent_turn_result(result: &crate::mvp::agent_runtime::AgentTurnResult) -> Self {
         Self {
             output_text: result.output_text.clone(),
@@ -63,9 +63,9 @@ type TurnJsonResponse = (StatusCode, Json<Value>);
 ///
 /// This endpoint validates the structured session/channel address first, then
 /// reuses the gateway's shared ACP manager and loaded config snapshot to run a
-/// single `AgentRuntime` turn. It is intentionally narrower than the CLI chat
-/// path: the request is always executed as an ACP turn and never owns long-lived
-/// interactive surface state.
+/// single shared turn-gateway request. It is intentionally narrower than the
+/// CLI chat path: the request is always executed as an ACP turn and never owns
+/// long-lived interactive surface state.
 pub(crate) async fn handle_turn(
     headers: HeaderMap,
     State(app_state): State<Arc<GatewayControlAppState>>,
@@ -75,7 +75,7 @@ pub(crate) async fn handle_turn(
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": error})));
     }
 
-    let turn_request: GatewayTurnRequest = match serde_json::from_value(request) {
+    let turn_request: GatewayHttpTurnRequest = match serde_json::from_value(request) {
         Ok(req) => req,
         Err(error) => {
             return (
@@ -92,7 +92,7 @@ pub(crate) async fn handle_turn(
         );
     }
 
-    if let Err(error) = crate::build_acp_dispatch_address(
+    let address = match crate::build_acp_dispatch_address(
         turn_request.session_id.as_str(),
         turn_request.channel_id.as_deref(),
         turn_request.conversation_id.as_deref(),
@@ -100,11 +100,14 @@ pub(crate) async fn handle_turn(
         turn_request.participant_id.as_deref(),
         turn_request.thread_id.as_deref(),
     ) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("invalid turn target: {error}")})),
-        );
-    }
+        Ok(address) => address,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("invalid turn target: {error}")})),
+            );
+        }
+    };
 
     let (Some(acp_manager), Some(config)) = (&app_state.acp_manager, &app_state.config) else {
         return (
@@ -127,44 +130,37 @@ pub(crate) async fn handle_turn(
         .map(ToOwned::to_owned);
 
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
-    let turn_runtime_request = crate::mvp::agent_runtime::AgentTurnRequest {
+    let execution = crate::mvp::turn_gateway::TurnGatewayExecution {
+        resolved_path: PathBuf::from(app_state.config_path.clone()),
+        config: config.clone(),
+        kernel_ctx: None,
+        acp_manager: Some(acp_manager.clone()),
+        event_sink: event_sink
+            .as_ref()
+            .map(|sink| sink as &dyn crate::mvp::acp::AcpTurnEventSink),
+        initialize_runtime_environment: false,
+    };
+    let turn_request = crate::mvp::turn_gateway::TurnGatewayRequest {
+        address,
         message: turn_request.input.clone(),
-        turn_mode: crate::mvp::agent_runtime::AgentTurnMode::Acp,
-        channel_id: turn_request.channel_id.clone(),
-        account_id: turn_request.account_id.clone(),
-        conversation_id: turn_request.conversation_id.clone(),
-        participant_id: turn_request.participant_id.clone(),
-        thread_id: turn_request.thread_id.clone(),
         metadata: turn_request.metadata.clone(),
+        turn_mode: crate::mvp::agent_runtime::AgentTurnMode::Acp,
         acp: true,
         acp_event_stream: event_sink.is_some(),
         acp_bootstrap_mcp_servers: Vec::new(),
         acp_cwd: working_directory,
         live_surface_enabled: false,
+        ingress: None,
+        observer: None,
+        provenance: crate::mvp::turn_gateway::TurnGatewayProvenance::default(),
+        provider_error_mode: crate::mvp::conversation::ProviderErrorMode::InlineMessage,
+        retry_progress: None,
     };
-    let turn_service = crate::mvp::agent_runtime::TurnExecutionService::new(
-        PathBuf::from(app_state.config_path.clone()),
-        config.clone(),
-    )
-    .with_acp_manager(acp_manager.clone())
-    .without_runtime_environment_init();
-    let turn_options = crate::mvp::agent_runtime::TurnExecutionOptions {
-        event_sink: event_sink
-            .as_ref()
-            .map(|sink| sink as &dyn crate::mvp::acp::AcpTurnEventSink),
-        ..Default::default()
-    };
-    let result = turn_service
-        .execute(
-            Some(turn_request.session_id.as_str()),
-            &turn_runtime_request,
-            turn_options,
-        )
-        .await;
+    let result = crate::mvp::turn_gateway::run_turn_gateway(execution, turn_request).await;
 
     match result {
         Ok(turn_result) => {
-            let response = GatewayTurnResponse::from_agent_turn_result(&turn_result);
+            let response = GatewayHttpTurnResponse::from_agent_turn_result(&turn_result);
             match serde_json::to_value(response) {
                 Ok(value) => (StatusCode::OK, Json(value)),
                 Err(error) => (
@@ -199,7 +195,7 @@ mod tests {
     async fn gateway_turn_returns_service_unavailable_without_acp_backend() {
         let token = "gateway-test-token";
         let router = build_turn_test_router_no_backend(token.to_owned());
-        let request = GatewayTurnRequest {
+        let request = GatewayHttpTurnRequest {
             session_id: "session-1".to_owned(),
             input: "hello".to_owned(),
             channel_id: None,

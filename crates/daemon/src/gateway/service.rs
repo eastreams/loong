@@ -320,8 +320,11 @@ fn build_gateway_supervisor_spec(
 ) -> Result<SupervisorSpec, String> {
     match entry_point {
         GatewayRuntimeEntryPoint::GatewayRun => {
-            let surfaces =
+            let gateway_owned_channel_ids =
+                crate::mvp::channel::gateway_owned_runtime_channel_ids(&loaded_config.config)?;
+            let mut surfaces =
                 collect_loaded_background_surfaces(&loaded_config.config, channel_accounts)?;
+            surfaces.retain(|surface| !gateway_owned_channel_ids.contains(surface.channel_id()));
             let mode = gateway_runtime_owner_mode(session)?;
             SupervisorSpec::new(mode, surfaces)
         }
@@ -531,5 +534,36 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(runtime_dir.as_path());
+    }
+
+    #[test]
+    fn gateway_run_supervisor_spec_skips_gateway_owned_http_ingress_channels() {
+        let mut config = crate::mvp::config::LoongConfig::default();
+        config.matrix.enabled = true;
+        config.feishu.enabled = true;
+        config.feishu.mode = Some(crate::mvp::config::FeishuChannelServeMode::Webhook);
+        config.whatsapp.enabled = true;
+        config.line.enabled = true;
+        config.webhook.enabled = true;
+        let loaded_config = LoadedSupervisorConfig {
+            resolved_path: PathBuf::from("/tmp/loong.toml"),
+            config,
+        };
+
+        let spec = build_gateway_supervisor_spec(
+            &loaded_config,
+            None,
+            &[],
+            GatewayRuntimeEntryPoint::GatewayRun,
+        )
+        .expect("build gateway supervisor spec");
+
+        let surface_ids = spec
+            .surfaces
+            .iter()
+            .map(|surface| surface.channel_id())
+            .collect::<Vec<_>>();
+
+        assert_eq!(surface_ids, vec!["matrix"]);
     }
 }

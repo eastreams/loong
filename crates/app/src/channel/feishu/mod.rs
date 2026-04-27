@@ -33,6 +33,8 @@ mod webhook;
 mod websocket;
 
 #[cfg(feature = "channel-feishu")]
+use crate::channel::http_ingress::{ChannelHttpServeSpec, serve_channel_http_router};
+#[cfg(feature = "channel-feishu")]
 use adapter::FeishuAdapter;
 #[cfg(feature = "channel-feishu")]
 use payload::normalize_webhook_path;
@@ -172,13 +174,7 @@ pub(super) async fn run_feishu_channel(
         kernel_ctx,
         runtime,
     );
-    let app = Router::new()
-        .route(path.as_str(), post(feishu_webhook_handler))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(bind.as_str())
-        .await
-        .map_err(|error| format!("bind feishu webhook listener failed: {error}"))?;
+    let app = build_feishu_webhook_router(state, path.as_str());
 
     println!(
         "feishu channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, bind={}, path={})",
@@ -204,12 +200,45 @@ pub(super) async fn run_feishu_channel(
         "feishu runtime started"
     );
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            stop.wait().await;
-        })
-        .await
-        .map_err(|error| format!("feishu webhook server stopped: {error}"))
+    serve_channel_http_router(
+        bind.as_str(),
+        app,
+        stop,
+        ChannelHttpServeSpec {
+            bind_error_context: "feishu webhook listener",
+            serve_error_context: "feishu webhook server",
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "channel-feishu")]
+pub(super) fn build_feishu_webhook_router(state: FeishuWebhookState, path: &str) -> Router {
+    Router::new()
+        .route(path, post(feishu_webhook_handler))
+        .with_state(state)
+}
+
+#[cfg(feature = "channel-feishu")]
+pub(in crate::channel) async fn build_gateway_feishu_ingress_router(
+    config: &LoongConfig,
+    resolved: &ResolvedFeishuChannelConfig,
+    resolved_path: &Path,
+    kernel_ctx: KernelContext,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
+) -> CliResult<Router> {
+    let mut adapter = FeishuAdapter::new(resolved)?;
+    adapter.refresh_tenant_token().await?;
+    let path = normalize_webhook_path(resolved.webhook_path.as_str());
+    let state = FeishuWebhookState::new_with_resolved_path(
+        config.clone(),
+        resolved_path.to_path_buf(),
+        resolved,
+        adapter,
+        kernel_ctx,
+        runtime,
+    );
+    Ok(build_feishu_webhook_router(state, path.as_str()))
 }
 
 #[cfg(all(test, feature = "channel-feishu"))]

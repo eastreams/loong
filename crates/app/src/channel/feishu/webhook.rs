@@ -41,7 +41,7 @@ const FEISHU_CALLBACK_RESPONSE_MARKER: &str = "[feishu_callback_response]";
 const PROVIDER_ERROR_REPLY_PREFIX: &str = "[provider_error] ";
 
 #[derive(Clone)]
-pub(super) struct FeishuWebhookState {
+pub(in crate::channel) struct FeishuWebhookState {
     config: LoongConfig,
     resolved_path: Option<PathBuf>,
     adapter: Arc<Mutex<FeishuAdapter>>,

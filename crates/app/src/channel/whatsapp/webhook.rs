@@ -114,7 +114,7 @@ impl RecentIdCache {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub(super) struct WhatsappWebhookState {
+pub(in crate::channel) struct WhatsappWebhookState {
     config: LoongConfig,
     resolved_path: Option<PathBuf>,
     configured_account_id: String,

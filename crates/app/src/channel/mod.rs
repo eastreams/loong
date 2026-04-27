@@ -2,6 +2,7 @@
 use crate::config::LoongConfig;
 
 pub(crate) mod access_policy;
+mod background_runtime;
 mod catalog;
 mod commands;
 mod core;
@@ -13,11 +14,14 @@ mod discord;
 mod email;
 #[cfg(feature = "feishu-integration")]
 pub mod feishu;
+mod gateway_ingress;
 #[cfg(feature = "channel-google-chat")]
 mod google_chat;
 mod http;
+mod http_ingress;
 #[cfg(feature = "channel-imessage")]
 mod imessage;
+mod inbound_turn;
 #[cfg(feature = "channel-irc")]
 mod irc;
 #[cfg(feature = "channel-line")]
@@ -144,7 +148,8 @@ pub use runtime::types::{ResolvedKnownChannelSessionTarget, resolve_known_channe
 pub use sdk::{
     ChannelDescriptor, ChannelOperationalModel, ChannelRuntimeKind,
     background_channel_runtime_descriptors, catalog_only_channel_descriptors, channel_descriptor,
-    gateway_supervised_channel_descriptors, is_background_channel_surface_enabled,
+    gateway_ingress_channel_descriptors, gateway_supervised_channel_descriptors,
+    is_background_channel_surface_enabled, is_gateway_ingress_channel_enabled,
     outbound_only_channel_descriptors, plugin_backed_channel_descriptors,
     runtime_backed_channel_descriptors, service_channel_descriptors,
     standalone_runtime_channel_descriptors,
@@ -206,18 +211,9 @@ mod dispatch;
 use crate::CliResult;
 #[cfg(test)]
 use crate::conversation::ConversationIngressPrivateContext;
+pub use background_runtime::run_background_channel_with_stop;
 #[cfg(test)]
 use commands::context::render_channel_route_notice;
-#[cfg(any(
-    feature = "channel-plugin-bridge",
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-qqbot",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-))]
-pub use dispatch::process_inbound_with_provider;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -249,6 +245,29 @@ use dispatch::{build_feishu_command_context, validate_feishu_security_config};
 #[cfg(test)]
 #[cfg(feature = "channel-telegram")]
 use dispatch::{build_telegram_command_context, validate_telegram_security_config};
+pub use dispatch::{
+    load_channel_operation_runtime_for_account_from_dir_for_test, run_dingtalk_send,
+    run_discord_send, run_email_send, run_feishu_channel, run_feishu_send, run_google_chat_send,
+    run_imessage_send, run_irc_send, run_line_channel, run_line_send, run_matrix_channel,
+    run_matrix_send, run_mattermost_send, run_nextcloud_talk_send, run_nostr_send,
+    run_qqbot_channel, run_signal_send, run_slack_send, run_synology_chat_send, run_teams_send,
+    run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
+    run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
+};
+pub use gateway_ingress::{
+    GatewayIngressMount, build_gateway_ingress, gateway_owned_runtime_channel_ids,
+    shutdown_gateway_ingress_runtimes,
+};
+#[cfg(any(
+    feature = "channel-plugin-bridge",
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-qqbot",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+))]
+pub use inbound_turn::process_inbound_with_provider;
 #[cfg(test)]
 #[cfg(any(
     feature = "channel-plugin-bridge",
@@ -258,18 +277,9 @@ use dispatch::{build_telegram_command_context, validate_telegram_security_config
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
-use dispatch::{
+use inbound_turn::{
     channel_message_ingress_context, process_inbound_with_runtime_and_feedback,
     reload_channel_turn_config,
-};
-pub use dispatch::{
-    load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
-    run_dingtalk_send, run_discord_send, run_email_send, run_feishu_channel, run_feishu_send,
-    run_google_chat_send, run_imessage_send, run_irc_send, run_line_channel, run_line_send,
-    run_matrix_channel, run_matrix_send, run_mattermost_send, run_nextcloud_talk_send,
-    run_nostr_send, run_qqbot_channel, run_signal_send, run_slack_send, run_synology_chat_send,
-    run_teams_send, run_telegram_channel, run_telegram_send, run_webhook_channel, run_webhook_send,
-    run_wecom_channel, run_wecom_send, run_whatsapp_channel, run_whatsapp_send,
 };
 #[cfg(test)]
 #[cfg(any(
