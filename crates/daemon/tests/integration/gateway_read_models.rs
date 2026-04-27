@@ -497,6 +497,37 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
 }
 
 #[test]
+fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
+    let root = unique_temp_dir("loong-gateway-runtime-snapshot-inventory");
+    let config_path = write_gateway_test_config(&root);
+    let config_path_text = config_path
+        .to_str()
+        .expect("config path should be valid utf-8");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(config_path_text))
+        .expect("collect runtime snapshot");
+    let payload = gateway::read_models::build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(serde_json::json!({
+            "available": true,
+            "returned_results": 1
+        })),
+    );
+    let encoded = serde_json::to_value(&payload).expect("serialize runtime snapshot read model");
+
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["available"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["returned_results"],
+        serde_json::json!(1)
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups() {
     let root = unique_temp_dir("loong-gateway-operator-summary");
     let config_path = write_gateway_test_config(&root);

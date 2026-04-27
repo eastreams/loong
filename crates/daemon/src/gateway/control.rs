@@ -39,7 +39,7 @@ use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
     GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
     build_acp_session_list_read_model, build_acp_status_read_model,
-    build_operator_summary_read_model, build_runtime_snapshot_read_model,
+    build_operator_summary_read_model, build_runtime_snapshot_read_model_with_inventory,
 };
 use super::state::{
     GatewayControlSurfaceBinding, GatewayStopRequestOutcome, gateway_control_token_path,
@@ -149,6 +149,7 @@ impl GatewayControlAppState {
                 },
             },
             runtime_plugins: json!({}),
+            runtime_plugin_inventory: None,
             external_skills: json!({}),
         };
         Self {
@@ -240,7 +241,7 @@ pub async fn start_gateway_control_surface(
     acp_manager: Option<Arc<AcpSessionManager>>,
 ) -> CliResult<GatewayControlSurface> {
     let channel_inventory = build_gateway_channel_inventory_read_model(loaded_config)?;
-    let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config)?;
+    let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config).await?;
     let bearer_token = new_gateway_control_bearer_token();
     let token_path = gateway_control_token_path(runtime_dir);
 
@@ -750,11 +751,15 @@ fn build_gateway_channel_inventory_read_model(
     Ok(read_model)
 }
 
-fn build_gateway_runtime_snapshot_read_model(
+async fn build_gateway_runtime_snapshot_read_model(
     loaded_config: &LoadedSupervisorConfig,
 ) -> CliResult<GatewayRuntimeSnapshotReadModel> {
     let snapshot = collect_runtime_snapshot_cli_state_from_loaded_config(loaded_config)?;
-    let read_model = build_runtime_snapshot_read_model(&snapshot);
+    let runtime_plugin_inventory = Some(
+        crate::plugins_cli::runtime_plugin_inventory_json_payload(&loaded_config.config).await,
+    );
+    let read_model =
+        build_runtime_snapshot_read_model_with_inventory(&snapshot, runtime_plugin_inventory);
     Ok(read_model)
 }
 

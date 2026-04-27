@@ -77,6 +77,7 @@ fn runtime_snapshot_fixture(
             },
         },
         runtime_plugins: serde_json::json!({}),
+        runtime_plugin_inventory: None,
         external_skills: serde_json::json!({}),
     }
 }

@@ -292,6 +292,8 @@ pub struct GatewayRuntimeSnapshotReadModel {
     pub tool_runtime: Value,
     pub tools: GatewayRuntimeSnapshotToolsReadModel,
     pub runtime_plugins: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_inventory: Option<Value>,
     pub external_skills: Value,
 }
 
@@ -536,6 +538,13 @@ pub fn build_acp_dispatch_read_model(
 pub fn build_runtime_snapshot_read_model(
     snapshot: &RuntimeSnapshotCliState,
 ) -> GatewayRuntimeSnapshotReadModel {
+    build_runtime_snapshot_read_model_with_inventory(snapshot, None)
+}
+
+pub fn build_runtime_snapshot_read_model_with_inventory(
+    snapshot: &RuntimeSnapshotCliState,
+    runtime_plugin_inventory: Option<Value>,
+) -> GatewayRuntimeSnapshotReadModel {
     let config = snapshot.config.clone();
     let schema = GatewayRuntimeSnapshotSchema {
         version: RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION,
@@ -605,6 +614,7 @@ pub fn build_runtime_snapshot_read_model(
         tool_runtime,
         tools,
         runtime_plugins,
+        runtime_plugin_inventory,
         external_skills,
     }
 }
@@ -1463,6 +1473,7 @@ mod tests {
                 },
             },
             runtime_plugins: serde_json::json!({}),
+            runtime_plugin_inventory: None,
             external_skills: serde_json::json!({}),
         };
 

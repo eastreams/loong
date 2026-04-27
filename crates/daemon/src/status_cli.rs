@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::gateway::read_models::{
     GatewayAcpObservabilityReadModel, GatewayOperatorSummaryReadModel,
     build_acp_observability_read_model, build_operator_summary_read_model,
-    build_runtime_snapshot_read_model,
+    build_runtime_snapshot_read_model_with_inventory,
 };
 use crate::gateway::service::default_gateway_owner_status;
 use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owner_status};
@@ -96,7 +96,12 @@ pub async fn collect_status_cli_read_model(
     let config_path_text = config_path_display.as_str();
     let channel_inventory =
         crate::build_channels_cli_json_payload(config_path_text, &snapshot.channels);
-    let runtime_snapshot = build_runtime_snapshot_read_model(&snapshot);
+    let runtime_plugin_inventory =
+        crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+    let runtime_snapshot = build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(runtime_plugin_inventory.clone()),
+    );
     let runtime_dir = default_gateway_runtime_state_dir();
     let owner_status_option = load_gateway_owner_status(runtime_dir.as_path());
     let owner_status = select_gateway_owner_status_for_config(
@@ -108,8 +113,6 @@ pub async fn collect_status_cli_read_model(
         build_operator_summary_read_model(&owner_status, &channel_inventory, &runtime_snapshot);
     let acp = collect_status_cli_acp_read_model(config_path_text, &config).await;
     let work_units = collect_status_cli_work_unit_read_model(&config);
-    let runtime_plugin_inventory =
-        Some(crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await);
     let next_actions = crate::next_actions::collect_setup_next_actions(&config, config_path_text)
         .into_iter()
         .map(|action| StatusCliAction {
@@ -133,7 +136,7 @@ pub async fn collect_status_cli_read_model(
         gateway,
         acp,
         work_units,
-        runtime_plugin_inventory,
+        runtime_plugin_inventory: Some(runtime_plugin_inventory),
         next_actions,
         recipes,
     })
