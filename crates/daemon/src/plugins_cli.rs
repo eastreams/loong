@@ -18,7 +18,8 @@ use crate::native_extension_authoring::{
     NativeExtensionAuthoringGuidanceView, PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT,
     PROCESS_STDIO_NATIVE_EXTENSION_EVENTS, PROCESS_STDIO_NATIVE_EXTENSION_FACETS,
     PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
-    build_native_extension_authoring_guidance, build_native_extension_authoring_view_from_profile,
+    build_native_extension_authoring_doctor_guidance, build_native_extension_authoring_guidance,
+    build_native_extension_authoring_view_from_profile,
     process_stdio_native_extension_language_profile, process_stdio_scaffold_args,
     render_authoring_actions_command, render_authoring_doctor_command,
     render_authoring_inventory_command, render_rust_extension_cargo_toml,
@@ -2490,11 +2491,19 @@ fn render_plugin_doctor_result_lines(
     ));
     if let Some(guidance) = guidance {
         lines.push(format!(
-            "  authoring inventory_command={} smoke_test_command={} reference_example={}",
+            "  authoring doctor_command={} inventory_command={} actions_command={} smoke_test_command={} reference_example={}",
+            guidance.doctor_command,
             guidance.inventory_command,
+            guidance.actions_command,
             guidance.smoke_test_command,
             guidance.reference_example_path
         ));
+        if !guidance.author_remediation_hints.is_empty() {
+            lines.push(format!(
+                "  author_remediation_hints={}",
+                format_csv_or_dash(&guidance.author_remediation_hints)
+            ));
+        }
     }
     lines.push(format!(
         "  blocking_diagnostics={} advisory_diagnostics={}",
@@ -3472,7 +3481,7 @@ fn build_plugins_doctor_native_extension_authoring_guidance(
 ) -> Vec<NativeExtensionAuthoringGuidanceView> {
     results
         .iter()
-        .filter_map(|result| build_native_extension_authoring_guidance(&result.plugin))
+        .filter_map(build_native_extension_authoring_doctor_guidance)
         .collect()
 }
 
@@ -4038,6 +4047,46 @@ mod tests {
     fn read_plugin_manifest(path: &std::path::Path) -> crate::kernel::PluginManifest {
         let rendered_manifest = fs::read_to_string(path).expect("manifest should exist");
         serde_json::from_str(&rendered_manifest).expect("manifest should decode")
+    }
+
+    fn write_invalid_native_extension_package(package_root: &str) {
+        fs::create_dir_all(package_root).expect("create invalid package root");
+        fs::write(
+            format!("{package_root}/loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "0.1.0",
+  "plugin_id": "broken-extension",
+  "provider_id": "broken-extension",
+  "connector_name": "broken-extension",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
+    "loong_extension_methods_json": "not-json",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_actions_json": "[]"
+  },
+  "summary": "Broken native extension metadata example",
+  "compatibility": {
+    "host_api": "loong-plugin/v1",
+    "host_version_req": ">=0.1.2-alpha.1"
+  }
+}"#,
+        )
+        .expect("write invalid package manifest");
+        fs::write(
+            format!("{package_root}/index.js"),
+            "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+        )
+        .expect("write invalid package entrypoint");
     }
 
     #[tokio::test]
@@ -6234,12 +6283,101 @@ mod tests {
 
         let rendered = render_plugins_doctor_text(&doctor_execution);
         assert!(
-            rendered.contains("authoring inventory_command="),
+            rendered.contains("authoring doctor_command="),
             "doctor text should include authoring guidance: {rendered}"
         );
         assert!(
             rendered.contains(spec.package_root_relative),
             "doctor text should include the reference example path: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_doctor_surfaces_author_remediation_hints_for_invalid_extension_metadata()
+     {
+        let temp_root = unique_temp_dir("loong-plugins-cli-doctor-invalid-extension");
+        let package_root = format!("{temp_root}/broken-extension");
+        write_invalid_native_extension_package(&package_root);
+
+        let doctor_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Doctor(PluginDoctorCommand {
+                source: PluginDoctorSourceArgs {
+                    scan: PluginScanSourceArgs {
+                        roots: vec![package_root.clone()],
+                        query: String::new(),
+                        limit: None,
+                        bridge_support: None,
+                        bridge_profile: None,
+                        bridge_support_delta: None,
+                        bridge_support_sha256: None,
+                        bridge_support_delta_sha256: None,
+                    },
+                    profile: PluginPreflightProfileArg::SdkRelease,
+                    policy_path: None,
+                    policy_sha256: None,
+                    policy_signature_public_key_base64: None,
+                    policy_signature_base64: None,
+                    policy_signature_algorithm: "ed25519".to_owned(),
+                },
+                include_passed: true,
+                include_warned: true,
+                include_blocked: true,
+                include_deferred: true,
+            }),
+        })
+        .await
+        .expect("doctor should evaluate invalid extension metadata package");
+
+        let PluginsCommandExecution::Doctor(doctor_execution) = doctor_execution else {
+            panic!("expected doctor execution");
+        };
+        assert_eq!(
+            doctor_execution.native_extension_authoring_guidance.len(),
+            1
+        );
+        let guidance = &doctor_execution.native_extension_authoring_guidance[0];
+        assert_eq!(guidance.plugin_id, "broken-extension");
+        assert_eq!(guidance.package_root, package_root);
+        assert_eq!(guidance.source_language_arg, "js");
+        assert_eq!(guidance.source_language, "javascript");
+        assert_eq!(
+            guidance.doctor_command,
+            render_authoring_doctor_command(package_root.as_str())
+        );
+        assert_eq!(
+            guidance.actions_command,
+            render_authoring_actions_command(package_root.as_str())
+        );
+        assert!(guidance.verdict.is_some());
+        assert!(guidance.policy_summary.is_some());
+        assert!(
+            guidance
+                .extension_metadata_issues
+                .iter()
+                .any(|issue| issue.contains("loong_extension_methods_json"))
+        );
+        assert!(
+            guidance
+                .author_remediation_hints
+                .iter()
+                .any(|hint| hint.contains("Repair native extension declaration metadata"))
+        );
+        assert!(
+            guidance
+                .author_remediation_hints
+                .iter()
+                .any(|hint| hint.contains("loong plugins doctor"))
+        );
+
+        let rendered = render_plugins_doctor_text(&doctor_execution);
+        assert!(
+            rendered.contains("author_remediation_hints="),
+            "doctor text should surface author remediation hints: {rendered}"
+        );
+        assert!(
+            rendered.contains("Repair native extension declaration metadata"),
+            "doctor text should surface native extension metadata repair guidance: {rendered}"
         );
     }
 

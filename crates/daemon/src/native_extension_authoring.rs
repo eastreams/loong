@@ -1,3 +1,4 @@
+use crate::PluginPreflightResult;
 use crate::{CliResult, PluginInventoryResult, kernel};
 use serde::Serialize;
 
@@ -35,7 +36,9 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
     pub source_language: String,
     pub bridge_kind: String,
     pub reference_example_path: String,
+    pub doctor_command: String,
     pub inventory_command: String,
+    pub actions_command: String,
     pub smoke_allow_command: String,
     pub smoke_test_command: String,
     pub extension_contract: Option<String>,
@@ -43,6 +46,18 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
     pub extension_events: Vec<String>,
     pub extension_host_actions: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_ready: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remediation_classes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommended_action_summaries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub author_remediation_hints: Vec<String>,
 }
 
 const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
@@ -203,6 +218,31 @@ pub(crate) fn build_native_extension_authoring_guidance(
     ))
 }
 
+pub(crate) fn build_native_extension_authoring_doctor_guidance(
+    result: &PluginPreflightResult,
+) -> Option<NativeExtensionAuthoringGuidanceView> {
+    let plugin = &result.plugin;
+    let mut guidance = build_native_extension_authoring_guidance(plugin)?;
+    guidance.verdict = Some(result.verdict.clone());
+    guidance.activation_ready = Some(result.activation_ready);
+    guidance.policy_summary = Some(result.policy_summary.clone());
+    guidance.remediation_classes = result
+        .remediation_classes
+        .iter()
+        .map(|value| value.as_str().to_owned())
+        .collect();
+    guidance.recommended_action_summaries = result
+        .recommended_actions
+        .iter()
+        .map(|action| action.summary.clone())
+        .collect();
+    guidance.author_remediation_hints = native_extension_author_remediation_hints(
+        &guidance.extension_metadata_issues,
+        &guidance.recommended_action_summaries,
+    );
+    Some(guidance)
+}
+
 pub(crate) fn build_native_extension_authoring_view_from_profile(
     package_root: &str,
     plugin_id: &str,
@@ -245,6 +285,8 @@ fn build_native_extension_authoring_view(
     extension_host_actions: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> NativeExtensionAuthoringGuidanceView {
+    let author_remediation_hints =
+        native_extension_author_remediation_hints(&extension_metadata_issues, &[]);
     NativeExtensionAuthoringGuidanceView {
         plugin_id: plugin_id.to_owned(),
         package_root: package_root.to_owned(),
@@ -252,7 +294,9 @@ fn build_native_extension_authoring_view(
         source_language: source_language.to_owned(),
         bridge_kind: bridge_kind.to_owned(),
         reference_example_path: profile.example_package_root.to_owned(),
+        doctor_command: render_authoring_doctor_command(package_root),
         inventory_command: render_authoring_inventory_command(package_root),
+        actions_command: render_authoring_actions_command(package_root),
         smoke_allow_command: profile.smoke_allow_command.to_owned(),
         smoke_test_command: render_authoring_smoke_test_command(
             package_root,
@@ -264,7 +308,33 @@ fn build_native_extension_authoring_view(
         extension_events,
         extension_host_actions,
         extension_metadata_issues,
+        verdict: None,
+        activation_ready: None,
+        policy_summary: None,
+        remediation_classes: Vec::new(),
+        recommended_action_summaries: Vec::new(),
+        author_remediation_hints,
     }
+}
+
+fn native_extension_author_remediation_hints(
+    extension_metadata_issues: &[String],
+    recommended_action_summaries: &[String],
+) -> Vec<String> {
+    let mut hints = extension_metadata_issues
+        .iter()
+        .map(|issue| format!("Repair native extension declaration metadata: {issue}"))
+        .collect::<Vec<_>>();
+    if !extension_metadata_issues.is_empty() {
+        hints.push(
+            "After fixing native extension declaration metadata, rerun `loong plugins doctor` and `loong plugins inventory`."
+                .to_owned(),
+        );
+    }
+    hints.extend(recommended_action_summaries.iter().cloned());
+    hints.sort();
+    hints.dedup();
+    hints
 }
 
 pub(crate) fn render_rust_extension_cargo_toml(plugin_id: &str) -> String {
