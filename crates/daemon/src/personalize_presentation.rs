@@ -76,3 +76,35 @@ pub(crate) const fn personalize_review_choice_description(
         }
     }
 }
+
+pub(crate) const fn personalize_skip_message() -> &'static str {
+    "No changes saved."
+}
+
+pub(crate) const fn personalize_suppressed_recovery_guidance() -> &'static str {
+    "Personalize suggestions are currently suppressed. Saving here will re-enable them."
+}
+
+pub(crate) const fn personalize_memory_profile_upgrade_prompt() -> &'static str {
+    "Let Loong surface these preferences in Session Profile by upgrading memory profile?"
+}
+
+pub(crate) const fn personalize_memory_profile_upgraded_message() -> &'static str {
+    "Memory profile upgraded to profile_plus_window so Loong can surface these preferences in Session Profile."
+}
+
+pub(crate) const fn personalize_memory_profile_deferred_message() -> &'static str {
+    "Saved these preferences without changing memory.profile; Loong will surface them once profile_plus_window is enabled."
+}
+
+pub(crate) fn personalize_saved_message(path: &str) -> String {
+    format!("Saved how Loong should work with you to {path}.")
+}
+
+pub(crate) fn personalize_cleared_message(path: &str) -> String {
+    format!("Cleared how Loong should work with you from {path}.")
+}
+
+pub(crate) fn personalize_suppressed_message(path: &str) -> String {
+    format!("Stopped future personalize suggestions in {path}.")
+}

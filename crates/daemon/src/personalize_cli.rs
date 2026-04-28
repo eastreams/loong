@@ -14,8 +14,13 @@ use crate::operator_prompt::{
 };
 use crate::personalize_presentation::{
     PersonalizePromptKind, PersonalizeReviewChoiceKind, PersonalizeSelectKind,
+    personalize_cleared_message, personalize_saved_message,
+    personalize_memory_profile_deferred_message, personalize_memory_profile_upgrade_prompt,
+    personalize_memory_profile_upgraded_message,
     personalize_prompt_label, personalize_review_choice_description,
     personalize_review_choice_label, personalize_review_intro, personalize_select_label,
+    personalize_skip_message, personalize_suppressed_message,
+    personalize_suppressed_recovery_guidance,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +76,7 @@ pub(crate) fn run_personalize_cli_with_ui(
             now,
         ),
         PersonalizeReviewAction::SkipForNow => {
-            ui.print_line("No changes saved.")?;
+            ui.print_line(personalize_skip_message())?;
             Ok(PersonalizeCliOutcome::Skipped)
         }
         PersonalizeReviewAction::SuppressFutureSuggestions => suppress_personalization(
@@ -97,7 +102,7 @@ fn print_suppressed_recovery_guidance(
     }
 
     ui.print_line(
-        "Personalize suggestions are currently suppressed. Saving preferences here will re-enable them.",
+        personalize_suppressed_recovery_guidance(),
     )?;
 
     Ok(())
@@ -436,10 +441,7 @@ fn save_personalization(
 
         config.memory.personalization = None;
         let saved_path = write_personalization_config(config, resolved_path)?;
-        let cleared_message = format!(
-            "Cleared operator preferences from {}.",
-            saved_path.display()
-        );
+        let cleared_message = personalize_cleared_message(saved_path.display().to_string().as_str());
         ui.print_line(cleared_message.as_str())?;
 
         return Ok(PersonalizeCliOutcome::Saved {
@@ -453,7 +455,7 @@ fn save_personalization(
         config.memory.profile != mvp::config::MemoryProfile::ProfilePlusWindow;
     if needs_memory_profile_upgrade {
         let confirmed = ui.prompt_confirm(
-            "Upgrade memory profile to profile_plus_window so these preferences surface in Session Profile?",
+            personalize_memory_profile_upgrade_prompt(),
             true,
         )?;
         if confirmed {
@@ -467,16 +469,14 @@ fn save_personalization(
     config.memory.personalization = Some(personalization);
     let saved_path = write_personalization_config(config, resolved_path)?;
 
-    ui.print_line(format!("Saved operator preferences to {}.", saved_path.display()).as_str())?;
+    ui.print_line(personalize_saved_message(saved_path.display().to_string().as_str()).as_str())?;
     if upgraded_memory_profile {
         ui.print_line(
-            "Memory profile upgraded to profile_plus_window so preferences project into Session Profile.",
+            personalize_memory_profile_upgraded_message(),
         )?;
     }
     if declined_memory_profile_upgrade {
-        ui.print_line(
-            "Saved preferences without changing memory.profile; they will project once profile_plus_window is enabled.",
-        )?;
+        ui.print_line(personalize_memory_profile_deferred_message())?;
     }
 
     Ok(PersonalizeCliOutcome::Saved {
@@ -518,11 +518,7 @@ fn suppress_personalization(
     let saved_path = write_personalization_config(config, resolved_path)?;
 
     ui.print_line(
-        format!(
-            "Suppressed future personalize suggestions in {}.",
-            saved_path.display()
-        )
-        .as_str(),
+        personalize_suppressed_message(saved_path.display().to_string().as_str()).as_str(),
     )?;
 
     Ok(PersonalizeCliOutcome::Suppressed)
@@ -1254,5 +1250,57 @@ mod tests {
             "review action options should stay operator-facing: {:#?}",
             ui.select_option_labels
         );
+    }
+
+    #[test]
+    fn personalize_cli_save_with_upgrade_uses_guidance_messages() {
+        let config_path = unique_config_path("save-guidance-copy");
+        let config_path_string = config_path.display().to_string();
+        write_default_config(&config_path);
+        let mut ui = TestPromptUi::with_inputs([
+            "Chum",
+            "3",
+            "3",
+            "Ask before destructive actions.",
+            "Asia/Shanghai",
+            "zh-CN",
+            "1",
+            "y",
+        ]);
+
+        let outcome =
+            run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
+                .expect("save flow should succeed");
+
+        assert_eq!(
+            outcome,
+            PersonalizeCliOutcome::Saved {
+                upgraded_memory_profile: true
+            }
+        );
+        assert_eq!(
+            ui.confirm_messages,
+            vec!["Let Loong surface these preferences in Session Profile by upgrading memory profile?"],
+            "memory-profile upgrade prompt should sound like operator guidance: {:#?}",
+            ui.confirm_messages
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line.contains("Saved how Loong should work with you to")
+            }),
+            "save flow should confirm the guidance outcome, got: {:#?}",
+            ui.printed_lines
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line.contains(
+                    "Memory profile upgraded to profile_plus_window so Loong can surface these preferences in Session Profile."
+                )
+            }),
+            "upgrade follow-up should use the guidance copy, got: {:#?}",
+            ui.printed_lines
+        );
+
+        let _ = std::fs::remove_file(config_path);
     }
 }
