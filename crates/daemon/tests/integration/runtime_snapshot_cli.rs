@@ -582,6 +582,35 @@ fn runtime_snapshot_surfaces_native_extension_authoring_guidance_for_invalid_pro
     fs::remove_dir_all(&root).ok();
 }
 
+#[test]
+fn runtime_snapshot_text_surfaces_native_extension_authoring_guidance_for_invalid_process_stdio_package(
+) {
+    let root = unique_temp_dir("loong-runtime-snapshot-invalid-stdio-authoring-text");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    install_invalid_process_stdio_runtime_plugin_package(&root, &config_path);
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let rendered = render_runtime_snapshot_text(&snapshot);
+
+    assert!(rendered.contains("invalid-stdio-plugin"));
+    assert!(rendered.contains("authoring reference_example=examples/plugins-process/native-extension-javascript"));
+    assert!(rendered.contains("smoke_allow_command=node"));
+    assert!(rendered.contains("action_roles=author,verification"));
+    assert!(rendered.contains("action_kinds=repair_extension_metadata,rerun_doctor,rerun_inventory,rerun_smoke_test"));
+    assert!(rendered.contains("runnable_action_kinds=rerun_doctor,rerun_inventory,rerun_smoke_test"));
+    assert!(rendered.contains("allow_command_action_kinds=rerun_smoke_test"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
 #[tokio::test]
 async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_truth() {
     let root = unique_temp_dir("loong-runtime-snapshot-invalid-extension-declarations");

@@ -580,6 +580,53 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             slot_claims,
             conflicting_slot_claims,
         ));
+        if let Some(authoring_guidance) = plugin.authoring_guidance.as_ref() {
+            let action_roles = crate::render_line_safe_text_values(
+                authoring_guidance
+                    .author_remediation_actions
+                    .iter()
+                    .map(|action| action.role.as_str()),
+                ",",
+            );
+            let action_kinds = crate::render_line_safe_text_values(
+                authoring_guidance
+                    .author_remediation_actions
+                    .iter()
+                    .map(|action| action.kind.as_str()),
+                ",",
+            );
+            let runnable_action_kinds = crate::render_line_safe_text_values(
+                authoring_guidance
+                    .author_remediation_actions
+                    .iter()
+                    .filter(|action| action.agent_runnable)
+                    .map(|action| action.kind.as_str()),
+                ",",
+            );
+            let allow_command_action_kinds = crate::render_line_safe_text_values(
+                authoring_guidance
+                    .author_remediation_actions
+                    .iter()
+                    .filter(|action| action.requires_allow_command)
+                    .map(|action| action.kind.as_str()),
+                ",",
+            );
+            let reference_example = crate::render_line_safe_text_value(
+                &authoring_guidance.reference_example_path,
+            );
+            let smoke_allow_command = crate::render_line_safe_text_value(
+                &authoring_guidance.smoke_allow_command,
+            );
+            lines.push(format!(
+                "    authoring reference_example={} smoke_allow_command={} action_roles={} action_kinds={} runnable_action_kinds={} allow_command_action_kinds={}",
+                reference_example,
+                smoke_allow_command,
+                action_roles,
+                action_kinds,
+                runnable_action_kinds,
+                allow_command_action_kinds,
+            ));
+        }
     }
 
     lines
