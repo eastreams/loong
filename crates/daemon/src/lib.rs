@@ -160,6 +160,7 @@ mod onboarding_model_policy;
 mod operator_inventory_cli;
 pub mod operator_prompt;
 pub mod personalize_cli;
+mod personalize_presentation;
 mod plugin_bridge_account_summary;
 pub mod plugins_cli;
 mod provider_credential_policy;
@@ -216,6 +217,7 @@ pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
+use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
 pub use runtime_snapshot_render::render_runtime_snapshot_text;
 pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_acp_json, runtime_snapshot_context_engine_json,
@@ -694,8 +696,8 @@ pub enum Commands {
         skip_model_probe: bool,
     },
     #[command(
-        about = "Teach Loong your working style for future sessions",
-        long_about = "Teach Loong your working style for future sessions.\n\nThis command stores advisory preferences such as preferred name, response density, initiative level, and standing boundaries. Rerun it any time to update or clear saved preferences. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first."
+        about = PERSONALIZE_COMMAND_ABOUT,
+        long_about = PERSONALIZE_COMMAND_LONG_ABOUT
     )]
     Personalize {
         /// Config file path to update (defaults to auto-discovery)

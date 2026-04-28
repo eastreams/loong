@@ -12,6 +12,7 @@ use loong_spec::CliResult;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::personalize_presentation::personalize_action_title;
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
@@ -3023,9 +3024,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             let prefix = match action.kind {
                 crate::next_actions::SetupNextActionKind::Ask => "Get a first answer",
                 crate::next_actions::SetupNextActionKind::Chat => "Continue in chat",
-                crate::next_actions::SetupNextActionKind::Personalize => {
-                    "Teach Loong your working style"
-                }
+                crate::next_actions::SetupNextActionKind::Personalize => personalize_action_title(),
                 crate::next_actions::SetupNextActionKind::Channel => "Open a channel",
                 crate::next_actions::SetupNextActionKind::BrowserPreview => {
                     match action.browser_preview_phase {

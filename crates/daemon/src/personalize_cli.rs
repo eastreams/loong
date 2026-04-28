@@ -12,6 +12,11 @@ use crate::operator_prompt::{
     OPERATOR_CLEAR_INPUT_TOKEN, OperatorPromptUi, SelectInteractionMode, SelectOption,
     StdioOperatorUi, prompt_optional_operator_text,
 };
+use crate::personalize_presentation::{
+    PersonalizePromptKind, PersonalizeReviewChoiceKind, PersonalizeSelectKind,
+    personalize_prompt_label, personalize_review_choice_description,
+    personalize_review_choice_label, personalize_review_intro, personalize_select_label,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PersonalizeReviewAction {
@@ -36,15 +41,6 @@ pub(crate) enum PersonalizeCliOutcome {
     Skipped,
     Suppressed,
 }
-
-const PREFERRED_NAME_PROMPT: &str = "How should Loong address you? (optional)";
-const STANDING_BOUNDARIES_PROMPT: &str =
-    "Any standing boundaries Loong should keep in mind? (optional)";
-const TIMEZONE_PROMPT: &str = "Which timezone should Loong assume? (optional)";
-const LOCALE_PROMPT: &str = "Which locale should Loong default to? (optional)";
-const RESPONSE_DENSITY_PROMPT: &str = "How detailed should Loong usually be?";
-const INITIATIVE_LEVEL_PROMPT: &str = "How proactive should Loong be?";
-const REVIEW_ACTION_PROMPT: &str = "What should Loong do with this draft?";
 
 pub fn run_personalize_cli(config_path: Option<&str>) -> CliResult<()> {
     let mut ui = StdioOperatorUi::default();
@@ -113,7 +109,11 @@ fn collect_personalization_draft(
 ) -> CliResult<PersonalizationDraft> {
     let preferred_name_default = existing_personalization
         .and_then(|personalization| personalization.preferred_name.as_deref());
-    let preferred_name = prompt_optional_text(ui, PREFERRED_NAME_PROMPT, preferred_name_default)?;
+    let preferred_name = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::PreferredName),
+        preferred_name_default,
+    )?;
 
     let response_density_default =
         existing_personalization.and_then(|personalization| personalization.response_density);
@@ -125,16 +125,27 @@ fn collect_personalization_draft(
 
     let standing_boundaries_default = existing_personalization
         .and_then(|personalization| personalization.standing_boundaries.as_deref());
-    let standing_boundaries =
-        prompt_optional_text(ui, STANDING_BOUNDARIES_PROMPT, standing_boundaries_default)?;
+    let standing_boundaries = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::StandingBoundaries),
+        standing_boundaries_default,
+    )?;
 
     let timezone_default =
         existing_personalization.and_then(|personalization| personalization.timezone.as_deref());
-    let timezone = prompt_optional_text(ui, TIMEZONE_PROMPT, timezone_default)?;
+    let timezone = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::Timezone),
+        timezone_default,
+    )?;
 
     let locale_default =
         existing_personalization.and_then(|personalization| personalization.locale.as_deref());
-    let locale = prompt_optional_text(ui, LOCALE_PROMPT, locale_default)?;
+    let locale = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::Locale),
+        locale_default,
+    )?;
 
     Ok(PersonalizationDraft {
         preferred_name,
@@ -224,7 +235,7 @@ fn select_response_density(
         None => unset_option_index,
     };
     let selected_index = ui.select_one(
-        RESPONSE_DENSITY_PROMPT,
+        personalize_select_label(PersonalizeSelectKind::ResponseDensity),
         &options,
         default_index,
         SelectInteractionMode::List,
@@ -308,7 +319,7 @@ fn select_initiative_level(
         None => unset_option_index,
     };
     let selected_index = ui.select_one(
-        INITIATIVE_LEVEL_PROMPT,
+        personalize_select_label(PersonalizeSelectKind::InitiativeLevel),
         &options,
         default_index,
         SelectInteractionMode::List,
@@ -343,28 +354,32 @@ fn select_review_action(
 
     let options = vec![
         SelectOption {
-            label: "use this draft".to_owned(),
+            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Save).to_owned(),
             slug: "save".to_owned(),
-            description: "save these preferences for future sessions".to_owned(),
+            description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Save)
+                .to_owned(),
             recommended: true,
         },
         SelectOption {
-            label: "not now".to_owned(),
+            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Skip).to_owned(),
             slug: "skip".to_owned(),
-            description: "leave the current config untouched".to_owned(),
+            description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Skip)
+                .to_owned(),
             recommended: false,
         },
         SelectOption {
-            label: "stop suggesting this".to_owned(),
+            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Suppress)
+                .to_owned(),
             slug: "suppress".to_owned(),
-            description:
-                "stop proactive suggestions without saving this draft; keep any existing saved preferences"
-                    .to_owned(),
+            description: personalize_review_choice_description(
+                PersonalizeReviewChoiceKind::Suppress,
+            )
+            .to_owned(),
             recommended: false,
         },
     ];
     let selected_index = ui.select_one(
-        REVIEW_ACTION_PROMPT,
+        personalize_select_label(PersonalizeSelectKind::ReviewAction),
         &options,
         Some(0),
         SelectInteractionMode::List,
@@ -393,7 +408,7 @@ fn render_review_lines(draft: &PersonalizationDraft) -> Vec<String> {
     let locale = draft.locale.as_deref().unwrap_or("not set");
 
     vec![
-        "Review how Loong will work with you:".to_owned(),
+        personalize_review_intro().to_owned(),
         format!("- preferred name: {preferred_name}"),
         format!("- response density: {response_density}"),
         format!("- initiative level: {initiative_level}"),

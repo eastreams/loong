@@ -743,6 +743,7 @@ pub(crate) fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::personalize_presentation::personalize_action_label;
 
     fn sample_success_summary() -> OnboardingSuccessSummary {
         OnboardingSuccessSummary {
@@ -788,7 +789,7 @@ mod tests {
                 },
                 OnboardingAction {
                     kind: OnboardingActionKind::Personalize,
-                    label: "teach Loong your working style".to_owned(),
+                    label: personalize_action_label().to_owned(),
                     command: "loong personalize --config '/tmp/loong.toml'".to_owned(),
                 },
                 OnboardingAction {
@@ -828,7 +829,7 @@ mod tests {
                     if title == "also available"
                         && items.iter().all(|item| item.label != "channels" && item.label != "browser preview")
                         && items.iter().any(|item| item.label == "chat")
-                        && items.iter().any(|item| item.label == "teach Loong your working style")
+                        && items.iter().any(|item| item.label == personalize_action_label())
             )),
             "expected general follow-up actions to stay separate from setup surfaces: {spec:#?}"
         );

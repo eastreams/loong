@@ -1,11 +1,10 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 
+use crate::personalize_presentation::personalize_action_label;
 use loong_app as mvp;
 
 pub use mvp::chat::DEFAULT_FIRST_PROMPT as DEFAULT_FIRST_ASK_MESSAGE;
-
-pub(crate) const PERSONALIZE_ACTION_LABEL: &str = "teach Loong your working style";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetupNextActionKind {
@@ -88,7 +87,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
                 kind: SetupNextActionKind::Personalize,
                 channel_action_id: None,
                 browser_preview_phase: None,
-                label: PERSONALIZE_ACTION_LABEL.to_owned(),
+                label: personalize_action_label().to_owned(),
                 command: crate::cli_handoff::format_subcommand_with_config(
                     "personalize",
                     config_path,
@@ -778,7 +777,7 @@ mod tests {
         assert_eq!(actions[0].kind, SetupNextActionKind::Ask);
         assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
         assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
-        assert_eq!(actions[2].label, PERSONALIZE_ACTION_LABEL);
+        assert_eq!(actions[2].label, personalize_action_label());
         assert_eq!(
             actions[2].command,
             "loong personalize --config '/tmp/loong.toml'"
