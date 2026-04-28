@@ -26,17 +26,27 @@ func buildExtensionPayload(operation string, payload map[string]any) any {
 		if event == "" {
 			event = "unknown"
 		}
-		return map[string]any{"ok": true, "handled_event": event}
+		return map[string]any{
+			"ok":            true,
+			"handled_event": event,
+		}
 	case "extension/command":
 		commandName, _ := payload["command_name"].(string)
 		if commandName == "" {
 			commandName = "extension"
 		}
-		return map[string]any{"text": fmt.Sprintf("%s command stub", commandName)}
+		return map[string]any{
+			"text": fmt.Sprintf("%s command stub", commandName),
+		}
 	case "extension/resource":
-		return map[string]any{"commands": []any{}, "tools": []any{}}
+		return map[string]any{
+			"commands": []any{},
+			"tools":    []any{},
+		}
 	default:
-		return map[string]any{"error": fmt.Sprintf("unsupported method: %s", operation)}
+		return map[string]any{
+			"error": fmt.Sprintf("unsupported method: %s", operation),
+		}
 	}
 }
 
@@ -47,14 +57,17 @@ func main() {
 		if line == "" {
 			continue
 		}
+
 		var request requestFrame
 		if err := json.Unmarshal([]byte(line), &request); err != nil {
 			continue
 		}
+
 		payload := request.Payload
 		if payload == nil {
 			payload = map[string]any{}
 		}
+
 		var responsePayload any
 		if request.Method == "tools/call" {
 			operation, _ := payload["operation"].(string)
@@ -64,9 +77,16 @@ func main() {
 			}
 			responsePayload = buildExtensionPayload(operation, extensionPayload)
 		} else {
-			responsePayload = map[string]any{"error": fmt.Sprintf("unsupported transport method: %s", request.Method)}
+			responsePayload = map[string]any{
+				"error": fmt.Sprintf("unsupported transport method: %s", request.Method),
+			}
 		}
-		response := responseFrame{Method: request.Method, ID: request.ID, Payload: responsePayload}
+
+		response := responseFrame{
+			Method:  request.Method,
+			ID:      request.ID,
+			Payload: responsePayload,
+		}
 		encoded, err := json.Marshal(response)
 		if err != nil {
 			continue

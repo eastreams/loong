@@ -12,6 +12,7 @@
     "source_language": "python",
     "command": "python3",
     "args_json": "[\"index.py\"]",
+    "process_timeout_ms": "5000",
     "loong_extension_contract": "process_stdio_json_line_v1",
     "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
     "loong_extension_methods_json": "[\"extension/event\",\"extension/command\",\"extension/resource\"]",

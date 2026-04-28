@@ -126,6 +126,7 @@ pub(super) fn collect_plugin_inventory_results(
     for report in plugin_scan_reports {
         for descriptor in &report.descriptors {
             let manifest = &descriptor.manifest;
+            let extension_declarations = manifest_native_extension_declarations(&manifest.metadata);
             let key = (descriptor.path.clone(), manifest.plugin_id.clone());
             let translation = translation_by_key.get(&key);
             let activation = activation_by_key.get(&key);
@@ -290,6 +291,12 @@ pub(super) fn collect_plugin_inventory_results(
                     }),
                 summary: manifest.summary.clone(),
                 tags: manifest.tags.clone(),
+                extension_contract: extension_declarations.contract.clone(),
+                extension_facets: extension_declarations.facets.clone(),
+                extension_methods: extension_declarations.methods.clone(),
+                extension_events: extension_declarations.events.clone(),
+                extension_host_actions: extension_declarations.host_actions.clone(),
+                extension_metadata_issues: extension_declarations.metadata_issues.clone(),
                 input_examples: manifest.input_examples.clone(),
                 output_examples: manifest.output_examples.clone(),
                 deferred: manifest.defer_loading,
@@ -382,6 +389,12 @@ pub(super) fn collect_plugin_inventory_results(
             bootstrap_hint: entry.bootstrap_hint,
             summary: entry.summary,
             tags: entry.tags,
+            extension_contract: entry.extension_contract,
+            extension_facets: entry.extension_facets,
+            extension_methods: entry.extension_methods,
+            extension_events: entry.extension_events,
+            extension_host_actions: entry.extension_host_actions,
+            extension_metadata_issues: entry.extension_metadata_issues,
             input_examples: if include_examples {
                 entry.input_examples
             } else {
@@ -396,6 +409,80 @@ pub(super) fn collect_plugin_inventory_results(
             loaded: entry.loaded,
         })
         .collect()
+}
+
+#[derive(Default)]
+struct NativeExtensionDeclarations {
+    contract: Option<String>,
+    facets: Vec<String>,
+    methods: Vec<String>,
+    events: Vec<String>,
+    host_actions: Vec<String>,
+    metadata_issues: Vec<String>,
+}
+
+fn manifest_native_extension_declarations(
+    metadata: &BTreeMap<String, String>,
+) -> NativeExtensionDeclarations {
+    let mut declarations = NativeExtensionDeclarations {
+        contract: optional_metadata_value(metadata, "loong_extension_contract"),
+        ..Default::default()
+    };
+    declarations.facets = parse_metadata_string_list(
+        metadata,
+        "loong_extension_facets_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.methods = parse_metadata_string_list(
+        metadata,
+        "loong_extension_methods_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.events = parse_metadata_string_list(
+        metadata,
+        "loong_extension_events_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.host_actions = parse_metadata_string_list(
+        metadata,
+        "loong_extension_host_actions_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations
+}
+
+fn optional_metadata_value(metadata: &BTreeMap<String, String>, key: &str) -> Option<String> {
+    metadata.get(key).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(trimmed.to_owned())
+    })
+}
+
+fn parse_metadata_string_list(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+    metadata_issues: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(value) = metadata.get(key) else {
+        return Vec::new();
+    };
+
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(values) => values
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect(),
+        Err(error) => {
+            metadata_issues.push(format!(
+                "metadata `{key}` must be a JSON string array: {error}"
+            ));
+            Vec::new()
+        }
+    }
 }
 
 fn plugin_inventory_status_is_blocked(status: &str) -> bool {

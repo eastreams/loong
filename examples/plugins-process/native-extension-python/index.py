@@ -5,12 +5,23 @@ import sys
 
 def build_extension_payload(operation, payload):
     if operation == "extension/event":
-        return {"ok": True, "handled_event": payload.get("event", "unknown")}
+        return {
+            "ok": True,
+            "handled_event": payload.get("event", "unknown"),
+        }
     if operation == "extension/command":
-        return {"text": f"{payload.get('command_name', 'extension')} command stub"}
+        command_name = payload.get("command_name", "extension")
+        return {
+            "text": f"{command_name} command stub"
+        }
     if operation == "extension/resource":
-        return {"commands": [], "tools": []}
-    return {"error": f"unsupported method: {operation}"}
+        return {
+            "commands": [],
+            "tools": []
+        }
+    return {
+        "error": f"unsupported method: {operation}"
+    }
 
 
 for line in sys.stdin:
