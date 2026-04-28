@@ -113,12 +113,16 @@ impl DoctorNextStep {
     }
 }
 
-fn doctor_next_step_from_rendered(step: String) -> DoctorNextStep {
-    let Some((label, command)) = step.split_once(": ") else {
-        return DoctorNextStep::guidance(step);
-    };
+impl From<String> for DoctorNextStep {
+    fn from(value: String) -> Self {
+        DoctorNextStep::guidance(value)
+    }
+}
 
-    DoctorNextStep::action(label, command)
+impl From<&str> for DoctorNextStep {
+    fn from(value: &str) -> Self {
+        DoctorNextStep::guidance(value)
+    }
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
@@ -2791,7 +2795,7 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
     fix_requested: bool,
     path_env: Option<&OsStr>,
 ) -> Vec<DoctorNextStep> {
-    let mut steps = Vec::new();
+    let mut steps: Vec<DoctorNextStep> = Vec::new();
     let config_path_display = config_path.display().to_string();
     let rerun_command =
         crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
@@ -2808,9 +2812,10 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
                 || check.name.ends_with("policy")
         })
     {
-        push_unique_step(
+        push_unique_action_step(
             &mut steps,
-            format!("Apply safe local repairs: {rerun_command} --fix"),
+            "Apply safe local repairs",
+            format!("{rerun_command} --fix"),
         );
     }
 
@@ -2986,11 +2991,10 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
                 provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
                     recommended_onboarding_model: Some(model),
                 } => {
-                    push_unique_step(
+                    push_unique_action_step(
                         &mut steps,
-                        format!(
-                            "Rerun onboarding and accept reviewed model `{model}`: {rerun_onboard_command}"
-                        ),
+                        format!("Rerun onboarding and accept reviewed model `{model}`"),
+                        &rerun_onboard_command,
                     );
                     push_unique_step(
                         &mut steps,
@@ -3122,9 +3126,10 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
     if checks.iter().any(|check| {
         check.name == "runtime plugins inventory" && check.level != DoctorCheckLevel::Pass
     }) {
-        push_unique_step(
+        push_unique_action_step(
             &mut steps,
-            format!("Inspect runtime plugin inventory: {runtime_snapshot_json_command}"),
+            "Inspect runtime plugin inventory",
+            &runtime_snapshot_json_command,
         );
         push_unique_step(
             &mut steps,
@@ -3147,9 +3152,10 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
                     .any(|action| check.name.to_ascii_lowercase().contains(action.id)))
     }) {
         for action in &channel_actions {
-            push_unique_step(
+            push_unique_action_step(
                 &mut steps,
-                format!("Bring {} online: {}", action.label, action.command),
+                format!("Bring {} online", action.label),
+                action.command.clone(),
             );
         }
     }
@@ -3192,7 +3198,7 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
             {
                 browser_preview_needs_runtime_verify = true;
             }
-            push_unique_step(&mut steps, format!("{prefix}: {}", action.command));
+            push_unique_action_step(&mut steps, prefix, action.command);
         }
         if browser_preview_needs_runtime_verify {
             push_unique_step(
@@ -3207,17 +3213,14 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
             .iter()
             .any(|check| check.level != DoctorCheckLevel::Pass)
     {
-        push_unique_step(&mut steps, format!("Re-run diagnostics: {rerun_command}"));
+        push_unique_action_step(&mut steps, "Re-run diagnostics", rerun_command);
     }
 
     steps
-        .into_iter()
-        .map(doctor_next_step_from_rendered)
-        .collect()
 }
 
 fn push_managed_bridge_discovery_next_steps(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     channel_surfaces: &[mvp::channel::ChannelSurface],
     rerun_command: &str,
 ) {
@@ -3247,18 +3250,19 @@ fn push_managed_bridge_discovery_next_steps(
     }
 
     let has_managed_bridge_guidance = steps.iter().any(|step| {
-        step.contains("Resolve managed bridge ambiguity")
-            || step.contains("Fix managed bridge selection")
-            || step.contains("Complete managed bridge setup")
+        let rendered = step.render();
+        rendered.contains("Resolve managed bridge ambiguity")
+            || rendered.contains("Fix managed bridge selection")
+            || rendered.contains("Complete managed bridge setup")
     });
 
     if has_managed_bridge_guidance {
-        push_unique_step(steps, format!("Re-run diagnostics: {rerun_command}"));
+        push_unique_action_step(steps, "Re-run diagnostics", rerun_command);
     }
 }
 
 fn push_managed_bridge_selection_next_step(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     surface: &mvp::channel::ChannelSurface,
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) {
@@ -3311,7 +3315,7 @@ fn push_managed_bridge_selection_next_step(
 }
 
 fn push_managed_bridge_ambiguity_next_step(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     surface: &mvp::channel::ChannelSurface,
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) {
@@ -3343,7 +3347,7 @@ fn push_managed_bridge_ambiguity_next_step(
 }
 
 fn push_managed_bridge_incomplete_setup_next_steps(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     surface: &mvp::channel::ChannelSurface,
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) {
@@ -3616,10 +3620,20 @@ fn push_unique_action(
     }
 }
 
-fn push_unique_step(steps: &mut Vec<String>, step: String) {
-    if !steps.iter().any(|existing| existing == &step) {
+fn push_unique_step(steps: &mut Vec<DoctorNextStep>, step: impl Into<DoctorNextStep>) {
+    let step = step.into();
+    let rendered = step.render();
+    if !steps.iter().any(|existing| existing.render() == rendered) {
         steps.push(step);
     }
+}
+
+fn push_unique_action_step(
+    steps: &mut Vec<DoctorNextStep>,
+    label: impl Into<String>,
+    command: impl Into<String>,
+) {
+    push_unique_step(steps, DoctorNextStep::action(label, command));
 }
 
 #[cfg(test)]
