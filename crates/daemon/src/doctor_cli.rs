@@ -62,6 +62,65 @@ struct DoctorSummary {
     fail: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DoctorNextStepAction {
+    pub label: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DoctorNextStep {
+    Action(DoctorNextStepAction),
+    Guidance(String),
+}
+
+impl DoctorNextStep {
+    fn action(label: impl Into<String>, command: impl Into<String>) -> Self {
+        Self::Action(DoctorNextStepAction {
+            label: label.into(),
+            command: command.into(),
+        })
+    }
+
+    fn guidance(text: impl Into<String>) -> Self {
+        Self::Guidance(text.into())
+    }
+
+    fn render(&self) -> String {
+        match self {
+            DoctorNextStep::Action(action) => format!("{}: {}", action.label, action.command),
+            DoctorNextStep::Guidance(text) => text.clone(),
+        }
+    }
+
+    fn as_action_spec(&self) -> Option<mvp::tui_surface::TuiActionSpec> {
+        let DoctorNextStep::Action(action) = self else {
+            return None;
+        };
+
+        Some(mvp::tui_surface::TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        })
+    }
+
+    fn as_action(&self) -> Option<&DoctorNextStepAction> {
+        let DoctorNextStep::Action(action) = self else {
+            return None;
+        };
+
+        Some(action)
+    }
+}
+
+fn doctor_next_step_from_rendered(step: String) -> DoctorNextStep {
+    let Some((label, command)) = step.split_once(": ") else {
+        return DoctorNextStep::guidance(step);
+    };
+
+    DoctorNextStep::action(label, command)
+}
+
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     if let Some(command) = options.command.clone() {
         return match command {
@@ -220,7 +279,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     }
 
     let summary = summarize_checks(&checks);
-    let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+    let next_steps = build_doctor_next_step_items_with_channel_surfaces_and_path_env(
         &checks,
         &config_path,
         &config,
@@ -228,6 +287,8 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         options.fix,
         path_env.as_deref(),
     );
+    let next_step_lines = doctor_next_step_lines(&next_steps);
+    let next_step_actions = doctor_next_step_actions(&next_steps);
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
         let payload = json!({
@@ -242,7 +303,8 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             "checks": checks,
             "fix_requested": options.fix,
             "applied_fixes": fixes,
-            "next_steps": next_steps,
+            "next_steps": next_step_lines,
+            "next_step_actions": next_step_actions,
         });
         let encoded = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize doctor output failed: {error}"))?;
@@ -2290,11 +2352,23 @@ fn summarize_checks(checks: &[DoctorCheck]) -> DoctorSummary {
     DoctorSummary { pass, warn, fail }
 }
 
+fn doctor_next_step_lines(next_steps: &[DoctorNextStep]) -> Vec<String> {
+    next_steps.iter().map(DoctorNextStep::render).collect()
+}
+
+fn doctor_next_step_actions(next_steps: &[DoctorNextStep]) -> Vec<DoctorNextStepAction> {
+    next_steps
+        .iter()
+        .filter_map(DoctorNextStep::as_action)
+        .cloned()
+        .collect()
+}
+
 fn render_doctor_text(
     checks: &[DoctorCheck],
     summary: DoctorSummary,
     fixes: &[String],
-    next_steps: &[String],
+    next_steps: &[DoctorNextStep],
     config_path: &Path,
     fix_requested: bool,
 ) -> String {
@@ -2329,13 +2403,7 @@ fn render_doctor_text(
 
     let action_items = next_steps
         .iter()
-        .filter_map(|step| {
-            let (label, command) = step.split_once(": ")?;
-            Some(mvp::tui_surface::TuiActionSpec {
-                label: label.to_owned(),
-                command: command.to_owned(),
-            })
-        })
+        .filter_map(DoctorNextStep::as_action_spec)
         .take(3)
         .collect::<Vec<_>>();
     if !action_items.is_empty() {
@@ -2359,7 +2427,10 @@ fn render_doctor_text(
     if !next_steps.is_empty() {
         sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
             title: Some("next actions".to_owned()),
-            lines: next_steps.iter().map(|step| format!("- {step}")).collect(),
+            lines: next_steps
+                .iter()
+                .map(|step| format!("- {}", step.render()))
+                .collect(),
         });
     }
 
@@ -2613,13 +2684,16 @@ fn build_doctor_next_steps(
     fix_requested: bool,
 ) -> Vec<String> {
     let path_env = env::var_os("PATH");
-    build_doctor_next_steps_with_path_env(
+    build_doctor_next_step_items_with_path_env(
         checks,
         config_path,
         config,
         fix_requested,
         path_env.as_deref(),
     )
+    .iter()
+    .map(DoctorNextStep::render)
+    .collect()
 }
 
 #[cfg(test)]
@@ -2631,7 +2705,29 @@ fn build_doctor_next_steps_with_path_env(
     path_env: Option<&OsStr>,
 ) -> Vec<String> {
     let inventory = mvp::channel::channel_inventory(config);
-    build_doctor_next_steps_with_channel_surfaces_and_path_env(
+    build_doctor_next_step_items_with_channel_surfaces_and_path_env(
+        checks,
+        config_path,
+        config,
+        &inventory.channel_surfaces,
+        fix_requested,
+        path_env,
+    )
+    .iter()
+    .map(DoctorNextStep::render)
+    .collect()
+}
+
+#[cfg(test)]
+fn build_doctor_next_step_items_with_path_env(
+    checks: &[DoctorCheck],
+    config_path: &Path,
+    config: &mvp::config::LoongConfig,
+    fix_requested: bool,
+    path_env: Option<&OsStr>,
+) -> Vec<DoctorNextStep> {
+    let inventory = mvp::channel::channel_inventory(config);
+    build_doctor_next_step_items_with_channel_surfaces_and_path_env(
         checks,
         config_path,
         config,
@@ -2641,6 +2737,7 @@ fn build_doctor_next_steps_with_path_env(
     )
 }
 
+#[cfg(test)]
 fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     checks: &[DoctorCheck],
     config_path: &Path,
@@ -2649,6 +2746,27 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     fix_requested: bool,
     path_env: Option<&OsStr>,
 ) -> Vec<String> {
+    build_doctor_next_step_items_with_channel_surfaces_and_path_env(
+        checks,
+        config_path,
+        config,
+        channel_surfaces,
+        fix_requested,
+        path_env,
+    )
+    .iter()
+    .map(DoctorNextStep::render)
+    .collect()
+}
+
+fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
+    checks: &[DoctorCheck],
+    config_path: &Path,
+    config: &mvp::config::LoongConfig,
+    channel_surfaces: &[mvp::channel::ChannelSurface],
+    fix_requested: bool,
+    path_env: Option<&OsStr>,
+) -> Vec<DoctorNextStep> {
     let mut steps = Vec::new();
     let config_path_display = config_path.display().to_string();
     let rerun_command =
@@ -3069,6 +3187,9 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     }
 
     steps
+        .into_iter()
+        .map(doctor_next_step_from_rendered)
+        .collect()
 }
 
 fn push_managed_bridge_discovery_next_steps(

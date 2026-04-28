@@ -443,6 +443,10 @@ fn doctor_cli_json_includes_schema_for_machine_readable_automation() {
         payload["next_steps"].is_array(),
         "doctor JSON should keep next steps machine-readable: {payload:#?}"
     );
+    assert!(
+        payload["next_step_actions"].is_array(),
+        "doctor JSON should include typed next-step actions for direct operator handoff surfaces: {payload:#?}"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
