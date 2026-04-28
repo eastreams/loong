@@ -674,7 +674,7 @@ fn shell_exec_truncates_large_stdout_without_failing_command() {
     }
 
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-shell-large-output-{}",
+        "loong-shell-large-output-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create large output root");
@@ -798,7 +798,7 @@ fn shell_exec_failed_large_stderr_prefers_stderr_handoff_recipe() {
     }
 
     let root = std::env::temp_dir().join(format!(
-        "loongclaw-shell-large-stderr-{}",
+        "loong-shell-large-stderr-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&root).expect("create large stderr root");

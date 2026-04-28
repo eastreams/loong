@@ -287,13 +287,6 @@ impl FollowupPayloadBudget {
         }
     }
 
-    pub(crate) fn unbounded() -> Self {
-        Self {
-            per_round_max_chars: usize::MAX,
-            remaining_total_chars: usize::MAX,
-        }
-    }
-
     pub(crate) fn truncate_payload(
         &mut self,
         label: ToolDrivenFollowupLabel,
