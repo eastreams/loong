@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::config::{
-    GovernedToolApprovalMode, LoongConfig, SessionVisibility, ToolConfig, ToolConsentMode,
-};
+use crate::config::{GovernedToolApprovalMode, SessionVisibility, ToolConfig, ToolConsentMode};
 use crate::context::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
@@ -50,6 +48,8 @@ use super::tool_input_contract::detect_repairable_tool_request_issue;
 mod batch;
 #[path = "turn_engine_decision.rs"]
 mod decision;
+#[path = "turn_engine_dispatcher.rs"]
+mod dispatcher;
 #[path = "turn_engine_outcome.rs"]
 mod outcome;
 #[path = "turn_engine_payload.rs"]
@@ -71,6 +71,10 @@ mod visibility;
 use batch::ToolBatchHarness;
 pub(crate) use decision::ToolOutcomeTelemetry;
 pub use decision::{ToolDecision, ToolDecisionKind, ToolDecisionTelemetry, ToolOutcome};
+use dispatcher::GovernedToolPreflight;
+pub use dispatcher::{
+    AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ToolExecutionPreflight,
+};
 pub(crate) use outcome::KernelFailureClass;
 pub use outcome::{
     ApprovalRequirement, ApprovalRequirementKind, ToolPreflightOutcome, ToolResultEnvelope,
@@ -132,142 +136,7 @@ const TOOL_PREFLIGHT_ALLOW_RULE_ID: &str = "tool_preflight_allowed";
 const AUTONOMY_POLICY_ALLOW_RULE_ID: &str = "autonomy_policy_allow";
 const AUTONOMY_POLICY_ALLOW_REASON_CODE: &str = "autonomy_policy_allow";
 
-#[async_trait]
-pub trait AppToolDispatcher: Send + Sync {
-    fn memory_config(&self) -> Option<&SessionStoreConfig> {
-        None
-    }
-
-    async fn preflight_tool_intent_with_binding(
-        &self,
-        session_context: &SessionContext,
-        intent: &ToolIntent,
-        descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-        _budget_state: &AutonomyTurnBudgetState,
-    ) -> Result<ToolPreflightOutcome, String> {
-        match self
-            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
-            .await
-        {
-            Ok(Some(requirement)) => {
-                let decision = approval_required_tool_decision(descriptor.name, &requirement);
-                Ok(ToolPreflightOutcome::NeedsApproval {
-                    requirement,
-                    decision,
-                })
-            }
-            Ok(None) => {
-                let decision = generic_allow_tool_decision(descriptor.name);
-                Ok(ToolPreflightOutcome::Allow(decision))
-            }
-            Err(reason) => Err(reason),
-        }
-    }
-
-    async fn maybe_require_approval_with_binding(
-        &self,
-        session_context: &SessionContext,
-        intent: &ToolIntent,
-        descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<Option<ApprovalRequirement>, String> {
-        let _ = (session_context, intent, descriptor, binding);
-        Ok(None)
-    }
-
-    async fn preflight_tool_execution_with_binding(
-        &self,
-        _session_context: &SessionContext,
-        _intent: &ToolIntent,
-        request: ToolCoreRequest,
-        _descriptor: &crate::tools::ToolDescriptor,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<ToolExecutionPreflight, String> {
-        Ok(ToolExecutionPreflight::ready(request))
-    }
-
-    async fn execute_app_tool(
-        &self,
-        session_context: &SessionContext,
-        request: ToolCoreRequest,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<ToolCoreOutcome, String>;
-
-    async fn after_tool_execution(
-        &self,
-        _session_context: &SessionContext,
-        _intent: &ToolIntent,
-        _intent_sequence: usize,
-        _request: &ToolCoreRequest,
-        _outcome: &ToolCoreOutcome,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) {
-    }
-}
-
-pub struct NoopAppToolDispatcher;
-
-#[async_trait]
-impl AppToolDispatcher for NoopAppToolDispatcher {
-    async fn execute_app_tool(
-        &self,
-        _session_context: &SessionContext,
-        request: ToolCoreRequest,
-        _binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<ToolCoreOutcome, String> {
-        Err(format!("app_tool_not_implemented: {}", request.tool_name))
-    }
-}
-
-pub enum ToolExecutionPreflight {
-    Ready {
-        request: ToolCoreRequest,
-        trusted_internal_context: bool,
-    },
-    NeedsApproval(ApprovalRequirement),
-}
-
-impl ToolExecutionPreflight {
-    fn ready(request: ToolCoreRequest) -> Self {
-        Self::Ready {
-            request,
-            trusted_internal_context: false,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct DefaultAppToolDispatcher {
-    memory_config: SessionStoreConfig,
-    tool_config: ToolConfig,
-    app_config: Option<Arc<LoongConfig>>,
-}
-
 impl DefaultAppToolDispatcher {
-    pub fn new(memory_config: SessionStoreConfig, tool_config: ToolConfig) -> Self {
-        Self {
-            memory_config,
-            tool_config,
-            app_config: None,
-        }
-    }
-
-    pub fn with_config(memory_config: SessionStoreConfig, app_config: LoongConfig) -> Self {
-        Self {
-            memory_config,
-            tool_config: app_config.tools.clone(),
-            app_config: Some(Arc::new(app_config)),
-        }
-    }
-
-    pub fn runtime() -> Self {
-        Self::new(
-            store::current_session_store_config().clone(),
-            ToolConfig::default(),
-        )
-    }
-
     fn autonomy_policy_decision_base(
         tool_name: &str,
         policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
@@ -1014,12 +883,6 @@ fn tool_is_auto_eligible(
     tool_is_session_consent_exempt(descriptor.name)
         || (governance.risk_class == crate::tools::ToolRiskClass::Low
             && governance.approval_mode == ToolApprovalMode::Never)
-}
-
-enum GovernedToolPreflight {
-    Allowed,
-    AllowedWithTrustedInternalContext(Value),
-    NeedsApproval(ApprovalRequirement),
 }
 
 impl Default for DefaultAppToolDispatcher {
@@ -1903,6 +1766,28 @@ mod tests {
         assert_eq!(failure.reason, "search for a hidden tool instead");
         assert!(!failure.retryable);
         assert!(failure.supports_discovery_recovery);
+    }
+
+    #[test]
+    fn tool_execution_preflight_ready_clears_trusted_internal_context() {
+        let preflight = ToolExecutionPreflight::ready(ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({"command": "echo hello"}),
+        });
+
+        match preflight {
+            ToolExecutionPreflight::Ready {
+                request,
+                trusted_internal_context,
+            } => {
+                assert_eq!(request.tool_name, "shell.exec");
+                assert_eq!(request.payload, json!({"command": "echo hello"}));
+                assert!(!trusted_internal_context);
+            }
+            ToolExecutionPreflight::NeedsApproval(requirement) => {
+                panic!("unexpected approval requirement: {:?}", requirement)
+            }
+        }
     }
 
     #[test]
