@@ -17,6 +17,8 @@ pub(crate) struct RuntimeScaffoldTemplateFile {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProcessStdioNativeExtensionLanguageProfile {
+    pub source_language_arg: &'static str,
+    pub source_language: &'static str,
     pub command: &'static str,
     pub args: &'static [&'static str],
     pub process_timeout_ms: u64,
@@ -29,6 +31,7 @@ pub(crate) struct ProcessStdioNativeExtensionLanguageProfile {
 pub(crate) struct NativeExtensionAuthoringGuidanceView {
     pub plugin_id: String,
     pub package_root: String,
+    pub source_language_arg: String,
     pub source_language: String,
     pub bridge_kind: String,
     pub reference_example_path: String,
@@ -73,6 +76,55 @@ const JAVASCRIPT_EXTENSION_ARGS: &[&str] = &["index.js"];
 const GO_EXTENSION_ARGS: &[&str] = &["run", "main.go"];
 const RUST_EXTENSION_ARGS: &[&str] = &["run", "--quiet", "--manifest-path", "Cargo.toml"];
 
+const SUPPORTED_PROCESS_STDIO_AUTHORING_PROFILES: &[ProcessStdioNativeExtensionLanguageProfile] = &[
+    ProcessStdioNativeExtensionLanguageProfile {
+        source_language_arg: "py",
+        source_language: "python",
+        command: "python3",
+        args: PYTHON_EXTENSION_ARGS,
+        process_timeout_ms: 5_000,
+        smoke_allow_command: "python3",
+        example_package_root: "examples/plugins-process/native-extension-python",
+        scaffold_files: PYTHON_EXTENSION_SCAFFOLD_FILES,
+    },
+    ProcessStdioNativeExtensionLanguageProfile {
+        source_language_arg: "js",
+        source_language: "javascript",
+        command: "node",
+        args: JAVASCRIPT_EXTENSION_ARGS,
+        process_timeout_ms: 15_000,
+        smoke_allow_command: "node",
+        example_package_root: "examples/plugins-process/native-extension-javascript",
+        scaffold_files: JAVASCRIPT_EXTENSION_SCAFFOLD_FILES,
+    },
+    ProcessStdioNativeExtensionLanguageProfile {
+        source_language_arg: "go",
+        source_language: "go",
+        command: "go",
+        args: GO_EXTENSION_ARGS,
+        process_timeout_ms: 15_000,
+        smoke_allow_command: "go",
+        example_package_root: "examples/plugins-process/native-extension-go",
+        scaffold_files: GO_EXTENSION_SCAFFOLD_FILES,
+    },
+    ProcessStdioNativeExtensionLanguageProfile {
+        source_language_arg: "rs",
+        source_language: "rust",
+        command: "cargo",
+        args: RUST_EXTENSION_ARGS,
+        process_timeout_ms: 60_000,
+        smoke_allow_command: "cargo",
+        example_package_root: "examples/plugins-process/native-extension-rust",
+        scaffold_files: RUST_EXTENSION_SCAFFOLD_FILES,
+    },
+];
+
+#[cfg(test)]
+pub(crate) fn supported_process_stdio_authoring_profiles()
+-> &'static [ProcessStdioNativeExtensionLanguageProfile] {
+    SUPPORTED_PROCESS_STDIO_AUTHORING_PROFILES
+}
+
 pub(crate) fn process_stdio_native_extension_language_profile(
     scaffold_defaults: &kernel::PluginRuntimeScaffoldDefaults,
 ) -> CliResult<Option<ProcessStdioNativeExtensionLanguageProfile>> {
@@ -80,44 +132,19 @@ pub(crate) fn process_stdio_native_extension_language_profile(
         return Ok(None);
     }
 
-    match scaffold_defaults.source_language.as_deref() {
-        Some("python") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "python3",
-            args: PYTHON_EXTENSION_ARGS,
-            process_timeout_ms: 5_000,
-            smoke_allow_command: "python3",
-            example_package_root: "examples/plugins-process/native-extension-python",
-            scaffold_files: PYTHON_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some("javascript") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "node",
-            args: JAVASCRIPT_EXTENSION_ARGS,
-            process_timeout_ms: 15_000,
-            smoke_allow_command: "node",
-            example_package_root: "examples/plugins-process/native-extension-javascript",
-            scaffold_files: JAVASCRIPT_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some("go") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "go",
-            args: GO_EXTENSION_ARGS,
-            process_timeout_ms: 15_000,
-            smoke_allow_command: "go",
-            example_package_root: "examples/plugins-process/native-extension-go",
-            scaffold_files: GO_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some("rust") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "cargo",
-            args: RUST_EXTENSION_ARGS,
-            process_timeout_ms: 60_000,
-            smoke_allow_command: "cargo",
-            example_package_root: "examples/plugins-process/native-extension-rust",
-            scaffold_files: RUST_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some(source_language) => Err(format!(
-            "plugins init only scaffolds runnable process_stdio extension entrypoints for source_language `python`, `javascript`, `go`, or `rust`; got `{source_language}`"
-        )),
-        None => Ok(None),
+    let Some(source_language) = scaffold_defaults.source_language.as_deref() else {
+        return Ok(None);
+    };
+    if let Some(profile) = SUPPORTED_PROCESS_STDIO_AUTHORING_PROFILES
+        .iter()
+        .find(|profile| profile.source_language == source_language)
+        .copied()
+    {
+        return Ok(Some(profile));
     }
+    Err(format!(
+        "plugins init only scaffolds runnable process_stdio extension entrypoints for source_language `python`, `javascript`, `go`, or `rust`; got `{source_language}`"
+    ))
 }
 
 pub(crate) fn process_stdio_scaffold_args(
@@ -165,6 +192,7 @@ pub(crate) fn build_native_extension_authoring_guidance(
     Some(NativeExtensionAuthoringGuidanceView {
         plugin_id: plugin.plugin_id.clone(),
         package_root: plugin.package_root.clone(),
+        source_language_arg: profile.source_language_arg.to_owned(),
         source_language,
         bridge_kind: plugin.bridge_kind.clone(),
         reference_example_path: profile.example_package_root.to_owned(),

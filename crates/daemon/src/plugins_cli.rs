@@ -806,6 +806,7 @@ pub struct PluginsInitExecution {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NativeExtensionAuthoringProfileExecution {
     pub contract: String,
+    pub source_language_arg: String,
     pub facets: Vec<String>,
     pub methods: Vec<String>,
     pub events: Vec<String>,
@@ -1664,6 +1665,7 @@ fn build_native_extension_authoring_profile(
         .expect("supported process_stdio scaffold profile should already validate")?;
     Some(NativeExtensionAuthoringProfileExecution {
         contract: PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
+        source_language_arg: profile.source_language_arg.to_owned(),
         facets: PROCESS_STDIO_NATIVE_EXTENSION_FACETS
             .iter()
             .map(|value| (*value).to_owned())
@@ -5160,6 +5162,7 @@ mod tests {
             .expect("process stdio scaffold should expose authoring profile");
         assert_eq!(authoring_profile.runtime_files, vec!["index.py".to_owned()]);
         assert_eq!(authoring_profile.command, "python3");
+        assert_eq!(authoring_profile.source_language_arg, "py");
         assert_eq!(authoring_profile.args, vec!["index.py".to_owned()]);
         assert_eq!(
             authoring_profile.inventory_command,
@@ -6003,6 +6006,7 @@ mod tests {
         let guidance = &inventory_execution.native_extension_authoring_guidance[0];
         assert_eq!(guidance.plugin_id, spec.plugin_id);
         assert_eq!(guidance.package_root, package_root);
+        assert_eq!(guidance.source_language_arg, profile.source_language_arg);
         assert_eq!(
             guidance.source_language,
             scaffold_defaults
@@ -6039,6 +6043,92 @@ mod tests {
             rendered.contains(spec.package_root_relative),
             "inventory text should include the reference example path: {rendered}"
         );
+    }
+
+    #[test]
+    fn public_native_extension_docs_cover_supported_process_stdio_profiles() {
+        let repo_root = repo_root();
+        let quickstart = fs::read_to_string(repo_root.join("docs/sdk/quickstart-external.md"))
+            .expect("quickstart doc should exist");
+        let site_docs = fs::read_to_string(repo_root.join("site/build-on-loong/extensions.mdx"))
+            .expect("public site doc should exist");
+        let compatibility = fs::read_to_string(repo_root.join("docs/sdk/compatibility-matrix.md"))
+            .expect("compatibility matrix should exist");
+        let examples_readme = fs::read_to_string(repo_root.join("examples/README.md"))
+            .expect("examples README should exist");
+
+        for profile in
+            crate::native_extension_authoring::supported_process_stdio_authoring_profiles()
+        {
+            assert!(
+                quickstart.contains(profile.example_package_root),
+                "quickstart should mention reference example {}",
+                profile.example_package_root
+            );
+            assert!(
+                site_docs.contains(profile.example_package_root),
+                "public site doc should mention reference example {}",
+                profile.example_package_root
+            );
+            assert!(
+                compatibility.contains(profile.example_package_root),
+                "compatibility matrix should mention reference example {}",
+                profile.example_package_root
+            );
+            assert!(
+                examples_readme.contains(
+                    profile
+                        .example_package_root
+                        .strip_prefix("examples/")
+                        .unwrap_or(profile.example_package_root)
+                ),
+                "examples README should mention reference example {}",
+                profile.example_package_root
+            );
+            assert!(
+                quickstart.contains(&format!("`{}`", profile.source_language_arg)),
+                "quickstart should mention source-language arg {}",
+                profile.source_language_arg
+            );
+            assert!(
+                site_docs.contains(&format!("`{}`", profile.source_language_arg)),
+                "public site doc should mention source-language arg {}",
+                profile.source_language_arg
+            );
+            assert!(
+                quickstart.contains(&format!("`{}`", profile.smoke_allow_command)),
+                "quickstart should mention smoke allow-command {}",
+                profile.smoke_allow_command
+            );
+            assert!(
+                site_docs.contains(&format!("`{}`", profile.smoke_allow_command)),
+                "public site doc should mention smoke allow-command {}",
+                profile.smoke_allow_command
+            );
+            assert!(
+                compatibility.contains(profile.smoke_allow_command),
+                "compatibility matrix should mention smoke allow-command {}",
+                profile.smoke_allow_command
+            );
+
+            for file in profile.scaffold_files {
+                assert!(
+                    quickstart.contains(&format!("`{}`", file.relative_path)),
+                    "quickstart should mention scaffold file {}",
+                    file.relative_path
+                );
+                assert!(
+                    site_docs.contains(&format!("`{}`", file.relative_path)),
+                    "public site doc should mention scaffold file {}",
+                    file.relative_path
+                );
+                assert!(
+                    compatibility.contains(&format!("`{}`", file.relative_path)),
+                    "compatibility matrix should mention scaffold file {}",
+                    file.relative_path
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -6097,6 +6187,7 @@ mod tests {
         let guidance = &doctor_execution.native_extension_authoring_guidance[0];
         assert_eq!(guidance.plugin_id, spec.plugin_id);
         assert_eq!(guidance.package_root, package_root);
+        assert_eq!(guidance.source_language_arg, profile.source_language_arg);
         assert_eq!(
             guidance.source_language,
             scaffold_defaults
