@@ -391,6 +391,16 @@ fn build_prompt_fragments_from_prompt_sources(
 fn render_execution_discipline_section() -> String {
     let lines = [
         "## Execution Discipline".to_owned(),
+        "<yolo_by_default>".to_owned(),
+        "- Default to the best bounded action already allowed by the current runtime authority."
+            .to_owned(),
+        "- Do not ask for confirmation for ordinary allowed work."
+            .to_owned(),
+        "- Continue from tool results and retrieved evidence until no useful bounded action remains."
+            .to_owned(),
+        "- Only stop for a verified completion condition, a concrete blocker, or a real approval boundary."
+            .to_owned(),
+        "</yolo_by_default>".to_owned(),
         "<tool_persistence>".to_owned(),
         "- Use tools whenever they materially improve correctness, completeness, or grounding."
             .to_owned(),
@@ -398,35 +408,35 @@ fn render_execution_discipline_section() -> String {
             .to_owned(),
         "- If one retrieval path returns partial or empty results, retry with a different bounded strategy before asking the user."
             .to_owned(),
-        "- Prefer continuing through bounded intermediate steps over narrating every step to the user."
+        "- Prefer finishing the work over narrating each intermediate step."
             .to_owned(),
         "</tool_persistence>".to_owned(),
         "<mandatory_tool_use>".to_owned(),
-        "- Do not answer live system, file-content, git-state, or current-fact questions from memory when runtime retrieval is available."
+        "- Do not answer live system, file, git, or current-fact questions from memory when runtime retrieval is available."
             .to_owned(),
-        "- Prefer runtime evidence over recalled assumptions about the environment you are currently executing in."
+        "- Prefer runtime evidence over recalled assumptions about the current environment."
             .to_owned(),
         "</mandatory_tool_use>".to_owned(),
         "<act_dont_ask>".to_owned(),
-        "- When ambiguity does not change the next tool or runtime action, act on the obvious local interpretation."
+        "- If ambiguity does not change the next tool or side effect, act on the obvious local interpretation."
             .to_owned(),
-        "- Ask only when the missing detail changes the required tool, target, or side effect."
+        "- Ask only when the missing detail changes the tool, target, or side effect."
             .to_owned(),
-        "- Do not emit incremental progress chatter after each tool result; keep going until you can deliver a completed result, a concrete blocker, or a real approval request."
+        "- Do not emit incremental progress chatter after each tool result."
             .to_owned(),
         "</act_dont_ask>".to_owned(),
         "<prerequisite_checks>".to_owned(),
-        "- Before a mutating step or a high-confidence claim, check whether discovery, inspection, or preflight lookup is still needed."
+        "- Before a mutating step or high-confidence claim, check whether discovery, inspection, or preflight is still needed."
             .to_owned(),
-        "- Treat prerequisite discovery as part of the task rather than optional ceremony."
+        "- Treat prerequisite discovery as part of the task."
             .to_owned(),
         "</prerequisite_checks>".to_owned(),
         "<verification>".to_owned(),
-        "- Before finalizing, check correctness, grounding, output shape, and whether a real stop condition has been reached."
+        "- Before finalizing, check correctness, grounding, output shape, and stop state."
             .to_owned(),
-        "- A reply is not by itself proof that a long-running task is complete."
+        "- A reply alone is not proof that a long-running task is complete."
             .to_owned(),
-        "- Queued async work, waiting task handles, blocked task states, and pending approvals are intermediate runtime states, not final completion."
+        "- Queued async work, waiting task handles, blocked task states, and pending approvals are intermediate states, not final completion."
             .to_owned(),
         "</verification>".to_owned(),
         "<missing_context>".to_owned(),
@@ -1875,6 +1885,22 @@ mod tests {
         assert!(content.contains("<prerequisite_checks>"));
         assert!(content.contains("<verification>"));
         assert!(content.contains("<missing_context>"));
+    }
+
+    #[test]
+    fn build_system_message_emphasizes_yolo_by_default_with_runtime_boundaries() {
+        let config = LoongConfig::default();
+
+        let system = build_system_message(&config, true).expect("system message");
+        let content = system["content"].as_str().expect("system content");
+
+        assert!(content.contains("<yolo_by_default>"));
+        assert!(content.contains(
+            "Default to the best bounded action already allowed by the current runtime authority."
+        ));
+        assert!(content.contains("Do not ask for confirmation for ordinary allowed work."));
+        assert!(content.contains("Continue from tool results and retrieved evidence until no useful bounded action remains."));
+        assert!(content.contains("Only stop for a verified completion condition, a concrete blocker, or a real approval boundary."));
     }
 
     #[test]
