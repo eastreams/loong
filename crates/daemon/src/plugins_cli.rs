@@ -18,10 +18,10 @@ use crate::native_extension_authoring::{
     NativeExtensionAuthoringGuidanceView, PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT,
     PROCESS_STDIO_NATIVE_EXTENSION_EVENTS, PROCESS_STDIO_NATIVE_EXTENSION_FACETS,
     PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
-    build_native_extension_authoring_guidance, process_stdio_native_extension_language_profile,
-    process_stdio_scaffold_args, render_authoring_actions_command, render_authoring_doctor_command,
-    render_authoring_inventory_command, render_authoring_smoke_test_command,
-    render_rust_extension_cargo_toml,
+    build_native_extension_authoring_guidance, build_native_extension_authoring_view_from_profile,
+    process_stdio_native_extension_language_profile, process_stdio_scaffold_args,
+    render_authoring_actions_command, render_authoring_doctor_command,
+    render_authoring_inventory_command, render_rust_extension_cargo_toml,
 };
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
@@ -807,6 +807,7 @@ pub struct PluginsInitExecution {
 pub struct NativeExtensionAuthoringProfileExecution {
     pub contract: String,
     pub source_language_arg: String,
+    pub reference_example_path: String,
     pub facets: Vec<String>,
     pub methods: Vec<String>,
     pub events: Vec<String>,
@@ -1648,14 +1649,6 @@ fn build_plugin_runtime_scaffold_files(
         .collect())
 }
 
-fn render_plugins_invoke_extension_command(
-    package_root: &str,
-    plugin_id: &str,
-    allow_command: &str,
-) -> String {
-    render_authoring_smoke_test_command(package_root, plugin_id, allow_command)
-}
-
 fn build_native_extension_authoring_profile(
     package_root: &str,
     plugin_id: &str,
@@ -1663,25 +1656,28 @@ fn build_native_extension_authoring_profile(
 ) -> Option<NativeExtensionAuthoringProfileExecution> {
     let profile = process_stdio_native_extension_language_profile(scaffold_defaults)
         .expect("supported process_stdio scaffold profile should already validate")?;
+    let source_language = scaffold_defaults.source_language.as_deref()?;
+    let authoring_view = build_native_extension_authoring_view_from_profile(
+        package_root,
+        plugin_id,
+        scaffold_defaults.bridge_kind.as_str(),
+        source_language,
+        profile,
+    );
     Some(NativeExtensionAuthoringProfileExecution {
-        contract: PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
-        source_language_arg: profile.source_language_arg.to_owned(),
+        contract: authoring_view
+            .extension_contract
+            .clone()
+            .unwrap_or_else(|| PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned()),
+        source_language_arg: authoring_view.source_language_arg.clone(),
+        reference_example_path: authoring_view.reference_example_path.clone(),
         facets: PROCESS_STDIO_NATIVE_EXTENSION_FACETS
             .iter()
             .map(|value| (*value).to_owned())
             .collect(),
-        methods: PROCESS_STDIO_NATIVE_EXTENSION_METHODS
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect(),
-        events: PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect(),
-        host_actions: PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect(),
+        methods: authoring_view.extension_methods.clone(),
+        events: authoring_view.extension_events.clone(),
+        host_actions: authoring_view.extension_host_actions.clone(),
         runtime_files: profile
             .scaffold_files
             .iter()
@@ -1690,13 +1686,9 @@ fn build_native_extension_authoring_profile(
         command: profile.command.to_owned(),
         args: process_stdio_scaffold_args(profile),
         process_timeout_ms: profile.process_timeout_ms,
-        inventory_command: render_authoring_inventory_command(package_root),
-        smoke_allow_command: profile.smoke_allow_command.to_owned(),
-        smoke_test_command: render_plugins_invoke_extension_command(
-            package_root,
-            plugin_id,
-            profile.smoke_allow_command,
-        ),
+        inventory_command: authoring_view.inventory_command.clone(),
+        smoke_allow_command: authoring_view.smoke_allow_command.clone(),
+        smoke_test_command: authoring_view.smoke_test_command,
         example_package_root: profile.example_package_root.to_owned(),
     })
 }
@@ -2015,10 +2007,10 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
     }
     if let Some(profile) = execution.native_extension_authoring_profile.as_ref() {
         lines.push(format!(
-            "- runtime_contract={} methods={} example_package={} inventory_command={} allow_command={}",
+            "- runtime_contract={} methods={} reference_example={} inventory_command={} allow_command={}",
             profile.contract,
             profile.methods.join(","),
-            profile.example_package_root,
+            profile.reference_example_path,
             profile.inventory_command,
             profile.smoke_allow_command
         ));
@@ -5177,6 +5169,10 @@ mod tests {
             "examples/plugins-process/native-extension-python".to_owned()
         );
         assert_eq!(
+            authoring_profile.reference_example_path,
+            "examples/plugins-process/native-extension-python".to_owned()
+        );
+        assert_eq!(
             authoring_profile.methods,
             vec![
                 "extension/event".to_owned(),
@@ -6022,7 +6018,7 @@ mod tests {
         assert_eq!(guidance.smoke_allow_command, profile.smoke_allow_command);
         assert_eq!(
             guidance.smoke_test_command,
-            render_authoring_smoke_test_command(
+            crate::native_extension_authoring::render_authoring_smoke_test_command(
                 package_root.as_str(),
                 spec.plugin_id,
                 profile.smoke_allow_command
@@ -6203,7 +6199,7 @@ mod tests {
         assert_eq!(guidance.smoke_allow_command, profile.smoke_allow_command);
         assert_eq!(
             guidance.smoke_test_command,
-            render_authoring_smoke_test_command(
+            crate::native_extension_authoring::render_authoring_smoke_test_command(
                 package_root.as_str(),
                 spec.plugin_id,
                 profile.smoke_allow_command

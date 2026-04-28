@@ -189,26 +189,82 @@ pub(crate) fn build_native_extension_authoring_guidance(
     let profile = process_stdio_native_extension_language_profile(&scaffold_defaults).ok()??;
     let source_language = scaffold_defaults.source_language?;
 
-    Some(NativeExtensionAuthoringGuidanceView {
-        plugin_id: plugin.plugin_id.clone(),
-        package_root: plugin.package_root.clone(),
-        source_language_arg: profile.source_language_arg.to_owned(),
+    Some(build_native_extension_authoring_view(
+        plugin.package_root.as_str(),
+        plugin.plugin_id.as_str(),
+        profile,
+        source_language.as_str(),
+        plugin.bridge_kind.as_str(),
+        plugin.extension_contract.clone(),
+        plugin.extension_methods.clone(),
+        plugin.extension_events.clone(),
+        plugin.extension_host_actions.clone(),
+        plugin.extension_metadata_issues.clone(),
+    ))
+}
+
+pub(crate) fn build_native_extension_authoring_view_from_profile(
+    package_root: &str,
+    plugin_id: &str,
+    bridge_kind: &str,
+    source_language: &str,
+    profile: ProcessStdioNativeExtensionLanguageProfile,
+) -> NativeExtensionAuthoringGuidanceView {
+    build_native_extension_authoring_view(
+        package_root,
+        plugin_id,
+        profile,
         source_language,
-        bridge_kind: plugin.bridge_kind.clone(),
+        bridge_kind,
+        Some(PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned()),
+        PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        Vec::new(),
+    )
+}
+
+fn build_native_extension_authoring_view(
+    package_root: &str,
+    plugin_id: &str,
+    profile: ProcessStdioNativeExtensionLanguageProfile,
+    source_language: &str,
+    bridge_kind: &str,
+    extension_contract: Option<String>,
+    extension_methods: Vec<String>,
+    extension_events: Vec<String>,
+    extension_host_actions: Vec<String>,
+    extension_metadata_issues: Vec<String>,
+) -> NativeExtensionAuthoringGuidanceView {
+    NativeExtensionAuthoringGuidanceView {
+        plugin_id: plugin_id.to_owned(),
+        package_root: package_root.to_owned(),
+        source_language_arg: profile.source_language_arg.to_owned(),
+        source_language: source_language.to_owned(),
+        bridge_kind: bridge_kind.to_owned(),
         reference_example_path: profile.example_package_root.to_owned(),
-        inventory_command: render_authoring_inventory_command(plugin.package_root.as_str()),
+        inventory_command: render_authoring_inventory_command(package_root),
         smoke_allow_command: profile.smoke_allow_command.to_owned(),
         smoke_test_command: render_authoring_smoke_test_command(
-            plugin.package_root.as_str(),
-            plugin.plugin_id.as_str(),
+            package_root,
+            plugin_id,
             profile.smoke_allow_command,
         ),
-        extension_contract: plugin.extension_contract.clone(),
-        extension_methods: plugin.extension_methods.clone(),
-        extension_events: plugin.extension_events.clone(),
-        extension_host_actions: plugin.extension_host_actions.clone(),
-        extension_metadata_issues: plugin.extension_metadata_issues.clone(),
-    })
+        extension_contract,
+        extension_methods,
+        extension_events,
+        extension_host_actions,
+        extension_metadata_issues,
+    }
 }
 
 pub(crate) fn render_rust_extension_cargo_toml(plugin_id: &str) -> String {
