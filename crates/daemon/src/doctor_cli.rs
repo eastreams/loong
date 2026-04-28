@@ -2364,6 +2364,36 @@ fn doctor_next_step_actions(next_steps: &[DoctorNextStep]) -> Vec<DoctorNextStep
         .collect()
 }
 
+fn doctor_primary_action_items(
+    next_steps: &[DoctorNextStep],
+    limit: usize,
+) -> Vec<mvp::tui_surface::TuiActionSpec> {
+    next_steps
+        .iter()
+        .filter_map(DoctorNextStep::as_action_spec)
+        .take(limit)
+        .collect()
+}
+
+fn doctor_followup_narrative_lines(
+    next_steps: &[DoctorNextStep],
+    primary_action_limit: usize,
+) -> Vec<String> {
+    let mut remaining_primary_actions = primary_action_limit;
+    let mut lines = Vec::new();
+
+    for step in next_steps {
+        if step.as_action().is_some() && remaining_primary_actions > 0 {
+            remaining_primary_actions -= 1;
+            continue;
+        }
+
+        lines.push(format!("- {}", step.render()));
+    }
+
+    lines
+}
+
 fn render_doctor_text(
     checks: &[DoctorCheck],
     summary: DoctorSummary,
@@ -2401,11 +2431,7 @@ fn render_doctor_text(
             .collect(),
     });
 
-    let action_items = next_steps
-        .iter()
-        .filter_map(DoctorNextStep::as_action_spec)
-        .take(3)
-        .collect::<Vec<_>>();
+    let action_items = doctor_primary_action_items(next_steps, 3);
     if !action_items.is_empty() {
         sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
             title: Some("start here".to_owned()),
@@ -2424,13 +2450,11 @@ fn render_doctor_text(
             lines: fix_lines,
         });
     }
-    if !next_steps.is_empty() {
+    let followup_lines = doctor_followup_narrative_lines(next_steps, 3);
+    if !followup_lines.is_empty() {
         sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
             title: Some("next actions".to_owned()),
-            lines: next_steps
-                .iter()
-                .map(|step| format!("- {}", step.render()))
-                .collect(),
+            lines: followup_lines,
         });
     }
 
@@ -7021,6 +7045,36 @@ mod tests {
                 |step| step == "Verify browser preview runtime: agent-browser open example.com"
             ),
             "green doctor runs should not ask for runtime verification before preview has been enabled: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn doctor_followup_narrative_lines_skip_primary_action_duplicates() {
+        let next_steps = vec![
+            DoctorNextStep::action("Get a first answer", "loong ask --config '/tmp/loong.toml'"),
+            DoctorNextStep::action("Continue in chat", "loong chat --config '/tmp/loong.toml'"),
+            DoctorNextStep::action(
+                "Teach Loong your working style",
+                "loong personalize --config '/tmp/loong.toml'",
+            ),
+            DoctorNextStep::guidance(
+                "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loong.toml' --skip-model-probe",
+            ),
+            DoctorNextStep::action(
+                "Open a channel",
+                "loong channels --config '/tmp/loong.toml'",
+            ),
+        ];
+
+        let lines = doctor_followup_narrative_lines(&next_steps, 3);
+
+        assert_eq!(
+            lines,
+            vec![
+                "- If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loong.toml' --skip-model-probe"
+                    .to_owned(),
+                "- Open a channel: loong channels --config '/tmp/loong.toml'".to_owned(),
+            ]
         );
     }
 
