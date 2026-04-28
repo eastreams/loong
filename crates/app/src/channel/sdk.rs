@@ -201,6 +201,7 @@ const WHATSAPP_PERSONAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
         is_enabled: whatsapp_personal_channel_is_enabled,
         collect_validation_issues: collect_whatsapp_personal_channel_validation_issues,
         background_surface_is_enabled: None,
+        gateway_ingress_is_enabled: None,
     };
 
 const DISCORD_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
