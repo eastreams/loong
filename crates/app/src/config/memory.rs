@@ -193,6 +193,14 @@ impl ResponseDensity {
             Self::Thorough => "thorough",
         }
     }
+
+    pub const fn display_text(self) -> &'static str {
+        match self {
+            Self::Concise => "concise",
+            Self::Balanced => "balanced",
+            Self::Thorough => "thorough",
+        }
+    }
 }
 
 impl InitiativeLevel {
@@ -201,6 +209,14 @@ impl InitiativeLevel {
             Self::AskBeforeActing => "ask_before_acting",
             Self::Balanced => "balanced",
             Self::HighInitiative => "high_initiative",
+        }
+    }
+
+    pub const fn display_text(self) -> &'static str {
+        match self {
+            Self::AskBeforeActing => "ask before acting",
+            Self::Balanced => "balanced",
+            Self::HighInitiative => "high initiative",
         }
     }
 }

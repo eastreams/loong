@@ -788,7 +788,7 @@ mod tests {
                 },
                 OnboardingAction {
                     kind: OnboardingActionKind::Personalize,
-                    label: "working preferences".to_owned(),
+                    label: "teach Loong your working style".to_owned(),
                     command: "loong personalize --config '/tmp/loong.toml'".to_owned(),
                 },
                 OnboardingAction {
@@ -828,7 +828,7 @@ mod tests {
                     if title == "also available"
                         && items.iter().all(|item| item.label != "channels" && item.label != "browser preview")
                         && items.iter().any(|item| item.label == "chat")
-                        && items.iter().any(|item| item.label == "working preferences")
+                        && items.iter().any(|item| item.label == "teach Loong your working style")
             )),
             "expected general follow-up actions to stay separate from setup surfaces: {spec:#?}"
         );

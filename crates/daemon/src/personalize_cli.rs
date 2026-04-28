@@ -377,18 +377,18 @@ fn render_review_lines(draft: &PersonalizationDraft) -> Vec<String> {
     let preferred_name = draft.preferred_name.as_deref().unwrap_or("not set");
     let response_density = draft
         .response_density
-        .map(|value| value.as_str())
+        .map(|value| value.display_text())
         .unwrap_or("not set");
     let initiative_level = draft
         .initiative_level
-        .map(|value| value.as_str())
+        .map(|value| value.display_text())
         .unwrap_or("not set");
     let standing_boundaries = draft.standing_boundaries.as_deref().unwrap_or("not set");
     let timezone = draft.timezone.as_deref().unwrap_or("not set");
     let locale = draft.locale.as_deref().unwrap_or("not set");
 
     vec![
-        "Review operator preferences:".to_owned(),
+        "Review how Loong will work with you:".to_owned(),
         format!("- preferred name: {preferred_name}"),
         format!("- response density: {response_density}"),
         format!("- initiative level: {initiative_level}"),
@@ -1126,5 +1126,26 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn render_review_lines_uses_human_readable_initiative_copy() {
+        let draft = PersonalizationDraft {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(mvp::config::ResponseDensity::Balanced),
+            initiative_level: Some(mvp::config::InitiativeLevel::AskBeforeActing),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: Some("zh-CN".to_owned()),
+        };
+
+        let lines = render_review_lines(&draft);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "- initiative level: ask before acting"),
+            "review copy should stay human-readable instead of leaking schema ids: {lines:#?}"
+        );
     }
 }
