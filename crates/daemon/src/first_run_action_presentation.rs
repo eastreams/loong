@@ -142,6 +142,14 @@ pub(crate) fn build_first_run_action_text_lines<T>(
     lines
 }
 
+pub(crate) fn render_first_run_action_text_item(
+    label: &str,
+    command: &str,
+    width: usize,
+) -> Vec<String> {
+    crate::mvp::presentation::render_wrapped_text_line("- ", &format!("{label}: {command}"), width)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
