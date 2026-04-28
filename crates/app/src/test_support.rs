@@ -22,6 +22,12 @@ fn env_lock() -> &'static Mutex<()> {
     ENV_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+pub fn lock_process_env_for_tests() -> MutexGuard<'static, ()> {
+    env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 fn subprocess_lock() -> &'static Mutex<()> {
     static SUBPROCESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -37,9 +43,7 @@ impl ScopedEnv {
     pub fn new() -> Self {
         let depth_before = scoped_env_depth();
         let guard = if depth_before == 0 {
-            let guard = env_lock()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = lock_process_env_for_tests();
             Some(guard)
         } else {
             None

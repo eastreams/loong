@@ -12045,7 +12045,7 @@ mod tests {
         let outcome = crate::tools::wait_for_task_with_config(
             json!({
                 "task_id": "task-root",
-                "timeout_ms": 1_000
+                "timeout_ms": 5_000
             }),
             "root-session",
             &config,

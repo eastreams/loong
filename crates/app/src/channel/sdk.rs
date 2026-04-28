@@ -125,7 +125,7 @@ const FEISHU_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     is_enabled: feishu_channel_is_enabled,
     collect_validation_issues: collect_feishu_channel_validation_issues,
     background_surface_is_enabled: Some(feishu_background_surface_is_enabled),
-    gateway_ingress_is_enabled: Some(feishu_gateway_ingress_is_enabled),
+    gateway_ingress_is_enabled: FEISHU_GATEWAY_INGRESS_IS_ENABLED,
 };
 
 #[cfg(feature = "channel-matrix")]
@@ -212,13 +212,27 @@ const SLACK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
     gateway_ingress_is_enabled: None,
 };
 
+#[cfg(feature = "channel-feishu")]
+const FEISHU_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> =
+    Some(feishu_gateway_ingress_is_enabled);
+
+#[cfg(not(feature = "channel-feishu"))]
+const FEISHU_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> = None;
+
+#[cfg(feature = "channel-line")]
+const LINE_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> =
+    Some(line_gateway_ingress_is_enabled);
+
+#[cfg(not(feature = "channel-line"))]
+const LINE_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> = None;
+
 const LINE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     channel_id: "line",
     background_runtime: None,
     is_enabled: line_channel_is_enabled,
     collect_validation_issues: collect_line_channel_validation_issues,
     background_surface_is_enabled: None,
-    gateway_ingress_is_enabled: Some(line_gateway_ingress_is_enabled),
+    gateway_ingress_is_enabled: LINE_GATEWAY_INGRESS_IS_ENABLED,
 };
 
 const DINGTALK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
@@ -244,13 +258,20 @@ const WHATSAPP_BACKGROUND_SURFACE_IS_ENABLED: Option<BackgroundSurfaceEnabledFn>
 #[cfg(not(feature = "channel-whatsapp"))]
 const WHATSAPP_BACKGROUND_SURFACE_IS_ENABLED: Option<BackgroundSurfaceEnabledFn> = None;
 
+#[cfg(feature = "channel-whatsapp")]
+const WHATSAPP_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> =
+    Some(whatsapp_gateway_ingress_is_enabled);
+
+#[cfg(not(feature = "channel-whatsapp"))]
+const WHATSAPP_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> = None;
+
 const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     channel_id: "whatsapp",
     background_runtime: WHATSAPP_BACKGROUND_RUNTIME,
     is_enabled: whatsapp_channel_is_enabled,
     collect_validation_issues: collect_whatsapp_channel_validation_issues,
     background_surface_is_enabled: WHATSAPP_BACKGROUND_SURFACE_IS_ENABLED,
-    gateway_ingress_is_enabled: Some(whatsapp_gateway_ingress_is_enabled),
+    gateway_ingress_is_enabled: WHATSAPP_GATEWAY_INGRESS_IS_ENABLED,
 };
 
 const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
@@ -262,13 +283,20 @@ const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
     gateway_ingress_is_enabled: None,
 };
 
+#[cfg(feature = "channel-webhook")]
+const WEBHOOK_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> =
+    Some(webhook_gateway_ingress_is_enabled);
+
+#[cfg(not(feature = "channel-webhook"))]
+const WEBHOOK_GATEWAY_INGRESS_IS_ENABLED: Option<GatewayIngressEnabledFn> = None;
+
 const WEBHOOK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     channel_id: "webhook",
     background_runtime: None,
     is_enabled: webhook_channel_is_enabled,
     collect_validation_issues: collect_webhook_channel_validation_issues,
     background_surface_is_enabled: None,
-    gateway_ingress_is_enabled: Some(webhook_gateway_ingress_is_enabled),
+    gateway_ingress_is_enabled: WEBHOOK_GATEWAY_INGRESS_IS_ENABLED,
 };
 
 const GOOGLE_CHAT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor =
@@ -1124,15 +1152,36 @@ mod tests {
     }
 
     fn expected_gateway_supervised_channel_ids() -> Vec<&'static str> {
-        vec!["telegram", "feishu", "matrix", "wecom", "qqbot", "whatsapp"]
+        let channel_id_slots = [
+            Some("telegram"),
+            Some("feishu"),
+            Some("matrix"),
+            Some("wecom"),
+            Some("qqbot"),
+            cfg!(feature = "channel-whatsapp").then_some("whatsapp"),
+        ];
+
+        channel_id_slots.into_iter().flatten().collect::<Vec<_>>()
     }
 
     fn expected_gateway_ingress_channel_ids() -> Vec<&'static str> {
-        vec!["feishu", "line", "whatsapp", "webhook"]
+        let channel_id_slots = [
+            cfg!(feature = "channel-feishu").then_some("feishu"),
+            cfg!(feature = "channel-line").then_some("line"),
+            cfg!(feature = "channel-whatsapp").then_some("whatsapp"),
+            cfg!(feature = "channel-webhook").then_some("webhook"),
+        ];
+
+        channel_id_slots.into_iter().flatten().collect::<Vec<_>>()
     }
 
     fn expected_standalone_runtime_channel_ids() -> Vec<&'static str> {
-        vec!["line", "webhook"]
+        let channel_id_slots = [
+            cfg!(feature = "channel-line").then_some("line"),
+            cfg!(feature = "channel-webhook").then_some("webhook"),
+        ];
+
+        channel_id_slots.into_iter().flatten().collect::<Vec<_>>()
     }
 
     #[test]
