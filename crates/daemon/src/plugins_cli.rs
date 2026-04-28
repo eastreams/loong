@@ -778,9 +778,31 @@ pub struct PluginsInitExecution {
     pub source_language: Option<String>,
     pub adapter_family: String,
     pub entrypoint: String,
+    pub doctor_command: String,
+    pub operator_actions_command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smoke_test_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_extension_authoring_profile: Option<NativeExtensionAuthoringProfileExecution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_files_written: Vec<String>,
     pub files_written: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct NativeExtensionAuthoringProfileExecution {
+    pub contract: String,
+    pub facets: Vec<String>,
+    pub methods: Vec<String>,
+    pub events: Vec<String>,
+    pub host_actions: Vec<String>,
+    pub runtime_files: Vec<String>,
+    pub command: String,
+    pub args: Vec<String>,
+    pub process_timeout_ms: u64,
+    pub smoke_allow_command: String,
+    pub smoke_test_command: String,
+    pub example_package_root: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1211,6 +1233,59 @@ pub(crate) async fn runtime_plugin_inventory_json_payload(
 }
 
 const PLUGINS_INIT_README_FILE_NAME: &str = "README.md";
+const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
+const PROCESS_STDIO_NATIVE_EXTENSION_FACETS: &[&str] = &["events", "commands", "resources"];
+const PROCESS_STDIO_NATIVE_EXTENSION_METHODS: &[&str] =
+    &["extension/event", "extension/command", "extension/resource"];
+const PROCESS_STDIO_NATIVE_EXTENSION_EVENTS: &[&str] = &["session_start"];
+const PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS: &[&str] = &[];
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeScaffoldTemplateFile {
+    relative_path: &'static str,
+    contents: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProcessStdioNativeExtensionLanguageProfile {
+    command: &'static str,
+    args: &'static [&'static str],
+    process_timeout_ms: u64,
+    smoke_allow_command: &'static str,
+    example_package_root: &'static str,
+    scaffold_files: &'static [RuntimeScaffoldTemplateFile],
+}
+
+const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
+    &[RuntimeScaffoldTemplateFile {
+        relative_path: "index.py",
+        contents: PYTHON_EXTENSION_STUB,
+    }];
+const JAVASCRIPT_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
+    &[RuntimeScaffoldTemplateFile {
+        relative_path: "index.js",
+        contents: JAVASCRIPT_EXTENSION_STUB,
+    }];
+const GO_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
+    &[RuntimeScaffoldTemplateFile {
+        relative_path: "main.go",
+        contents: GO_EXTENSION_STUB,
+    }];
+const RUST_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] = &[
+    RuntimeScaffoldTemplateFile {
+        relative_path: "Cargo.toml",
+        contents: RUST_EXTENSION_CARGO_TOML,
+    },
+    RuntimeScaffoldTemplateFile {
+        relative_path: "src/main.rs",
+        contents: RUST_EXTENSION_MAIN_RS,
+    },
+];
+
+const PYTHON_EXTENSION_ARGS: &[&str] = &["index.py"];
+const JAVASCRIPT_EXTENSION_ARGS: &[&str] = &["index.js"];
+const GO_EXTENSION_ARGS: &[&str] = &["run", "main.go"];
+const RUST_EXTENSION_ARGS: &[&str] = &["run", "--quiet", "--manifest-path", "Cargo.toml"];
 
 #[derive(Debug, Serialize)]
 struct PluginPackageScaffoldManifestDocument {
@@ -1249,6 +1324,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         plugin_runtime_scaffold_defaults(bridge_kind, command.source_language.as_deref())
             .map_err(|error| format!("plugins init failed: {error}; use --source-language when required by the selected bridge"))?;
 
+    let runtime_scaffold_files = build_plugin_runtime_scaffold_files(&scaffold_defaults)?;
     let manifest = build_plugin_scaffold_manifest(
         &plugin_id,
         &provider_id,
@@ -1257,7 +1333,16 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         summary,
         &scaffold_defaults,
     );
-    let runtime_scaffold_files = build_plugin_runtime_scaffold_files(&scaffold_defaults)?;
+    let doctor_command = render_plugins_doctor_command(package_root.as_str());
+    let operator_actions_command = render_plugins_actions_command(package_root.as_str());
+    let native_extension_authoring_profile = build_native_extension_authoring_profile(
+        package_root.as_str(),
+        plugin_id.as_str(),
+        &scaffold_defaults,
+    );
+    let smoke_test_command = native_extension_authoring_profile
+        .as_ref()
+        .map(|profile| profile.smoke_test_command.clone());
 
     let package_root_path = Path::new(package_root.as_str());
     ensure_empty_plugin_scaffold_root(package_root_path)?;
@@ -1269,11 +1354,12 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let rendered_manifest = serde_json::to_string_pretty(&manifest_document)
         .map_err(|error| format!("serialize scaffold manifest failed: {error}"))?;
     let rendered_readme = render_plugin_scaffold_readme(
-        package_root.as_str(),
         plugin_id.as_str(),
         bridge_kind.as_str(),
-        scaffold_defaults.source_language.as_deref(),
-        !runtime_scaffold_files.is_empty(),
+        &runtime_scaffold_files,
+        doctor_command.as_str(),
+        operator_actions_command.as_str(),
+        smoke_test_command.as_deref(),
     );
 
     write_plugin_scaffold_files(
@@ -1313,6 +1399,10 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         source_language: scaffold_defaults.source_language,
         adapter_family: scaffold_defaults.adapter_family,
         entrypoint: scaffold_defaults.entrypoint_hint,
+        doctor_command,
+        operator_actions_command,
+        smoke_test_command,
+        native_extension_authoring_profile,
         runtime_files_written,
         files_written,
     })
@@ -1465,10 +1555,12 @@ fn build_plugin_scaffold_manifest(
     if let Some(source_language) = scaffold_defaults.source_language.as_ref() {
         metadata.insert("source_language".to_owned(), source_language.clone());
     }
-    if scaffold_defaults.bridge_kind == PluginBridgeKind::ProcessStdio {
-        let process_args = process_stdio_scaffold_args(scaffold_defaults);
-        let process_command = process_stdio_scaffold_command(scaffold_defaults);
-        let timeout_ms = process_stdio_scaffold_timeout_ms(scaffold_defaults);
+    if let Some(profile) = process_stdio_native_extension_language_profile(scaffold_defaults)
+        .expect("supported process_stdio scaffold profile should already validate")
+    {
+        let process_args = process_stdio_scaffold_args(profile);
+        let process_command = profile.command;
+        let timeout_ms = profile.process_timeout_ms;
         metadata.insert("command".to_owned(), process_command.to_owned());
         metadata.insert(
             "args_json".to_owned(),
@@ -1477,23 +1569,27 @@ fn build_plugin_scaffold_manifest(
         metadata.insert("process_timeout_ms".to_owned(), timeout_ms.to_string());
         metadata.insert(
             "loong_extension_contract".to_owned(),
-            "process_stdio_json_line_v1".to_owned(),
+            PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
         );
         metadata.insert(
             "loong_extension_facets_json".to_owned(),
-            "[\"events\",\"commands\",\"resources\"]".to_owned(),
+            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_FACETS)
+                .unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_methods_json".to_owned(),
-            "[\"extension/event\",\"extension/command\",\"extension/resource\"]".to_owned(),
+            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_METHODS)
+                .unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_events_json".to_owned(),
-            "[\"session_start\"]".to_owned(),
+            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_EVENTS)
+                .unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_host_actions_json".to_owned(),
-            "[]".to_owned(),
+            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS)
+                .unwrap_or_else(|_| "[]".to_owned()),
         );
     }
 
@@ -1557,80 +1653,134 @@ fn plugin_scaffold_manifest_document(
 fn build_plugin_runtime_scaffold_files(
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
 ) -> CliResult<Vec<PluginRuntimeScaffoldFile>> {
-    if scaffold_defaults.bridge_kind != PluginBridgeKind::ProcessStdio {
-        return Ok(Vec::new());
-    }
-
-    let Some(source_language) = scaffold_defaults.source_language.as_deref() else {
+    let Some(profile) = process_stdio_native_extension_language_profile(scaffold_defaults)? else {
         return Ok(Vec::new());
     };
 
-    match source_language {
-        "python" => Ok(vec![PluginRuntimeScaffoldFile {
-            relative_path: "index.py".to_owned(),
-            contents: PYTHON_EXTENSION_STUB.to_owned(),
-        }]),
-        "javascript" => Ok(vec![PluginRuntimeScaffoldFile {
-            relative_path: "index.js".to_owned(),
-            contents: JAVASCRIPT_EXTENSION_STUB.to_owned(),
-        }]),
-        "go" => Ok(vec![PluginRuntimeScaffoldFile {
-            relative_path: "main.go".to_owned(),
-            contents: GO_EXTENSION_STUB.to_owned(),
-        }]),
-        "rust" => Ok(vec![
-            PluginRuntimeScaffoldFile {
-                relative_path: "Cargo.toml".to_owned(),
-                contents: RUST_EXTENSION_CARGO_TOML.to_owned(),
-            },
-            PluginRuntimeScaffoldFile {
-                relative_path: "src/main.rs".to_owned(),
-                contents: RUST_EXTENSION_MAIN_RS.to_owned(),
-            },
-        ]),
-        _ => Err(format!(
+    Ok(profile
+        .scaffold_files
+        .iter()
+        .map(|file| PluginRuntimeScaffoldFile {
+            relative_path: file.relative_path.to_owned(),
+            contents: file.contents.to_owned(),
+        })
+        .collect())
+}
+
+fn process_stdio_native_extension_language_profile(
+    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+) -> CliResult<Option<ProcessStdioNativeExtensionLanguageProfile>> {
+    if scaffold_defaults.bridge_kind != PluginBridgeKind::ProcessStdio {
+        return Ok(None);
+    }
+
+    match scaffold_defaults.source_language.as_deref() {
+        Some("python") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
+            command: "python3",
+            args: PYTHON_EXTENSION_ARGS,
+            process_timeout_ms: 5_000,
+            smoke_allow_command: "python3",
+            example_package_root: "examples/plugins-process/native-extension-python",
+            scaffold_files: PYTHON_EXTENSION_SCAFFOLD_FILES,
+        })),
+        Some("javascript") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
+            command: "node",
+            args: JAVASCRIPT_EXTENSION_ARGS,
+            process_timeout_ms: 15_000,
+            smoke_allow_command: "node",
+            example_package_root: "examples/plugins-process/native-extension-javascript",
+            scaffold_files: JAVASCRIPT_EXTENSION_SCAFFOLD_FILES,
+        })),
+        Some("go") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
+            command: "go",
+            args: GO_EXTENSION_ARGS,
+            process_timeout_ms: 15_000,
+            smoke_allow_command: "go",
+            example_package_root: "examples/plugins-process/native-extension-go",
+            scaffold_files: GO_EXTENSION_SCAFFOLD_FILES,
+        })),
+        Some("rust") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
+            command: "cargo",
+            args: RUST_EXTENSION_ARGS,
+            process_timeout_ms: 60_000,
+            smoke_allow_command: "cargo",
+            example_package_root: "examples/plugins-process/native-extension-rust",
+            scaffold_files: RUST_EXTENSION_SCAFFOLD_FILES,
+        })),
+        Some(source_language) => Err(format!(
             "plugins init only scaffolds runnable process_stdio extension entrypoints for source_language `python`, `javascript`, `go`, or `rust`; got `{source_language}`"
         )),
+        None => Ok(None),
     }
 }
 
-fn process_stdio_scaffold_args(
-    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
-) -> Vec<String> {
-    match scaffold_defaults.source_language.as_deref() {
-        Some("python") => vec!["index.py".to_owned()],
-        Some("javascript") => vec!["index.js".to_owned()],
-        Some("go") => vec!["run".to_owned(), "main.go".to_owned()],
-        Some("rust") => vec![
-            "run".to_owned(),
-            "--quiet".to_owned(),
-            "--manifest-path".to_owned(),
-            "Cargo.toml".to_owned(),
-        ],
-        _ => Vec::new(),
-    }
+fn process_stdio_scaffold_args(profile: ProcessStdioNativeExtensionLanguageProfile) -> Vec<String> {
+    profile
+        .args
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect()
 }
 
-fn process_stdio_scaffold_command(
-    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
-) -> &'static str {
-    match scaffold_defaults.source_language.as_deref() {
-        Some("python") => "python3",
-        Some("javascript") => "node",
-        Some("go") => "go",
-        Some("rust") => "cargo",
-        _ => "",
-    }
+fn render_plugins_doctor_command(package_root: &str) -> String {
+    format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release")
 }
 
-fn process_stdio_scaffold_timeout_ms(
+fn render_plugins_actions_command(package_root: &str) -> String {
+    format!("loong plugins actions --root \"{package_root}\" --profile sdk-release")
+}
+
+fn render_plugins_invoke_extension_command(
+    package_root: &str,
+    plugin_id: &str,
+    allow_command: &str,
+) -> String {
+    format!(
+        "loong plugins invoke-extension --root \"{package_root}\" --plugin-id \"{plugin_id}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command {allow_command}"
+    )
+}
+
+fn build_native_extension_authoring_profile(
+    package_root: &str,
+    plugin_id: &str,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
-) -> u64 {
-    match scaffold_defaults.source_language.as_deref() {
-        Some("rust") => 60_000,
-        Some("go") => 15_000,
-        _ => 5_000,
-    }
+) -> Option<NativeExtensionAuthoringProfileExecution> {
+    let profile = process_stdio_native_extension_language_profile(scaffold_defaults)
+        .expect("supported process_stdio scaffold profile should already validate")?;
+    Some(NativeExtensionAuthoringProfileExecution {
+        contract: PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
+        facets: PROCESS_STDIO_NATIVE_EXTENSION_FACETS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        methods: PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        events: PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        host_actions: PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        runtime_files: profile
+            .scaffold_files
+            .iter()
+            .map(|file| file.relative_path.to_owned())
+            .collect(),
+        command: profile.command.to_owned(),
+        args: process_stdio_scaffold_args(profile),
+        process_timeout_ms: profile.process_timeout_ms,
+        smoke_allow_command: profile.smoke_allow_command.to_owned(),
+        smoke_test_command: render_plugins_invoke_extension_command(
+            package_root,
+            plugin_id,
+            profile.smoke_allow_command,
+        ),
+        example_package_root: profile.example_package_root.to_owned(),
+    })
 }
 
 const PYTHON_EXTENSION_STUB: &str = r#"#!/usr/bin/env python3
@@ -1677,8 +1827,6 @@ for line in sys.stdin:
 "#;
 
 const JAVASCRIPT_EXTENSION_STUB: &str = r#"#!/usr/bin/env node
-const readline = require('node:readline');
-
 function buildExtensionPayload(operation, payload) {
   if (operation === 'extension/event') {
     return {
@@ -1703,12 +1851,7 @@ function buildExtensionPayload(operation, payload) {
   };
 }
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  crlfDelay: Infinity,
-});
-
-rl.on('line', (line) => {
+function emitResponse(line) {
   const trimmed = line.trim();
   if (!trimmed) {
     return;
@@ -1724,8 +1867,30 @@ rl.on('line', (line) => {
     id: request.id ?? null,
     payload: responsePayload,
   };
-  process.stdout.write(`${JSON.stringify(response)}\\n`);
+  process.stdout.write(`${JSON.stringify(response)}\n`);
+}
+
+process.stdin.setEncoding('utf8');
+let buffered = '';
+
+process.stdin.on('data', (chunk) => {
+  buffered += chunk;
+  let newlineIndex = buffered.indexOf('\n');
+  while (newlineIndex !== -1) {
+    const line = buffered.slice(0, newlineIndex);
+    buffered = buffered.slice(newlineIndex + 1);
+    emitResponse(line);
+    newlineIndex = buffered.indexOf('\n');
+  }
 });
+
+process.stdin.on('end', () => {
+  if (buffered.trim()) {
+    emitResponse(buffered);
+  }
+});
+
+process.stdin.resume();
 "#;
 
 const GO_EXTENSION_STUB: &str = r#"package main
@@ -1925,23 +2090,29 @@ fn main() {
 "#;
 
 fn render_plugin_scaffold_readme(
-    package_root: &str,
     plugin_id: &str,
     bridge_kind: &str,
-    source_language: Option<&str>,
-    has_runtime_entrypoint: bool,
+    runtime_scaffold_files: &[PluginRuntimeScaffoldFile],
+    doctor_command: &str,
+    operator_actions_command: &str,
+    smoke_test_command: Option<&str>,
 ) -> String {
-    let doctor_command =
-        format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release");
-    let actions_command =
-        format!("loong plugins actions --root \"{package_root}\" --profile sdk-release");
-    let invoke_command = source_language
-        .and_then(scaffold_smoke_allow_command)
-        .map(|allow_command| {
-            format!(
-                "loong plugins invoke-extension --root \"{package_root}\" --plugin-id \"{plugin_id}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command {allow_command}"
-            )
-        });
+    let runtime_files = runtime_scaffold_files
+        .iter()
+        .map(|file| format!("`{}`", file.relative_path))
+        .collect::<Vec<_>>();
+    let runtime_files_summary = match runtime_files.as_slice() {
+        [] => format!(
+            "1. Fill in the runtime entry metadata in `{PACKAGE_MANIFEST_FILE_NAME}` for your package implementation."
+        ),
+        [single] => format!(
+            "1. Replace the scaffolded runtime file {single} with your implementation. If you rename it, keep `command` and `args_json` in `{PACKAGE_MANIFEST_FILE_NAME}` aligned."
+        ),
+        multiple => format!(
+            "1. Replace the scaffolded runtime files {} with your implementation. If you rename them, keep `command` and `args_json` in `{PACKAGE_MANIFEST_FILE_NAME}` aligned.",
+            multiple.join(", ")
+        ),
+    };
 
     let mut lines = vec![
         format!("# {plugin_id}"),
@@ -1954,9 +2125,7 @@ fn render_plugin_scaffold_readme(
         String::new(),
         "## Next Steps".to_owned(),
         String::new(),
-        format!(
-            "1. Replace the scaffolded bridge entrypoint in `{PACKAGE_MANIFEST_FILE_NAME}` with the real runtime entry for your package."
-        ),
+        runtime_files_summary,
         format!(
             "2. Fill in `summary`, `setup`, `slot_claims`, `tags`, and examples in `{PACKAGE_MANIFEST_FILE_NAME}` as your package contract becomes concrete."
         ),
@@ -1964,24 +2133,26 @@ fn render_plugin_scaffold_readme(
             .to_owned(),
         String::new(),
         "```bash".to_owned(),
-        doctor_command,
+        doctor_command.to_owned(),
         "```".to_owned(),
         String::new(),
         "4. Review the deduplicated operator action plan before release or marketplace handoff:"
             .to_owned(),
         String::new(),
         "```bash".to_owned(),
-        actions_command,
+        operator_actions_command.to_owned(),
         "```".to_owned(),
     ];
-    if has_runtime_entrypoint && let Some(invoke_command) = invoke_command {
+    if !runtime_scaffold_files.is_empty()
+        && let Some(smoke_test_command) = smoke_test_command
+    {
         lines.extend([
             String::new(),
             "5. Smoke-test the native extension entrypoint through the governed process bridge:"
                 .to_owned(),
             String::new(),
             "```bash".to_owned(),
-            invoke_command,
+            smoke_test_command.to_owned(),
             "```".to_owned(),
         ]);
     }
@@ -2179,10 +2350,6 @@ fn wrap_plugins_surface_text(title: &str, body: String) -> String {
 
 fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
     let source_language = execution.source_language.as_deref().unwrap_or("-");
-    let smoke_allow_command = execution
-        .source_language
-        .as_deref()
-        .and_then(scaffold_smoke_allow_command);
     let mut lines = vec![format!(
         "plugins init package_root={} plugin_id={} provider_id={} connector_name={}",
         execution.package_root,
@@ -2202,35 +2369,26 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
             execution.runtime_files_written.join(",")
         ));
     }
+    lines.push(format!("- doctor_command={}", execution.doctor_command));
     lines.push(format!(
-        "- next_steps=loong plugins doctor --root \"{}\" --profile sdk-release",
-        execution.package_root
-    ));
-    lines.push(format!(
-        "- operator_actions=loong plugins actions --root \"{}\" --profile sdk-release",
-        execution.package_root
+        "- operator_actions_command={}",
+        execution.operator_actions_command
     ));
     if !execution.runtime_files_written.is_empty()
-        && let Some(smoke_allow_command) = smoke_allow_command
+        && let Some(smoke_test_command) = execution.smoke_test_command.as_deref()
     {
+        lines.push(format!("- smoke_test_command={smoke_test_command}"));
+    }
+    if let Some(profile) = execution.native_extension_authoring_profile.as_ref() {
         lines.push(format!(
-            "- smoke_test=loong plugins invoke-extension --root \"{}\" --plugin-id \"{}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command {}",
-            execution.package_root,
-            execution.plugin_id,
-            smoke_allow_command
+            "- runtime_contract={} methods={} example_package={} allow_command={}",
+            profile.contract,
+            profile.methods.join(","),
+            profile.example_package_root,
+            profile.smoke_allow_command
         ));
     }
     lines.join("\n")
-}
-
-fn scaffold_smoke_allow_command(source_language: &str) -> Option<&'static str> {
-    match source_language {
-        "python" => Some("python3"),
-        "javascript" => Some("node"),
-        "go" => Some("go"),
-        "rust" => Some("cargo"),
-        _ => None,
-    }
 }
 
 fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> String {
@@ -3827,6 +3985,7 @@ mod tests {
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_VERSION,
     };
     use serde_json::json;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir(prefix: &str) -> String {
@@ -3838,6 +3997,14 @@ mod tests {
             .join(format!("{prefix}-{nanos}"))
             .display()
             .to_string()
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("daemon crate should live under repo root")
+            .to_path_buf()
     }
 
     #[test]
@@ -5169,11 +5336,53 @@ mod tests {
         assert_eq!(execution.source_language.as_deref(), Some("python"));
         assert_eq!(execution.adapter_family, "python-stdio-adapter");
         assert_eq!(execution.entrypoint, "stdin/stdout::invoke");
+        assert_eq!(
+            execution.doctor_command,
+            format!(
+                "loong plugins doctor --root \"{}\" --profile sdk-release",
+                execution.package_root
+            )
+        );
+        assert_eq!(
+            execution.operator_actions_command,
+            format!(
+                "loong plugins actions --root \"{}\" --profile sdk-release",
+                execution.package_root
+            )
+        );
+        let expected_smoke_test_command = format!(
+            "loong plugins invoke-extension --root \"{}\" --plugin-id \"weather-python\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command python3",
+            execution.package_root
+        );
+        assert_eq!(
+            execution.smoke_test_command.as_deref(),
+            Some(expected_smoke_test_command.as_str())
+        );
         assert_eq!(execution.runtime_files_written.len(), 1);
         assert!(
             execution.runtime_files_written[0].ends_with("index.py"),
             "expected scaffolded runtime entrypoint, got {:?}",
             execution.runtime_files_written
+        );
+        let authoring_profile = execution
+            .native_extension_authoring_profile
+            .as_ref()
+            .expect("process stdio scaffold should expose authoring profile");
+        assert_eq!(authoring_profile.runtime_files, vec!["index.py".to_owned()]);
+        assert_eq!(authoring_profile.command, "python3");
+        assert_eq!(authoring_profile.args, vec!["index.py".to_owned()]);
+        assert_eq!(authoring_profile.smoke_allow_command, "python3".to_owned());
+        assert_eq!(
+            authoring_profile.example_package_root,
+            "examples/plugins-process/native-extension-python".to_owned()
+        );
+        assert_eq!(
+            authoring_profile.methods,
+            vec![
+                "extension/event".to_owned(),
+                "extension/command".to_owned(),
+                "extension/resource".to_owned()
+            ]
         );
 
         let rendered_manifest =
@@ -5276,6 +5485,64 @@ mod tests {
         assert_eq!(
             manifest.metadata.get("args_json").map(String::as_str),
             Some("[\"run\",\"main.go\"]")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_javascript_process_stdio_scaffold_writes_runnable_entrypoint() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-javascript");
+        let package_root = format!("{temp_root}/weather-js");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-js".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                version: "0.2.0".to_owned(),
+                summary: Some("JavaScript weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("javascript process stdio scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        assert_eq!(execution.source_language.as_deref(), Some("javascript"));
+        assert_eq!(execution.adapter_family, "javascript-stdio-adapter");
+        assert_eq!(execution.runtime_files_written.len(), 1);
+        assert!(
+            execution.runtime_files_written[0].ends_with("index.js"),
+            "expected scaffolded javascript entrypoint, got {:?}",
+            execution.runtime_files_written
+        );
+        let authoring_profile = execution
+            .native_extension_authoring_profile
+            .as_ref()
+            .expect("javascript scaffold should expose authoring profile");
+        assert_eq!(authoring_profile.command, "node");
+        assert_eq!(authoring_profile.args, vec!["index.js".to_owned()]);
+        assert_eq!(
+            authoring_profile.example_package_root,
+            "examples/plugins-process/native-extension-javascript".to_owned()
+        );
+
+        let rendered_manifest =
+            fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+        assert_eq!(
+            manifest.metadata.get("command").map(String::as_str),
+            Some("node")
+        );
+        assert_eq!(
+            manifest.metadata.get("args_json").map(String::as_str),
+            Some("[\"index.js\"]")
         );
     }
 
@@ -5396,6 +5663,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_plugins_invoke_extension_runs_scaffolded_javascript_process_stdio_extension() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-invoke-extension-javascript");
+        let package_root = format!("{temp_root}/weather-js");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "weather-js".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                version: "0.2.0".to_owned(),
+                summary: Some("JavaScript weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("javascript scaffold should succeed");
+
+        let PluginsCommandExecution::Init(_) = execution else {
+            panic!("expected init execution");
+        };
+
+        let invoke_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::InvokeExtension(PluginInvokeExtensionCommand {
+                root: package_root,
+                plugin_id: "weather-js".to_owned(),
+                method: "extension/event".to_owned(),
+                payload: "{\"event\":\"session_start\"}".to_owned(),
+                allow_commands: vec!["node".to_owned()],
+            }),
+        })
+        .await
+        .expect("invoke-extension should execute scaffolded javascript extension");
+
+        let PluginsCommandExecution::InvokeExtension(invoke_execution) = invoke_execution else {
+            panic!("expected invoke-extension execution");
+        };
+        assert_eq!(
+            invoke_execution.response_payload["handled_event"],
+            json!("session_start")
+        );
+    }
+
+    #[tokio::test]
     async fn execute_plugins_invoke_extension_runs_scaffolded_go_process_stdio_extension() {
         let temp_root = unique_temp_dir("loong-plugins-cli-invoke-extension-go");
         let package_root = format!("{temp_root}/weather-go");
@@ -5487,6 +5801,95 @@ mod tests {
             invoke_execution.response_payload["handled_event"],
             json!("session_start")
         );
+    }
+
+    #[tokio::test]
+    async fn checked_in_native_extension_examples_stay_smoke_runnable() {
+        let repo_root = repo_root();
+        let examples = [
+            (
+                "examples/plugins-process/native-extension-python",
+                "native-extension-python-example",
+                "python3",
+                "python",
+            ),
+            (
+                "examples/plugins-process/native-extension-javascript",
+                "native-extension-javascript-example",
+                "node",
+                "javascript",
+            ),
+            (
+                "examples/plugins-process/native-extension-go",
+                "native-extension-go-example",
+                "go",
+                "go",
+            ),
+            (
+                "examples/plugins-process/native-extension-rust",
+                "native-extension-rust-example",
+                "cargo",
+                "rust",
+            ),
+        ];
+
+        for (relative_root, plugin_id, allow_command, expected_language) in examples {
+            let package_root = repo_root.join(relative_root).display().to_string();
+
+            let inventory_execution = execute_plugins_command(PluginsCommandOptions {
+                json: false,
+                command: PluginsCommands::Inventory(PluginInventoryCommand {
+                    source: PluginScanSourceArgs {
+                        roots: vec![package_root.clone()],
+                        query: String::new(),
+                        limit: None,
+                        bridge_support: None,
+                        bridge_profile: None,
+                        bridge_support_delta: None,
+                        bridge_support_sha256: None,
+                        bridge_support_delta_sha256: None,
+                    },
+                    include_ready: true,
+                    include_blocked: true,
+                    include_deferred: true,
+                    include_examples: false,
+                }),
+            })
+            .await
+            .expect("inventory should read checked-in example package");
+
+            let PluginsCommandExecution::Inventory(inventory_execution) = inventory_execution
+            else {
+                panic!("expected inventory execution");
+            };
+            assert_eq!(inventory_execution.returned_results, 1);
+            assert_eq!(
+                inventory_execution.results[0].source_language.as_deref(),
+                Some(expected_language)
+            );
+
+            let invoke_execution = execute_plugins_command(PluginsCommandOptions {
+                json: false,
+                command: PluginsCommands::InvokeExtension(PluginInvokeExtensionCommand {
+                    root: package_root,
+                    plugin_id: plugin_id.to_owned(),
+                    method: "extension/event".to_owned(),
+                    payload: "{\"event\":\"session_start\"}".to_owned(),
+                    allow_commands: vec![allow_command.to_owned()],
+                }),
+            })
+            .await
+            .expect("invoke-extension should execute checked-in example package");
+
+            let PluginsCommandExecution::InvokeExtension(invoke_execution) = invoke_execution
+            else {
+                panic!("expected invoke-extension execution");
+            };
+            assert_eq!(
+                invoke_execution.response_payload["handled_event"],
+                json!("session_start")
+            );
+        }
     }
 
     #[test]

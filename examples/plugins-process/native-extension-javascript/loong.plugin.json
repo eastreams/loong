@@ -1,0 +1,28 @@
+{
+  "api_version": "v1alpha1",
+  "version": "0.1.0",
+  "plugin_id": "native-extension-javascript-example",
+  "provider_id": "native-extension-javascript-example",
+  "connector_name": "native-extension-javascript-example",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
+    "loong_extension_methods_json": "[\"extension/event\",\"extension/command\",\"extension/resource\"]",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_actions_json": "[]"
+  },
+  "summary": "Minimal manifest-first JavaScript native extension example",
+  "tags": ["example", "native-extension", "process-stdio", "javascript"],
+  "compatibility": {
+    "host_api": "loong-plugin/v1",
+    "host_version_req": ">=0.1.2-alpha.1"
+  }
+}

@@ -94,6 +94,15 @@ loong plugins init ./weather-rust \
   --source-language rs
 ```
 
+## Supported runnable templates
+
+| Language | `--source-language` | Scaffolded runtime files | Smoke `--allow-command` | Checked-in example |
+|----------|----------------------|--------------------------|-------------------------|--------------------|
+| Python | `py` | `index.py` | `python3` | `examples/plugins-process/native-extension-python/` |
+| JavaScript | `js` | `index.js` | `node` | `examples/plugins-process/native-extension-javascript/` |
+| Go | `go` | `main.go` | `go` | `examples/plugins-process/native-extension-go/` |
+| Rust | `rs` | `Cargo.toml`, `src/main.rs` | `cargo` | `examples/plugins-process/native-extension-rust/` |
+
 ## Understand the generated stub
 
 The generated runtime file is intentionally small.
@@ -195,6 +204,7 @@ Repeat until:
 The repository also carries a minimal example package under:
 
 - `examples/plugins-process/native-extension-python/`
+- `examples/plugins-process/native-extension-javascript/`
 - `examples/plugins-process/native-extension-go/`
 - `examples/plugins-process/native-extension-rust/`
 

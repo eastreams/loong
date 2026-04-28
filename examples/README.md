@@ -10,7 +10,7 @@ and security policy profiles for Loong.
 | `spec/` | 13 JSON spec files | Execution specifications for deterministic test scenarios |
 | `plugins/` | Rust source | Plugin manifest examples for scanner-based hotplug |
 | `plugins-wasm/` | Rust source + compiled `.wasm` | WASM plugin source and compiled binary |
-| `plugins-process/` | Python script + manifest-first package | Process-based plugin examples, including a manifest-first native extension package |
+| `plugins-process/` | Python script + multi-language manifest-first packages | Process-based plugin examples, including Python, JavaScript, Go, and Rust native extension packages |
 | `benchmarks/` | 2 JSON files | Performance benchmark matrix and baseline configurations |
 | `policy/` | 2 JSON files | Security policy profiles (approval, scanning) |
 
@@ -100,6 +100,7 @@ Convenience scripts:
 - `plugins-wasm/secure_wasm_plugin.rs` -- WASM plugin Rust source. Compiled to `secure_echo.wasm`, with an `official` trust tier for first-party runtime examples.
 - `plugins-process/stdio_echo_plugin.py` -- Python stdio echo plugin for process-bridge testing. This example stays explicitly `unverified` so the trust-policy fixtures can demonstrate blocked auto-apply without hiding the plugin from scan/search results.
 - `plugins-process/native-extension-python/` -- Minimal manifest-first Python native extension example with doctor/inventory/smoke-test commands.
+- `plugins-process/native-extension-javascript/` -- Minimal manifest-first JavaScript native extension example with the same governed authoring loop.
 - `plugins-process/native-extension-go/` -- Minimal manifest-first Go native extension example with the same governed authoring loop.
 - `plugins-process/native-extension-rust/` -- Minimal manifest-first Rust native extension example with the same governed authoring loop.
 

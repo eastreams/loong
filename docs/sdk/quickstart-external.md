@@ -178,11 +178,21 @@ The first Rust smoke run may take longer because the scaffold uses
 This smoke path is explicit by design: local process execution only happens
 when you pass the allowed command on the CLI.
 
+## Supported runnable templates
+
+| Language | `--source-language` | Scaffolded runtime files | Smoke `--allow-command` | Checked-in example |
+|----------|----------------------|--------------------------|-------------------------|--------------------|
+| Python | `py` | `index.py` | `python3` | `examples/plugins-process/native-extension-python/` |
+| JavaScript | `js` | `index.js` | `node` | `examples/plugins-process/native-extension-javascript/` |
+| Go | `go` | `main.go` | `go` | `examples/plugins-process/native-extension-go/` |
+| Rust | `rs` | `Cargo.toml`, `src/main.rs` | `cargo` | `examples/plugins-process/native-extension-rust/` |
+
 ## Reference example
 
 The repository now also carries a minimal manifest-first example under:
 
 - `examples/plugins-process/native-extension-python/`
+- `examples/plugins-process/native-extension-javascript/`
 - `examples/plugins-process/native-extension-go/`
 - `examples/plugins-process/native-extension-rust/`
 
