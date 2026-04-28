@@ -364,6 +364,7 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
 pub struct GatewayRuntimePluginInventorySummaryReadModel {
     pub available: bool,
     pub reason: Option<String>,
+    pub roots_source: Option<String>,
     pub returned_results: Option<usize>,
     pub loaded_plugins: Option<usize>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1195,6 +1196,7 @@ fn build_runtime_plugin_inventory_summary_read_model(
     GatewayRuntimePluginInventorySummaryReadModel {
         available: inventory.available,
         reason: inventory.reason.clone(),
+        roots_source: inventory.roots_source.clone(),
         returned_results: inventory.returned_results,
         loaded_plugins,
         activation_attestation_integrity_distribution,

@@ -761,10 +761,11 @@ fn render_status_runtime_plugin_inventory_summary(
     let returned_results = render_optional_usize(inventory.returned_results);
     let loaded_plugins = render_optional_usize(inventory.loaded_plugins);
     let reason = inventory.reason.as_deref().unwrap_or("-");
+    let roots_source = inventory.roots_source.as_deref().unwrap_or("-");
 
     format!(
-        "available={} returned_results={} loaded_plugins={} reason={}",
-        inventory.available, returned_results, loaded_plugins, reason
+        "available={} roots_source={} returned_results={} loaded_plugins={} reason={}",
+        inventory.available, roots_source, returned_results, loaded_plugins, reason
     )
 }
 
@@ -936,6 +937,7 @@ mod tests {
                     crate::gateway::read_models::GatewayRuntimePluginInventorySummaryReadModel {
                         available: true,
                         reason: None,
+                        roots_source: Some("configured".to_owned()),
                         returned_results: Some(1),
                         loaded_plugins: Some(0),
                         activation_attestation_integrity_distribution:
@@ -985,6 +987,7 @@ mod tests {
                 available: true,
                 reason: None,
                 error: None,
+                roots_source: Some("configured".to_owned()),
                 returned_results: Some(1),
                 summary: None,
                 native_extension_authoring_summary: Some(
@@ -1152,6 +1155,7 @@ mod tests {
                 available: true,
                 reason: None,
                 error: None,
+                roots_source: Some("configured".to_owned()),
                 returned_results: Some(1),
                 summary: None,
                 native_extension_authoring_summary: Some(
@@ -1183,6 +1187,10 @@ mod tests {
         assert_eq!(
             value["runtime_plugin_inventory"]["returned_results"],
             json!(1)
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["roots_source"],
+            json!("configured")
         );
         assert_eq!(
             value["runtime_plugin_inventory"]["native_extension_authoring_summary"]["guided_plugins"],

@@ -512,6 +512,7 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
             available: true,
             reason: None,
             error: None,
+            roots_source: Some("configured".to_owned()),
             returned_results: Some(1),
             summary: None,
             native_extension_authoring_summary: None,

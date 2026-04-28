@@ -571,6 +571,8 @@ pub struct RuntimePluginInventoryReadModel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub returned_results: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<PluginsInventorySummaryView>,
@@ -1170,6 +1172,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             available: false,
             reason: Some("runtime_plugins_disabled".to_owned()),
             error: None,
+            roots_source: None,
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
@@ -1177,9 +1180,10 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
         };
     }
 
-    let roots = config
-        .runtime_plugins
-        .resolved_roots()
+    let root_selection = config.runtime_plugins.resolved_root_selection();
+    let roots_source = Some(root_selection.source.to_owned());
+    let roots = root_selection
+        .roots
         .into_iter()
         .map(|root| root.display().to_string())
         .collect::<Vec<_>>();
@@ -1188,6 +1192,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             available: false,
             reason: Some("no_runtime_plugin_roots".to_owned()),
             error: None,
+            roots_source,
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
@@ -1220,6 +1225,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             available: true,
             reason: None,
             error: None,
+            roots_source,
             returned_results: Some(execution.returned_results),
             summary: Some(execution.summary),
             native_extension_authoring_summary: summarize_native_extension_authoring_guidance(
@@ -1243,6 +1249,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             available: false,
             reason: Some("unexpected_plugins_command_variant".to_owned()),
             error: None,
+            roots_source,
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
@@ -1252,6 +1259,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             available: false,
             reason: Some("inventory_execution_failed".to_owned()),
             error: Some(error),
+            roots_source,
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,

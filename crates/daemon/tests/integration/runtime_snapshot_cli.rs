@@ -512,6 +512,7 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
             available: true,
             reason: None,
             error: None,
+            roots_source: Some("configured".to_owned()),
             returned_results: Some(1),
             summary: None,
             native_extension_authoring_summary: None,
