@@ -2452,6 +2452,8 @@ pub struct RuntimeSnapshotRuntimePluginsState {
     pub ready_plugin_count: usize,
     pub setup_incomplete_plugin_count: usize,
     pub blocked_plugin_count: usize,
+    pub native_extension_authoring_summary:
+        Option<crate::native_extension_authoring::NativeExtensionAuthoringSummaryView>,
     pub plugins: Vec<RuntimeSnapshotRuntimePluginState>,
 }
 
@@ -2985,6 +2987,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             ready_plugin_count: 0,
             setup_incomplete_plugin_count: 0,
             blocked_plugin_count: 0,
+            native_extension_authoring_summary: None,
             plugins: Vec::new(),
         };
     }
@@ -3011,6 +3014,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             ready_plugin_count: 0,
             setup_incomplete_plugin_count: 0,
             blocked_plugin_count: 0,
+            native_extension_authoring_summary: None,
             plugins: Vec::new(),
         };
     }
@@ -3040,6 +3044,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                     ready_plugin_count: 0,
                     setup_incomplete_plugin_count: 0,
                     blocked_plugin_count: 0,
+                    native_extension_authoring_summary: None,
                     plugins: Vec::new(),
                 };
             }
@@ -3066,6 +3071,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 ready_plugin_count: 0,
                 setup_incomplete_plugin_count: 0,
                 blocked_plugin_count: 0,
+                native_extension_authoring_summary: None,
                 plugins: Vec::new(),
             };
         }
@@ -3255,6 +3261,13 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             }
         })
         .collect::<Vec<_>>();
+    let native_extension_authoring_summary =
+        crate::native_extension_authoring::summarize_native_extension_authoring_guidance(
+            &plugins
+                .iter()
+                .filter_map(|plugin| plugin.authoring_guidance.clone())
+                .collect::<Vec<_>>(),
+        );
 
     RuntimeSnapshotRuntimePluginsState {
         enabled: true,
@@ -3272,6 +3285,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
         ready_plugin_count: activation.ready_plugins,
         setup_incomplete_plugin_count: activation.setup_incomplete_plugins,
         blocked_plugin_count: activation.blocked_plugins,
+        native_extension_authoring_summary,
         plugins,
     }
 }

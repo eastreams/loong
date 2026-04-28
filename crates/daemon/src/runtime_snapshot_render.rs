@@ -396,9 +396,10 @@ fn render_tool_surface_summary(surfaces: &[crate::mvp::tools::ToolSurfaceState])
 
 fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -> Vec<String> {
     let mut lines = vec![format!(
-        "runtime_plugins inventory_status={} enabled={} readiness_evaluation={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={}",
+        "runtime_plugins inventory_status={} enabled={} roots_source={} readiness_evaluation={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={}",
         snapshot.inventory_status.as_str(),
         snapshot.enabled,
+        crate::render_line_safe_text_value(&snapshot.roots_source),
         snapshot.readiness_evaluation,
         crate::render_line_safe_text_values(
             snapshot.supported_bridges.iter().map(String::as_str),
@@ -420,6 +421,30 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         snapshot.setup_incomplete_plugin_count,
         snapshot.blocked_plugin_count,
     )];
+    if let Some(authoring_summary) = snapshot.native_extension_authoring_summary.as_ref() {
+        let action_roles = authoring_summary
+            .action_roles
+            .iter()
+            .map(|(key, value)| format!("{key}:{value}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let action_execution_kinds = authoring_summary
+            .action_execution_kinds
+            .iter()
+            .map(|(key, value)| format!("{key}:{value}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(format!(
+            "  authoring_summary guided_plugins={} plugins_with_metadata_issues={} total_remediation_actions={} action_roles={} action_execution_kinds={} runnable_actions={} allow_command_gated_actions={}",
+            authoring_summary.guided_plugins,
+            authoring_summary.plugins_with_metadata_issues,
+            authoring_summary.total_remediation_actions,
+            crate::render_line_safe_text_value(&action_roles),
+            crate::render_line_safe_text_value(&action_execution_kinds),
+            authoring_summary.runnable_action_count,
+            authoring_summary.allow_command_gated_action_count,
+        ));
+    }
 
     if let Some(error) = snapshot.inventory_error.as_deref() {
         let rendered_error = crate::render_line_safe_text_value(error);
@@ -825,6 +850,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
 ) -> Value {
     json!({
         "enabled": snapshot.enabled,
+        "roots_source": snapshot.roots_source,
         "roots": snapshot.roots,
         "supported_bridges": snapshot.supported_bridges,
         "supported_adapter_families": snapshot.supported_adapter_families,
@@ -838,6 +864,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
         "ready_plugin_count": snapshot.ready_plugin_count,
         "setup_incomplete_plugin_count": snapshot.setup_incomplete_plugin_count,
         "blocked_plugin_count": snapshot.blocked_plugin_count,
+        "native_extension_authoring_summary": snapshot.native_extension_authoring_summary,
         "plugins": snapshot
             .plugins
             .iter()

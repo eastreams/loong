@@ -604,6 +604,8 @@ fn runtime_snapshot_text_surfaces_native_extension_authoring_guidance_for_invali
     let rendered = render_runtime_snapshot_text(&snapshot);
 
     assert!(rendered.contains("invalid-stdio-plugin"));
+    assert!(rendered.contains("authoring_summary guided_plugins=1"));
+    assert!(rendered.contains("plugins_with_metadata_issues=1"));
     assert!(rendered.contains(
         "authoring reference_example=examples/plugins-process/native-extension-javascript"
     ));

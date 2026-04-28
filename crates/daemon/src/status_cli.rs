@@ -762,10 +762,23 @@ fn render_status_runtime_plugin_inventory_summary(
     let loaded_plugins = render_optional_usize(inventory.loaded_plugins);
     let reason = inventory.reason.as_deref().unwrap_or("-");
     let roots_source = inventory.roots_source.as_deref().unwrap_or("-");
+    let authoring_summary = inventory.native_extension_authoring_summary.as_ref();
+    let guided_plugins = authoring_summary
+        .map(|summary| summary.guided_plugins.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let metadata_issues = authoring_summary
+        .map(|summary| summary.plugins_with_metadata_issues.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let runnable_actions = authoring_summary
+        .map(|summary| summary.runnable_action_count.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let allow_command_gated_actions = authoring_summary
+        .map(|summary| summary.allow_command_gated_action_count.to_string())
+        .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "available={} roots_source={} returned_results={} loaded_plugins={} reason={}",
-        inventory.available, roots_source, returned_results, loaded_plugins, reason
+        "available={} roots_source={} returned_results={} loaded_plugins={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
+        inventory.available, roots_source, returned_results, loaded_plugins, guided_plugins, metadata_issues, runnable_actions, allow_command_gated_actions, reason
     )
 }
 
@@ -940,6 +953,24 @@ mod tests {
                         roots_source: Some("configured".to_owned()),
                         returned_results: Some(1),
                         loaded_plugins: Some(0),
+                        native_extension_authoring_summary: Some(
+                            crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
+                                guided_plugins: 1,
+                                plugins_with_metadata_issues: 1,
+                                total_remediation_actions: 4,
+                                action_roles: std::collections::BTreeMap::from([
+                                    ("author".to_owned(), 1),
+                                    ("verification".to_owned(), 3),
+                                ]),
+                                action_execution_kinds: std::collections::BTreeMap::from([
+                                    ("manual_edit".to_owned(), 1),
+                                    ("read_only_cli".to_owned(), 2),
+                                    ("governed_smoke_probe".to_owned(), 1),
+                                ]),
+                                runnable_action_count: 3,
+                                allow_command_gated_action_count: 1,
+                            },
+                        ),
                         activation_attestation_integrity_distribution:
                             std::collections::BTreeMap::from([("unreported".to_owned(), 1)]),
                         runtime_health_status_distribution: std::collections::BTreeMap::from([(
@@ -1042,7 +1073,12 @@ mod tests {
         assert!(rendered.contains("web boundary"));
         assert!(rendered.contains("ordinary network access stays separately governed"));
         assert!(rendered.contains("runtime plugin inventory"));
+        assert!(rendered.contains("roots_source=configured"));
         assert!(rendered.contains("returned_results=1"));
+        assert!(rendered.contains("guided_plugins=1"));
+        assert!(rendered.contains("metadata_issues=1"));
+        assert!(rendered.contains("runnable_actions=3"));
+        assert!(rendered.contains("allow_command_gated_actions=1"));
         assert!(rendered.contains("plugin attestation"));
         assert!(rendered.contains("unreported:1"));
         assert!(rendered.contains("plugin runtime health"));
