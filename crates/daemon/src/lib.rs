@@ -144,6 +144,7 @@ mod mcp_cli;
 mod memory_context_benchmark;
 pub mod migrate_cli;
 pub mod migration;
+mod native_extension_authoring;
 pub mod next_actions;
 mod observability;
 pub mod onboard_cli;

@@ -14,6 +14,12 @@ use crate::kernel::{
     HarnessKind, PACKAGE_MANIFEST_FILE_NAME, PluginBridgeKind, PluginCompatibility, PluginManifest,
     VerticalPackManifest, plugin_runtime_scaffold_defaults,
 };
+use crate::native_extension_authoring::{
+    PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT, PROCESS_STDIO_NATIVE_EXTENSION_EVENTS,
+    PROCESS_STDIO_NATIVE_EXTENSION_FACETS, PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS,
+    PROCESS_STDIO_NATIVE_EXTENSION_METHODS, process_stdio_native_extension_language_profile,
+    process_stdio_scaffold_args, render_rust_extension_cargo_toml,
+};
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
     MaterializedBridgeSupportDeltaArtifact, OperationSpec, PluginActivationAttestationResult,
@@ -1235,59 +1241,6 @@ pub(crate) async fn runtime_plugin_inventory_json_payload(
 }
 
 const PLUGINS_INIT_README_FILE_NAME: &str = "README.md";
-const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
-const PROCESS_STDIO_NATIVE_EXTENSION_FACETS: &[&str] = &["events", "commands", "resources"];
-const PROCESS_STDIO_NATIVE_EXTENSION_METHODS: &[&str] =
-    &["extension/event", "extension/command", "extension/resource"];
-const PROCESS_STDIO_NATIVE_EXTENSION_EVENTS: &[&str] = &["session_start"];
-const PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS: &[&str] = &[];
-
-#[derive(Debug, Clone, Copy)]
-struct RuntimeScaffoldTemplateFile {
-    relative_path: &'static str,
-    contents: &'static str,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ProcessStdioNativeExtensionLanguageProfile {
-    command: &'static str,
-    args: &'static [&'static str],
-    process_timeout_ms: u64,
-    smoke_allow_command: &'static str,
-    example_package_root: &'static str,
-    scaffold_files: &'static [RuntimeScaffoldTemplateFile],
-}
-
-const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
-    &[RuntimeScaffoldTemplateFile {
-        relative_path: "index.py",
-        contents: PYTHON_EXTENSION_STUB,
-    }];
-const JAVASCRIPT_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
-    &[RuntimeScaffoldTemplateFile {
-        relative_path: "index.js",
-        contents: JAVASCRIPT_EXTENSION_STUB,
-    }];
-const GO_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
-    &[RuntimeScaffoldTemplateFile {
-        relative_path: "main.go",
-        contents: GO_EXTENSION_STUB,
-    }];
-const RUST_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] = &[
-    RuntimeScaffoldTemplateFile {
-        relative_path: "Cargo.toml",
-        contents: RUST_EXTENSION_CARGO_TOML,
-    },
-    RuntimeScaffoldTemplateFile {
-        relative_path: "src/main.rs",
-        contents: RUST_EXTENSION_MAIN_RS,
-    },
-];
-
-const PYTHON_EXTENSION_ARGS: &[&str] = &["index.py"];
-const JAVASCRIPT_EXTENSION_ARGS: &[&str] = &["index.js"];
-const GO_EXTENSION_ARGS: &[&str] = &["run", "main.go"];
-const RUST_EXTENSION_ARGS: &[&str] = &["run", "--quiet", "--manifest-path", "Cargo.toml"];
 
 #[derive(Debug, Serialize)]
 struct PluginPackageScaffoldManifestDocument {
@@ -1365,6 +1318,9 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         inventory_command.as_str(),
         operator_actions_command.as_str(),
         smoke_test_command.as_deref(),
+        native_extension_authoring_profile
+            .as_ref()
+            .map(|profile| profile.example_package_root.as_str()),
     );
 
     write_plugin_scaffold_files(
@@ -1678,86 +1634,6 @@ fn build_plugin_runtime_scaffold_files(
         .collect())
 }
 
-fn process_stdio_native_extension_language_profile(
-    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
-) -> CliResult<Option<ProcessStdioNativeExtensionLanguageProfile>> {
-    if scaffold_defaults.bridge_kind != PluginBridgeKind::ProcessStdio {
-        return Ok(None);
-    }
-
-    match scaffold_defaults.source_language.as_deref() {
-        Some("python") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "python3",
-            args: PYTHON_EXTENSION_ARGS,
-            process_timeout_ms: 5_000,
-            smoke_allow_command: "python3",
-            example_package_root: "examples/plugins-process/native-extension-python",
-            scaffold_files: PYTHON_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some("javascript") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "node",
-            args: JAVASCRIPT_EXTENSION_ARGS,
-            process_timeout_ms: 15_000,
-            smoke_allow_command: "node",
-            example_package_root: "examples/plugins-process/native-extension-javascript",
-            scaffold_files: JAVASCRIPT_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some("go") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "go",
-            args: GO_EXTENSION_ARGS,
-            process_timeout_ms: 15_000,
-            smoke_allow_command: "go",
-            example_package_root: "examples/plugins-process/native-extension-go",
-            scaffold_files: GO_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some("rust") => Ok(Some(ProcessStdioNativeExtensionLanguageProfile {
-            command: "cargo",
-            args: RUST_EXTENSION_ARGS,
-            process_timeout_ms: 60_000,
-            smoke_allow_command: "cargo",
-            example_package_root: "examples/plugins-process/native-extension-rust",
-            scaffold_files: RUST_EXTENSION_SCAFFOLD_FILES,
-        })),
-        Some(source_language) => Err(format!(
-            "plugins init only scaffolds runnable process_stdio extension entrypoints for source_language `python`, `javascript`, `go`, or `rust`; got `{source_language}`"
-        )),
-        None => Ok(None),
-    }
-}
-
-fn process_stdio_scaffold_args(profile: ProcessStdioNativeExtensionLanguageProfile) -> Vec<String> {
-    profile
-        .args
-        .iter()
-        .map(|value| (*value).to_owned())
-        .collect()
-}
-
-fn render_rust_extension_cargo_toml(plugin_id: &str) -> String {
-    format!(
-        "[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde_json = \"1\"\n\n[workspace]\n",
-        rust_package_name_for_plugin(plugin_id)
-    )
-}
-
-fn rust_package_name_for_plugin(plugin_id: &str) -> String {
-    let normalized = plugin_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let trimmed = normalized.trim_matches(|ch| ch == '-' || ch == '_');
-    if trimmed.is_empty() {
-        return "native-extension-rust".to_owned();
-    }
-    trimmed.to_owned()
-}
-
 fn render_plugins_doctor_command(package_root: &str) -> String {
     format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release")
 }
@@ -1824,312 +1700,6 @@ fn build_native_extension_authoring_profile(
     })
 }
 
-const PYTHON_EXTENSION_STUB: &str = r#"#!/usr/bin/env python3
-import json
-import sys
-
-
-def build_extension_payload(operation, payload):
-    if operation == "extension/event":
-        return {
-            "ok": True,
-            "handled_event": payload.get("event", "unknown"),
-        }
-    if operation == "extension/command":
-        command_name = payload.get("command_name", "extension")
-        return {
-            "text": f"{command_name} command stub"
-        }
-    if operation == "extension/resource":
-        return {
-            "commands": [],
-            "tools": []
-        }
-    return {
-        "error": f"unsupported method: {operation}"
-    }
-
-
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    request = json.loads(line)
-    method = request.get("method", "")
-    payload = request.get("payload") or {}
-    if method == "tools/call":
-        operation = payload.get("operation", "")
-        extension_payload = payload.get("payload") or {}
-        response_payload = build_extension_payload(operation, extension_payload)
-    else:
-        response_payload = {"error": f"unsupported transport method: {method}"}
-    response = {"method": method, "id": request.get("id"), "payload": response_payload}
-    print(json.dumps(response), flush=True)
-"#;
-
-const JAVASCRIPT_EXTENSION_STUB: &str = r#"#!/usr/bin/env node
-function buildExtensionPayload(operation, payload) {
-  if (operation === 'extension/event') {
-    return {
-      ok: true,
-      handled_event: payload.event ?? 'unknown',
-    };
-  }
-  if (operation === 'extension/command') {
-    const commandName = payload.command_name ?? 'extension';
-    return {
-      text: `${commandName} command stub`,
-    };
-  }
-  if (operation === 'extension/resource') {
-    return {
-      commands: [],
-      tools: [],
-    };
-  }
-  return {
-    error: `unsupported method: ${operation}`,
-  };
-}
-
-function emitResponse(line) {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return;
-  }
-  const request = JSON.parse(trimmed);
-  const method = request.method ?? '';
-  const payload = request.payload ?? {};
-  const responsePayload = method === 'tools/call'
-    ? buildExtensionPayload(payload.operation ?? '', payload.payload ?? {})
-    : { error: `unsupported transport method: ${method}` };
-  const response = {
-    method,
-    id: request.id ?? null,
-    payload: responsePayload,
-  };
-  process.stdout.write(`${JSON.stringify(response)}\n`);
-}
-
-process.stdin.setEncoding('utf8');
-let buffered = '';
-
-process.stdin.on('data', (chunk) => {
-  buffered += chunk;
-  let newlineIndex = buffered.indexOf('\n');
-  while (newlineIndex !== -1) {
-    const line = buffered.slice(0, newlineIndex);
-    buffered = buffered.slice(newlineIndex + 1);
-    emitResponse(line);
-    newlineIndex = buffered.indexOf('\n');
-  }
-});
-
-process.stdin.on('end', () => {
-  if (buffered.trim()) {
-    emitResponse(buffered);
-  }
-});
-
-process.stdin.resume();
-"#;
-
-const GO_EXTENSION_STUB: &str = r#"package main
-
-import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"os"
-)
-
-type requestFrame struct {
-	Method  string         `json:"method"`
-	ID      any            `json:"id"`
-	Payload map[string]any `json:"payload"`
-}
-
-type responseFrame struct {
-	Method  string `json:"method"`
-	ID      any    `json:"id"`
-	Payload any    `json:"payload"`
-}
-
-func buildExtensionPayload(operation string, payload map[string]any) any {
-	switch operation {
-	case "extension/event":
-		event, _ := payload["event"].(string)
-		if event == "" {
-			event = "unknown"
-		}
-		return map[string]any{
-			"ok":            true,
-			"handled_event": event,
-		}
-	case "extension/command":
-		commandName, _ := payload["command_name"].(string)
-		if commandName == "" {
-			commandName = "extension"
-		}
-		return map[string]any{
-			"text": fmt.Sprintf("%s command stub", commandName),
-		}
-	case "extension/resource":
-		return map[string]any{
-			"commands": []any{},
-			"tools":    []any{},
-		}
-	default:
-		return map[string]any{
-			"error": fmt.Sprintf("unsupported method: %s", operation),
-		}
-	}
-}
-
-func main() {
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		var request requestFrame
-		if err := json.Unmarshal([]byte(line), &request); err != nil {
-			continue
-		}
-
-		payload := request.Payload
-		if payload == nil {
-			payload = map[string]any{}
-		}
-
-		var responsePayload any
-		if request.Method == "tools/call" {
-			operation, _ := payload["operation"].(string)
-			extensionPayload, _ := payload["payload"].(map[string]any)
-			if extensionPayload == nil {
-				extensionPayload = map[string]any{}
-			}
-			responsePayload = buildExtensionPayload(operation, extensionPayload)
-		} else {
-			responsePayload = map[string]any{
-				"error": fmt.Sprintf("unsupported transport method: %s", request.Method),
-			}
-		}
-
-		response := responseFrame{
-			Method:  request.Method,
-			ID:      request.ID,
-			Payload: responsePayload,
-		}
-		encoded, err := json.Marshal(response)
-		if err != nil {
-			continue
-		}
-		fmt.Println(string(encoded))
-	}
-}
-"#;
-
-const RUST_EXTENSION_CARGO_TOML: &str = r#"[package]
-name = "native-extension-rust"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-serde_json = "1"
-
-[workspace]
-"#;
-
-const RUST_EXTENSION_MAIN_RS: &str = r#"use serde_json::{Map, Value, json};
-use std::io::{self, BufRead};
-
-fn build_extension_payload(operation: &str, payload: &Map<String, Value>) -> Value {
-    match operation {
-        "extension/event" => {
-            let handled_event = payload
-                .get("event")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            json!({
-                "ok": true,
-                "handled_event": handled_event,
-            })
-        }
-        "extension/command" => {
-            let command_name = payload
-                .get("command_name")
-                .and_then(Value::as_str)
-                .unwrap_or("extension");
-            json!({
-                "text": format!("{command_name} command stub"),
-            })
-        }
-        "extension/resource" => json!({
-            "commands": [],
-            "tools": [],
-        }),
-        other => json!({
-            "error": format!("unsupported method: {other}"),
-        }),
-    }
-}
-
-fn main() {
-    let stdin = io::stdin();
-    for line in stdin.lock().lines().map_while(Result::ok) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let request = match serde_json::from_str::<Value>(trimmed) {
-            Ok(request) => request,
-            Err(_) => continue,
-        };
-        let method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let payload = request
-            .get("payload")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-
-        let response_payload = if method == "tools/call" {
-            let operation = payload
-                .get("operation")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let extension_payload = payload
-                .get("payload")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            build_extension_payload(operation, &extension_payload)
-        } else {
-            json!({
-                "error": format!("unsupported transport method: {method}"),
-            })
-        };
-
-        println!(
-            "{}",
-            json!({
-                "method": method,
-                "id": id,
-                "payload": response_payload,
-            })
-        );
-    }
-}
-"#;
-
 fn render_plugin_scaffold_readme(
     plugin_id: &str,
     bridge_kind: &str,
@@ -2138,6 +1708,7 @@ fn render_plugin_scaffold_readme(
     inventory_command: &str,
     operator_actions_command: &str,
     smoke_test_command: Option<&str>,
+    reference_example_path: Option<&str>,
 ) -> String {
     let runtime_files = runtime_scaffold_files
         .iter()
@@ -2202,6 +1773,16 @@ fn render_plugin_scaffold_readme(
             "```bash".to_owned(),
             smoke_test_command.to_owned(),
             "```".to_owned(),
+        ]);
+    }
+    if let Some(reference_example_path) = reference_example_path {
+        lines.extend([
+            String::new(),
+            "## Reference Example".to_owned(),
+            String::new(),
+            format!(
+                "Compare your package against the checked-in reference package at `{reference_example_path}/`."
+            ),
         ]);
     }
 
@@ -4105,15 +3686,8 @@ mod tests {
         package_root_relative: &'static str,
         plugin_id: &'static str,
         source_language_arg: &'static str,
-        expected_source_language: &'static str,
-        expected_adapter_family: &'static str,
         expected_summary: &'static str,
-        allow_command: &'static str,
-        expected_runtime_files: &'static [&'static str],
         expected_tags: &'static [&'static str],
-        expected_command: &'static str,
-        expected_args_json: &'static str,
-        expected_timeout_ms: &'static str,
     }
 
     fn checked_in_native_extension_example_specs() -> Vec<CheckedInNativeExtensionExampleSpec> {
@@ -4122,59 +3696,41 @@ mod tests {
                 package_root_relative: "examples/plugins-process/native-extension-python",
                 plugin_id: "native-extension-python-example",
                 source_language_arg: "py",
-                expected_source_language: "python",
-                expected_adapter_family: "python-stdio-adapter",
                 expected_summary: "Minimal manifest-first native extension example",
-                allow_command: "python3",
-                expected_runtime_files: &["index.py"],
                 expected_tags: &["example", "native-extension", "process-stdio"],
-                expected_command: "python3",
-                expected_args_json: "[\"index.py\"]",
-                expected_timeout_ms: "5000",
             },
             CheckedInNativeExtensionExampleSpec {
                 package_root_relative: "examples/plugins-process/native-extension-javascript",
                 plugin_id: "native-extension-javascript-example",
                 source_language_arg: "js",
-                expected_source_language: "javascript",
-                expected_adapter_family: "javascript-stdio-adapter",
                 expected_summary: "Minimal manifest-first JavaScript native extension example",
-                allow_command: "node",
-                expected_runtime_files: &["index.js"],
                 expected_tags: &["example", "native-extension", "process-stdio", "javascript"],
-                expected_command: "node",
-                expected_args_json: "[\"index.js\"]",
-                expected_timeout_ms: "15000",
             },
             CheckedInNativeExtensionExampleSpec {
                 package_root_relative: "examples/plugins-process/native-extension-go",
                 plugin_id: "native-extension-go-example",
                 source_language_arg: "go",
-                expected_source_language: "go",
-                expected_adapter_family: "go-stdio-adapter",
                 expected_summary: "Minimal manifest-first Go native extension example",
-                allow_command: "go",
-                expected_runtime_files: &["main.go"],
                 expected_tags: &["example", "native-extension", "process-stdio", "go"],
-                expected_command: "go",
-                expected_args_json: "[\"run\",\"main.go\"]",
-                expected_timeout_ms: "15000",
             },
             CheckedInNativeExtensionExampleSpec {
                 package_root_relative: "examples/plugins-process/native-extension-rust",
                 plugin_id: "native-extension-rust-example",
                 source_language_arg: "rs",
-                expected_source_language: "rust",
-                expected_adapter_family: "rust-stdio-adapter",
                 expected_summary: "Minimal manifest-first Rust native extension example",
-                allow_command: "cargo",
-                expected_runtime_files: &["Cargo.toml", "src/main.rs"],
                 expected_tags: &["example", "native-extension", "process-stdio", "rust"],
-                expected_command: "cargo",
-                expected_args_json: "[\"run\",\"--quiet\",\"--manifest-path\",\"Cargo.toml\"]",
-                expected_timeout_ms: "60000",
             },
         ]
+    }
+
+    fn checked_in_native_extension_scaffold_defaults(
+        spec: &CheckedInNativeExtensionExampleSpec,
+    ) -> crate::kernel::PluginRuntimeScaffoldDefaults {
+        plugin_runtime_scaffold_defaults(
+            PluginBridgeKind::ProcessStdio,
+            Some(spec.source_language_arg),
+        )
+        .expect("checked-in example should map to scaffold defaults")
     }
 
     #[test]
@@ -5611,6 +5167,12 @@ mod tests {
             scaffolded_entrypoint.contains("extension/event"),
             "expected event handler in scaffolded entrypoint: {scaffolded_entrypoint}"
         );
+        let rendered_readme =
+            fs::read_to_string(&execution.readme_path).expect("scaffold readme should exist");
+        assert!(
+            rendered_readme.contains("examples/plugins-process/native-extension-python/"),
+            "README should point authors at the checked-in reference example: {rendered_readme}"
+        );
 
         let scanner = crate::kernel::PluginScanner::new();
         let scan_report = scanner
@@ -6003,6 +5565,10 @@ mod tests {
             let temp_root = unique_temp_dir("loong-plugins-cli-example-conformance");
             let package_root = format!("{temp_root}/{}", spec.plugin_id);
             let checked_in_root = repo_root.join(spec.package_root_relative);
+            let scaffold_defaults = checked_in_native_extension_scaffold_defaults(&spec);
+            let profile = process_stdio_native_extension_language_profile(&scaffold_defaults)
+                .expect("checked-in example should map to a public authoring profile")
+                .expect("checked-in example should resolve a process stdio profile");
 
             let execution = execute_plugins_command(PluginsCommandOptions {
                 json: false,
@@ -6026,9 +5592,9 @@ mod tests {
 
             assert_eq!(
                 execution.source_language.as_deref(),
-                Some(spec.expected_source_language)
+                scaffold_defaults.source_language.as_deref()
             );
-            assert_eq!(execution.adapter_family, spec.expected_adapter_family);
+            assert_eq!(execution.adapter_family, scaffold_defaults.adapter_family);
             assert_eq!(
                 execution.inventory_command,
                 format!(
@@ -6040,17 +5606,18 @@ mod tests {
                 .native_extension_authoring_profile
                 .as_ref()
                 .expect("checked-in example scaffold should expose authoring profile");
-            assert_eq!(authoring_profile.command, spec.expected_command);
+            assert_eq!(authoring_profile.command, profile.command);
             assert_eq!(
                 authoring_profile.runtime_files,
-                spec.expected_runtime_files
+                profile
+                    .scaffold_files
                     .iter()
-                    .map(|value| (*value).to_owned())
+                    .map(|value| value.relative_path.to_owned())
                     .collect::<Vec<_>>()
             );
             assert_eq!(
-                authoring_profile.process_timeout_ms.to_string(),
-                spec.expected_timeout_ms
+                authoring_profile.process_timeout_ms,
+                profile.process_timeout_ms
             );
             assert_eq!(
                 authoring_profile.example_package_root,
@@ -6109,21 +5676,24 @@ mod tests {
                     .metadata
                     .get("command")
                     .map(String::as_str),
-                Some(spec.expected_command)
+                Some(profile.command)
             );
+            let expected_args_json = serde_json::to_string(&process_stdio_scaffold_args(profile))
+                .expect("serialize scaffold args");
             assert_eq!(
                 checked_in_manifest
                     .metadata
                     .get("args_json")
                     .map(String::as_str),
-                Some(spec.expected_args_json)
+                Some(expected_args_json.as_str())
             );
+            let expected_timeout_ms = profile.process_timeout_ms.to_string();
             assert_eq!(
                 checked_in_manifest
                     .metadata
                     .get("process_timeout_ms")
                     .map(String::as_str),
-                Some(spec.expected_timeout_ms)
+                Some(expected_timeout_ms.as_str())
             );
             assert_eq!(checked_in_manifest.metadata, scaffold_manifest.metadata);
             assert_eq!(
@@ -6131,7 +5701,7 @@ mod tests {
                 scaffold_manifest.compatibility
             );
 
-            for relative_path in spec.expected_runtime_files {
+            for relative_path in profile.scaffold_files.iter().map(|file| file.relative_path) {
                 let scaffold_runtime = fs::read_to_string(
                     std::path::Path::new(&execution.package_root).join(relative_path),
                 )
@@ -6155,6 +5725,10 @@ mod tests {
                 .join(spec.package_root_relative)
                 .display()
                 .to_string();
+            let scaffold_defaults = checked_in_native_extension_scaffold_defaults(&spec);
+            let profile = process_stdio_native_extension_language_profile(&scaffold_defaults)
+                .expect("checked-in example should map to a public authoring profile")
+                .expect("checked-in example should resolve a process stdio profile");
 
             let inventory_execution = execute_plugins_command(PluginsCommandOptions {
                 json: false,
@@ -6189,7 +5763,7 @@ mod tests {
             assert_eq!(inventory_execution.summary.loaded_plugins, 1);
             assert_eq!(
                 inventory_execution.results[0].source_language.as_deref(),
-                Some(spec.expected_source_language)
+                scaffold_defaults.source_language.as_deref()
             );
             assert_eq!(
                 inventory_execution.results[0].bridge_kind,
@@ -6197,7 +5771,7 @@ mod tests {
             );
             assert_eq!(
                 inventory_execution.results[0].adapter_family.as_deref(),
-                Some(spec.expected_adapter_family)
+                Some(scaffold_defaults.adapter_family.as_str())
             );
             assert_eq!(
                 inventory_execution.results[0].summary.as_deref(),
@@ -6292,10 +5866,12 @@ mod tests {
             assert_eq!(doctor_execution.summary.total_recommended_actions, 0);
             assert_eq!(doctor_execution.summary.total_operator_actions, 0);
             assert_eq!(
-                doctor_execution
-                    .summary
-                    .source_language_distribution
-                    .get(spec.expected_source_language),
+                doctor_execution.summary.source_language_distribution.get(
+                    scaffold_defaults
+                        .source_language
+                        .as_deref()
+                        .expect("checked-in example should resolve a source language"),
+                ),
                 Some(&1)
             );
             assert_eq!(doctor_execution.results[0].verdict, "pass".to_owned());
@@ -6308,7 +5884,7 @@ mod tests {
                     plugin_id: spec.plugin_id.to_owned(),
                     method: "extension/event".to_owned(),
                     payload: "{\"event\":\"session_start\"}".to_owned(),
-                    allow_commands: vec![spec.allow_command.to_owned()],
+                    allow_commands: vec![profile.smoke_allow_command.to_owned()],
                 }),
             })
             .await
