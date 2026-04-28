@@ -230,3 +230,19 @@ fn render_welcome_banner_includes_version_and_next_commands() {
         "welcome banner should include a quoted personalize command: {rendered}"
     );
 }
+
+#[test]
+fn render_welcome_banner_separates_continue_setup_actions() {
+    let config = mvp::config::LoongConfig::default();
+
+    let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
+
+    assert!(
+        rendered.contains("continue setup"),
+        "welcome banner should expose setup-extension actions as their own group: {rendered}"
+    );
+    assert!(
+        rendered.contains("choose a channel"),
+        "welcome banner should keep the channel handoff visible in the continue-setup group: {rendered}"
+    );
+}
