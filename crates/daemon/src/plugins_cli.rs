@@ -6552,7 +6552,10 @@ mod tests {
                 .author_remediation_actions
                 .iter()
                 .any(|action| action.kind == "repair_extension_metadata"
-                    && action.role == "author"),
+                    && action.role == "author"
+                    && action.execution_kind == "manual_edit"
+                    && !action.agent_runnable
+                    && !action.requires_allow_command),
             "doctor guidance should expose a typed repair action: {:?}",
             guidance.author_remediation_actions
         );
@@ -6562,6 +6565,9 @@ mod tests {
                 .iter()
                 .any(|action| action.kind == "rerun_doctor"
                     && action.role == "verification"
+                    && action.execution_kind == "read_only_cli"
+                    && action.agent_runnable
+                    && !action.requires_allow_command
                     && action.command.as_deref()
                         == Some(render_authoring_doctor_command(package_root.as_str()).as_str())),
             "doctor guidance should expose a rerun-doctor action: {:?}",
@@ -6573,11 +6579,27 @@ mod tests {
                 .iter()
                 .any(|action| action.kind == "rerun_inventory"
                     && action.role == "verification"
+                    && action.execution_kind == "read_only_cli"
+                    && action.agent_runnable
+                    && !action.requires_allow_command
                     && action.command.as_deref()
                         == Some(
                             render_authoring_inventory_command(package_root.as_str()).as_str()
                         )),
             "doctor guidance should expose a rerun-inventory action: {:?}",
+            guidance.author_remediation_actions
+        );
+        assert!(
+            guidance
+                .author_remediation_actions
+                .iter()
+                .any(|action| action.kind == "rerun_smoke_test"
+                    && action.role == "verification"
+                    && action.execution_kind == "governed_smoke_probe"
+                    && action.agent_runnable
+                    && action.requires_allow_command
+                    && action.allow_command.as_deref() == Some("node")),
+            "doctor guidance should expose a governed smoke rerun action: {:?}",
             guidance.author_remediation_actions
         );
 
