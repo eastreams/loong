@@ -1,4 +1,5 @@
 use crate::onboard_cli::SelectOption;
+use loong_app as mvp;
 
 pub(crate) const PERSONALIZE_COMMAND_ABOUT: &str =
     "Teach Loong your working style for future sessions";
@@ -120,6 +121,17 @@ pub(crate) fn response_density_select_options(has_current_value: bool) -> Vec<Se
     options
 }
 
+pub(crate) const fn response_density_default_slug(
+    current_value: Option<mvp::config::ResponseDensity>,
+) -> &'static str {
+    match current_value {
+        Some(mvp::config::ResponseDensity::Concise) => "concise",
+        Some(mvp::config::ResponseDensity::Balanced) => "balanced",
+        Some(mvp::config::ResponseDensity::Thorough) => "thorough",
+        None => "balanced",
+    }
+}
+
 pub(crate) fn initiative_level_select_options(has_current_value: bool) -> Vec<SelectOption> {
     let mut options = vec![
         SelectOption {
@@ -161,21 +173,33 @@ pub(crate) fn initiative_level_select_options(has_current_value: bool) -> Vec<Se
     options
 }
 
-pub(crate) fn review_action_select_options() -> Vec<SelectOption> {
+pub(crate) const fn initiative_level_default_slug(
+    current_value: Option<mvp::config::InitiativeLevel>,
+) -> &'static str {
+    match current_value {
+        Some(mvp::config::InitiativeLevel::AskBeforeActing) => "ask_before_acting",
+        Some(mvp::config::InitiativeLevel::Balanced) => "balanced",
+        Some(mvp::config::InitiativeLevel::HighInitiative) => "high_initiative",
+        None => "balanced",
+    }
+}
+
+pub(crate) fn review_action_select_options(has_meaningful_preferences: bool) -> Vec<SelectOption> {
+    let recommended_choice = review_action_default_slug(has_meaningful_preferences);
     vec![
         SelectOption {
             label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Save).to_owned(),
             slug: "save".to_owned(),
             description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Save)
                 .to_owned(),
-            recommended: true,
+            recommended: recommended_choice == "save",
         },
         SelectOption {
             label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Skip).to_owned(),
             slug: "skip".to_owned(),
             description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Skip)
                 .to_owned(),
-            recommended: false,
+            recommended: recommended_choice == "skip",
         },
         SelectOption {
             label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Suppress)
@@ -185,9 +209,17 @@ pub(crate) fn review_action_select_options() -> Vec<SelectOption> {
                 PersonalizeReviewChoiceKind::Suppress,
             )
             .to_owned(),
-            recommended: false,
+            recommended: recommended_choice == "suppress",
         },
     ]
+}
+
+pub(crate) const fn review_action_default_slug(has_meaningful_preferences: bool) -> &'static str {
+    if has_meaningful_preferences {
+        "save"
+    } else {
+        "skip"
+    }
 }
 
 pub(crate) const fn personalize_skip_message() -> &'static str {

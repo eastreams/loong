@@ -13,13 +13,15 @@ use crate::operator_prompt::{
     StdioOperatorUi, prompt_optional_operator_text,
 };
 use crate::personalize_presentation::{
-    PersonalizePromptKind, PersonalizeSelectKind, initiative_level_select_options,
+    PersonalizePromptKind, PersonalizeSelectKind, initiative_level_default_slug,
+    initiative_level_select_options,
     personalize_cleared_message, personalize_memory_profile_deferred_message,
     personalize_memory_profile_upgrade_prompt, personalize_memory_profile_upgraded_message,
     personalize_prompt_label, personalize_review_intro, personalize_saved_message,
+    response_density_default_slug,
     personalize_select_label, personalize_skip_message, personalize_suppressed_message,
     personalize_suppressed_recovery_guidance, response_density_select_options,
-    review_action_select_options,
+    review_action_default_slug, review_action_select_options,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,18 +184,8 @@ fn select_response_density(
     current_value: Option<mvp::config::ResponseDensity>,
 ) -> CliResult<Option<mvp::config::ResponseDensity>> {
     let options = response_density_select_options(current_value.is_some());
-    let default_index = match current_value {
-        Some(mvp::config::ResponseDensity::Concise) => {
-            find_select_option_index(&options, "concise")
-        }
-        Some(mvp::config::ResponseDensity::Balanced) => {
-            find_select_option_index(&options, "balanced")
-        }
-        Some(mvp::config::ResponseDensity::Thorough) => {
-            find_select_option_index(&options, "thorough")
-        }
-        None => find_select_option_index(&options, "unset"),
-    };
+    let default_index =
+        find_select_option_index(&options, response_density_default_slug(current_value));
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::ResponseDensity),
         &options,
@@ -224,18 +216,8 @@ fn select_initiative_level(
     current_value: Option<mvp::config::InitiativeLevel>,
 ) -> CliResult<Option<mvp::config::InitiativeLevel>> {
     let options = initiative_level_select_options(current_value.is_some());
-    let default_index = match current_value {
-        Some(mvp::config::InitiativeLevel::AskBeforeActing) => {
-            find_select_option_index(&options, "ask_before_acting")
-        }
-        Some(mvp::config::InitiativeLevel::Balanced) => {
-            find_select_option_index(&options, "balanced")
-        }
-        Some(mvp::config::InitiativeLevel::HighInitiative) => {
-            find_select_option_index(&options, "high_initiative")
-        }
-        None => find_select_option_index(&options, "unset"),
-    };
+    let default_index =
+        find_select_option_index(&options, initiative_level_default_slug(current_value));
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::InitiativeLevel),
         &options,
@@ -270,11 +252,14 @@ fn select_review_action(
         ui.print_line(line.as_str())?;
     }
 
-    let options = review_action_select_options();
+    let has_meaningful_preferences = draft_has_meaningful_preferences(draft);
+    let options = review_action_select_options(has_meaningful_preferences);
+    let default_index =
+        find_select_option_index(&options, review_action_default_slug(has_meaningful_preferences));
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::ReviewAction),
         &options,
-        Some(0),
+        default_index,
         SelectInteractionMode::List,
     )?;
 
@@ -290,6 +275,15 @@ fn find_select_option_index(options: &[SelectOption], slug: &str) -> Option<usiz
     options
         .iter()
         .position(|option| option.slug.eq_ignore_ascii_case(slug))
+}
+
+fn draft_has_meaningful_preferences(draft: &PersonalizationDraft) -> bool {
+    draft.preferred_name.is_some()
+        || draft.response_density.is_some()
+        || draft.initiative_level.is_some()
+        || draft.standing_boundaries.is_some()
+        || draft.timezone.is_some()
+        || draft.locale.is_some()
 }
 
 fn render_review_lines(draft: &PersonalizationDraft) -> Vec<String> {
@@ -1272,6 +1266,70 @@ mod tests {
                 )
             }),
             "upgrade follow-up should use the guidance copy, got: {:#?}",
+            ui.printed_lines
+        );
+
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn personalize_cli_blank_density_and_initiative_use_recommended_defaults() {
+        let config_path = unique_config_path("recommended-defaults");
+        let config_path_string = config_path.display().to_string();
+        write_default_config(&config_path);
+        let mut ui = TestPromptUi::with_inputs([
+            "Chum",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "1",
+            "n",
+        ]);
+
+        run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
+            .expect("save flow should succeed");
+        let load_result =
+            mvp::config::load(Some(config_path_string.as_str())).expect("reload config");
+        let (_, loaded_config) = load_result;
+        let personalization = loaded_config
+            .memory
+            .personalization
+            .expect("saved personalization");
+
+        assert_eq!(personalization.preferred_name.as_deref(), Some("Chum"));
+        assert_eq!(
+            personalization.response_density,
+            Some(mvp::config::ResponseDensity::Balanced),
+            "blank response density should follow the recommended balanced default"
+        );
+        assert_eq!(
+            personalization.initiative_level,
+            Some(mvp::config::InitiativeLevel::Balanced),
+            "blank initiative should follow the recommended balanced default"
+        );
+
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn personalize_cli_explicit_empty_draft_defaults_to_skip_instead_of_error() {
+        let config_path = unique_config_path("empty-draft-skip-default");
+        let config_path_string = config_path.display().to_string();
+        write_default_config(&config_path);
+        let mut ui = TestPromptUi::with_inputs(["", "unset", "unset", "", "", "", ""]);
+
+        let outcome =
+            run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
+                .expect("explicit empty draft should skip instead of failing");
+
+        assert_eq!(outcome, PersonalizeCliOutcome::Skipped);
+        assert!(
+            ui.printed_lines
+                .iter()
+                .any(|line| line == "No changes saved."),
+            "empty-draft default should take the skip path: {:#?}",
             ui.printed_lines
         );
 
