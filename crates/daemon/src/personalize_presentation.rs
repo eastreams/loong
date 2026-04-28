@@ -1,3 +1,5 @@
+use crate::onboard_cli::SelectOption;
+
 pub(crate) const PERSONALIZE_COMMAND_ABOUT: &str =
     "Teach Loong your working style for future sessions";
 pub(crate) const PERSONALIZE_COMMAND_LONG_ABOUT: &str = "Teach Loong your working style for future sessions.\n\nThis command stores advisory preferences such as preferred name, response density, initiative level, and standing boundaries. Rerun it any time to update or clear saved preferences. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first.";
@@ -75,6 +77,117 @@ pub(crate) const fn personalize_review_choice_description(
             "stop proactive suggestions without saving this draft; keep any existing saved preferences"
         }
     }
+}
+
+pub(crate) fn response_density_select_options(has_current_value: bool) -> Vec<SelectOption> {
+    let mut options = vec![
+        SelectOption {
+            label: "concise".to_owned(),
+            slug: "concise".to_owned(),
+            description: "keep responses brief and tightly scoped".to_owned(),
+            recommended: false,
+        },
+        SelectOption {
+            label: "balanced".to_owned(),
+            slug: "balanced".to_owned(),
+            description: "balance speed, clarity, and context".to_owned(),
+            recommended: true,
+        },
+        SelectOption {
+            label: "thorough".to_owned(),
+            slug: "thorough".to_owned(),
+            description: "include deeper context and reasoning when useful".to_owned(),
+            recommended: false,
+        },
+    ];
+
+    if has_current_value {
+        options.push(SelectOption {
+            label: "clear current value".to_owned(),
+            slug: "clear".to_owned(),
+            description: "remove the saved response density preference".to_owned(),
+            recommended: false,
+        });
+    } else {
+        options.push(SelectOption {
+            label: "leave unset".to_owned(),
+            slug: "unset".to_owned(),
+            description: "do not save a response density preference yet".to_owned(),
+            recommended: false,
+        });
+    }
+
+    options
+}
+
+pub(crate) fn initiative_level_select_options(has_current_value: bool) -> Vec<SelectOption> {
+    let mut options = vec![
+        SelectOption {
+            label: "ask before acting".to_owned(),
+            slug: "ask_before_acting".to_owned(),
+            description: "confirm before taking non-trivial action".to_owned(),
+            recommended: false,
+        },
+        SelectOption {
+            label: "balanced".to_owned(),
+            slug: "balanced".to_owned(),
+            description: "default initiative with selective confirmation".to_owned(),
+            recommended: true,
+        },
+        SelectOption {
+            label: "high initiative".to_owned(),
+            slug: "high_initiative".to_owned(),
+            description: "move forward proactively unless risk is high".to_owned(),
+            recommended: false,
+        },
+    ];
+
+    if has_current_value {
+        options.push(SelectOption {
+            label: "clear current value".to_owned(),
+            slug: "clear".to_owned(),
+            description: "remove the saved initiative preference".to_owned(),
+            recommended: false,
+        });
+    } else {
+        options.push(SelectOption {
+            label: "leave unset".to_owned(),
+            slug: "unset".to_owned(),
+            description: "do not save an initiative preference yet".to_owned(),
+            recommended: false,
+        });
+    }
+
+    options
+}
+
+pub(crate) fn review_action_select_options() -> Vec<SelectOption> {
+    vec![
+        SelectOption {
+            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Save).to_owned(),
+            slug: "save".to_owned(),
+            description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Save)
+                .to_owned(),
+            recommended: true,
+        },
+        SelectOption {
+            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Skip).to_owned(),
+            slug: "skip".to_owned(),
+            description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Skip)
+                .to_owned(),
+            recommended: false,
+        },
+        SelectOption {
+            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Suppress)
+                .to_owned(),
+            slug: "suppress".to_owned(),
+            description: personalize_review_choice_description(
+                PersonalizeReviewChoiceKind::Suppress,
+            )
+            .to_owned(),
+            recommended: false,
+        },
+    ]
 }
 
 pub(crate) const fn personalize_skip_message() -> &'static str {

@@ -13,14 +13,13 @@ use crate::operator_prompt::{
     StdioOperatorUi, prompt_optional_operator_text,
 };
 use crate::personalize_presentation::{
-    PersonalizePromptKind, PersonalizeReviewChoiceKind, PersonalizeSelectKind,
-    personalize_cleared_message, personalize_saved_message,
-    personalize_memory_profile_deferred_message, personalize_memory_profile_upgrade_prompt,
-    personalize_memory_profile_upgraded_message,
-    personalize_prompt_label, personalize_review_choice_description,
-    personalize_review_choice_label, personalize_review_intro, personalize_select_label,
-    personalize_skip_message, personalize_suppressed_message,
-    personalize_suppressed_recovery_guidance,
+    PersonalizePromptKind, PersonalizeSelectKind, initiative_level_select_options,
+    personalize_cleared_message, personalize_memory_profile_deferred_message,
+    personalize_memory_profile_upgrade_prompt, personalize_memory_profile_upgraded_message,
+    personalize_prompt_label, personalize_review_intro, personalize_saved_message,
+    personalize_select_label, personalize_skip_message, personalize_suppressed_message,
+    personalize_suppressed_recovery_guidance, response_density_select_options,
+    review_action_select_options,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,9 +100,7 @@ fn print_suppressed_recovery_guidance(
         return Ok(());
     }
 
-    ui.print_line(
-        personalize_suppressed_recovery_guidance(),
-    )?;
+    ui.print_line(personalize_suppressed_recovery_guidance())?;
 
     Ok(())
 }
@@ -184,60 +181,18 @@ fn select_response_density(
     ui: &mut impl OperatorPromptUi,
     current_value: Option<mvp::config::ResponseDensity>,
 ) -> CliResult<Option<mvp::config::ResponseDensity>> {
-    let mut options = Vec::new();
-    let concise_option_index = options.len();
-    let concise_option = SelectOption {
-        label: "concise".to_owned(),
-        slug: "concise".to_owned(),
-        description: "keep responses brief and tightly scoped".to_owned(),
-        recommended: false,
-    };
-    options.push(concise_option);
-    let balanced_option_index = options.len();
-    let balanced_option = SelectOption {
-        label: "balanced".to_owned(),
-        slug: "balanced".to_owned(),
-        description: "balance speed, clarity, and context".to_owned(),
-        recommended: true,
-    };
-    options.push(balanced_option);
-    let thorough_option_index = options.len();
-    let thorough_option = SelectOption {
-        label: "thorough".to_owned(),
-        slug: "thorough".to_owned(),
-        description: "include deeper context and reasoning when useful".to_owned(),
-        recommended: false,
-    };
-    options.push(thorough_option);
-    let unset_option_index = if current_value.is_none() {
-        let unset_option = SelectOption {
-            label: "leave unset".to_owned(),
-            slug: "unset".to_owned(),
-            description: "do not save a response density preference yet".to_owned(),
-            recommended: false,
-        };
-        options.push(unset_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
-    let clear_option_index = if current_value.is_some() {
-        let clear_option = SelectOption {
-            label: "clear current value".to_owned(),
-            slug: "clear".to_owned(),
-            description: "remove the saved response density preference".to_owned(),
-            recommended: false,
-        };
-        options.push(clear_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
+    let options = response_density_select_options(current_value.is_some());
     let default_index = match current_value {
-        Some(mvp::config::ResponseDensity::Concise) => Some(concise_option_index),
-        Some(mvp::config::ResponseDensity::Balanced) => Some(balanced_option_index),
-        Some(mvp::config::ResponseDensity::Thorough) => Some(thorough_option_index),
-        None => unset_option_index,
+        Some(mvp::config::ResponseDensity::Concise) => {
+            find_select_option_index(&options, "concise")
+        }
+        Some(mvp::config::ResponseDensity::Balanced) => {
+            find_select_option_index(&options, "balanced")
+        }
+        Some(mvp::config::ResponseDensity::Thorough) => {
+            find_select_option_index(&options, "thorough")
+        }
+        None => find_select_option_index(&options, "unset"),
     };
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::ResponseDensity),
@@ -245,19 +200,19 @@ fn select_response_density(
         default_index,
         SelectInteractionMode::List,
     )?;
-    if Some(selected_index) == unset_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "unset") {
         return Ok(None);
     }
-    if Some(selected_index) == clear_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "clear") {
         return Ok(None);
     }
-    if selected_index == concise_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "concise") {
         return Ok(Some(mvp::config::ResponseDensity::Concise));
     }
-    if selected_index == balanced_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "balanced") {
         return Ok(Some(mvp::config::ResponseDensity::Balanced));
     }
-    if selected_index == thorough_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "thorough") {
         return Ok(Some(mvp::config::ResponseDensity::Thorough));
     }
 
@@ -268,60 +223,18 @@ fn select_initiative_level(
     ui: &mut impl OperatorPromptUi,
     current_value: Option<mvp::config::InitiativeLevel>,
 ) -> CliResult<Option<mvp::config::InitiativeLevel>> {
-    let mut options = Vec::new();
-    let ask_before_acting_option_index = options.len();
-    let ask_before_acting_option = SelectOption {
-        label: "ask before acting".to_owned(),
-        slug: "ask_before_acting".to_owned(),
-        description: "confirm before taking non-trivial action".to_owned(),
-        recommended: false,
-    };
-    options.push(ask_before_acting_option);
-    let balanced_option_index = options.len();
-    let balanced_option = SelectOption {
-        label: "balanced".to_owned(),
-        slug: "balanced".to_owned(),
-        description: "default initiative with selective confirmation".to_owned(),
-        recommended: true,
-    };
-    options.push(balanced_option);
-    let high_initiative_option_index = options.len();
-    let high_initiative_option = SelectOption {
-        label: "high initiative".to_owned(),
-        slug: "high_initiative".to_owned(),
-        description: "move forward proactively unless risk is high".to_owned(),
-        recommended: false,
-    };
-    options.push(high_initiative_option);
-    let unset_option_index = if current_value.is_none() {
-        let unset_option = SelectOption {
-            label: "leave unset".to_owned(),
-            slug: "unset".to_owned(),
-            description: "do not save an initiative preference yet".to_owned(),
-            recommended: false,
-        };
-        options.push(unset_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
-    let clear_option_index = if current_value.is_some() {
-        let clear_option = SelectOption {
-            label: "clear current value".to_owned(),
-            slug: "clear".to_owned(),
-            description: "remove the saved initiative preference".to_owned(),
-            recommended: false,
-        };
-        options.push(clear_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
+    let options = initiative_level_select_options(current_value.is_some());
     let default_index = match current_value {
-        Some(mvp::config::InitiativeLevel::AskBeforeActing) => Some(ask_before_acting_option_index),
-        Some(mvp::config::InitiativeLevel::Balanced) => Some(balanced_option_index),
-        Some(mvp::config::InitiativeLevel::HighInitiative) => Some(high_initiative_option_index),
-        None => unset_option_index,
+        Some(mvp::config::InitiativeLevel::AskBeforeActing) => {
+            find_select_option_index(&options, "ask_before_acting")
+        }
+        Some(mvp::config::InitiativeLevel::Balanced) => {
+            find_select_option_index(&options, "balanced")
+        }
+        Some(mvp::config::InitiativeLevel::HighInitiative) => {
+            find_select_option_index(&options, "high_initiative")
+        }
+        None => find_select_option_index(&options, "unset"),
     };
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::InitiativeLevel),
@@ -329,19 +242,19 @@ fn select_initiative_level(
         default_index,
         SelectInteractionMode::List,
     )?;
-    if Some(selected_index) == unset_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "unset") {
         return Ok(None);
     }
-    if Some(selected_index) == clear_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "clear") {
         return Ok(None);
     }
-    if selected_index == ask_before_acting_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "ask_before_acting") {
         return Ok(Some(mvp::config::InitiativeLevel::AskBeforeActing));
     }
-    if selected_index == balanced_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "balanced") {
         return Ok(Some(mvp::config::InitiativeLevel::Balanced));
     }
-    if selected_index == high_initiative_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "high_initiative") {
         return Ok(Some(mvp::config::InitiativeLevel::HighInitiative));
     }
 
@@ -357,32 +270,7 @@ fn select_review_action(
         ui.print_line(line.as_str())?;
     }
 
-    let options = vec![
-        SelectOption {
-            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Save).to_owned(),
-            slug: "save".to_owned(),
-            description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Save)
-                .to_owned(),
-            recommended: true,
-        },
-        SelectOption {
-            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Skip).to_owned(),
-            slug: "skip".to_owned(),
-            description: personalize_review_choice_description(PersonalizeReviewChoiceKind::Skip)
-                .to_owned(),
-            recommended: false,
-        },
-        SelectOption {
-            label: personalize_review_choice_label(PersonalizeReviewChoiceKind::Suppress)
-                .to_owned(),
-            slug: "suppress".to_owned(),
-            description: personalize_review_choice_description(
-                PersonalizeReviewChoiceKind::Suppress,
-            )
-            .to_owned(),
-            recommended: false,
-        },
-    ];
+    let options = review_action_select_options();
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::ReviewAction),
         &options,
@@ -396,6 +284,12 @@ fn select_review_action(
         2 => Ok(PersonalizeReviewAction::SuppressFutureSuggestions),
         _ => Err("review action selection out of range".to_owned()),
     }
+}
+
+fn find_select_option_index(options: &[SelectOption], slug: &str) -> Option<usize> {
+    options
+        .iter()
+        .position(|option| option.slug.eq_ignore_ascii_case(slug))
 }
 
 fn render_review_lines(draft: &PersonalizationDraft) -> Vec<String> {
@@ -441,7 +335,8 @@ fn save_personalization(
 
         config.memory.personalization = None;
         let saved_path = write_personalization_config(config, resolved_path)?;
-        let cleared_message = personalize_cleared_message(saved_path.display().to_string().as_str());
+        let cleared_message =
+            personalize_cleared_message(saved_path.display().to_string().as_str());
         ui.print_line(cleared_message.as_str())?;
 
         return Ok(PersonalizeCliOutcome::Saved {
@@ -454,10 +349,7 @@ fn save_personalization(
     let needs_memory_profile_upgrade =
         config.memory.profile != mvp::config::MemoryProfile::ProfilePlusWindow;
     if needs_memory_profile_upgrade {
-        let confirmed = ui.prompt_confirm(
-            personalize_memory_profile_upgrade_prompt(),
-            true,
-        )?;
+        let confirmed = ui.prompt_confirm(personalize_memory_profile_upgrade_prompt(), true)?;
         if confirmed {
             config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
             upgraded_memory_profile = true;
@@ -471,9 +363,7 @@ fn save_personalization(
 
     ui.print_line(personalize_saved_message(saved_path.display().to_string().as_str()).as_str())?;
     if upgraded_memory_profile {
-        ui.print_line(
-            personalize_memory_profile_upgraded_message(),
-        )?;
+        ui.print_line(personalize_memory_profile_upgraded_message())?;
     }
     if declined_memory_profile_upgrade {
         ui.print_line(personalize_memory_profile_deferred_message())?;
@@ -563,6 +453,7 @@ mod tests {
         prompt_labels: Vec<String>,
         select_labels: Vec<String>,
         select_option_labels: Vec<Vec<String>>,
+        select_option_descriptions: Vec<Vec<String>>,
         confirm_messages: Vec<String>,
     }
 
@@ -575,6 +466,7 @@ mod tests {
                 prompt_labels: Vec::new(),
                 select_labels: Vec::new(),
                 select_option_labels: Vec::new(),
+                select_option_descriptions: Vec::new(),
                 confirm_messages: Vec::new(),
             }
         }
@@ -628,6 +520,12 @@ mod tests {
             self.select_labels.push(label.to_owned());
             self.select_option_labels
                 .push(options.iter().map(|option| option.label.clone()).collect());
+            self.select_option_descriptions.push(
+                options
+                    .iter()
+                    .map(|option| option.description.clone())
+                    .collect(),
+            );
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim();
             if trimmed_input.is_empty() {
@@ -1253,6 +1151,80 @@ mod tests {
     }
 
     #[test]
+    fn select_response_density_uses_guidance_option_copy() {
+        let mut ui = TestPromptUi::with_inputs([""]);
+
+        let selection = select_response_density(&mut ui, None).expect("select response density");
+
+        assert_eq!(selection, None);
+        assert_eq!(
+            ui.select_labels,
+            vec!["How detailed should Loong usually be?"],
+            "response density prompt should stay operator-facing: {:#?}",
+            ui.select_labels
+        );
+        assert_eq!(
+            ui.select_option_labels,
+            vec![vec![
+                "concise".to_owned(),
+                "balanced".to_owned(),
+                "thorough".to_owned(),
+                "leave unset".to_owned(),
+            ]],
+            "response density option labels should remain stable: {:#?}",
+            ui.select_option_labels
+        );
+        assert_eq!(
+            ui.select_option_descriptions,
+            vec![vec![
+                "keep responses brief and tightly scoped".to_owned(),
+                "balance speed, clarity, and context".to_owned(),
+                "include deeper context and reasoning when useful".to_owned(),
+                "do not save a response density preference yet".to_owned(),
+            ]],
+            "response density option descriptions should come from one guidance source: {:#?}",
+            ui.select_option_descriptions
+        );
+    }
+
+    #[test]
+    fn select_initiative_level_uses_guidance_option_copy() {
+        let mut ui = TestPromptUi::with_inputs([""]);
+
+        let selection = select_initiative_level(&mut ui, None).expect("select initiative level");
+
+        assert_eq!(selection, None);
+        assert_eq!(
+            ui.select_labels,
+            vec!["How proactive should Loong be?"],
+            "initiative prompt should stay operator-facing: {:#?}",
+            ui.select_labels
+        );
+        assert_eq!(
+            ui.select_option_labels,
+            vec![vec![
+                "ask before acting".to_owned(),
+                "balanced".to_owned(),
+                "high initiative".to_owned(),
+                "leave unset".to_owned(),
+            ]],
+            "initiative option labels should remain stable: {:#?}",
+            ui.select_option_labels
+        );
+        assert_eq!(
+            ui.select_option_descriptions,
+            vec![vec![
+                "confirm before taking non-trivial action".to_owned(),
+                "default initiative with selective confirmation".to_owned(),
+                "move forward proactively unless risk is high".to_owned(),
+                "do not save an initiative preference yet".to_owned(),
+            ]],
+            "initiative option descriptions should come from one guidance source: {:#?}",
+            ui.select_option_descriptions
+        );
+    }
+
+    #[test]
     fn personalize_cli_save_with_upgrade_uses_guidance_messages() {
         let config_path = unique_config_path("save-guidance-copy");
         let config_path_string = config_path.display().to_string();
@@ -1280,14 +1252,16 @@ mod tests {
         );
         assert_eq!(
             ui.confirm_messages,
-            vec!["Let Loong surface these preferences in Session Profile by upgrading memory profile?"],
+            vec![
+                "Let Loong surface these preferences in Session Profile by upgrading memory profile?"
+            ],
             "memory-profile upgrade prompt should sound like operator guidance: {:#?}",
             ui.confirm_messages
         );
         assert!(
-            ui.printed_lines.iter().any(|line| {
-                line.contains("Saved how Loong should work with you to")
-            }),
+            ui.printed_lines
+                .iter()
+                .any(|line| { line.contains("Saved how Loong should work with you to") }),
             "save flow should confirm the guidance outcome, got: {:#?}",
             ui.printed_lines
         );
