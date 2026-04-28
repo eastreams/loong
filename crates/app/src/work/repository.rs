@@ -1206,10 +1206,10 @@ impl WorkUnitRepository {
             .query_row(
                 "SELECT
                     COUNT(*),
-                    SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status = 'leased' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END),
-                    SUM(CASE
+                    COALESCE(SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'leased' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE
                             WHEN status IN ('waiting_external', 'waiting_review') THEN 1
                             WHEN status IN ('ready', 'retry_pending')
                                  AND EXISTS (
@@ -1221,14 +1221,14 @@ impl WorkUnitRepository {
                                        AND blockers.status NOT IN ('completed', 'failed_terminal', 'cancelled', 'archived')
                                  ) THEN 1
                             ELSE 0
-                        END),
-                    SUM(CASE WHEN status = 'retry_pending' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status IN ('completed', 'failed_terminal', 'cancelled') THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status IN ('leased', 'running')
+                        END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'retry_pending' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status IN ('completed', 'failed_terminal', 'cancelled') THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status IN ('leased', 'running')
                                  AND lease_expires_at_ms IS NOT NULL
                                  AND lease_expires_at_ms < ?1
-                             THEN 1 ELSE 0 END)
+                             THEN 1 ELSE 0 END), 0)
                  FROM work_units",
                 params![now_ms],
                 |row| {
@@ -2891,6 +2891,26 @@ mod tests {
             })
             .expect("list work units including archived");
         assert_eq!(with_archived.len(), 2);
+    }
+
+    #[test]
+    fn load_runtime_health_returns_zero_counts_for_empty_repository() {
+        let config = isolated_memory_config("runtime-health-empty");
+        let repository = WorkUnitRepository::new(&config).expect("repository");
+
+        let health = repository
+            .load_runtime_health(Some(5_000))
+            .expect("load runtime health");
+
+        assert_eq!(health.total_count, 0);
+        assert_eq!(health.ready_count, 0);
+        assert_eq!(health.leased_count, 0);
+        assert_eq!(health.running_count, 0);
+        assert_eq!(health.blocked_count, 0);
+        assert_eq!(health.retry_pending_count, 0);
+        assert_eq!(health.terminal_count, 0);
+        assert_eq!(health.archived_count, 0);
+        assert_eq!(health.expired_lease_count, 0);
     }
 
     #[test]
