@@ -84,11 +84,22 @@ loong plugins init ./weather-js \
   --source-language js
 ```
 
+TypeScript:
+
+```bash
+loong plugins init ./weather-ts \
+  --plugin-id weather-ts \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language ts
+```
+
 This writes:
 
 - `loong.plugin.json`
 - `README.md`
-- a runnable `index.py` or `index.js` stub
+- a runnable `index.py`, `index.js`, or `index.ts` stub
 
 ### 2. Edit the manifest and runtime file
 
@@ -127,6 +138,10 @@ loong plugins invoke-extension \
 ```
 
 For JavaScript, replace `python3` with `node`.
+
+For TypeScript, scaffold with `--source-language ts` and use the same
+`--allow-command node`; the template runs through
+`node --experimental-strip-types index.ts`.
 
 Go:
 
@@ -184,6 +199,7 @@ when you pass the allowed command on the CLI.
 |----------|----------------------|--------------------------|-------------------------|--------------------|
 | Python | `py` | `index.py` | `python3` | `examples/plugins-process/native-extension-python/` |
 | JavaScript | `js` | `index.js` | `node` | `examples/plugins-process/native-extension-javascript/` |
+| TypeScript | `ts` | `index.ts` | `node` | `examples/plugins-process/native-extension-typescript/` |
 | Go | `go` | `main.go` | `go` | `examples/plugins-process/native-extension-go/` |
 | Rust | `rs` | `Cargo.toml`, `src/main.rs` | `cargo` | `examples/plugins-process/native-extension-rust/` |
 
@@ -193,6 +209,7 @@ The repository now also carries a minimal manifest-first example under:
 
 - `examples/plugins-process/native-extension-python/`
 - `examples/plugins-process/native-extension-javascript/`
+- `examples/plugins-process/native-extension-typescript/`
 - `examples/plugins-process/native-extension-go/`
 - `examples/plugins-process/native-extension-rust/`
 

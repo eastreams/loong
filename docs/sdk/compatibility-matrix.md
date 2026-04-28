@@ -39,5 +39,6 @@ surfaces.
 |----------|------------------|--------------------------|------------------------|--------------------|
 | Python | Supported public runnable template | `index.py` | `loong plugins invoke-extension ... --allow-command python3` | `examples/plugins-process/native-extension-python/` |
 | JavaScript | Supported public runnable template | `index.js` | `loong plugins invoke-extension ... --allow-command node` | `examples/plugins-process/native-extension-javascript/` |
+| TypeScript | Supported public runnable template | `index.ts` | `loong plugins invoke-extension ... --allow-command node` | `examples/plugins-process/native-extension-typescript/` |
 | Go | Supported public runnable template | `main.go` | `loong plugins invoke-extension ... --allow-command go` | `examples/plugins-process/native-extension-go/` |
 | Rust | Supported public runnable template | `Cargo.toml`, `src/main.rs` | `loong plugins invoke-extension ... --allow-command cargo` | `examples/plugins-process/native-extension-rust/` |

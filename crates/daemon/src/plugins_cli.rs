@@ -3803,6 +3803,13 @@ mod tests {
                 expected_tags: &["example", "native-extension", "process-stdio", "javascript"],
             },
             CheckedInNativeExtensionExampleSpec {
+                package_root_relative: "examples/plugins-process/native-extension-typescript",
+                plugin_id: "native-extension-typescript-example",
+                source_language_arg: "ts",
+                expected_summary: "Minimal manifest-first TypeScript native extension example",
+                expected_tags: &["example", "native-extension", "process-stdio", "typescript"],
+            },
+            CheckedInNativeExtensionExampleSpec {
                 package_root_relative: "examples/plugins-process/native-extension-go",
                 plugin_id: "native-extension-go-example",
                 source_language_arg: "go",
@@ -5439,6 +5446,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_plugins_init_typescript_process_stdio_scaffold_writes_runnable_entrypoint() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-typescript");
+        let package_root = format!("{temp_root}/weather-ts");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-ts".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("ts".to_owned()),
+                version: "0.2.0".to_owned(),
+                summary: Some("TypeScript weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("typescript process stdio scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        assert_eq!(execution.source_language.as_deref(), Some("typescript"));
+        assert_eq!(execution.adapter_family, "typescript-stdio-adapter");
+        assert_eq!(execution.runtime_files_written.len(), 1);
+        assert!(
+            execution.runtime_files_written[0].ends_with("index.ts"),
+            "expected scaffolded typescript entrypoint, got {:?}",
+            execution.runtime_files_written
+        );
+        let authoring_profile = execution
+            .native_extension_authoring_profile
+            .as_ref()
+            .expect("typescript scaffold should expose authoring profile");
+        assert_eq!(authoring_profile.command, "node");
+        assert_eq!(
+            authoring_profile.args,
+            vec![
+                "--experimental-strip-types".to_owned(),
+                "index.ts".to_owned()
+            ]
+        );
+        assert_eq!(
+            authoring_profile.reference_example_path,
+            "examples/plugins-process/native-extension-typescript".to_owned()
+        );
+
+        let rendered_manifest =
+            fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+        assert_eq!(
+            manifest.metadata.get("command").map(String::as_str),
+            Some("node")
+        );
+        assert_eq!(
+            manifest.metadata.get("args_json").map(String::as_str),
+            Some("[\"--experimental-strip-types\",\"index.ts\"]")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("process_timeout_ms")
+                .map(String::as_str),
+            Some("15000")
+        );
+    }
+
+    #[tokio::test]
     async fn execute_plugins_init_rust_process_stdio_scaffold_writes_runnable_entrypoint() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-rust");
         let package_root = format!("{temp_root}/weather-rust");
@@ -5595,6 +5673,53 @@ mod tests {
         })
         .await
         .expect("invoke-extension should execute scaffolded javascript extension");
+
+        let PluginsCommandExecution::InvokeExtension(invoke_execution) = invoke_execution else {
+            panic!("expected invoke-extension execution");
+        };
+        assert_eq!(
+            invoke_execution.response_payload["handled_event"],
+            json!("session_start")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_invoke_extension_runs_scaffolded_typescript_process_stdio_extension() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-invoke-extension-typescript");
+        let package_root = format!("{temp_root}/weather-ts");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "weather-ts".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("ts".to_owned()),
+                version: "0.2.0".to_owned(),
+                summary: Some("TypeScript weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("typescript scaffold should succeed");
+
+        let PluginsCommandExecution::Init(_) = execution else {
+            panic!("expected init execution");
+        };
+
+        let invoke_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::InvokeExtension(PluginInvokeExtensionCommand {
+                root: package_root,
+                plugin_id: "weather-ts".to_owned(),
+                method: "extension/event".to_owned(),
+                payload: "{\"event\":\"session_start\"}".to_owned(),
+                allow_commands: vec!["node".to_owned()],
+            }),
+        })
+        .await
+        .expect("invoke-extension should execute scaffolded typescript extension");
 
         let PluginsCommandExecution::InvokeExtension(invoke_execution) = invoke_execution else {
             panic!("expected invoke-extension execution");

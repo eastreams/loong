@@ -101,6 +101,7 @@ Convenience scripts:
 - `plugins-process/stdio_echo_plugin.py` -- Python stdio echo plugin for process-bridge testing. This example stays explicitly `unverified` so the trust-policy fixtures can demonstrate blocked auto-apply without hiding the plugin from scan/search results.
 - `plugins-process/native-extension-python/` -- Minimal manifest-first Python native extension example with doctor/inventory/smoke-test commands.
 - `plugins-process/native-extension-javascript/` -- Minimal manifest-first JavaScript native extension example with the same governed authoring loop.
+- `plugins-process/native-extension-typescript/` -- Minimal manifest-first TypeScript native extension example with the same governed authoring loop.
 - `plugins-process/native-extension-go/` -- Minimal manifest-first Go native extension example with the same governed authoring loop.
 - `plugins-process/native-extension-rust/` -- Minimal manifest-first Rust native extension example with the same governed authoring loop.
 

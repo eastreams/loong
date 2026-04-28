@@ -83,6 +83,11 @@ const JAVASCRIPT_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
         relative_path: "index.js",
         contents: JAVASCRIPT_EXTENSION_STUB,
     }];
+const TYPESCRIPT_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
+    &[RuntimeScaffoldTemplateFile {
+        relative_path: "index.ts",
+        contents: TYPESCRIPT_EXTENSION_STUB,
+    }];
 const GO_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
     &[RuntimeScaffoldTemplateFile {
         relative_path: "main.go",
@@ -101,6 +106,7 @@ const RUST_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] = &[
 
 const PYTHON_EXTENSION_ARGS: &[&str] = &["index.py"];
 const JAVASCRIPT_EXTENSION_ARGS: &[&str] = &["index.js"];
+const TYPESCRIPT_EXTENSION_ARGS: &[&str] = &["--experimental-strip-types", "index.ts"];
 const GO_EXTENSION_ARGS: &[&str] = &["run", "main.go"];
 const RUST_EXTENSION_ARGS: &[&str] = &["run", "--quiet", "--manifest-path", "Cargo.toml"];
 
@@ -124,6 +130,16 @@ const SUPPORTED_PROCESS_STDIO_AUTHORING_PROFILES: &[ProcessStdioNativeExtensionL
         smoke_allow_command: "node",
         example_package_root: "examples/plugins-process/native-extension-javascript",
         scaffold_files: JAVASCRIPT_EXTENSION_SCAFFOLD_FILES,
+    },
+    ProcessStdioNativeExtensionLanguageProfile {
+        source_language_arg: "ts",
+        source_language: "typescript",
+        command: "node",
+        args: TYPESCRIPT_EXTENSION_ARGS,
+        process_timeout_ms: 15_000,
+        smoke_allow_command: "node",
+        example_package_root: "examples/plugins-process/native-extension-typescript",
+        scaffold_files: TYPESCRIPT_EXTENSION_SCAFFOLD_FILES,
     },
     ProcessStdioNativeExtensionLanguageProfile {
         source_language_arg: "go",
@@ -549,6 +565,87 @@ process.stdin.setEncoding('utf8');
 let buffered = '';
 
 process.stdin.on('data', (chunk) => {
+  buffered += chunk;
+  let newlineIndex = buffered.indexOf('\n');
+  while (newlineIndex !== -1) {
+    const line = buffered.slice(0, newlineIndex);
+    buffered = buffered.slice(newlineIndex + 1);
+    emitResponse(line);
+    newlineIndex = buffered.indexOf('\n');
+  }
+});
+
+process.stdin.on('end', () => {
+  if (buffered.trim()) {
+    emitResponse(buffered);
+  }
+});
+
+process.stdin.resume();
+"#;
+
+const TYPESCRIPT_EXTENSION_STUB: &str = r#"#!/usr/bin/env node
+type PayloadMap = Record<string, unknown>;
+
+function buildExtensionPayload(operation: string, payload: PayloadMap): unknown {
+  if (operation === 'extension/event') {
+    const handledEvent = typeof payload.event === 'string' ? payload.event : 'unknown';
+    return {
+      ok: true,
+      handled_event: handledEvent,
+    };
+  }
+  if (operation === 'extension/command') {
+    const commandName =
+      typeof payload.command_name === 'string' ? payload.command_name : 'extension';
+    return {
+      text: `${commandName} command stub`,
+    };
+  }
+  if (operation === 'extension/resource') {
+    return {
+      commands: [],
+      tools: [],
+    };
+  }
+  return {
+    error: `unsupported method: ${operation}`,
+  };
+}
+
+function emitResponse(line: string): void {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return;
+  }
+  const request = JSON.parse(trimmed) as {
+    method?: string;
+    id?: unknown;
+    payload?: PayloadMap;
+  };
+  const method = typeof request.method === 'string' ? request.method : '';
+  const payload = request.payload ?? {};
+  const nestedPayload =
+    payload.payload && typeof payload.payload === 'object'
+      ? (payload.payload as PayloadMap)
+      : {};
+  const operation = typeof payload.operation === 'string' ? payload.operation : '';
+  const responsePayload =
+    method === 'tools/call'
+      ? buildExtensionPayload(operation, nestedPayload)
+      : { error: `unsupported transport method: ${method}` };
+  const response = {
+    method,
+    id: request.id ?? null,
+    payload: responsePayload,
+  };
+  process.stdout.write(`${JSON.stringify(response)}\n`);
+}
+
+process.stdin.setEncoding('utf8');
+let buffered = '';
+
+process.stdin.on('data', (chunk: string) => {
   buffered += chunk;
   let newlineIndex = buffered.indexOf('\n');
   while (newlineIndex !== -1) {

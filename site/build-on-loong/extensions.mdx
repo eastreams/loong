@@ -62,7 +62,7 @@ For `process_stdio`, Loong now scaffolds:
 
 - `loong.plugin.json`
 - `README.md`
-- a runnable `index.py` or `index.js` stub
+- a runnable `index.py`, `index.js`, or `index.ts` stub
 
 The generated manifest also includes the native extension metadata keys needed for inventory and audit surfaces, including:
 
@@ -94,12 +94,24 @@ loong plugins init ./weather-rust \
   --source-language rs
 ```
 
+### TypeScript
+
+```bash
+loong plugins init ./weather-ts \
+  --plugin-id weather-ts \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language ts
+```
+
 ## Supported runnable templates
 
 | Language | `--source-language` | Scaffolded runtime files | Smoke `--allow-command` | Checked-in example |
 |----------|----------------------|--------------------------|-------------------------|--------------------|
 | Python | `py` | `index.py` | `python3` | `examples/plugins-process/native-extension-python/` |
 | JavaScript | `js` | `index.js` | `node` | `examples/plugins-process/native-extension-javascript/` |
+| TypeScript | `ts` | `index.ts` | `node` | `examples/plugins-process/native-extension-typescript/` |
 | Go | `go` | `main.go` | `go` | `examples/plugins-process/native-extension-go/` |
 | Rust | `rs` | `Cargo.toml`, `src/main.rs` | `cargo` | `examples/plugins-process/native-extension-rust/` |
 
@@ -160,6 +172,20 @@ loong plugins invoke-extension \
   --allow-command node
 ```
 
+For TypeScript:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-ts" \
+  --plugin-id weather-ts \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command node
+```
+
+The TypeScript template runs through `node --experimental-strip-types index.ts`
+behind the governed process bridge.
+
 For Go:
 
 ```bash
@@ -205,6 +231,7 @@ The repository also carries a minimal example package under:
 
 - `examples/plugins-process/native-extension-python/`
 - `examples/plugins-process/native-extension-javascript/`
+- `examples/plugins-process/native-extension-typescript/`
 - `examples/plugins-process/native-extension-go/`
 - `examples/plugins-process/native-extension-rust/`
 
