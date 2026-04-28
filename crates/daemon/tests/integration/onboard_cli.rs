@@ -6906,6 +6906,71 @@ async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_shortcut_can_install_byted_web_search() {
+    let output_path = isolated_output_path("current-shortcut-byted-web-search-config.toml");
+    let mut existing = mvp::config::LoongConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loong_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "byted-web-search", "y", "y", "o"],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with byted web search selection");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("preinstalled skills")),
+        "onboarding transcript should include the bundled skill selection step: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load written onboarding config");
+    let install_root = config
+        .external_skills
+        .resolved_install_root()
+        .expect("byted web search should persist an install root");
+
+    assert!(
+        install_root
+            .join("byted-web-search")
+            .join("scripts")
+            .join("web_search.py")
+            .exists(),
+        "onboarding should install the bundled byted web search script"
+    );
+    assert!(
+        install_root
+            .join("byted-web-search")
+            .join("references")
+            .join("setup-guide.md")
+            .exists(),
+        "onboarding should install bundled byted web search references"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_shortcut_flow_skips_detailed_edit_screens() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("detected-shortcut-workspace");

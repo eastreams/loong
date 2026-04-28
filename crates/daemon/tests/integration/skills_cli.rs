@@ -1964,6 +1964,69 @@ fn execute_skills_command_installs_bundled_browser_companion_preview() {
 }
 
 #[test]
+fn execute_skills_command_installs_bundled_byted_web_search() {
+    let root = unique_temp_dir("loong-skills-cli-byted-web-search-install");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
+    let config_path = write_external_skills_config(&root, true);
+
+    let install = loong_daemon::skills_cli::execute_skills_command(
+        loong_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::skills_cli::SkillsCommands::InstallBundled {
+                skill_id: "byted-web-search".to_owned(),
+                replace: false,
+            },
+        },
+    )
+    .expect("bundled byted web search install should succeed");
+    assert_eq!(install.outcome.payload["skill_id"], "byted-web-search");
+    assert_eq!(install.outcome.payload["display_name"], "Byted Web Search");
+    assert_eq!(install.outcome.payload["source_kind"], "bundled");
+    assert_eq!(
+        install.outcome.payload["source_path"],
+        "bundled://byted-web-search"
+    );
+
+    assert!(
+        root.join("managed-skills")
+            .join("byted-web-search")
+            .join("scripts")
+            .join("web_search.py")
+            .exists(),
+        "bundled byted web search install should copy the packaged script"
+    );
+    assert!(
+        root.join("managed-skills")
+            .join("byted-web-search")
+            .join("references")
+            .join("setup-guide.md")
+            .exists(),
+        "bundled byted web search install should copy bundled references"
+    );
+
+    let info = loong_daemon::skills_cli::execute_skills_command(
+        loong_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "byted-web-search".to_owned(),
+            },
+        },
+    )
+    .expect("bundled byted web search info should succeed");
+    assert!(
+        info.outcome.payload["instructions_preview"]
+            .as_str()
+            .expect("instructions preview should be text")
+            .contains("Volcengine web search skill"),
+        "bundled byted web search should keep the packaged skill preview readable"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn execute_skills_command_installs_bundled_pack_members() {
     let root = unique_temp_dir("loong-skills-cli-bundled-pack-install");
     let _env = SkillsCliEnvironmentGuard::set(&[]);

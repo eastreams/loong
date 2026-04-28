@@ -2167,6 +2167,7 @@ fn preinstalled_skills_screen_only_surfaces_the_onboarding_subset() {
         "systematic-debugging",
         "plan",
         "github-issues",
+        "Byted Web Search",
         "Anthropic Office pack",
         "Minimax Office pack",
     ] {
@@ -2198,6 +2199,12 @@ fn onboarding_preinstall_targets_are_derived_from_app_registry() {
         .find(|target| target.install_id == "anthropic-office")
         .expect("anthropic office pack should be exposed by app registry");
     assert_eq!(anthropic.skill_ids, &["docx", "pdf", "pptx", "xlsx"]);
+
+    let byted = mvp::tools::bundled_preinstall_targets()
+        .iter()
+        .find(|target| target.install_id == "byted-web-search")
+        .expect("byted web search should be exposed by app registry");
+    assert_eq!(byted.skill_ids, &["byted-web-search"]);
 }
 
 #[test]
