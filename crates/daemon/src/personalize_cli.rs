@@ -1383,9 +1383,9 @@ mod tests {
         collect_personalization_draft(&mut ui, Some(&existing)).expect("collect draft");
 
         assert!(
-            ui.printed_lines.iter().any(|line| {
-                line == "Current value: Chum · Enter keeps it · - clears it."
-            }),
+            ui.printed_lines
+                .iter()
+                .any(|line| { line == "Current value: Chum · Enter keeps it · - clears it." }),
             "text prompts should use the compact current-value guidance: {:#?}",
             ui.printed_lines
         );
