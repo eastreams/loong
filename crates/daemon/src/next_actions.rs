@@ -507,6 +507,7 @@ fn managed_bridge_runtime_doctor_action_label(
     format!("inspect managed bridge runtimes: {rendered_surface_ids}")
 }
 
+#[cfg(test)]
 pub(crate) fn is_managed_bridge_doctor_action(action: &SetupNextAction) -> bool {
     let is_doctor = action.kind == SetupNextActionKind::Doctor;
     let label = action.label.as_str();
