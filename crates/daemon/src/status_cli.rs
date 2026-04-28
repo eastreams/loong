@@ -3,6 +3,7 @@ use loong_spec::CliResult;
 use serde::Serialize;
 use std::path::Path;
 
+use crate::first_run_action_presentation::{FirstRunActionGroup, build_first_run_action_sections};
 use crate::gateway::client::GatewayLocalClient;
 use crate::gateway::read_models::{
     GatewayAcpObservabilityReadModel, GatewayOperatorChannelsSummaryReadModel,
@@ -404,33 +405,25 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let ordinary_network_detail = render_web_ordinary_network_detail(web_access);
     let query_search_detail = render_web_query_search_detail(web_access);
     let web_boundary_note = web_access.separation_note.clone();
-    let mut sections = Vec::new();
-
-    if let Some(primary_action) = status.next_actions.first() {
-        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: false,
-            items: vec![loong_app::tui_surface::TuiActionSpec {
-                label: primary_action.label.clone(),
-                command: primary_action.command.clone(),
-            }],
-        });
-    }
-    if status.next_actions.len() > 1 {
-        sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("also useful".to_owned()),
-            inline_title_when_wide: false,
-            items: status
-                .next_actions
-                .iter()
-                .skip(1)
-                .map(|action| loong_app::tui_surface::TuiActionSpec {
-                    label: action.label.clone(),
-                    command: action.command.clone(),
-                })
-                .collect(),
-        });
-    }
+    let mut sections = build_first_run_action_sections(
+        &status.next_actions,
+        |action| {
+            if action.label == "choose a channel"
+                || action.label == "browser preview"
+                || action.label == "enable browser preview"
+                || action.label == "allow agent-browser"
+                || action.label.starts_with("install ")
+            {
+                FirstRunActionGroup::ContinueSetup
+            } else {
+                FirstRunActionGroup::GeneralFollowup
+            }
+        },
+        |action| loong_app::tui_surface::TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        },
+    );
 
     sections.push(loong_app::tui_surface::TuiSectionSpec::Checklist {
         title: Some("runtime posture".to_owned()),
@@ -1092,7 +1085,90 @@ mod tests {
 
     #[test]
     fn render_status_cli_text_surfaces_drill_down_recipes() {
-        let gateway = GatewayOperatorSummaryReadModel {
+        let gateway = sample_gateway_operator_summary();
+        let status = StatusCliReadModel {
+            config: "/tmp/config.toml".to_owned(),
+            schema: StatusCliJsonSchema {
+                version: STATUS_CLI_JSON_SCHEMA_VERSION,
+                surface: "status",
+                purpose: "operator_runtime_summary",
+            },
+            active_provider: "Demo [demo]".to_owned(),
+            active_model: "gpt-4.1-mini".to_owned(),
+            memory_profile: "window_only".to_owned(),
+            gateway,
+            acp: StatusCliAcpReadModel {
+                enabled: false,
+                availability: "disabled".to_owned(),
+                error: None,
+                persisted_session_count: Some(0),
+                observability: None,
+            },
+            work_units: StatusCliWorkUnitReadModel {
+                availability: "available".to_owned(),
+                error: None,
+                health: Some(WorkRuntimeHealthSnapshot {
+                    total_count: 0,
+                    ready_count: 0,
+                    leased_count: 0,
+                    running_count: 0,
+                    blocked_count: 0,
+                    retry_pending_count: 0,
+                    terminal_count: 0,
+                    archived_count: 0,
+                    expired_lease_count: 0,
+                }),
+            },
+            next_actions: vec![StatusCliAction {
+                label: "first answer".to_owned(),
+                command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
+            }],
+            recipes: vec!["loong gateway status".to_owned()],
+        };
+
+        let rendered = render_status_cli_text(&status);
+
+        assert!(rendered.contains("start here"));
+        assert!(
+            rendered.contains(
+                "- first answer: loong ask --config '/tmp/config.toml' --message 'hello'"
+            )
+        );
+        assert!(rendered.contains("runtime posture"));
+        assert!(rendered.contains("[OK] tool calling"));
+        assert!(rendered.contains("[OK] ordinary network"));
+        assert!(rendered.contains("[OK] query search"));
+        assert!(rendered.contains("configured channels"));
+        assert!(rendered.contains("enabled channels"));
+        assert!(rendered.contains("service enabled ids"));
+        assert!(rendered.contains("runtime attention surfaces"));
+        assert!(rendered.contains("runtime attention ids"));
+        assert!(rendered.contains("saved runtime"));
+        assert!(rendered.contains("gateway summary"));
+        assert!(rendered.contains("paired devices: 2"));
+        assert!(rendered.contains("managed bridges: 1"));
+        assert!(rendered.contains("known nodes: 3"));
+        assert!(rendered.contains("visible tools: 4"));
+        assert!(rendered.contains("direct tools: read,exec"));
+        assert!(rendered.contains("hidden surfaces: agent,web"));
+        assert!(rendered.contains("ordinary network"));
+        assert!(rendered.contains("enabled=true"));
+        assert!(rendered.contains("query search"));
+        assert!(rendered.contains("provider=duckduckgo"));
+        assert!(rendered.contains("credential_ready=true"));
+        assert!(rendered.contains("web boundary"));
+        assert!(rendered.contains("ordinary network access stays separately governed"));
+        assert!(rendered.contains("channel and recovery detail"));
+        assert!(rendered.contains("enabled channels: telegram"));
+        assert!(rendered.contains("service enabled ids: telegram"));
+        assert!(rendered.contains("capability snapshot: abc123"));
+        assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
+        assert!(rendered.contains("deep dives"));
+        assert!(rendered.contains("- recipe: loong gateway status"));
+    }
+
+    fn sample_gateway_operator_summary() -> GatewayOperatorSummaryReadModel {
+        GatewayOperatorSummaryReadModel {
             owner: GatewayOwnerStatus {
                 runtime_dir: "/tmp/runtime".to_owned(),
                 phase: "running".to_owned(),
@@ -1183,7 +1259,11 @@ mod tests {
                 managed_bridge_count: 1,
                 total_count: 3,
             },
-        };
+        }
+    }
+
+    #[test]
+    fn render_status_cli_text_separates_continue_setup_actions() {
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
             schema: StatusCliJsonSchema {
@@ -1194,7 +1274,7 @@ mod tests {
             active_provider: "Demo [demo]".to_owned(),
             active_model: "gpt-4.1-mini".to_owned(),
             memory_profile: "window_only".to_owned(),
-            gateway,
+            gateway: sample_gateway_operator_summary(),
             acp: StatusCliAcpReadModel {
                 enabled: false,
                 availability: "disabled".to_owned(),
@@ -1217,52 +1297,51 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
-            next_actions: vec![StatusCliAction {
-                label: "first answer".to_owned(),
-                command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
-            }],
-            recipes: vec!["loong gateway status".to_owned()],
+            next_actions: vec![
+                StatusCliAction {
+                    label: "first answer".to_owned(),
+                    command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
+                },
+                StatusCliAction {
+                    label: "chat".to_owned(),
+                    command: "loong chat --config '/tmp/config.toml'".to_owned(),
+                },
+                StatusCliAction {
+                    label: "teach Loong your working style".to_owned(),
+                    command: "loong personalize --config '/tmp/config.toml'".to_owned(),
+                },
+                StatusCliAction {
+                    label: "choose a channel".to_owned(),
+                    command: "loong channels --config '/tmp/config.toml'".to_owned(),
+                },
+            ],
+            recipes: Vec::new(),
         };
 
         let rendered = render_status_cli_text(&status);
 
-        assert!(rendered.contains("start here"));
+        assert!(rendered.contains("start here"), "{rendered}");
+        assert!(rendered.contains("also available"), "{rendered}");
+        assert!(rendered.contains("continue setup"), "{rendered}");
+        assert!(rendered.contains("- chat:"), "{rendered}");
         assert!(
-            rendered.contains(
-                "- first answer: loong ask --config '/tmp/config.toml' --message 'hello'"
-            )
+            rendered.contains("loong chat --config '/tmp/config.toml'"),
+            "{rendered}"
         );
-        assert!(rendered.contains("runtime posture"));
-        assert!(rendered.contains("[OK] tool calling"));
-        assert!(rendered.contains("[OK] ordinary network"));
-        assert!(rendered.contains("[OK] query search"));
-        assert!(rendered.contains("configured channels"));
-        assert!(rendered.contains("enabled channels"));
-        assert!(rendered.contains("service enabled ids"));
-        assert!(rendered.contains("runtime attention surfaces"));
-        assert!(rendered.contains("runtime attention ids"));
-        assert!(rendered.contains("saved runtime"));
-        assert!(rendered.contains("gateway summary"));
-        assert!(rendered.contains("paired devices: 2"));
-        assert!(rendered.contains("managed bridges: 1"));
-        assert!(rendered.contains("known nodes: 3"));
-        assert!(rendered.contains("visible tools: 4"));
-        assert!(rendered.contains("direct tools: read,exec"));
-        assert!(rendered.contains("hidden surfaces: agent,web"));
-        assert!(rendered.contains("ordinary network"));
-        assert!(rendered.contains("enabled=true"));
-        assert!(rendered.contains("query search"));
-        assert!(rendered.contains("provider=duckduckgo"));
-        assert!(rendered.contains("credential_ready=true"));
-        assert!(rendered.contains("web boundary"));
-        assert!(rendered.contains("ordinary network access stays separately governed"));
-        assert!(rendered.contains("channel and recovery detail"));
-        assert!(rendered.contains("enabled channels: telegram"));
-        assert!(rendered.contains("service enabled ids: telegram"));
-        assert!(rendered.contains("capability snapshot: abc123"));
-        assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
-        assert!(rendered.contains("deep dives"));
-        assert!(rendered.contains("- recipe: loong gateway status"));
+        assert!(
+            rendered.contains("- teach Loong your working style:"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("loong personalize --config"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("'/tmp/config.toml'"), "{rendered}");
+        assert!(rendered.contains("- choose a channel:"), "{rendered}");
+        assert!(
+            rendered.contains("loong channels --config '/tmp/config.toml'"),
+            "{rendered}"
+        );
     }
 
     #[test]

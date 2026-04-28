@@ -140,6 +140,7 @@ mod external_skills_policy_probe;
 pub mod feishu_cli;
 mod feishu_onboarding;
 pub mod feishu_support;
+mod first_run_action_presentation;
 pub mod gateway;
 pub mod import_cli;
 mod managed_plugin_bridge_runtime;
@@ -212,6 +213,7 @@ use channel_bridge_render::{
 pub(crate) use channel_bridge_render::{
     render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
 };
+use first_run_action_presentation::{FirstRunActionGroup, build_first_run_action_sections};
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
@@ -1084,35 +1086,25 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
 fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConfig) -> String {
     let config_path_display = config_path.display().to_string();
     let next_actions = next_actions::collect_setup_next_actions(config, &config_path_display);
-    let primary_action = next_actions.first().cloned();
-    let secondary_actions = next_actions.iter().skip(1).cloned().collect::<Vec<_>>();
     let render_width = mvp::presentation::detect_render_width();
-    let mut sections = Vec::new();
-
-    if let Some(primary_action) = primary_action {
-        sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: false,
-            items: vec![mvp::tui_surface::TuiActionSpec {
-                label: primary_action.label,
-                command: primary_action.command,
-            }],
-        });
-    }
-
-    if !secondary_actions.is_empty() {
-        sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("also available".to_owned()),
-            inline_title_when_wide: false,
-            items: secondary_actions
-                .into_iter()
-                .map(|action| mvp::tui_surface::TuiActionSpec {
-                    label: action.label,
-                    command: action.command,
-                })
-                .collect(),
-        });
-    }
+    let mut sections = build_first_run_action_sections(
+        &next_actions,
+        |action| {
+            if matches!(
+                action.kind,
+                next_actions::SetupNextActionKind::Channel
+                    | next_actions::SetupNextActionKind::BrowserPreview
+            ) {
+                FirstRunActionGroup::ContinueSetup
+            } else {
+                FirstRunActionGroup::GeneralFollowup
+            }
+        },
+        |action| mvp::tui_surface::TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        },
+    );
 
     sections.push(mvp::tui_surface::TuiSectionSpec::KeyValues {
         title: Some("saved setup".to_owned()),

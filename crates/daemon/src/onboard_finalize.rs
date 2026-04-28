@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
+use crate::first_run_action_presentation::{FirstRunActionGroup, build_first_run_action_sections};
 use crate::onboard_types::OnboardingCredentialSummary;
 use mvp::tui_surface::{
     TuiActionSpec, TuiHeaderStyle, TuiKeyValueSpec, TuiScreenSpec, TuiSectionSpec,
@@ -490,52 +491,20 @@ fn render_onboarding_success_summary_with_style(
 }
 
 fn build_onboarding_success_screen_spec(summary: &OnboardingSuccessSummary) -> TuiScreenSpec {
-    let mut sections = Vec::new();
-
-    if let Some(primary) = summary.next_actions.first() {
-        sections.push(TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: false,
-            items: vec![TuiActionSpec {
-                label: primary.label.clone(),
-                command: primary.command.clone(),
-            }],
-        });
-    }
-
-    let (setup_actions, general_actions): (Vec<_>, Vec<_>) = summary
-        .next_actions
-        .iter()
-        .skip(1)
-        .partition(|action| onboarding_action_is_continue_setup(action.kind));
-
-    if !general_actions.is_empty() {
-        sections.push(TuiSectionSpec::ActionGroup {
-            title: Some("also available".to_owned()),
-            inline_title_when_wide: false,
-            items: general_actions
-                .into_iter()
-                .map(|action| TuiActionSpec {
-                    label: action.label.clone(),
-                    command: action.command.clone(),
-                })
-                .collect(),
-        });
-    }
-
-    if !setup_actions.is_empty() {
-        sections.push(TuiSectionSpec::ActionGroup {
-            title: Some("continue setup".to_owned()),
-            inline_title_when_wide: false,
-            items: setup_actions
-                .into_iter()
-                .map(|action| TuiActionSpec {
-                    label: action.label.clone(),
-                    command: action.command.clone(),
-                })
-                .collect(),
-        });
-    }
+    let mut sections = build_first_run_action_sections(
+        &summary.next_actions,
+        |action| {
+            if onboarding_action_is_continue_setup(action.kind) {
+                FirstRunActionGroup::ContinueSetup
+            } else {
+                FirstRunActionGroup::GeneralFollowup
+            }
+        },
+        |action| TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        },
+    );
 
     sections.push(TuiSectionSpec::KeyValues {
         title: Some("saved setup".to_owned()),
