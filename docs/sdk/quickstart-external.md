@@ -130,3 +130,12 @@ For JavaScript, replace `python3` with `node`.
 
 This smoke path is explicit by design: local process execution only happens
 when you pass the allowed command on the CLI.
+
+## Reference example
+
+The repository now also carries a minimal manifest-first example under:
+
+- `examples/plugins-process/native-extension-python/`
+
+Use it when you want a concrete `loong.plugin.json` plus runnable Python
+entrypoint instead of starting from an empty package root.

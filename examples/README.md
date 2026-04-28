@@ -10,7 +10,7 @@ and security policy profiles for Loong.
 | `spec/` | 13 JSON spec files | Execution specifications for deterministic test scenarios |
 | `plugins/` | Rust source | Plugin manifest examples for scanner-based hotplug |
 | `plugins-wasm/` | Rust source + compiled `.wasm` | WASM plugin source and compiled binary |
-| `plugins-process/` | Python script | Process-based plugin example (stdio bridge) |
+| `plugins-process/` | Python script + manifest-first package | Process-based plugin examples, including a manifest-first native extension package |
 | `benchmarks/` | 2 JSON files | Performance benchmark matrix and baseline configurations |
 | `policy/` | 2 JSON files | Security policy profiles (approval, scanning) |
 
@@ -99,6 +99,7 @@ Convenience scripts:
 - `plugins/openrouter_plugin.rs` -- Rust plugin with embedded `LOONG_PLUGIN_START` / `LOONG_PLUGIN_END` manifest markers. This example is marked `verified-community` so tool search and catalog reports surface a non-default trust tier.
 - `plugins-wasm/secure_wasm_plugin.rs` -- WASM plugin Rust source. Compiled to `secure_echo.wasm`, with an `official` trust tier for first-party runtime examples.
 - `plugins-process/stdio_echo_plugin.py` -- Python stdio echo plugin for process-bridge testing. This example stays explicitly `unverified` so the trust-policy fixtures can demonstrate blocked auto-apply without hiding the plugin from scan/search results.
+- `plugins-process/native-extension-python/` -- Minimal manifest-first native extension example with `loong.plugin.json`, a runnable Python `process_stdio` entrypoint, and explicit doctor/inventory/smoke-test commands.
 
 Tool search and bootstrap reports now surface `trust_tier` and `provenance_summary` fields for scanned plugin-backed providers. `run-spec` reports also include a top-level `plugin_trust_summary`, so operator review can see tier counts and review-required high-risk plugins without manually diffing raw scan/bootstrap arrays. `tool_search` accepts both inline query prefixes like `trust:official` / `tier:verified-community` and a structured `trust_tiers` array on the operation payload when specs need deterministic trust-aware discovery. The `tool_search` outcome now also carries a `trust_filter_summary` block so operators can see which trust scope was requested, how many candidates were filtered out, and whether conflicting trust constraints collapsed the result set. For quick operator review, `run-spec` also mirrors this into a top-level `tool_search_summary` with the query, returned count, trust scope, and compact top-result cards, and `loong run-spec --render-summary` renders the same trust-aware summary to `stderr` without breaking JSON consumers. The audit lane now also records `ToolSearchEvaluated` events, so `loong audit recent`, `loong audit summary`, and the dedicated `loong audit discovery` subcommand can surface trust-filter conflicts and trust-filtered empty discovery outcomes directly, including trust-scope rollups, the last triage label, a compact context summary, and an operator hint for what to adjust next.
 
