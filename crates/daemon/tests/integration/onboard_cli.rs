@@ -6130,7 +6130,10 @@ fn onboarding_success_summary_derives_structured_actions() {
     );
     assert_eq!(summary.next_actions[0].label, "first answer");
     assert_eq!(summary.next_actions[1].label, "chat");
-    assert_eq!(summary.next_actions[2].label, "working preferences");
+    assert_eq!(
+        summary.next_actions[2].label,
+        "teach Loong your working style"
+    );
     assert_eq!(summary.next_actions[3].label, "Telegram");
     assert_eq!(summary.next_actions[4].label, "Feishu/Lark");
     assert_eq!(summary.next_actions[5].label, "enable browser preview");
@@ -6162,12 +6165,15 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
         summary.next_actions[2].kind,
         crate::onboard_cli::OnboardingActionKind::Personalize
     );
-    assert_eq!(summary.next_actions[2].label, "working preferences");
+    assert_eq!(
+        summary.next_actions[2].label,
+        "teach Loong your working style"
+    );
     assert_eq!(
         summary.next_actions[3].kind,
         crate::onboard_cli::OnboardingActionKind::Channel
     );
-    assert_eq!(summary.next_actions[3].label, "channels");
+    assert_eq!(summary.next_actions[3].label, "choose a channel");
     assert_eq!(
         summary.next_actions[3].command,
         "loong channels --config '/tmp/loong-config.toml'"
@@ -8518,11 +8524,11 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
         loong_daemon::onboard_cli::OnboardingActionKind::Channel,
         "channel catalog should become the primary handoff when cli and service channels are both unavailable: {summary:#?}"
     );
-    assert_eq!(summary.next_actions[0].label, "channels");
+    assert_eq!(summary.next_actions[0].label, "choose a channel");
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line == "- channels: loong channels --config '/tmp/loong-config.toml'"
+                line == "- choose a channel: loong channels --config '/tmp/loong-config.toml'"
             }),
         "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
     );
@@ -8884,7 +8890,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         .position(|action| action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Chat);
     let personalize_position = summary.next_actions.iter().position(|action| {
         action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Personalize
-            && action.label == "working preferences"
+            && action.label == "teach Loong your working style"
     });
     let doctor_position = summary.next_actions.iter().position(|action| {
         action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Doctor
@@ -8906,7 +8912,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         "cli-enabled plugin-backed setups should keep the chat handoff second: {summary:#?}"
     );
     let personalize_position = personalize_position.expect(
-        "cli-enabled plugin-backed setups should keep the working-preferences handoff visible before diagnostics",
+        "cli-enabled plugin-backed setups should keep the personalization handoff visible before diagnostics",
     );
     let doctor_position =
         doctor_position.expect("managed-bridge diagnostics should remain available");
@@ -8914,7 +8920,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         .expect("contextual bridge inspection handoff should remain available");
     assert!(
         personalize_position < doctor_position,
-        "working preferences should stay ahead of managed-bridge diagnostics in cli-enabled setups: {summary:#?}"
+        "personalization should stay ahead of managed-bridge diagnostics in cli-enabled setups: {summary:#?}"
     );
     assert!(
         doctor_position < bridge_review_position,
