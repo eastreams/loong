@@ -7,7 +7,9 @@ use loong_app as mvp;
 use loong_spec::CliResult;
 use serde::Serialize;
 
-use crate::first_run_action_presentation::{FirstRunActionGroup, partition_first_run_actions};
+use crate::first_run_action_presentation::{
+    FirstRunActionGroup, build_first_run_action_text_lines,
+};
 use crate::migration::{self, ImportCandidate, ImportSourceKind, SetupDomainKind};
 
 #[derive(Debug, Clone)]
@@ -528,43 +530,36 @@ fn build_import_apply_summary_body_lines(
     }
     let next_actions =
         crate::next_actions::collect_setup_next_actions(resolved_config, &config_path);
-    let grouped_actions = partition_first_run_actions(&next_actions, |action| {
-        if action.kind == crate::next_actions::SetupNextActionKind::Channel
-            || action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
-        {
-            FirstRunActionGroup::ContinueSetup
-        } else {
-            FirstRunActionGroup::GeneralFollowup
-        }
-    });
-    if let Some(primary) = grouped_actions.primary {
-        lines.push("start here".to_owned());
-        lines.extend(mvp::presentation::render_wrapped_text_line(
-            "next step: ",
-            &primary.command,
-            width,
-        ));
-        if !grouped_actions.general_followups.is_empty() {
-            lines.push("also available".to_owned());
-        }
-        for action in grouped_actions.general_followups {
-            lines.extend(mvp::presentation::render_wrapped_text_line(
-                "also available: ",
+    lines.extend(build_first_run_action_text_lines(
+        &next_actions,
+        width,
+        |action| {
+            if action.kind == crate::next_actions::SetupNextActionKind::Channel
+                || action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
+            {
+                FirstRunActionGroup::ContinueSetup
+            } else {
+                FirstRunActionGroup::GeneralFollowup
+            }
+        },
+        |action, width| {
+            mvp::presentation::render_wrapped_text_line("next step: ", &action.command, width)
+        },
+        |action, width| {
+            let prefix = if action.kind == crate::next_actions::SetupNextActionKind::Channel
+                || action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
+            {
+                "continue setup: "
+            } else {
+                "also available: "
+            };
+            mvp::presentation::render_wrapped_text_line(
+                prefix,
                 &format!("{} · {}", action.label, action.command),
                 width,
-            ));
-        }
-        if !grouped_actions.continue_setup.is_empty() {
-            lines.push("continue setup".to_owned());
-        }
-        for action in grouped_actions.continue_setup {
-            lines.extend(mvp::presentation::render_wrapped_text_line(
-                "continue setup: ",
-                &format!("{} · {}", action.label, action.command),
-                width,
-            ));
-        }
-    }
+            )
+        },
+    ));
     lines
 }
 
