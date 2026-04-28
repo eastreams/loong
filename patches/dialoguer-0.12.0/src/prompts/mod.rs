@@ -3,6 +3,7 @@
 pub mod confirm;
 pub mod input;
 pub mod multi_select;
+mod selection_cursor;
 pub mod select;
 pub mod sort;
 

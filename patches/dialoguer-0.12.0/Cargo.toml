@@ -40,6 +40,8 @@ allowed_external_types = [
     "fuzzy_matcher::skim::SkimMatcherV2",
 ]
 
+[workspace]
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = [
