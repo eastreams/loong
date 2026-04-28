@@ -1490,6 +1490,12 @@ fn resolve_web_search_secret_binding(
         .filter(|value| !value.is_empty())
 }
 
+fn discover_browser_companion_command() -> Option<String> {
+    which::which("loong-browser-companion")
+        .ok()
+        .and_then(|path| path.to_str().map(str::to_owned))
+}
+
 pub(crate) fn browser_companion_runtime_policy_from_tool_config(
     config: &crate::config::ToolConfig,
 ) -> BrowserCompanionRuntimePolicy {
@@ -1516,8 +1522,13 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
     config: &crate::config::ToolConfig,
 ) -> BrowserCompanionRuntimePolicy {
     let env_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
+    let discovered_command = env_command
+        .is_none()
+        .then(discover_browser_companion_command)
+        .flatten();
     let env_expected_version = parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
     let env_enabled = parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false);
+    let env_ready = parse_env_bool("LOONG_BROWSER_COMPANION_READY");
     let default_browser_companion = crate::config::BrowserCompanionToolConfig::default();
     let use_env_web_policy = config.browser_companion == default_browser_companion;
     let allow_private_hosts = if use_env_web_policy {
@@ -1544,16 +1555,18 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
             .collect()
     };
     let enforce_allowed_domains = !allowed_domains.is_empty();
+    let auto_enabled = use_env_web_policy && (env_command.is_some() || discovered_command.is_some());
+    let effective_enabled = config.browser_companion.enabled || env_enabled || auto_enabled;
+    let effective_ready = env_ready.unwrap_or(auto_enabled);
     browser_companion_runtime_policy(
-        config.browser_companion.enabled
-            || env_enabled
-            || (use_env_web_policy && env_command.is_some()),
-        parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
+        effective_enabled,
+        effective_ready,
         config
             .browser_companion
             .command
             .as_deref()
-            .or(env_command.as_deref()),
+            .or(env_command.as_deref())
+            .or(discovered_command.as_deref()),
         config
             .browser_companion
             .expected_version
@@ -1756,9 +1769,10 @@ pub fn get_tool_runtime_config() -> &'static ToolRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongHome};
+    use crate::test_support::{ScopedEnv, ScopedLoongHome, write_executable_script_atomically};
     #[cfg(feature = "feishu-integration")]
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     fn clear_tool_runtime_env(env: &mut ScopedEnv) {
         for key in [
@@ -3026,6 +3040,45 @@ mod tests {
         assert!(policy.ready);
         assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn browser_companion_policy_with_env_fallback_auto_detects_command_on_path() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+
+        let root = tempfile::tempdir().expect("create browser companion tempdir");
+        #[cfg(unix)]
+        let command_path = root.path().join("loong-browser-companion");
+        #[cfg(windows)]
+        let command_path = root.path().join("loong-browser-companion.cmd");
+
+        #[cfg(unix)]
+        write_executable_script_atomically(&command_path, "#!/bin/sh\nexit 0\n")
+            .expect("write fake browser companion");
+        #[cfg(windows)]
+        std::fs::write(&command_path, "@echo off\r\nexit /b 0\r\n")
+            .expect("write fake browser companion");
+
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let joined = std::env::join_paths(
+            std::iter::once(root.path().to_path_buf()).chain(std::env::split_paths(&path)),
+        )
+        .expect("join PATH");
+        env.set("PATH", joined);
+
+        let policy = browser_companion_runtime_policy_with_env_fallback(
+            &crate::config::ToolConfig::default(),
+        );
+
+        assert!(policy.enabled);
+        assert!(policy.ready);
+        assert!(
+            policy
+                .command
+                .as_deref()
+                .is_some_and(|value| value.contains("loong-browser-companion"))
+        );
     }
 
     #[test]
