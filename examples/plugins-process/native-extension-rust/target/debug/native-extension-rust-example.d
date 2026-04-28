@@ -1,1 +1,0 @@
-/Users/chum/worktrees/loong-extension-maturity-20260425/examples/plugins-process/native-extension-rust/target/debug/native-extension-rust-example: /Users/chum/worktrees/loong-extension-maturity-20260425/examples/plugins-process/native-extension-rust/src/main.rs
