@@ -759,7 +759,7 @@ mod tests {
             Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID)
         );
         assert_eq!(action.browser_preview_phase, None);
-        assert_eq!(action.label, "channels");
+        assert_eq!(action.label, "choose a channel");
         assert_eq!(action.command, "loong channels --config '/tmp/loong.toml'");
     }
 
