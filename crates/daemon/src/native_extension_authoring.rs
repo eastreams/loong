@@ -66,9 +66,14 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
 pub(crate) struct NativeExtensionAuthoringActionView {
     pub kind: String,
     pub role: String,
+    pub execution_kind: String,
+    pub agent_runnable: bool,
     pub summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_command: Option<String>,
+    pub requires_allow_command: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field_path: Option<String>,
     pub blocking: bool,
@@ -252,6 +257,11 @@ pub(crate) fn build_native_extension_authoring_doctor_guidance(
     result: &PluginPreflightResult,
 ) -> Option<NativeExtensionAuthoringGuidanceView> {
     let plugin = &result.plugin;
+    let bridge_kind = kernel::PluginBridgeKind::parse_label(&plugin.bridge_kind)?;
+    let scaffold_defaults =
+        kernel::plugin_runtime_scaffold_defaults(bridge_kind, plugin.source_language.as_deref())
+            .ok()?;
+    let profile = process_stdio_native_extension_language_profile(&scaffold_defaults).ok()??;
     let mut guidance = build_native_extension_authoring_guidance(plugin)?;
     guidance.verdict = Some(result.verdict.clone());
     guidance.activation_ready = Some(result.activation_ready);
@@ -268,6 +278,8 @@ pub(crate) fn build_native_extension_authoring_doctor_guidance(
         .collect();
     guidance.author_remediation_actions = native_extension_author_remediation_actions(
         guidance.package_root.as_str(),
+        guidance.plugin_id.as_str(),
+        profile,
         &guidance.extension_metadata_issues,
         Some(&result.recommended_actions),
     );
@@ -320,8 +332,13 @@ fn build_native_extension_authoring_view(
     extension_host_actions: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> NativeExtensionAuthoringGuidanceView {
-    let author_remediation_actions =
-        native_extension_author_remediation_actions(package_root, &extension_metadata_issues, None);
+    let author_remediation_actions = native_extension_author_remediation_actions(
+        package_root,
+        plugin_id,
+        profile,
+        &extension_metadata_issues,
+        None,
+    );
     let author_remediation_hints =
         native_extension_author_remediation_hints(&extension_metadata_issues, &[]);
     NativeExtensionAuthoringGuidanceView {
@@ -377,6 +394,8 @@ fn native_extension_author_remediation_hints(
 
 fn native_extension_author_remediation_actions(
     package_root: &str,
+    plugin_id: &str,
+    profile: ProcessStdioNativeExtensionLanguageProfile,
     extension_metadata_issues: &[String],
     recommended_actions: Option<&[crate::PluginPreflightRecommendedAction]>,
 ) -> Vec<NativeExtensionAuthoringActionView> {
@@ -385,8 +404,12 @@ fn native_extension_author_remediation_actions(
         .map(|issue| NativeExtensionAuthoringActionView {
             kind: "repair_extension_metadata".to_owned(),
             role: "author".to_owned(),
+            execution_kind: "manual_edit".to_owned(),
+            agent_runnable: false,
             summary: format!("Repair native extension declaration metadata: {issue}"),
             command: None,
+            allow_command: None,
+            requires_allow_command: false,
             field_path: parse_metadata_field_path_from_issue(issue),
             blocking: true,
         })
@@ -396,18 +419,44 @@ fn native_extension_author_remediation_actions(
         actions.push(NativeExtensionAuthoringActionView {
             kind: "rerun_doctor".to_owned(),
             role: "verification".to_owned(),
+            execution_kind: "read_only_cli".to_owned(),
+            agent_runnable: true,
             summary: "Rerun doctor after repairing native extension declaration metadata."
                 .to_owned(),
             command: Some(render_authoring_doctor_command(package_root)),
+            allow_command: None,
+            requires_allow_command: false,
             field_path: None,
             blocking: false,
         });
         actions.push(NativeExtensionAuthoringActionView {
             kind: "rerun_inventory".to_owned(),
             role: "verification".to_owned(),
+            execution_kind: "read_only_cli".to_owned(),
+            agent_runnable: true,
             summary: "Rerun inventory to confirm the repaired native extension declaration truth."
                 .to_owned(),
             command: Some(render_authoring_inventory_command(package_root)),
+            allow_command: None,
+            requires_allow_command: false,
+            field_path: None,
+            blocking: false,
+        });
+        actions.push(NativeExtensionAuthoringActionView {
+            kind: "rerun_smoke_test".to_owned(),
+            role: "verification".to_owned(),
+            execution_kind: "governed_smoke_probe".to_owned(),
+            agent_runnable: true,
+            summary:
+                "Rerun the governed smoke probe after repairing native extension declaration metadata."
+                    .to_owned(),
+            command: Some(render_authoring_smoke_test_command(
+                package_root,
+                plugin_id,
+                profile.smoke_allow_command,
+            )),
+            allow_command: Some(profile.smoke_allow_command.to_owned()),
+            requires_allow_command: true,
             field_path: None,
             blocking: false,
         });
@@ -422,11 +471,19 @@ fn native_extension_author_remediation_actions(
                 } else {
                     "author".to_owned()
                 },
+                execution_kind: if action.operator_action.is_some() {
+                    "operator_follow_up".to_owned()
+                } else {
+                    "author_follow_up".to_owned()
+                },
+                agent_runnable: false,
                 summary: action.summary.clone(),
                 command: action
                     .operator_action
                     .as_ref()
                     .map(|_| render_authoring_actions_command(package_root)),
+                allow_command: None,
+                requires_allow_command: false,
                 field_path: action.field_path.clone(),
                 blocking: action.blocking,
             }
@@ -442,8 +499,12 @@ fn native_extension_author_remediation_actions(
     actions.dedup_by(|left, right| {
         left.kind == right.kind
             && left.role == right.role
+            && left.execution_kind == right.execution_kind
+            && left.agent_runnable == right.agent_runnable
             && left.summary == right.summary
             && left.command == right.command
+            && left.allow_command == right.allow_command
+            && left.requires_allow_command == right.requires_allow_command
             && left.field_path == right.field_path
             && left.blocking == right.blocking
     });

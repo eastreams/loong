@@ -2547,6 +2547,8 @@ fn format_native_extension_author_remediation_actions(
             let mut parts = vec![
                 format!("kind={}", action.kind),
                 format!("role={}", action.role),
+                format!("execution_kind={}", action.execution_kind),
+                format!("agent_runnable={}", action.agent_runnable),
             ];
             if let Some(field_path) = action.field_path.as_deref() {
                 parts.push(format!("field={field_path}"));
@@ -2554,6 +2556,13 @@ fn format_native_extension_author_remediation_actions(
             if let Some(command) = action.command.as_deref() {
                 parts.push(format!("command={command}"));
             }
+            if let Some(allow_command) = action.allow_command.as_deref() {
+                parts.push(format!("allow_command={allow_command}"));
+            }
+            parts.push(format!(
+                "requires_allow_command={}",
+                action.requires_allow_command
+            ));
             parts.push(format!("blocking={}", action.blocking));
             parts.push(format!("summary={}", action.summary));
             parts.join("|")
