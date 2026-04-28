@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use kernel::{
     IntegrationCatalog, PluginActivationCandidate, PluginActivationInventoryEntry,
     PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginDiagnosticFinding,
-    PluginScanReport, PluginTranslationReport,
+    PluginScanReport, PluginTranslationReport, plugin_native_extension_declarations_from_metadata,
 };
 
 use crate::spec_runtime::{
@@ -126,7 +126,8 @@ pub(super) fn collect_plugin_inventory_results(
     for report in plugin_scan_reports {
         for descriptor in &report.descriptors {
             let manifest = &descriptor.manifest;
-            let extension_declarations = manifest_native_extension_declarations(&manifest.metadata);
+            let extension_declarations =
+                plugin_native_extension_declarations_from_metadata(&manifest.metadata);
             let key = (descriptor.path.clone(), manifest.plugin_id.clone());
             let translation = translation_by_key.get(&key);
             let activation = activation_by_key.get(&key);
@@ -409,80 +410,6 @@ pub(super) fn collect_plugin_inventory_results(
             loaded: entry.loaded,
         })
         .collect()
-}
-
-#[derive(Default)]
-struct NativeExtensionDeclarations {
-    contract: Option<String>,
-    facets: Vec<String>,
-    methods: Vec<String>,
-    events: Vec<String>,
-    host_actions: Vec<String>,
-    metadata_issues: Vec<String>,
-}
-
-fn manifest_native_extension_declarations(
-    metadata: &BTreeMap<String, String>,
-) -> NativeExtensionDeclarations {
-    let mut declarations = NativeExtensionDeclarations {
-        contract: optional_metadata_value(metadata, "loong_extension_contract"),
-        ..Default::default()
-    };
-    declarations.facets = parse_metadata_string_list(
-        metadata,
-        "loong_extension_facets_json",
-        &mut declarations.metadata_issues,
-    );
-    declarations.methods = parse_metadata_string_list(
-        metadata,
-        "loong_extension_methods_json",
-        &mut declarations.metadata_issues,
-    );
-    declarations.events = parse_metadata_string_list(
-        metadata,
-        "loong_extension_events_json",
-        &mut declarations.metadata_issues,
-    );
-    declarations.host_actions = parse_metadata_string_list(
-        metadata,
-        "loong_extension_host_actions_json",
-        &mut declarations.metadata_issues,
-    );
-    declarations
-}
-
-fn optional_metadata_value(metadata: &BTreeMap<String, String>, key: &str) -> Option<String> {
-    metadata.get(key).and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        Some(trimmed.to_owned())
-    })
-}
-
-fn parse_metadata_string_list(
-    metadata: &BTreeMap<String, String>,
-    key: &str,
-    metadata_issues: &mut Vec<String>,
-) -> Vec<String> {
-    let Some(value) = metadata.get(key) else {
-        return Vec::new();
-    };
-
-    match serde_json::from_str::<Vec<String>>(value) {
-        Ok(values) => values
-            .into_iter()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .collect(),
-        Err(error) => {
-            metadata_issues.push(format!(
-                "metadata `{key}` must be a JSON string array: {error}"
-            ));
-            Vec::new()
-        }
-    }
 }
 
 fn plugin_inventory_status_is_blocked(status: &str) -> bool {

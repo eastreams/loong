@@ -3264,99 +3264,10 @@ fn merge_plugin_scan_report(
     combined.diagnostic_findings.extend(diagnostic_findings);
 }
 
-#[derive(Debug, Clone, Default)]
-struct RuntimePluginExtensionDeclarations {
-    contract: Option<String>,
-    facets: Vec<String>,
-    methods: Vec<String>,
-    events: Vec<String>,
-    host_actions: Vec<String>,
-    metadata_issues: Vec<String>,
-}
-
 fn runtime_plugin_extension_declarations_from_metadata(
     metadata: &BTreeMap<String, String>,
-) -> RuntimePluginExtensionDeclarations {
-    let (facets, facets_issue) = runtime_plugin_metadata_json_string_list(
-        metadata,
-        "loong_extension_facets_json",
-        "extension facets",
-    );
-    let (methods, methods_issue) = runtime_plugin_metadata_json_string_list(
-        metadata,
-        "loong_extension_methods_json",
-        "extension methods",
-    );
-    let (events, events_issue) = runtime_plugin_metadata_json_string_list(
-        metadata,
-        "loong_extension_events_json",
-        "extension events",
-    );
-    let (host_actions, host_actions_issue) = runtime_plugin_metadata_json_string_list(
-        metadata,
-        "loong_extension_host_actions_json",
-        "extension host actions",
-    );
-
-    RuntimePluginExtensionDeclarations {
-        contract: runtime_plugin_optional_metadata_value(metadata, "loong_extension_contract"),
-        facets,
-        methods,
-        events,
-        host_actions,
-        metadata_issues: [
-            facets_issue,
-            methods_issue,
-            events_issue,
-            host_actions_issue,
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
-    }
-}
-
-fn runtime_plugin_optional_metadata_value(
-    metadata: &BTreeMap<String, String>,
-    key: &str,
-) -> Option<String> {
-    metadata
-        .get(key)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn runtime_plugin_metadata_json_string_list(
-    metadata: &BTreeMap<String, String>,
-    key: &str,
-    label: &str,
-) -> (Vec<String>, Option<String>) {
-    let Some(raw_value) = metadata.get(key) else {
-        return (Vec::new(), None);
-    };
-    let trimmed = raw_value.trim();
-    if trimmed.is_empty() {
-        return (Vec::new(), None);
-    }
-
-    match serde_json::from_str::<Vec<String>>(trimmed) {
-        Ok(values) => (
-            values
-                .into_iter()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .collect(),
-            None,
-        ),
-        Err(error) => (
-            Vec::new(),
-            Some(format!(
-                "{label} metadata is not a JSON string array: {error}"
-            )),
-        ),
-    }
+) -> kernel::PluginNativeExtensionDeclarations {
+    kernel::plugin_native_extension_declarations_from_metadata(metadata)
 }
 
 fn runtime_plugin_diagnostic_codes(

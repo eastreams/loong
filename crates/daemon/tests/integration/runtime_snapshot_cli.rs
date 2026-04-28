@@ -245,6 +245,41 @@ fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
         .expect("rewrite config fixture with runtime plugin roots");
 }
 
+fn install_invalid_runtime_plugin_package(root: &Path, config_path: &Path) {
+    write_file(
+        root,
+        "runtime-plugins/invalid-search/loong.plugin.json",
+        r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "invalid-search-plugin",
+  "provider_id": "invalid-search",
+  "connector_name": "invalid-search-http",
+  "endpoint": "https://example.com/search",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Malformed native extension declarations",
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "web-search",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"tooling\",\"events\"]",
+    "loong_extension_methods_json": "not-json",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_actions_json": "[\"notify\"]"
+  }
+}"#,
+    );
+
+    let (path_string, mut reloaded) = mvp::config::load(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("reload config");
+    reloaded.runtime_plugins.enabled = true;
+    reloaded.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+    mvp::config::write(Some(&path_string.display().to_string()), &reloaded, true)
+        .expect("rewrite config fixture with runtime plugin roots");
+}
+
 fn array_contains_string(array: &Value, needle: &str) -> bool {
     array.as_array().is_some_and(|items| {
         items
@@ -447,6 +482,98 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
     assert_eq!(
         payload["runtime_plugin_inventory"]["returned_results"],
         serde_json::json!(1)
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_truth() {
+    let root = unique_temp_dir("loong-runtime-snapshot-invalid-extension-declarations");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    install_invalid_runtime_plugin_package(&root, &config_path);
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+    let runtime_plugin = array_object_with_string_field(
+        &payload["runtime_plugins"]["plugins"],
+        "plugin_id",
+        "invalid-search-plugin",
+    )
+    .expect("runtime snapshot should include invalid plugin");
+
+    let inventory_execution = loong_daemon::plugins_cli::execute_plugins_command(
+        loong_daemon::plugins_cli::PluginsCommandOptions {
+            json: false,
+            command: loong_daemon::plugins_cli::PluginsCommands::Inventory(
+                loong_daemon::plugins_cli::PluginInventoryCommand {
+                    source: loong_daemon::plugins_cli::PluginScanSourceArgs {
+                        roots: vec![root.join("runtime-plugins").display().to_string()],
+                        query: String::new(),
+                        limit: None,
+                        bridge_support: None,
+                        bridge_profile: None,
+                        bridge_support_delta: None,
+                        bridge_support_sha256: None,
+                        bridge_support_delta_sha256: None,
+                    },
+                    include_ready: true,
+                    include_blocked: true,
+                    include_deferred: true,
+                    include_examples: false,
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inventory should decode invalid extension declarations");
+
+    let loong_daemon::plugins_cli::PluginsCommandExecution::Inventory(inventory_execution) =
+        inventory_execution
+    else {
+        panic!("expected inventory execution");
+    };
+
+    let inventory_plugin = &inventory_execution.results[0];
+    assert_eq!(
+        runtime_plugin["extension_contract"],
+        serde_json::json!("process_stdio_json_line_v1")
+    );
+    assert_eq!(
+        runtime_plugin["extension_events"],
+        serde_json::json!(["session_start"])
+    );
+    assert_eq!(
+        runtime_plugin["extension_host_actions"],
+        serde_json::json!(["notify"])
+    );
+    assert_eq!(
+        inventory_plugin.extension_contract.as_deref(),
+        Some("process_stdio_json_line_v1")
+    );
+    assert_eq!(
+        inventory_plugin.extension_events,
+        vec!["session_start".to_owned()]
+    );
+    assert_eq!(
+        inventory_plugin.extension_host_actions,
+        vec!["notify".to_owned()]
+    );
+    assert_eq!(runtime_plugin["extension_methods"], serde_json::json!([]));
+    assert!(inventory_plugin.extension_methods.is_empty());
+    assert_eq!(
+        runtime_plugin["extension_metadata_issues"],
+        serde_json::to_value(&inventory_plugin.extension_metadata_issues)
+            .expect("serialize inventory metadata issues")
     );
 
     fs::remove_dir_all(&root).ok();

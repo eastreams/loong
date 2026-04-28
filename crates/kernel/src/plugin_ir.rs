@@ -69,6 +69,17 @@ pub struct PluginRuntimeScaffoldDefaults {
     pub entrypoint_hint: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PluginNativeExtensionDeclarations {
+    pub contract: Option<String>,
+    pub facets: Vec<String>,
+    pub methods: Vec<String>,
+    pub events: Vec<String>,
+    pub host_actions: Vec<String>,
+    pub metadata_issues: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginChannelBridgeReadiness {
     pub ready: bool,
@@ -1394,6 +1405,71 @@ fn normalized_manifest_metadata_string_list(
     }
 
     Ok(normalized_values)
+}
+
+pub fn plugin_native_extension_declarations_from_metadata(
+    metadata: &BTreeMap<String, String>,
+) -> PluginNativeExtensionDeclarations {
+    let mut declarations = PluginNativeExtensionDeclarations {
+        contract: normalized_optional_metadata_value(metadata, "loong_extension_contract"),
+        ..Default::default()
+    };
+    declarations.facets = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_extension_facets_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.methods = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_extension_methods_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.events = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_extension_events_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.host_actions = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_extension_host_actions_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations
+}
+
+fn normalized_optional_metadata_value(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    let value = metadata.get(key).map(String::as_str);
+    normalized_optional_value(value)
+}
+
+fn normalized_metadata_string_list_with_issue(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+    metadata_issues: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(raw_value) = metadata.get(key) else {
+        return Vec::new();
+    };
+    if raw_value.trim().is_empty() {
+        return Vec::new();
+    }
+
+    match serde_json::from_str::<Vec<String>>(raw_value) {
+        Ok(parsed_values) => parsed_values
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect(),
+        Err(error) => {
+            metadata_issues.push(format!(
+                "metadata `{key}` must be a JSON string array: {error}"
+            ));
+            Vec::new()
+        }
+    }
 }
 
 fn normalized_optional_value(raw: Option<&str>) -> Option<String> {
