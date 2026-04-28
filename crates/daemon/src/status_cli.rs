@@ -987,6 +987,24 @@ mod tests {
                 error: None,
                 returned_results: Some(1),
                 summary: None,
+                native_extension_authoring_summary: Some(
+                    crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
+                        guided_plugins: 1,
+                        plugins_with_metadata_issues: 1,
+                        total_remediation_actions: 4,
+                        action_roles: std::collections::BTreeMap::from([
+                            ("author".to_owned(), 1),
+                            ("verification".to_owned(), 3),
+                        ]),
+                        action_execution_kinds: std::collections::BTreeMap::from([
+                            ("manual_edit".to_owned(), 1),
+                            ("read_only_cli".to_owned(), 2),
+                            ("governed_smoke_probe".to_owned(), 1),
+                        ]),
+                        runnable_action_count: 3,
+                        allow_command_gated_action_count: 1,
+                    },
+                ),
                 results: Vec::new(),
             }),
             next_actions: vec![StatusCliAction {
@@ -1136,6 +1154,24 @@ mod tests {
                 error: None,
                 returned_results: Some(1),
                 summary: None,
+                native_extension_authoring_summary: Some(
+                    crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
+                        guided_plugins: 1,
+                        plugins_with_metadata_issues: 1,
+                        total_remediation_actions: 4,
+                        action_roles: std::collections::BTreeMap::from([
+                            ("author".to_owned(), 1),
+                            ("verification".to_owned(), 3),
+                        ]),
+                        action_execution_kinds: std::collections::BTreeMap::from([
+                            ("manual_edit".to_owned(), 1),
+                            ("read_only_cli".to_owned(), 2),
+                            ("governed_smoke_probe".to_owned(), 1),
+                        ]),
+                        runnable_action_count: 3,
+                        allow_command_gated_action_count: 1,
+                    },
+                ),
                 results: Vec::new(),
             }),
             next_actions: Vec::new(),
@@ -1146,6 +1182,14 @@ mod tests {
         assert_eq!(value["runtime_plugin_inventory"]["available"], json!(true));
         assert_eq!(
             value["runtime_plugin_inventory"]["returned_results"],
+            json!(1)
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["native_extension_authoring_summary"]["guided_plugins"],
+            json!(1)
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["native_extension_authoring_summary"]["allow_command_gated_action_count"],
             json!(1)
         );
     }

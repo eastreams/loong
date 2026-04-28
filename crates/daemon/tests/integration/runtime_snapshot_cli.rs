@@ -514,6 +514,7 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
             error: None,
             returned_results: Some(1),
             summary: None,
+            native_extension_authoring_summary: None,
             results: Vec::new(),
         }),
     )
@@ -532,7 +533,8 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
 }
 
 #[test]
-fn runtime_snapshot_surfaces_native_extension_authoring_guidance_for_invalid_process_stdio_package() {
+fn runtime_snapshot_surfaces_native_extension_authoring_guidance_for_invalid_process_stdio_package()
+{
     let root = unique_temp_dir("loong-runtime-snapshot-invalid-stdio-authoring");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("DEEPSEEK_API_KEY", None),
@@ -583,8 +585,8 @@ fn runtime_snapshot_surfaces_native_extension_authoring_guidance_for_invalid_pro
 }
 
 #[test]
-fn runtime_snapshot_text_surfaces_native_extension_authoring_guidance_for_invalid_process_stdio_package(
-) {
+fn runtime_snapshot_text_surfaces_native_extension_authoring_guidance_for_invalid_process_stdio_package()
+ {
     let root = unique_temp_dir("loong-runtime-snapshot-invalid-stdio-authoring-text");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("DEEPSEEK_API_KEY", None),
@@ -601,11 +603,17 @@ fn runtime_snapshot_text_surfaces_native_extension_authoring_guidance_for_invali
     let rendered = render_runtime_snapshot_text(&snapshot);
 
     assert!(rendered.contains("invalid-stdio-plugin"));
-    assert!(rendered.contains("authoring reference_example=examples/plugins-process/native-extension-javascript"));
+    assert!(rendered.contains(
+        "authoring reference_example=examples/plugins-process/native-extension-javascript"
+    ));
     assert!(rendered.contains("smoke_allow_command=node"));
     assert!(rendered.contains("action_roles=author,verification"));
-    assert!(rendered.contains("action_kinds=repair_extension_metadata,rerun_doctor,rerun_inventory,rerun_smoke_test"));
-    assert!(rendered.contains("runnable_action_kinds=rerun_doctor,rerun_inventory,rerun_smoke_test"));
+    assert!(rendered.contains(
+        "action_kinds=repair_extension_metadata,rerun_doctor,rerun_inventory,rerun_smoke_test"
+    ));
+    assert!(
+        rendered.contains("runnable_action_kinds=rerun_doctor,rerun_inventory,rerun_smoke_test")
+    );
     assert!(rendered.contains("allow_command_action_kinds=rerun_smoke_test"));
 
     fs::remove_dir_all(&root).ok();

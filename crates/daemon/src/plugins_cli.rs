@@ -15,14 +15,15 @@ use crate::kernel::{
     VerticalPackManifest, plugin_runtime_scaffold_defaults,
 };
 use crate::native_extension_authoring::{
-    NativeExtensionAuthoringGuidanceView, PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT,
-    PROCESS_STDIO_NATIVE_EXTENSION_EVENTS, PROCESS_STDIO_NATIVE_EXTENSION_FACETS,
-    PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
-    build_native_extension_authoring_doctor_guidance, build_native_extension_authoring_guidance,
-    build_native_extension_authoring_view_from_profile,
+    NativeExtensionAuthoringGuidanceView, NativeExtensionAuthoringSummaryView,
+    PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT, PROCESS_STDIO_NATIVE_EXTENSION_EVENTS,
+    PROCESS_STDIO_NATIVE_EXTENSION_FACETS, PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS,
+    PROCESS_STDIO_NATIVE_EXTENSION_METHODS, build_native_extension_authoring_doctor_guidance,
+    build_native_extension_authoring_guidance, build_native_extension_authoring_view_from_profile,
     process_stdio_native_extension_language_profile, process_stdio_scaffold_args,
     render_authoring_actions_command, render_authoring_doctor_command,
     render_authoring_inventory_command, render_rust_extension_cargo_toml,
+    summarize_native_extension_authoring_guidance,
 };
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
@@ -573,6 +574,8 @@ pub struct RuntimePluginInventoryReadModel {
     pub returned_results: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<PluginsInventorySummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_extension_authoring_summary: Option<NativeExtensionAuthoringSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<RuntimePluginInventoryResultView>,
 }
@@ -1169,6 +1172,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             error: None,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             results: Vec::new(),
         };
     }
@@ -1186,6 +1190,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             error: None,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             results: Vec::new(),
         };
     }
@@ -1217,6 +1222,9 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             error: None,
             returned_results: Some(execution.returned_results),
             summary: Some(execution.summary),
+            native_extension_authoring_summary: summarize_native_extension_authoring_guidance(
+                &execution.native_extension_authoring_guidance,
+            ),
             results: execution
                 .results
                 .into_iter()
@@ -1237,6 +1245,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             error: None,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             results: Vec::new(),
         },
         Err(error) => RuntimePluginInventoryReadModel {
@@ -1245,6 +1254,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             error: Some(error),
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             results: Vec::new(),
         },
     }

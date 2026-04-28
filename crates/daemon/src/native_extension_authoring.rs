@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use crate::PluginPreflightResult;
 use crate::{CliResult, PluginInventoryResult, kernel};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FACETS: &[&str] =
@@ -29,7 +31,7 @@ pub(crate) struct ProcessStdioNativeExtensionLanguageProfile {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct NativeExtensionAuthoringGuidanceView {
+pub struct NativeExtensionAuthoringGuidanceView {
     pub plugin_id: String,
     pub package_root: String,
     pub source_language_arg: String,
@@ -63,7 +65,7 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct NativeExtensionAuthoringActionView {
+pub struct NativeExtensionAuthoringActionView {
     pub kind: String,
     pub role: String,
     pub execution_kind: String,
@@ -77,6 +79,17 @@ pub(crate) struct NativeExtensionAuthoringActionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field_path: Option<String>,
     pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeExtensionAuthoringSummaryView {
+    pub guided_plugins: usize,
+    pub plugins_with_metadata_issues: usize,
+    pub total_remediation_actions: usize,
+    pub action_roles: BTreeMap<String, usize>,
+    pub action_execution_kinds: BTreeMap<String, usize>,
+    pub runnable_action_count: usize,
+    pub allow_command_gated_action_count: usize,
 }
 
 const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
@@ -411,6 +424,54 @@ fn native_extension_author_remediation_hints(
     hints.sort();
     hints.dedup();
     hints
+}
+
+pub(crate) fn summarize_native_extension_authoring_guidance(
+    guidance: &[NativeExtensionAuthoringGuidanceView],
+) -> Option<NativeExtensionAuthoringSummaryView> {
+    if guidance.is_empty() {
+        return None;
+    }
+
+    let mut plugins_with_metadata_issues = 0_usize;
+    let mut total_remediation_actions = 0_usize;
+    let mut action_roles = BTreeMap::new();
+    let mut action_execution_kinds = BTreeMap::new();
+    let mut runnable_action_count = 0_usize;
+    let mut allow_command_gated_action_count = 0_usize;
+
+    for plugin in guidance {
+        if !plugin.extension_metadata_issues.is_empty() {
+            plugins_with_metadata_issues = plugins_with_metadata_issues.saturating_add(1);
+        }
+
+        total_remediation_actions =
+            total_remediation_actions.saturating_add(plugin.author_remediation_actions.len());
+
+        for action in &plugin.author_remediation_actions {
+            *action_roles.entry(action.role.clone()).or_insert(0) += 1;
+            *action_execution_kinds
+                .entry(action.execution_kind.clone())
+                .or_insert(0) += 1;
+            if action.agent_runnable {
+                runnable_action_count = runnable_action_count.saturating_add(1);
+            }
+            if action.requires_allow_command {
+                allow_command_gated_action_count =
+                    allow_command_gated_action_count.saturating_add(1);
+            }
+        }
+    }
+
+    Some(NativeExtensionAuthoringSummaryView {
+        guided_plugins: guidance.len(),
+        plugins_with_metadata_issues,
+        total_remediation_actions,
+        action_roles,
+        action_execution_kinds,
+        runnable_action_count,
+        allow_command_gated_action_count,
+    })
 }
 
 fn native_extension_author_remediation_actions(

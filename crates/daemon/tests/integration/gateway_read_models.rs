@@ -514,6 +514,7 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
             error: None,
             returned_results: Some(1),
             summary: None,
+            native_extension_authoring_summary: None,
             results: Vec::new(),
         }),
     );

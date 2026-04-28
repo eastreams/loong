@@ -2497,7 +2497,8 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub extension_events: Vec<String>,
     pub extension_host_actions: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
-    pub authoring_guidance: Option<crate::native_extension_authoring::NativeExtensionAuthoringGuidanceView>,
+    pub authoring_guidance:
+        Option<crate::native_extension_authoring::NativeExtensionAuthoringGuidanceView>,
 }
 
 pub(crate) const RUNTIME_WEB_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access stays separately governed";

@@ -611,12 +611,10 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
                     .map(|action| action.kind.as_str()),
                 ",",
             );
-            let reference_example = crate::render_line_safe_text_value(
-                &authoring_guidance.reference_example_path,
-            );
-            let smoke_allow_command = crate::render_line_safe_text_value(
-                &authoring_guidance.smoke_allow_command,
-            );
+            let reference_example =
+                crate::render_line_safe_text_value(&authoring_guidance.reference_example_path);
+            let smoke_allow_command =
+                crate::render_line_safe_text_value(&authoring_guidance.smoke_allow_command);
             lines.push(format!(
                 "    authoring reference_example={} smoke_allow_command={} action_roles={} action_kinds={} runnable_action_kinds={} allow_command_action_kinds={}",
                 reference_example,
