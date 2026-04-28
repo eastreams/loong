@@ -1517,6 +1517,7 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
 ) -> BrowserCompanionRuntimePolicy {
     let env_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
     let env_expected_version = parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
+    let env_enabled = parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false);
     let default_browser_companion = crate::config::BrowserCompanionToolConfig::default();
     let use_env_web_policy = config.browser_companion == default_browser_companion;
     let allow_private_hosts = if use_env_web_policy {
@@ -1545,7 +1546,8 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
     let enforce_allowed_domains = !allowed_domains.is_empty();
     browser_companion_runtime_policy(
         config.browser_companion.enabled
-            || parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false),
+            || env_enabled
+            || (use_env_web_policy && env_command.is_some()),
         parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
         config
             .browser_companion
@@ -3006,6 +3008,24 @@ mod tests {
         assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
         assert_eq!(policy.timeout_seconds, 11);
+    }
+
+    #[test]
+    fn browser_companion_policy_with_env_fallback_auto_enables_when_command_is_present() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONG_BROWSER_COMPANION_READY", "true");
+        env.set("LOONG_BROWSER_COMPANION_COMMAND", "loong-browser-companion");
+        env.set("LOONG_BROWSER_COMPANION_EXPECTED_VERSION", "1.2.3");
+
+        let policy = browser_companion_runtime_policy_with_env_fallback(
+            &crate::config::ToolConfig::default(),
+        );
+
+        assert!(policy.enabled);
+        assert!(policy.ready);
+        assert_eq!(policy.command.as_deref(), Some("loong-browser-companion"));
+        assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
     }
 
     #[test]
