@@ -694,8 +694,8 @@ pub enum Commands {
         skip_model_probe: bool,
     },
     #[command(
-        about = "Capture optional operator preferences for future sessions",
-        long_about = "Capture optional operator preferences for future sessions.\n\nThis command stores advisory working preferences such as preferred name, response density, initiative level, and standing boundaries. Rerun it any time to update or clear saved preferences. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first."
+        about = "Teach Loong your working style for future sessions",
+        long_about = "Teach Loong your working style for future sessions.\n\nThis command stores advisory preferences such as preferred name, response density, initiative level, and standing boundaries. Rerun it any time to update or clear saved preferences. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first."
     )]
     Personalize {
         /// Config file path to update (defaults to auto-discovery)
@@ -4630,4 +4630,40 @@ pub fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
     fs::write(path, serialized)
         .map_err(|error| format!("write JSON output file failed: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_cli_command;
+
+    #[test]
+    fn build_cli_command_personalize_subcommand_uses_guidance_copy() {
+        let command = build_cli_command("loong");
+        let personalize = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "personalize")
+            .expect("personalize subcommand");
+
+        let about = personalize
+            .get_about()
+            .map(ToString::to_string)
+            .expect("personalize about");
+        let long_about = personalize
+            .get_long_about()
+            .map(ToString::to_string)
+            .expect("personalize long_about");
+
+        assert!(
+            about.contains("Teach Loong your working style"),
+            "personalize about should match the operator-facing guidance copy: {about}"
+        );
+        assert!(
+            long_about.contains("Teach Loong your working style"),
+            "personalize help should lead with the same guidance copy: {long_about}"
+        );
+        assert!(
+            !long_about.contains("working preferences"),
+            "personalize help should not fall back to the older field-oriented wording: {long_about}"
+        );
+    }
 }
