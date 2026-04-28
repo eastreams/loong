@@ -3,15 +3,15 @@ use std::collections::BTreeSet;
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
 use super::super::super::config::LoongConfig;
-#[cfg(feature = "memory-sqlite")]
-use super::active_external_skills;
 use super::super::context_engine::ContextArtifactKind;
 use super::super::runtime_binding::ConversationRuntimeBinding;
-use super::session_runtime::open_session_repository;
 use super::super::subagent::DelegateBuiltinProfile;
+#[cfg(feature = "memory-sqlite")]
+use super::active_external_skills;
+use super::session_runtime::open_session_repository;
 use super::{
-    AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane,
-    SessionContext, provider,
+    AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane, SessionContext,
+    provider,
 };
 
 pub(super) fn provider_runtime_binding(
@@ -72,7 +72,8 @@ pub(super) fn runtime_self_continuity_prompt_summary(
     session_context: &SessionContext,
 ) -> Option<String> {
     let stored_continuity = session_context.runtime_self_continuity.as_ref()?;
-    let live_continuity = crate::runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
+    let live_continuity =
+        crate::runtime_self_continuity::resolve_runtime_self_continuity_for_config(config);
     let missing_continuity = crate::runtime_self_continuity::missing_runtime_self_continuity(
         stored_continuity,
         live_continuity.as_ref(),

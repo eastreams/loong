@@ -170,7 +170,9 @@ where
         messages: &[Value],
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        self.inner.request_completion(config, messages, binding).await
+        self.inner
+            .request_completion(config, messages, binding)
+            .await
     }
 
     async fn request_turn(

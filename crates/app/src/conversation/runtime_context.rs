@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
-use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::ToolView;
+use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
-use super::mailbox_for_session;
 use super::super::subagent::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
     ConstrainedSubagentProfile, DelegateBuiltinProfile,
 };
 use super::LoongConfig;
+use super::mailbox_for_session;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContext {

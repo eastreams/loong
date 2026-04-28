@@ -6,12 +6,12 @@ use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{ToolView, delegate_child_tool_view_for_contract};
 
-use super::SessionContext;
+use super::super::super::config::LoongConfig;
 use super::super::subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
     DelegateBuiltinProfile,
 };
-use super::super::super::config::LoongConfig;
+use super::SessionContext;
 #[cfg(feature = "memory-sqlite")]
 use super::active_external_skills;
 #[cfg(feature = "memory-sqlite")]
@@ -19,9 +19,7 @@ use crate::operator::delegate_runtime::{
     derive_subagent_profile_from_lineage, resolve_delegate_child_contract,
 };
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{
-    SessionKind, SessionRepository, SessionToolPolicyRecord,
-};
+use crate::session::repository::{SessionKind, SessionRepository, SessionToolPolicyRecord};
 #[cfg(feature = "memory-sqlite")]
 use crate::session::store;
 
@@ -90,21 +88,15 @@ pub(super) fn load_delegate_anchor_snapshot(
         }
 
         if execution.is_none() {
-            execution = ConstrainedSubagentExecution::from_event_payload(
-                &event.payload_json,
-            );
+            execution = ConstrainedSubagentExecution::from_event_payload(&event.payload_json);
         }
         if profile.is_none() {
-            profile = ConstrainedSubagentExecution::profile_from_event_payload(
-                &event.payload_json,
-            );
+            profile = ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json);
         }
         if workspace_root.is_none() {
             let event_workspace_root =
-                ConstrainedSubagentExecution::from_event_payload(
-                    &event.payload_json,
-                )
-                .and_then(|execution| execution.workspace_root);
+                ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
+                    .and_then(|execution| execution.workspace_root);
             workspace_root = event_workspace_root;
         }
         if execution.is_some() && profile.is_some() && workspace_root.is_some() {
@@ -413,7 +405,8 @@ pub(super) fn build_session_context_from_snapshot(
     base_tool_view: ToolView,
     snapshot: PersistedSessionSnapshot,
 ) -> CliResult<SessionContext> {
-    let visible_external_skill_roots = super::model_visible_external_skill_roots_from_config(config);
+    let visible_external_skill_roots =
+        super::model_visible_external_skill_roots_from_config(config);
     let tool_view = apply_active_external_skill_blocked_tools_to_tool_view(
         apply_session_tool_policy_to_tool_view(
             base_tool_view,
@@ -429,7 +422,9 @@ pub(super) fn build_session_context_from_snapshot(
         Some(parent_session_id) => {
             SessionContext::child(snapshot.session_id.clone(), parent_session_id, tool_view)
         }
-        None => super::root_session_context_from_config(config, snapshot.session_id.clone(), tool_view),
+        None => {
+            super::root_session_context_from_config(config, snapshot.session_id.clone(), tool_view)
+        }
     };
     if let Some(profile) = snapshot.delegate_profile {
         session_context = session_context.with_profile(profile);

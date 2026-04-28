@@ -3,10 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::super::subagent::{ConstrainedSubagentExecution, DelegateBuiltinProfile};
-use super::{LoongConfig, RuntimeSelfContinuity, load_default_conversation_runtime};
 use super::super::runtime_binding::OwnedConversationRuntimeBinding;
+use super::super::subagent::{ConstrainedSubagentExecution, DelegateBuiltinProfile};
 use super::super::{delegate_support, turn_coordinator};
+use super::{LoongConfig, RuntimeSelfContinuity, load_default_conversation_runtime};
 
 #[derive(Clone)]
 pub struct AsyncDelegateSpawnRequest {
@@ -126,7 +126,9 @@ pub async fn execute_async_delegate_spawn_request(
     }
 
     let memory_config =
-        crate::session::store::session_store_config_from_memory_config_without_env_overrides(&config.memory);
+        crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+            &config.memory,
+        );
     let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
     let runtime = load_default_conversation_runtime(config)?;
     let runtime_ref = &runtime;

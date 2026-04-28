@@ -5,11 +5,11 @@ use async_trait::async_trait;
 use loong_contracts::Capability;
 use serde_json::Value;
 
-use crate::{CliResult, KernelContext};
-#[cfg(feature = "memory-sqlite")]
-use crate::session::store;
 use crate::memory;
 use crate::provider;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::store;
+use crate::{CliResult, KernelContext};
 
 use super::super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
@@ -18,11 +18,11 @@ use super::super::context_engine::{
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::{
     AsyncDelegateSpawner, DefaultAsyncDelegateSpawner, DefaultConversationRuntime, LoongConfig,
-    ProviderTurn, SessionContext, ToolView,
-    apply_active_external_skill_blocked_tools_to_tool_view, apply_session_tool_policy_to_tool_view,
-    build_base_tool_view_from_snapshot, build_session_context_from_snapshot,
-    load_persisted_session_context, load_persisted_session_snapshot, open_session_repository,
-    provider_runtime_binding, root_session_context_from_config,
+    ProviderTurn, SessionContext, ToolView, apply_active_external_skill_blocked_tools_to_tool_view,
+    apply_session_tool_policy_to_tool_view, build_base_tool_view_from_snapshot,
+    build_session_context_from_snapshot, load_persisted_session_context,
+    load_persisted_session_snapshot, open_session_repository, provider_runtime_binding,
+    root_session_context_from_config,
 };
 
 #[async_trait]
@@ -42,7 +42,9 @@ pub trait ConversationRuntime: Send + Sync {
             return Ok(session_context);
         }
 
-        Ok(root_session_context_from_config(config, session_id, tool_view))
+        Ok(root_session_context_from_config(
+            config, session_id, tool_view,
+        ))
     }
 
     fn tool_view(
@@ -262,13 +264,19 @@ where
                 );
             }
 
-            Ok(root_session_context_from_config(config, session_id, base_tool_view))
+            Ok(root_session_context_from_config(
+                config,
+                session_id,
+                base_tool_view,
+            ))
         }
 
         #[cfg(not(feature = "memory-sqlite"))]
         {
             let tool_view = self.tool_view(config, session_id, _binding)?;
-            Ok(root_session_context_from_config(config, session_id, tool_view))
+            Ok(root_session_context_from_config(
+                config, session_id, tool_view,
+            ))
         }
     }
 
