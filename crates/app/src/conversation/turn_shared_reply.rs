@@ -1,3 +1,4 @@
+use super::super::persistence::format_provider_error_reply;
 use super::{
     ReplyResolutionMode, ToolDrivenFollowupKind, ToolDrivenFollowupPayload, TurnResult,
     format_approval_required_reply, join_non_empty_lines, sanitize_reply_text,
@@ -202,7 +203,7 @@ pub fn compose_assistant_reply(
             join_non_empty_lines(&[assistant_preface, failure.reason.as_str()])
         }
         TurnResult::ProviderError(failure) => {
-            let inline = super::format_provider_error_reply(failure.reason.as_str());
+            let inline = format_provider_error_reply(failure.reason.as_str());
             join_non_empty_lines(&[assistant_preface, inline.as_str()])
         }
     }

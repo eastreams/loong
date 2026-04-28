@@ -1,17 +1,19 @@
+#[cfg(test)]
 use super::super::config::LoongConfig;
-use super::ProviderErrorMode;
-use super::persistence::format_provider_error_reply;
+#[cfg(test)]
 use super::runtime::ConversationRuntime;
+#[cfg(test)]
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_engine::{
-    ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolResultPayloadSemantics,
-    TurnResult,
+    ApprovalRequirement, ApprovalRequirementKind, ToolResultPayloadSemantics, TurnResult,
 };
 #[cfg(test)]
-use super::turn_engine::{ToolIntent, ToolResultEnvelope};
+use super::turn_engine::{ProviderTurn, ToolIntent, ToolResultEnvelope};
 use serde::Serialize;
+#[cfg(test)]
 use serde_json::Value;
 
+#[cfg(test)]
 use crate::CliResult;
 #[cfg(test)]
 use crate::tools::ToolView;
@@ -32,6 +34,8 @@ mod prompt;
 mod reply;
 #[path = "turn_shared_request.rs"]
 mod request;
+#[path = "turn_shared_runtime.rs"]
+mod runtime_support;
 #[path = "turn_shared_tool_result.rs"]
 mod tool_result;
 pub use approval::{
@@ -92,6 +96,10 @@ pub(crate) use request::{
     effective_followup_tool_name, effective_followup_visible_tool_name,
     summarize_provider_lane_tool_request, summarize_single_tool_followup_request,
 };
+pub use runtime_support::{
+    ProviderTurnRequestAction, decide_provider_turn_request_action,
+    request_completion_with_raw_fallback, request_completion_with_raw_fallback_detailed,
+};
 use tool_result::{parse_tool_result_continuation, parse_tool_result_followup_context};
 pub use tool_result::{reduce_followup_payload_for_model, tool_result_contains_truncation_signal};
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
@@ -110,79 +118,6 @@ pub enum ReplyPersistenceMode {
 pub enum ReplyResolutionMode {
     Direct,
     CompletionPass,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProviderTurnRequestAction {
-    Continue { turn: ProviderTurn },
-    FinalizeInlineProviderError { reply: String },
-    ReturnError { error: String },
-}
-
-pub fn decide_provider_turn_request_action(
-    result: CliResult<ProviderTurn>,
-    error_mode: ProviderErrorMode,
-) -> ProviderTurnRequestAction {
-    match result {
-        Ok(turn) => ProviderTurnRequestAction::Continue { turn },
-        Err(error) => match error_mode {
-            ProviderErrorMode::Propagate => ProviderTurnRequestAction::ReturnError { error },
-            ProviderErrorMode::InlineMessage => {
-                ProviderTurnRequestAction::FinalizeInlineProviderError {
-                    reply: format_provider_error_reply(&error),
-                }
-            }
-        },
-    }
-}
-
-pub async fn request_completion_with_raw_fallback_detailed<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    config: &LoongConfig,
-    messages: &[Value],
-    binding: ConversationRuntimeBinding<'_>,
-    raw_reply: &str,
-    retry_progress: crate::provider::ProviderRetryProgressCallback,
-) -> ParsedToolDrivenContinuationReply {
-    match runtime
-        .request_completion_with_retry_progress(config, messages, binding, retry_progress)
-        .await
-    {
-        Ok(final_reply) => {
-            let parsed_reply = parse_tool_driven_continuation_reply(final_reply.as_str());
-            if parsed_reply.reply.is_empty() && parsed_reply.state.is_none() {
-                parse_tool_driven_continuation_reply(raw_reply)
-            } else if parsed_reply.reply.is_empty() {
-                ParsedToolDrivenContinuationReply {
-                    state: parsed_reply.state,
-                    reply: sanitize_reply_text(raw_reply),
-                }
-            } else {
-                parsed_reply
-            }
-        }
-        Err(_) => parse_tool_driven_continuation_reply(raw_reply),
-    }
-}
-
-pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
-    runtime: &R,
-    config: &LoongConfig,
-    messages: &[Value],
-    binding: ConversationRuntimeBinding<'_>,
-    raw_reply: &str,
-    retry_progress: crate::provider::ProviderRetryProgressCallback,
-) -> String {
-    request_completion_with_raw_fallback_detailed(
-        runtime,
-        config,
-        messages,
-        binding,
-        raw_reply,
-        retry_progress,
-    )
-    .await
-    .reply
 }
 
 #[cfg(test)]
@@ -533,6 +468,93 @@ mod tests {
         .await;
 
         assert_eq!(reply.state, Some(ToolDrivenContinuationState::Continue));
+        assert_eq!(reply.reply, "fallback body");
+    }
+
+    #[tokio::test]
+    async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_completion_is_empty()
+    {
+        #[derive(Clone)]
+        struct EmptyReplyRuntime;
+
+        #[async_trait]
+        impl ConversationRuntime for EmptyReplyRuntime {
+            fn tool_view(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<ToolView> {
+                Ok(crate::tools::runtime_tool_view())
+            }
+
+            async fn build_messages(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _include_system_prompt: bool,
+                _tool_view: &ToolView,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<Vec<Value>> {
+                Ok(Vec::new())
+            }
+
+            async fn request_completion(
+                &self,
+                _config: &LoongConfig,
+                _messages: &[Value],
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<String> {
+                Ok(String::new())
+            }
+
+            async fn request_turn(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _turn_id: &str,
+                _messages: &[Value],
+                _tool_view: &ToolView,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<ProviderTurn> {
+                Ok(ProviderTurn::default())
+            }
+
+            async fn request_turn_streaming(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _turn_id: &str,
+                _messages: &[Value],
+                _tool_view: &ToolView,
+                _binding: ConversationRuntimeBinding<'_>,
+                _on_token: crate::provider::StreamingTokenCallback,
+            ) -> CliResult<ProviderTurn> {
+                Ok(ProviderTurn::default())
+            }
+
+            async fn persist_turn(
+                &self,
+                _session_id: &str,
+                _role: &str,
+                _content: &str,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<()> {
+                Ok(())
+            }
+        }
+
+        let reply = request_completion_with_raw_fallback_detailed(
+            &EmptyReplyRuntime,
+            &LoongConfig::default(),
+            &[],
+            ConversationRuntimeBinding::direct(),
+            "<think>hidden</think>fallback body",
+            None,
+        )
+        .await;
+
+        assert_eq!(reply.state, None);
         assert_eq!(reply.reply, "fallback body");
     }
 
