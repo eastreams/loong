@@ -3,10 +3,11 @@ use std::ffi::OsStr;
 
 use crate::personalize_presentation::personalize_action_label;
 use loong_app as mvp;
+use serde::Serialize;
 
 pub use mvp::chat::DEFAULT_FIRST_PROMPT as DEFAULT_FIRST_ASK_MESSAGE;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum SetupNextActionKind {
     Ask,
     Chat,

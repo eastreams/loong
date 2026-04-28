@@ -43,6 +43,7 @@ pub struct StatusCliWorkUnitReadModel {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusCliAction {
+    pub kind: crate::next_actions::SetupNextActionKind,
     pub label: String,
     pub command: String,
 }
@@ -113,6 +114,7 @@ pub async fn collect_status_cli_read_model(
         crate::next_actions::collect_setup_next_actions(&config, config_path_text)
             .into_iter()
             .map(|action| StatusCliAction {
+                kind: action.kind,
                 label: action.label,
                 command: action.command,
             }),
@@ -408,12 +410,11 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let mut sections = build_first_run_action_sections(
         &status.next_actions,
         |action| {
-            if action.label == "choose a channel"
-                || action.label == "browser preview"
-                || action.label == "enable browser preview"
-                || action.label == "allow agent-browser"
-                || action.label.starts_with("install ")
-            {
+            if matches!(
+                action.kind,
+                crate::next_actions::SetupNextActionKind::Channel
+                    | crate::next_actions::SetupNextActionKind::BrowserPreview
+            ) {
                 FirstRunActionGroup::ContinueSetup
             } else {
                 FirstRunActionGroup::GeneralFollowup
@@ -808,7 +809,11 @@ fn collect_status_runtime_attention_actions(
         )
     };
 
-    vec![StatusCliAction { label, command }]
+    vec![StatusCliAction {
+        kind: crate::next_actions::SetupNextActionKind::Doctor,
+        label,
+        command,
+    }]
 }
 
 fn status_runtime_attention_action_label(
@@ -1120,6 +1125,7 @@ mod tests {
                 }),
             },
             next_actions: vec![StatusCliAction {
+                kind: crate::next_actions::SetupNextActionKind::Ask,
                 label: "first answer".to_owned(),
                 command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
             }],
@@ -1299,18 +1305,22 @@ mod tests {
             },
             next_actions: vec![
                 StatusCliAction {
+                    kind: crate::next_actions::SetupNextActionKind::Ask,
                     label: "first answer".to_owned(),
                     command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
                 },
                 StatusCliAction {
+                    kind: crate::next_actions::SetupNextActionKind::Chat,
                     label: "chat".to_owned(),
                     command: "loong chat --config '/tmp/config.toml'".to_owned(),
                 },
                 StatusCliAction {
+                    kind: crate::next_actions::SetupNextActionKind::Personalize,
                     label: "teach Loong your working style".to_owned(),
                     command: "loong personalize --config '/tmp/config.toml'".to_owned(),
                 },
                 StatusCliAction {
+                    kind: crate::next_actions::SetupNextActionKind::Channel,
                     label: "choose a channel".to_owned(),
                     command: "loong channels --config '/tmp/config.toml'".to_owned(),
                 },
@@ -1338,6 +1348,69 @@ mod tests {
         );
         assert!(rendered.contains("'/tmp/config.toml'"), "{rendered}");
         assert!(rendered.contains("- choose a channel:"), "{rendered}");
+        assert!(
+            rendered.contains("loong channels --config '/tmp/config.toml'"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_status_cli_text_groups_channel_kind_even_when_label_varies() {
+        let status = StatusCliReadModel {
+            config: "/tmp/config.toml".to_owned(),
+            schema: StatusCliJsonSchema {
+                version: STATUS_CLI_JSON_SCHEMA_VERSION,
+                surface: "status",
+                purpose: "operator_runtime_summary",
+            },
+            active_provider: "Demo [demo]".to_owned(),
+            active_model: "gpt-4.1-mini".to_owned(),
+            memory_profile: "window_only".to_owned(),
+            gateway: sample_gateway_operator_summary(),
+            acp: StatusCliAcpReadModel {
+                enabled: false,
+                availability: "disabled".to_owned(),
+                error: None,
+                persisted_session_count: Some(0),
+                observability: None,
+            },
+            work_units: StatusCliWorkUnitReadModel {
+                availability: "available".to_owned(),
+                error: None,
+                health: Some(WorkRuntimeHealthSnapshot {
+                    total_count: 0,
+                    ready_count: 0,
+                    leased_count: 0,
+                    running_count: 0,
+                    blocked_count: 0,
+                    retry_pending_count: 0,
+                    terminal_count: 0,
+                    archived_count: 0,
+                    expired_lease_count: 0,
+                }),
+            },
+            next_actions: vec![
+                StatusCliAction {
+                    kind: crate::next_actions::SetupNextActionKind::Ask,
+                    label: "first answer".to_owned(),
+                    command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
+                },
+                StatusCliAction {
+                    kind: crate::next_actions::SetupNextActionKind::Channel,
+                    label: "inspect configured bridges".to_owned(),
+                    command: "loong channels --config '/tmp/config.toml'".to_owned(),
+                },
+            ],
+            recipes: Vec::new(),
+        };
+
+        let rendered = render_status_cli_text(&status);
+
+        assert!(rendered.contains("continue setup"), "{rendered}");
+        assert!(
+            rendered.contains("- inspect configured bridges:"),
+            "{rendered}"
+        );
         assert!(
             rendered.contains("loong channels --config '/tmp/config.toml'"),
             "{rendered}"
@@ -1787,6 +1860,7 @@ mod tests {
                 }),
             },
             next_actions: vec![StatusCliAction {
+                kind: crate::next_actions::SetupNextActionKind::Doctor,
                 label: "inspect weixin managed bridge runtime (retrying)".to_owned(),
                 command: "loong doctor --config '/tmp/config.toml'".to_owned(),
             }],
