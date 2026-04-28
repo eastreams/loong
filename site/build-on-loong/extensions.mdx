@@ -72,6 +72,28 @@ The generated manifest also includes the native extension metadata keys needed f
 - `loong_extension_events_json`
 - `loong_extension_host_actions_json`
 
+### Go
+
+```bash
+loong plugins init ./weather-go \
+  --plugin-id weather-go \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language go
+```
+
+### Rust
+
+```bash
+loong plugins init ./weather-rust \
+  --plugin-id weather-rust \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language rs
+```
+
 ## Understand the generated stub
 
 The generated runtime file is intentionally small.
@@ -127,6 +149,28 @@ loong plugins invoke-extension \
   --method extension/event \
   --payload '{"event":"session_start"}' \
   --allow-command node
+```
+
+For Go:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-go" \
+  --plugin-id weather-go \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command go
+```
+
+For Rust:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-rust" \
+  --plugin-id weather-rust \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command cargo
 ```
 
 This is intentionally explicit: the smoke probe only runs when you allow the process command on the CLI.

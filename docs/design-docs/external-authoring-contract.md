@@ -66,11 +66,18 @@ The intended ergonomic shape is:
 For the current public authoring lane, Loong should stabilize:
 
 - `loong plugins init` for manifest-first scaffolding
-- a runnable local `process_stdio` entrypoint for supported authoring templates
+- runnable local `process_stdio` entrypoints for the supported public templates
 - `loong plugins invoke-extension` as a bounded smoke surface
 - inventory / doctor / operator surfaces that show extension declarations before execution
 
 without implying ungoverned in-process host loading.
+
+The currently supported public runnable templates are:
+
+- Python
+- JavaScript
+- Go
+- Rust
 
 ### Workflow and flow assets
 

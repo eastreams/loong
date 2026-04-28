@@ -128,6 +128,53 @@ loong plugins invoke-extension \
 
 For JavaScript, replace `python3` with `node`.
 
+Go:
+
+```bash
+loong plugins init ./weather-go \
+  --plugin-id weather-go \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language go
+```
+
+Smoke-test:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-go" \
+  --plugin-id weather-go \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command go
+```
+
+Rust:
+
+```bash
+loong plugins init ./weather-rust \
+  --plugin-id weather-rust \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language rs
+```
+
+Smoke-test:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-rust" \
+  --plugin-id weather-rust \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command cargo
+```
+
+The first Rust smoke run may take longer because the scaffold uses
+`cargo run --quiet --manifest-path Cargo.toml` behind the governed bridge.
+
 This smoke path is explicit by design: local process execution only happens
 when you pass the allowed command on the CLI.
 
