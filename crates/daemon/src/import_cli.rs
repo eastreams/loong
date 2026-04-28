@@ -531,14 +531,43 @@ fn build_import_apply_summary_body_lines(
     }
     let next_actions =
         crate::next_actions::collect_setup_next_actions(resolved_config, &config_path);
+    let ordered_next_actions = prioritize_import_apply_actions(&next_actions);
     lines.extend(build_first_run_action_text_lines(
-        &next_actions,
+        &ordered_next_actions,
         width,
         |action| first_run_group_for_setup_action_kind(action.kind),
         |action, width| render_first_run_action_text_item(&action.label, &action.command, width),
         |action, width| render_first_run_action_text_item(&action.label, &action.command, width),
     ));
     lines
+}
+
+fn prioritize_import_apply_actions<'a>(
+    actions: &'a [crate::next_actions::SetupNextAction],
+) -> Vec<&'a crate::next_actions::SetupNextAction> {
+    let primary_index = actions
+        .iter()
+        .position(is_import_managed_bridge_doctor_action)
+        .unwrap_or(0);
+    let Some(primary) = actions.get(primary_index) else {
+        return Vec::new();
+    };
+    let mut ordered = vec![primary];
+
+    for (index, action) in actions.iter().enumerate() {
+        if index != primary_index {
+            ordered.push(action);
+        }
+    }
+
+    ordered
+}
+
+fn is_import_managed_bridge_doctor_action(action: &crate::next_actions::SetupNextAction) -> bool {
+    let is_doctor = action.kind == crate::next_actions::SetupNextActionKind::Doctor;
+    let mentions_managed_bridge = action.label.contains("managed bridge");
+
+    is_doctor && mentions_managed_bridge
 }
 
 #[derive(Serialize)]

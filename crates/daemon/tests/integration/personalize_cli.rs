@@ -5,12 +5,12 @@ fn cli_personalize_help_mentions_operator_preferences() {
     let help = render_cli_help(["personalize"]);
 
     assert!(
-        help.contains("operator preferences"),
-        "personalize help should explain the operator-preference purpose: {help}"
+        help.contains("Teach Loong your working style"),
+        "personalize help should explain the guided setup purpose: {help}"
     );
     assert!(
-        help.contains("advisory"),
-        "personalize help should explain that persistence stays advisory: {help}"
+        help.contains("advisory preferences"),
+        "personalize help should explain that saved guidance stays advisory: {help}"
     );
     assert!(
         help.contains("loong onboard"),
