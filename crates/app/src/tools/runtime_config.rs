@@ -771,6 +771,37 @@ impl ToolRuntimeConfig {
             config.tools.browser_companion.normalized_allowed_domains();
         let browser_companion_enforce_allowed_domains =
             !browser_companion_allowed_domains.is_empty();
+        let env_browser_companion_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
+        let discovered_browser_companion_command = env_browser_companion_command
+            .is_none()
+            .then(discover_browser_companion_command)
+            .flatten();
+        let env_browser_companion_ready = parse_env_bool("LOONG_BROWSER_COMPANION_READY");
+        let env_browser_companion_expected_version =
+            parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
+        let browser_companion_default_config = crate::config::BrowserCompanionToolConfig::default();
+        let browser_companion_uses_default_config =
+            config.tools.browser_companion == browser_companion_default_config;
+        let browser_companion_auto_enabled = browser_companion_uses_default_config
+            && (env_browser_companion_command.is_some()
+                || discovered_browser_companion_command.is_some());
+        let browser_companion_enabled =
+            config.tools.browser_companion.enabled || browser_companion_auto_enabled;
+        let browser_companion_ready =
+            env_browser_companion_ready.unwrap_or(browser_companion_auto_enabled);
+        let browser_companion_command = config
+            .tools
+            .browser_companion
+            .command
+            .as_deref()
+            .or(env_browser_companion_command.as_deref())
+            .or(discovered_browser_companion_command.as_deref());
+        let browser_companion_expected_version = config
+            .tools
+            .browser_companion
+            .expected_version
+            .as_deref()
+            .or(env_browser_companion_expected_version.as_deref());
         let shell_allow: BTreeSet<String> = config
             .tools
             .shell_allow
@@ -812,10 +843,10 @@ impl ToolRuntimeConfig {
                 max_text_chars: config.tools.browser.max_text_chars,
             },
             browser_companion: browser_companion_runtime_policy(
-                config.tools.browser_companion.enabled,
-                parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false),
-                config.tools.browser_companion.command.as_deref(),
-                config.tools.browser_companion.expected_version.as_deref(),
+                browser_companion_enabled,
+                browser_companion_ready,
+                browser_companion_command,
+                browser_companion_expected_version,
                 config.tools.browser_companion.timeout_seconds,
                 config.tools.browser_companion.allow_private_hosts,
                 browser_companion_allowed_domains.into_iter().collect(),
@@ -971,9 +1002,12 @@ impl ToolRuntimeConfig {
             .unwrap_or(crate::config::DEFAULT_BROWSER_MAX_TEXT_CHARS);
         let browser_companion_enabled =
             parse_env_bool("LOONG_BROWSER_COMPANION_ENABLED").unwrap_or(false);
-        let browser_companion_ready =
-            parse_env_bool("LOONG_BROWSER_COMPANION_READY").unwrap_or(false);
+        let browser_companion_ready = parse_env_bool("LOONG_BROWSER_COMPANION_READY");
         let browser_companion_command = parse_env_string("LOONG_BROWSER_COMPANION_COMMAND");
+        let discovered_browser_companion_command = browser_companion_command
+            .is_none()
+            .then(discover_browser_companion_command)
+            .flatten();
         let browser_companion_expected_version =
             parse_env_string("LOONG_BROWSER_COMPANION_EXPECTED_VERSION");
         let browser_companion_timeout_seconds =
@@ -1085,6 +1119,8 @@ impl ToolRuntimeConfig {
         let browser_companion_blocked_domains = web_fetch_blocked_domains.clone();
         let browser_companion_enforce_allowed_domains =
             !browser_companion_allowed_domains.is_empty();
+        let browser_companion_auto_enabled =
+            browser_companion_command.is_some() || discovered_browser_companion_command.is_some();
 
         Self {
             file_root,
@@ -1107,9 +1143,11 @@ impl ToolRuntimeConfig {
                 max_text_chars: browser_max_text_chars,
             },
             browser_companion: browser_companion_runtime_policy(
-                browser_companion_enabled,
-                browser_companion_ready,
-                browser_companion_command.as_deref(),
+                browser_companion_enabled || browser_companion_auto_enabled,
+                browser_companion_ready.unwrap_or(browser_companion_auto_enabled),
+                browser_companion_command
+                    .as_deref()
+                    .or(discovered_browser_companion_command.as_deref()),
                 browser_companion_expected_version.as_deref(),
                 browser_companion_timeout_seconds,
                 browser_companion_allow_private_hosts,
@@ -1555,7 +1593,8 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
             .collect()
     };
     let enforce_allowed_domains = !allowed_domains.is_empty();
-    let auto_enabled = use_env_web_policy && (env_command.is_some() || discovered_command.is_some());
+    let auto_enabled =
+        use_env_web_policy && (env_command.is_some() || discovered_command.is_some());
     let effective_enabled = config.browser_companion.enabled || env_enabled || auto_enabled;
     let effective_ready = env_ready.unwrap_or(auto_enabled);
     browser_companion_runtime_policy(
@@ -2474,6 +2513,45 @@ mod tests {
         assert_eq!(
             runtime.browser_companion.blocked_domains,
             BTreeSet::from(["internal.example".to_owned()])
+        );
+    }
+
+    #[test]
+    fn from_loong_config_auto_detects_browser_companion_command_on_path() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+
+        let root = tempfile::tempdir().expect("create browser companion tempdir");
+        #[cfg(unix)]
+        let command_path = root.path().join("loong-browser-companion");
+        #[cfg(windows)]
+        let command_path = root.path().join("loong-browser-companion.cmd");
+
+        #[cfg(unix)]
+        write_executable_script_atomically(&command_path, "#!/bin/sh\nexit 0\n")
+            .expect("write fake browser companion");
+        #[cfg(windows)]
+        std::fs::write(&command_path, "@echo off\r\nexit /b 0\r\n")
+            .expect("write fake browser companion");
+
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let joined = std::env::join_paths(
+            std::iter::once(root.path().to_path_buf()).chain(std::env::split_paths(&path)),
+        )
+        .expect("join PATH");
+        env.set("PATH", joined);
+
+        let config = crate::config::LoongConfig::default();
+        let runtime = ToolRuntimeConfig::from_loong_config(&config, None);
+
+        assert!(runtime.browser_companion.enabled);
+        assert!(runtime.browser_companion.ready);
+        assert!(
+            runtime
+                .browser_companion
+                .command
+                .as_deref()
+                .is_some_and(|value| value.contains("loong-browser-companion"))
         );
     }
 
