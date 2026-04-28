@@ -542,9 +542,9 @@ fn build_import_apply_summary_body_lines(
     lines
 }
 
-fn prioritize_import_apply_actions<'a>(
-    actions: &'a [crate::next_actions::SetupNextAction],
-) -> Vec<&'a crate::next_actions::SetupNextAction> {
+fn prioritize_import_apply_actions(
+    actions: &[crate::next_actions::SetupNextAction],
+) -> Vec<&crate::next_actions::SetupNextAction> {
     let primary_index = actions
         .iter()
         .position(is_import_managed_bridge_doctor_action)
