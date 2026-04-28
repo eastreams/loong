@@ -280,6 +280,50 @@ fn install_invalid_runtime_plugin_package(root: &Path, config_path: &Path) {
         .expect("rewrite config fixture with runtime plugin roots");
 }
 
+fn install_invalid_process_stdio_runtime_plugin_package(root: &Path, config_path: &Path) {
+    write_file(
+        root,
+        "runtime-plugins/invalid-stdio/loong.plugin.json",
+        r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "invalid-stdio-plugin",
+  "provider_id": "invalid-stdio",
+  "connector_name": "invalid-stdio",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Malformed process stdio extension declarations",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
+    "loong_extension_methods_json": "not-json",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_actions_json": "[]"
+  }
+}"#,
+    );
+    write_file(
+        root,
+        "runtime-plugins/invalid-stdio/index.js",
+        "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+    );
+
+    let (path_string, mut reloaded) = mvp::config::load(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("reload config");
+    reloaded.runtime_plugins.enabled = true;
+    reloaded.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+    mvp::config::write(Some(&path_string.display().to_string()), &reloaded, true)
+        .expect("rewrite config fixture with runtime plugin roots");
+}
+
 fn array_contains_string(array: &Value, needle: &str) -> bool {
     array.as_array().is_some_and(|items| {
         items
@@ -483,6 +527,57 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
         payload["runtime_plugin_inventory"]["returned_results"],
         serde_json::json!(1)
     );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_surfaces_native_extension_authoring_guidance_for_invalid_process_stdio_package() {
+    let root = unique_temp_dir("loong-runtime-snapshot-invalid-stdio-authoring");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    install_invalid_process_stdio_runtime_plugin_package(&root, &config_path);
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+    let plugin = array_object_with_string_field(
+        &payload["runtime_plugins"]["plugins"],
+        "plugin_id",
+        "invalid-stdio-plugin",
+    )
+    .expect("runtime snapshot should include invalid process stdio plugin");
+
+    let guidance = &plugin["authoring_guidance"];
+    assert_eq!(
+        guidance["reference_example_path"],
+        serde_json::json!("examples/plugins-process/native-extension-javascript")
+    );
+    assert_eq!(guidance["source_language_arg"], serde_json::json!("js"));
+    assert_eq!(guidance["smoke_allow_command"], serde_json::json!("node"));
+    let actions = guidance["author_remediation_actions"]
+        .as_array()
+        .expect("author remediation actions should be an array");
+    assert!(actions.iter().any(|action| {
+        action["kind"] == serde_json::json!("repair_extension_metadata")
+            && action["role"] == serde_json::json!("author")
+            && action["execution_kind"] == serde_json::json!("manual_edit")
+    }));
+    assert!(actions.iter().any(|action| {
+        action["kind"] == serde_json::json!("rerun_smoke_test")
+            && action["role"] == serde_json::json!("verification")
+            && action["execution_kind"] == serde_json::json!("governed_smoke_probe")
+            && action["agent_runnable"] == serde_json::json!(true)
+            && action["requires_allow_command"] == serde_json::json!(true)
+            && action["allow_command"] == serde_json::json!("node")
+    }));
 
     fs::remove_dir_all(&root).ok();
 }

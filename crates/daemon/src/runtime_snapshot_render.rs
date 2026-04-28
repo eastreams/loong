@@ -962,6 +962,10 @@ fn runtime_snapshot_runtime_plugin_json(
         "extension_metadata_issues".to_owned(),
         serde_json::to_value(&plugin.extension_metadata_issues).unwrap_or(Value::Null),
     );
+    object.insert(
+        "authoring_guidance".to_owned(),
+        serde_json::to_value(&plugin.authoring_guidance).unwrap_or(Value::Null),
+    );
     Value::Object(object)
 }
 

@@ -232,24 +232,45 @@ pub(crate) fn render_authoring_smoke_test_command(
 pub(crate) fn build_native_extension_authoring_guidance(
     plugin: &PluginInventoryResult,
 ) -> Option<NativeExtensionAuthoringGuidanceView> {
-    let bridge_kind = kernel::PluginBridgeKind::parse_label(&plugin.bridge_kind)?;
-    let scaffold_defaults =
-        kernel::plugin_runtime_scaffold_defaults(bridge_kind, plugin.source_language.as_deref())
-            .ok()?;
-    let profile = process_stdio_native_extension_language_profile(&scaffold_defaults).ok()??;
-    let source_language = scaffold_defaults.source_language?;
-
-    Some(build_native_extension_authoring_view(
+    build_native_extension_authoring_guidance_from_runtime_profile(
         plugin.package_root.as_str(),
         plugin.plugin_id.as_str(),
-        profile,
-        source_language.as_str(),
         plugin.bridge_kind.as_str(),
+        plugin.source_language.as_deref()?,
         plugin.extension_contract.clone(),
         plugin.extension_methods.clone(),
         plugin.extension_events.clone(),
         plugin.extension_host_actions.clone(),
         plugin.extension_metadata_issues.clone(),
+    )
+}
+
+pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
+    package_root: &str,
+    plugin_id: &str,
+    bridge_kind: &str,
+    source_language: &str,
+    extension_contract: Option<String>,
+    extension_methods: Vec<String>,
+    extension_events: Vec<String>,
+    extension_host_actions: Vec<String>,
+    extension_metadata_issues: Vec<String>,
+) -> Option<NativeExtensionAuthoringGuidanceView> {
+    let bridge_kind = kernel::PluginBridgeKind::parse_label(bridge_kind)?;
+    let scaffold_defaults =
+        kernel::plugin_runtime_scaffold_defaults(bridge_kind, Some(source_language)).ok()?;
+    let profile = process_stdio_native_extension_language_profile(&scaffold_defaults).ok()??;
+    Some(build_native_extension_authoring_view(
+        package_root,
+        plugin_id,
+        profile,
+        source_language,
+        bridge_kind.as_str(),
+        extension_contract,
+        extension_methods,
+        extension_events,
+        extension_host_actions,
+        extension_metadata_issues,
     ))
 }
 

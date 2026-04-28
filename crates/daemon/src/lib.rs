@@ -2497,6 +2497,7 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub extension_events: Vec<String>,
     pub extension_host_actions: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
+    pub authoring_guidance: Option<crate::native_extension_authoring::NativeExtensionAuthoringGuidanceView>,
 }
 
 pub(crate) const RUNTIME_WEB_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access stays separately governed";
@@ -3113,6 +3114,18 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 .collect::<Vec<_>>();
             let extension_declarations =
                 runtime_plugin_extension_declarations_from_metadata(&entry.metadata);
+            let authoring_guidance = crate::native_extension_authoring::
+                build_native_extension_authoring_guidance_from_runtime_profile(
+                    entry.package_root.as_str(),
+                    entry.plugin_id.as_str(),
+                    entry.runtime.bridge_kind.as_str(),
+                    entry.runtime.source_language.as_str(),
+                    extension_declarations.contract.clone(),
+                    extension_declarations.methods.clone(),
+                    extension_declarations.events.clone(),
+                    extension_declarations.host_actions.clone(),
+                    extension_declarations.metadata_issues.clone(),
+                );
             let compatibility_shim = inventory_entry
                 .and_then(|item| item.compatibility_shim.as_ref())
                 .map(|shim| shim.shim_id.clone());
@@ -3225,6 +3238,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 extension_events: extension_declarations.events,
                 extension_host_actions: extension_declarations.host_actions,
                 extension_metadata_issues: extension_declarations.metadata_issues,
+                authoring_guidance,
             }
         })
         .collect::<Vec<_>>();
