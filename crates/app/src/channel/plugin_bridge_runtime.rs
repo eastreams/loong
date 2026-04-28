@@ -67,7 +67,7 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
     let resolved_roots = config.runtime_plugins.resolved_roots();
     if resolved_roots.is_empty() {
         return Err(
-            "managed bridge runtime is enabled but runtime plugin roots are empty".to_owned(),
+            "managed bridge runtime is enabled but no runtime plugin roots were found; create `.loong/extensions/`, `~/.loong/agent/extensions/`, or set runtime_plugins.roots explicitly".to_owned(),
         );
     }
 

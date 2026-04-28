@@ -6364,6 +6364,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn public_native_extension_docs_describe_loong_auto_discovery_dirs() {
+        let repo_root = repo_root();
+        let quickstart = fs::read_to_string(repo_root.join("docs/sdk/quickstart-external.md"))
+            .expect("quickstart doc should exist");
+        let site_docs = fs::read_to_string(repo_root.join("site/build-on-loong/extensions.mdx"))
+            .expect("public site doc should exist");
+
+        for doc in [quickstart.as_str(), site_docs.as_str()] {
+            assert!(
+                doc.contains(".loong/extensions/"),
+                "doc should mention project-local Loong extension auto-discovery"
+            );
+            assert!(
+                doc.contains("~/.loong/agent/extensions/"),
+                "doc should mention global Loong extension auto-discovery"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn execute_plugins_doctor_surfaces_native_extension_authoring_guidance() {
         let repo_root = repo_root();

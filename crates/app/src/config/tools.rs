@@ -1059,13 +1059,19 @@ impl ExternalSkillsConfig {
 
 impl RuntimePluginsConfig {
     pub fn resolved_roots(&self) -> Vec<PathBuf> {
-        self.roots
+        let explicit_roots = self
+            .roots
             .iter()
             .map(String::as_str)
             .map(str::trim)
             .filter(|root| !root.is_empty())
             .map(expand_path)
-            .collect()
+            .collect::<Vec<_>>();
+        if !explicit_roots.is_empty() {
+            return explicit_roots;
+        }
+
+        default_runtime_plugin_discovery_roots()
     }
 
     pub fn resolved_supported_bridges(&self) -> Result<Vec<PluginBridgeKind>, String> {
@@ -1174,28 +1180,6 @@ impl RuntimePluginsConfig {
     pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
         let mut issues = Vec::new();
 
-        let has_non_empty_root = self.roots.iter().any(|root| !root.trim().is_empty());
-        if self.enabled && !has_non_empty_root {
-            let mut extra_message_variables = BTreeMap::new();
-            extra_message_variables.insert(
-                "invalid_reason".to_owned(),
-                "runtime_plugins.enabled requires at least one non-empty root".to_owned(),
-            );
-            extra_message_variables.insert(
-                "suggested_fix".to_owned(),
-                "set runtime_plugins.roots to one or more plugin discovery directories".to_owned(),
-            );
-            issues.push(ConfigValidationIssue {
-                severity: super::shared::ConfigValidationSeverity::Error,
-                code: super::shared::ConfigValidationCode::InvalidValue,
-                field_path: "runtime_plugins.roots".to_owned(),
-                inline_field_path: "runtime_plugins.roots".to_owned(),
-                example_env_name: String::new(),
-                suggested_env_name: None,
-                extra_message_variables,
-            });
-        }
-
         let invalid_bridge_labels = self.invalid_supported_bridge_labels();
         if !invalid_bridge_labels.is_empty() {
             let mut extra_message_variables = BTreeMap::new();
@@ -1245,6 +1229,18 @@ impl RuntimePluginsConfig {
 
         invalid_labels.into_iter().collect()
     }
+}
+
+fn default_runtime_plugin_discovery_roots() -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = expand_path("~");
+    [
+        cwd.join(".loong/extensions"),
+        home.join(".loong/agent/extensions"),
+    ]
+    .into_iter()
+    .filter(|path| path.exists())
+    .collect()
 }
 
 impl WebToolConfig {
@@ -1430,7 +1426,7 @@ fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ScopedEnv, ScopedLoongHome};
+    use crate::test_support::{ScopedCurrentDir, ScopedEnv, ScopedLoongHome};
 
     #[test]
     fn tool_config_defaults_expose_session_runtime_policy() {
@@ -2286,6 +2282,32 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
+    fn runtime_plugins_resolved_roots_auto_discover_loong_extension_dirs_when_unconfigured() {
+        let home = tempfile::tempdir().expect("create temp home");
+        let workspace = tempfile::tempdir().expect("create workspace");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+        let _cwd = ScopedCurrentDir::new(workspace.path());
+
+        let project_root = workspace.path().join(".loong/extensions");
+        let global_root = home.path().join(".loong/agent/extensions");
+        std::fs::create_dir_all(&project_root).expect("create project auto-discovery root");
+        std::fs::create_dir_all(&global_root).expect("create global auto-discovery root");
+
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["   ".to_owned()],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+            allowed_process_commands: Vec::new(),
+        };
+
+        let roots = config.resolved_roots();
+
+        assert_eq!(roots, vec![project_root, global_root]);
+    }
+
+    #[test]
     fn runtime_plugins_bridge_support_matrix_uses_configured_policy() {
         let config = RuntimePluginsConfig {
             enabled: true,
@@ -2369,7 +2391,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     }
 
     #[test]
-    fn runtime_plugins_validate_rejects_enabled_mode_without_roots() {
+    fn runtime_plugins_validate_allows_enabled_mode_without_explicit_roots() {
         let config = RuntimePluginsConfig {
             enabled: true,
             roots: vec!["   ".to_owned()],
@@ -2381,10 +2403,10 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         let issues = config.validate();
 
         assert!(
-            issues
+            !issues
                 .iter()
                 .any(|issue| issue.field_path == "runtime_plugins.roots"),
-            "expected runtime_plugins.roots validation issue, got {issues:?}"
+            "runtime plugin auto-discovery should allow enabled mode without explicit roots: {issues:?}"
         );
     }
 

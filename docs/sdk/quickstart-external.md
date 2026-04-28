@@ -193,6 +193,17 @@ The first Rust smoke run may take longer because the scaffold uses
 This smoke path is explicit by design: local process execution only happens
 when you pass the allowed command on the CLI.
 
+## Auto-discovery locations
+
+If you do not want to set `runtime_plugins.roots` explicitly, Loong now
+auto-discovers runtime plugin packages from:
+
+- `.loong/extensions/` — project-local
+- `~/.loong/agent/extensions/` — global
+
+This keeps the authoring lane open by default while preserving a Loong-native
+directory contract.
+
 ## Supported runnable templates
 
 | Language | `--source-language` | Scaffolded runtime files | Smoke `--allow-command` | Checked-in example |

@@ -30,6 +30,16 @@ A native extension is a **governed plugin package** whose manifest declares a sm
 
 The current shortest authoring lane is a `process_stdio` package.
 
+## Auto-discovery locations
+
+Loong can auto-discover runtime plugin packages from:
+
+- `.loong/extensions/` — project-local
+- `~/.loong/agent/extensions/` — global
+
+Use explicit `runtime_plugins.roots` only when you want to override that
+default discovery contract.
+
 ## Scaffold a package
 
 Start with `plugins init`.

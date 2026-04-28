@@ -2990,7 +2990,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             supported_adapter_families,
             inventory_status: RuntimeSnapshotInventoryStatus::Error,
             inventory_error: Some(
-                "runtime_plugins.enabled=true but no runtime plugin roots are configured"
+                "runtime_plugins.enabled=true but no runtime plugin roots were found; create `.loong/extensions/` in the project, `~/.loong/agent/extensions/` globally, or set runtime_plugins.roots explicitly"
                     .to_owned(),
             ),
             readiness_evaluation,

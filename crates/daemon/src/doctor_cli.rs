@@ -3081,6 +3081,24 @@ mod tests {
         temp_dir
     }
 
+    struct DoctorCliCurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl DoctorCliCurrentDirGuard {
+        fn set(path: &Path) -> Self {
+            let original = std::env::current_dir().expect("read current dir");
+            std::env::set_current_dir(path).expect("set current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for DoctorCliCurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("restore current dir");
+        }
+    }
+
     fn runtime_plugins_test_config(root: &Path, enabled: bool) -> mvp::config::LoongConfig {
         let mut config = mvp::config::LoongConfig::default();
         config.tools.file_root = Some(root.display().to_string());
@@ -6512,6 +6530,54 @@ mod tests {
             summary["action_execution_kinds"]["governed_smoke_probe"],
             json!(1)
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn doctor_runtime_plugin_inventory_json_payload_auto_discovers_project_local_loong_extensions()
+     {
+        let root = browser_companion_temp_dir("runtime-plugins-auto-discovery");
+        let _cwd = DoctorCliCurrentDirGuard::set(&root);
+        let mut config = runtime_plugins_test_config(&root, true);
+        config.runtime_plugins.roots = vec!["   ".to_owned()];
+        let runtime_root = root.join(".loong/extensions");
+        std::fs::create_dir_all(runtime_root.join("search")).expect("create runtime root");
+        std::fs::write(
+            runtime_root.join("search").join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "auto-discovered-extension",
+  "provider_id": "auto-discovered-extension",
+  "connector_name": "auto-discovered-extension",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "python",
+    "command": "python3",
+    "args_json": "[\"index.py\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+        )
+        .expect("write runtime plugin manifest");
+
+        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+
+        assert_eq!(payload["available"], json!(true));
+        assert_eq!(payload["returned_results"], json!(1));
+        let plugin = payload["results"]
+            .as_array()
+            .and_then(|plugins| {
+                plugins.iter().find(|plugin| {
+                    plugin["plugin_id"].as_str() == Some("auto-discovered-extension")
+                })
+            })
+            .expect("auto-discovered extension should be present");
+        assert_eq!(plugin["plugin_id"], json!("auto-discovered-extension"));
 
         std::fs::remove_dir_all(&root).ok();
     }
