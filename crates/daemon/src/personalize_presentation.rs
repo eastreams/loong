@@ -1,5 +1,6 @@
 use crate::onboard_cli::SelectOption;
 use loong_app as mvp;
+use crate::operator_prompt::OPERATOR_CLEAR_INPUT_TOKEN;
 
 pub(crate) const PERSONALIZE_COMMAND_ABOUT: &str =
     "Teach Loong your working style for future sessions";
@@ -252,4 +253,18 @@ pub(crate) fn personalize_cleared_message(path: &str) -> String {
 
 pub(crate) fn personalize_suppressed_message(path: &str) -> String {
     format!("Stopped future personalize suggestions in {path}.")
+}
+
+pub(crate) fn personalize_current_value_line(value: &str) -> String {
+    format!("Current value: {value}")
+}
+
+pub(crate) fn personalize_text_keep_or_clear_hint() -> String {
+    format!(
+        "Press Enter to keep it, or type {OPERATOR_CLEAR_INPUT_TOKEN} to clear it."
+    )
+}
+
+pub(crate) const fn personalize_select_keep_or_clear_hint() -> &'static str {
+    "Press Enter to keep the current setting, or choose clear current value to remove it."
 }
