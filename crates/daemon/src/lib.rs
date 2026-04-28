@@ -1660,6 +1660,7 @@ pub struct RuntimeSnapshotCliState {
     pub enabled_outbound_only_channel_ids: Vec<String>,
     pub channels: mvp::channel::ChannelInventory,
     pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
+    pub tool_access: RuntimeToolAccessSummary,
     pub visible_tool_names: Vec<String>,
     pub discoverable_tool_summary: mvp::tools::DiscoverableToolSurfaceSummary,
     pub capability_snapshot: String,
@@ -1738,32 +1739,57 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub missing_required_config_keys: Vec<String>,
 }
 
-pub(crate) const RUNTIME_WEB_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access stays separately governed";
+pub(crate) const RUNTIME_TOOL_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access and browser lanes stay separately governed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeWebAccessSummary {
+pub(crate) struct RuntimeToolAccessSummary {
     pub ordinary_network_access_enabled: bool,
     pub query_search_enabled: bool,
     pub query_search_default_provider: String,
     pub query_search_credential_ready: bool,
+    pub browser_page_access_enabled: bool,
+    pub managed_browser_session_enabled: bool,
+    pub managed_browser_session_ready: bool,
+    pub consent_mode: &'static str,
+    pub approval_mode: &'static str,
     pub separation_note: &'static str,
 }
 
-pub(crate) fn runtime_web_access_summary(
+pub(crate) fn runtime_tool_access_summary(
+    config: &mvp::config::LoongConfig,
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> RuntimeWebAccessSummary {
+) -> RuntimeToolAccessSummary {
     let ordinary_network_access_enabled = runtime.web_fetch.enabled;
     let query_search_enabled = runtime.web_search.enabled;
     let query_search_default_provider = runtime.web_search.default_provider.clone();
     let query_search_credential_ready = web_search_provider_credential_ready(&runtime.web_search);
-    let separation_note = RUNTIME_WEB_ACCESS_SEPARATION_NOTE;
+    let browser_page_access_enabled = runtime.browser.enabled;
+    let managed_browser_session_enabled = runtime.browser_companion.enabled;
+    let managed_browser_session_ready =
+        runtime.browser_companion.enabled && runtime.browser_companion.ready;
+    let consent_mode = config.tools.consent.default_mode.as_str();
+    let approval_mode = render_tool_approval_mode(config.tools.approval.mode);
+    let separation_note = RUNTIME_TOOL_ACCESS_SEPARATION_NOTE;
 
-    RuntimeWebAccessSummary {
+    RuntimeToolAccessSummary {
         ordinary_network_access_enabled,
         query_search_enabled,
         query_search_default_provider,
         query_search_credential_ready,
+        browser_page_access_enabled,
+        managed_browser_session_enabled,
+        managed_browser_session_ready,
+        consent_mode,
+        approval_mode,
         separation_note,
+    }
+}
+
+const fn render_tool_approval_mode(mode: mvp::config::GovernedToolApprovalMode) -> &'static str {
+    match mode {
+        mvp::config::GovernedToolApprovalMode::Disabled => "disabled",
+        mvp::config::GovernedToolApprovalMode::MediumBalanced => "medium_balanced",
+        mvp::config::GovernedToolApprovalMode::Strict => "strict",
     }
 }
 
@@ -1945,6 +1971,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     );
     let (external_skills, snapshot_tool_runtime) =
         collect_runtime_snapshot_external_skills_state(&tool_runtime);
+    let tool_access = runtime_tool_access_summary(config, &snapshot_tool_runtime);
     let tool_view = mvp::tools::runtime_tool_view_for_runtime_config(&snapshot_tool_runtime);
     let visible_tools = tool_view
         .tool_names()
@@ -1974,6 +2001,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         enabled_outbound_only_channel_ids,
         channels,
         tool_runtime: snapshot_tool_runtime,
+        tool_access,
         visible_tool_names: visible_tools,
         discoverable_tool_summary,
         capability_snapshot,

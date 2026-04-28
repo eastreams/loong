@@ -318,6 +318,20 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         &payload["tools"]["visible_tool_names"],
         "external_skills.list"
     ));
+    assert_eq!(payload["tool_runtime"]["approval"]["mode"], "disabled");
+    assert_eq!(payload["tool_runtime"]["consent"]["default_mode"], "full");
+    assert_eq!(
+        payload["tool_runtime"]["access"]["browser_page_access_enabled"],
+        true
+    );
+    assert_eq!(
+        payload["tool_runtime"]["access"]["managed_browser_session_enabled"],
+        true
+    );
+    assert_eq!(
+        payload["tool_runtime"]["access"]["managed_browser_session_ready"],
+        true
+    );
     assert_eq!(payload["external_skills"]["policy"]["enabled"], true);
     assert!(array_contains_object_field(
         &payload["external_skills"]["inventory"]["skills"],
@@ -610,9 +624,14 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
         )
     );
     assert!(rendered.contains("acp_mcp docs status=pending"));
-    assert!(rendered.contains("tool_runtime web_access ordinary_network_enabled="));
+    assert!(rendered.contains("tool_runtime access ordinary_network_enabled="));
     assert!(rendered.contains("query_search_default_provider=duckduckgo"));
     assert!(rendered.contains("query_search_credential_ready=true"));
+    assert!(rendered.contains("browser_page_enabled=true"));
+    assert!(rendered.contains("managed_browser_enabled=true"));
+    assert!(rendered.contains("managed_browser_ready=true"));
+    assert!(rendered.contains("consent_mode=full"));
+    assert!(rendered.contains("approval_mode=disabled"));
     assert!(rendered.contains("tools visible_count="));
     assert!(rendered.contains("runtime_plugins inventory_status=ok enabled=true"));
     assert!(rendered.contains("readiness_evaluation=default_bridge_support_matrix"));

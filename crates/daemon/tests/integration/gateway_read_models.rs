@@ -488,13 +488,18 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
     assert!(encoded["provider"]["transport_runtime"]["failover_by_reason"].is_object());
     assert!(encoded["provider"]["transport_runtime"]["failover_by_stage"].is_object());
     assert!(encoded["provider"]["transport_runtime"]["failover_by_provider"].is_object());
-    assert!(encoded["tools"]["web_access"]["ordinary_network_access_enabled"].is_boolean());
-    assert!(encoded["tools"]["web_access"]["query_search_enabled"].is_boolean());
-    assert!(encoded["tools"]["web_access"]["query_search_default_provider"].is_string());
-    assert!(encoded["tools"]["web_access"]["query_search_credential_ready"].is_boolean());
+    assert!(encoded["tools"]["access"]["ordinary_network_access_enabled"].is_boolean());
+    assert!(encoded["tools"]["access"]["query_search_enabled"].is_boolean());
+    assert!(encoded["tools"]["access"]["query_search_default_provider"].is_string());
+    assert!(encoded["tools"]["access"]["query_search_credential_ready"].is_boolean());
+    assert!(encoded["tools"]["access"]["browser_page_access_enabled"].is_boolean());
+    assert!(encoded["tools"]["access"]["managed_browser_session_enabled"].is_boolean());
+    assert!(encoded["tools"]["access"]["managed_browser_session_ready"].is_boolean());
+    assert!(encoded["tools"]["access"]["consent_mode"].is_string());
+    assert!(encoded["tools"]["access"]["approval_mode"].is_string());
     assert_eq!(
-        encoded["tools"]["web_access"]["separation_note"],
-        "web-search provider settings affect only query search mode; ordinary network access stays separately governed"
+        encoded["tools"]["access"]["separation_note"],
+        "web-search provider settings affect only query search mode; ordinary network access and browser lanes stay separately governed"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -636,13 +641,10 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         summary.runtime.tool_calling.availability,
         runtime_snapshot.tools.tool_calling.availability
     );
+    assert_eq!(summary.runtime.access, runtime_snapshot.tools.access);
     assert_eq!(
-        summary.runtime.web_access,
-        runtime_snapshot.tools.web_access
-    );
-    assert_eq!(
-        encoded["runtime"]["web_access"]["separation_note"],
-        "web-search provider settings affect only query search mode; ordinary network access stays separately governed"
+        encoded["runtime"]["access"]["separation_note"],
+        "web-search provider settings affect only query search mode; ordinary network access and browser lanes stay separately governed"
     );
     assert_eq!(
         encoded["control_surface"]["base_url"],

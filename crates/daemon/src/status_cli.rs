@@ -400,10 +400,13 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         runtime.hidden_tool_surface_ids.join(",")
     };
     let tool_calling = &runtime.tool_calling;
-    let web_access = &runtime.web_access;
-    let ordinary_network_detail = render_web_ordinary_network_detail(web_access);
-    let query_search_detail = render_web_query_search_detail(web_access);
-    let web_boundary_note = web_access.separation_note.clone();
+    let access = &runtime.access;
+    let ordinary_network_detail = render_access_ordinary_network_detail(access);
+    let query_search_detail = render_access_query_search_detail(access);
+    let browser_page_detail = render_access_browser_page_detail(access);
+    let managed_browser_detail = render_access_managed_browser_detail(access);
+    let governance_detail = render_access_governance_detail(access);
+    let web_boundary_note = access.separation_note.clone();
     let mut sections = Vec::new();
 
     if let Some(primary_action) = status.next_actions.first() {
@@ -473,7 +476,7 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 detail: format!("availability={}", status.work_units.availability),
             },
             loong_app::tui_surface::TuiChecklistItemSpec {
-                status: if web_access.ordinary_network_access_enabled {
+                status: if access.ordinary_network_access_enabled {
                     loong_app::tui_surface::TuiChecklistStatus::Pass
                 } else {
                     loong_app::tui_surface::TuiChecklistStatus::Warn
@@ -482,9 +485,34 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 detail: ordinary_network_detail.clone(),
             },
             loong_app::tui_surface::TuiChecklistItemSpec {
-                status: query_search_checklist_status(web_access),
+                status: query_search_checklist_status(access),
                 label: "query search".to_owned(),
                 detail: query_search_detail.clone(),
+            },
+            loong_app::tui_surface::TuiChecklistItemSpec {
+                status: if access.browser_page_access_enabled {
+                    loong_app::tui_surface::TuiChecklistStatus::Pass
+                } else {
+                    loong_app::tui_surface::TuiChecklistStatus::Warn
+                },
+                label: "browser page".to_owned(),
+                detail: browser_page_detail,
+            },
+            loong_app::tui_surface::TuiChecklistItemSpec {
+                status: if !access.managed_browser_session_enabled
+                    || access.managed_browser_session_ready
+                {
+                    loong_app::tui_surface::TuiChecklistStatus::Pass
+                } else {
+                    loong_app::tui_surface::TuiChecklistStatus::Warn
+                },
+                label: "managed browser".to_owned(),
+                detail: managed_browser_detail,
+            },
+            loong_app::tui_surface::TuiChecklistItemSpec {
+                status: loong_app::tui_surface::TuiChecklistStatus::Pass,
+                label: "governance".to_owned(),
+                detail: governance_detail,
             },
         ],
     });
@@ -1011,31 +1039,55 @@ fn render_optional_usize(value: Option<usize>) -> String {
     value.unwrap_or_else(|| "-".to_owned())
 }
 
-fn render_web_ordinary_network_detail(
-    web_access: &crate::gateway::read_models::GatewayWebAccessReadModel,
+fn render_access_ordinary_network_detail(
+    access: &crate::gateway::read_models::GatewayToolAccessReadModel,
 ) -> String {
-    format!("enabled={}", web_access.ordinary_network_access_enabled)
+    format!("enabled={}", access.ordinary_network_access_enabled)
 }
 
-fn render_web_query_search_detail(
-    web_access: &crate::gateway::read_models::GatewayWebAccessReadModel,
+fn render_access_query_search_detail(
+    access: &crate::gateway::read_models::GatewayToolAccessReadModel,
 ) -> String {
     format!(
         "enabled={} · provider={} · credential_ready={}",
-        web_access.query_search_enabled,
-        web_access.query_search_default_provider,
-        web_access.query_search_credential_ready,
+        access.query_search_enabled,
+        access.query_search_default_provider,
+        access.query_search_credential_ready,
     )
 }
 
 fn query_search_checklist_status(
-    web_access: &crate::gateway::read_models::GatewayWebAccessReadModel,
+    access: &crate::gateway::read_models::GatewayToolAccessReadModel,
 ) -> loong_app::tui_surface::TuiChecklistStatus {
-    if !web_access.query_search_enabled || web_access.query_search_credential_ready {
+    if !access.query_search_enabled || access.query_search_credential_ready {
         loong_app::tui_surface::TuiChecklistStatus::Pass
     } else {
         loong_app::tui_surface::TuiChecklistStatus::Warn
     }
+}
+
+fn render_access_browser_page_detail(
+    access: &crate::gateway::read_models::GatewayToolAccessReadModel,
+) -> String {
+    format!("enabled={}", access.browser_page_access_enabled)
+}
+
+fn render_access_managed_browser_detail(
+    access: &crate::gateway::read_models::GatewayToolAccessReadModel,
+) -> String {
+    format!(
+        "enabled={} · ready={}",
+        access.managed_browser_session_enabled, access.managed_browser_session_ready
+    )
+}
+
+fn render_access_governance_detail(
+    access: &crate::gateway::read_models::GatewayToolAccessReadModel,
+) -> String {
+    format!(
+        "consent_mode={} · approval_mode={}",
+        access.consent_mode, access.approval_mode
+    )
 }
 
 #[cfg(test)]
@@ -1065,24 +1117,34 @@ mod tests {
 
     #[test]
     fn query_search_checklist_status_treats_disabled_mode_as_non_degraded() {
-        let disabled = crate::gateway::read_models::GatewayWebAccessReadModel {
+        let disabled = crate::gateway::read_models::GatewayToolAccessReadModel {
             ordinary_network_access_enabled: true,
             query_search_enabled: false,
             query_search_default_provider: "duckduckgo".to_owned(),
             query_search_credential_ready: false,
-            separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+            browser_page_access_enabled: true,
+            managed_browser_session_enabled: false,
+            managed_browser_session_ready: false,
+            consent_mode: "full".to_owned(),
+            approval_mode: "disabled".to_owned(),
+            separation_note: crate::RUNTIME_TOOL_ACCESS_SEPARATION_NOTE.to_owned(),
         };
         assert_eq!(
             query_search_checklist_status(&disabled),
             loong_app::tui_surface::TuiChecklistStatus::Pass
         );
 
-        let enabled_missing_credential = crate::gateway::read_models::GatewayWebAccessReadModel {
+        let enabled_missing_credential = crate::gateway::read_models::GatewayToolAccessReadModel {
             ordinary_network_access_enabled: true,
             query_search_enabled: true,
             query_search_default_provider: "brave".to_owned(),
             query_search_credential_ready: false,
-            separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+            browser_page_access_enabled: true,
+            managed_browser_session_enabled: false,
+            managed_browser_session_ready: false,
+            consent_mode: "full".to_owned(),
+            approval_mode: "disabled".to_owned(),
+            separation_note: crate::RUNTIME_TOOL_ACCESS_SEPARATION_NOTE.to_owned(),
         };
         assert_eq!(
             query_search_checklist_status(&enabled_missing_credential),
@@ -1165,12 +1227,17 @@ mod tests {
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
                 },
-                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                access: crate::gateway::read_models::GatewayToolAccessReadModel {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
                     query_search_credential_ready: true,
-                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                    browser_page_access_enabled: true,
+                    managed_browser_session_enabled: false,
+                    managed_browser_session_ready: false,
+                    consent_mode: "full".to_owned(),
+                    approval_mode: "disabled".to_owned(),
+                    separation_note: crate::RUNTIME_TOOL_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
@@ -1254,8 +1321,13 @@ mod tests {
         assert!(rendered.contains("query search"));
         assert!(rendered.contains("provider=duckduckgo"));
         assert!(rendered.contains("credential_ready=true"));
+        assert!(rendered.contains("browser page"));
+        assert!(rendered.contains("managed browser"));
+        assert!(rendered.contains("governance"));
         assert!(rendered.contains("web boundary"));
-        assert!(rendered.contains("ordinary network access stays separately governed"));
+        assert!(
+            rendered.contains("ordinary network access and browser lanes stay separately governed")
+        );
         assert!(rendered.contains("channel and recovery detail"));
         assert!(rendered.contains("enabled channels: telegram"));
         assert!(rendered.contains("service enabled ids: telegram"));
@@ -1371,12 +1443,17 @@ mod tests {
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
                 },
-                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                access: crate::gateway::read_models::GatewayToolAccessReadModel {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
                     query_search_credential_ready: true,
-                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                    browser_page_access_enabled: true,
+                    managed_browser_session_enabled: false,
+                    managed_browser_session_ready: false,
+                    consent_mode: "full".to_owned(),
+                    approval_mode: "disabled".to_owned(),
+                    separation_note: crate::RUNTIME_TOOL_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
@@ -1519,12 +1596,17 @@ mod tests {
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
                 },
-                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                access: crate::gateway::read_models::GatewayToolAccessReadModel {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
                     query_search_credential_ready: true,
-                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                    browser_page_access_enabled: true,
+                    managed_browser_session_enabled: false,
+                    managed_browser_session_ready: false,
+                    consent_mode: "full".to_owned(),
+                    approval_mode: "disabled".to_owned(),
+                    separation_note: crate::RUNTIME_TOOL_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {
@@ -1655,12 +1737,17 @@ mod tests {
                         "provider turns include structured tool definitions for the active model"
                             .to_owned(),
                 },
-                web_access: crate::gateway::read_models::GatewayWebAccessReadModel {
+                access: crate::gateway::read_models::GatewayToolAccessReadModel {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
                     query_search_credential_ready: true,
-                    separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
+                    browser_page_access_enabled: true,
+                    managed_browser_session_enabled: false,
+                    managed_browser_session_ready: false,
+                    consent_mode: "full".to_owned(),
+                    approval_mode: "disabled".to_owned(),
+                    separation_note: crate::RUNTIME_TOOL_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
             pairing: crate::gateway::read_models::GatewayOperatorPairingSummaryReadModel {

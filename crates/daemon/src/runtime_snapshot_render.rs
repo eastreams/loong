@@ -293,21 +293,26 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         render_string_list(snapshot.tool_runtime.web_fetch.allowed_domains.iter().map(String::as_str)),
         render_string_list(snapshot.tool_runtime.web_fetch.blocked_domains.iter().map(String::as_str))
     ));
-    let web_access_summary = crate::runtime_web_access_summary(&snapshot.tool_runtime);
+    let tool_access = &snapshot.tool_access;
     lines.push(format!(
         "tool_runtime web_search enabled={} default_provider={} credential_ready={} separation_note=\"{}\"",
         snapshot.tool_runtime.web_search.enabled,
         snapshot.tool_runtime.web_search.default_provider,
-        web_access_summary.query_search_credential_ready,
-        web_access_summary.separation_note
+        tool_access.query_search_credential_ready,
+        tool_access.separation_note
     ));
     lines.push(format!(
-        "tool_runtime web_access ordinary_network_enabled={} query_search_enabled={} query_search_default_provider={} query_search_credential_ready={} separation_note=\"{}\"",
-        web_access_summary.ordinary_network_access_enabled,
-        web_access_summary.query_search_enabled,
-        web_access_summary.query_search_default_provider,
-        web_access_summary.query_search_credential_ready,
-        web_access_summary.separation_note
+        "tool_runtime access ordinary_network_enabled={} query_search_enabled={} query_search_default_provider={} query_search_credential_ready={} browser_page_enabled={} managed_browser_enabled={} managed_browser_ready={} consent_mode={} approval_mode={} separation_note=\"{}\"",
+        tool_access.ordinary_network_access_enabled,
+        tool_access.query_search_enabled,
+        tool_access.query_search_default_provider,
+        tool_access.query_search_credential_ready,
+        tool_access.browser_page_access_enabled,
+        tool_access.managed_browser_session_enabled,
+        tool_access.managed_browser_session_ready,
+        tool_access.consent_mode,
+        tool_access.approval_mode,
+        tool_access.separation_note
     ));
     lines.push(format!(
         "tools visible_count={} hidden_count={} capability_snapshot_sha256={} visible_names={} visible_direct_names={}",
@@ -627,8 +632,8 @@ pub(crate) fn runtime_snapshot_acp_json(snapshot: &mvp::acp::AcpRuntimeSnapshot)
 
 pub(crate) fn runtime_snapshot_tool_runtime_json(
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
+    tool_access: &crate::RuntimeToolAccessSummary,
 ) -> Value {
-    let web_access_summary = crate::runtime_web_access_summary(runtime);
     json!({
         "file_root": runtime
             .file_root
@@ -668,15 +673,26 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
         "web_search": {
             "enabled": runtime.web_search.enabled,
             "default_provider": runtime.web_search.default_provider,
-            "credential_ready": web_access_summary.query_search_credential_ready,
-            "separation_note": web_access_summary.separation_note,
+            "credential_ready": tool_access.query_search_credential_ready,
+            "separation_note": tool_access.separation_note,
         },
-        "web_access": {
-            "ordinary_network_access_enabled": web_access_summary.ordinary_network_access_enabled,
-            "query_search_enabled": web_access_summary.query_search_enabled,
-            "query_search_default_provider": web_access_summary.query_search_default_provider,
-            "query_search_credential_ready": web_access_summary.query_search_credential_ready,
-            "separation_note": web_access_summary.separation_note,
+        "consent": {
+            "default_mode": tool_access.consent_mode,
+        },
+        "approval": {
+            "mode": tool_access.approval_mode,
+        },
+        "access": {
+            "ordinary_network_access_enabled": tool_access.ordinary_network_access_enabled,
+            "query_search_enabled": tool_access.query_search_enabled,
+            "query_search_default_provider": tool_access.query_search_default_provider,
+            "query_search_credential_ready": tool_access.query_search_credential_ready,
+            "browser_page_access_enabled": tool_access.browser_page_access_enabled,
+            "managed_browser_session_enabled": tool_access.managed_browser_session_enabled,
+            "managed_browser_session_ready": tool_access.managed_browser_session_ready,
+            "consent_mode": tool_access.consent_mode,
+            "approval_mode": tool_access.approval_mode,
+            "separation_note": tool_access.separation_note,
         },
     })
 }
