@@ -1,0 +1,28 @@
+{
+  "api_version": "v1alpha1",
+  "version": "0.1.0",
+  "plugin_id": "native-extension-rust-example",
+  "provider_id": "native-extension-rust-example",
+  "connector_name": "native-extension-rust-example",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "rust-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "rust",
+    "command": "cargo",
+    "args_json": "[\"run\",\"--quiet\",\"--manifest-path\",\"Cargo.toml\"]",
+    "process_timeout_ms": "60000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
+    "loong_extension_methods_json": "[\"extension/event\",\"extension/command\",\"extension/resource\"]",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_actions_json": "[]"
+  },
+  "summary": "Minimal manifest-first Rust native extension example",
+  "tags": ["example", "native-extension", "process-stdio", "rust"],
+  "compatibility": {
+    "host_api": "loong-plugin/v1",
+    "host_version_req": ">=0.1.2-alpha.1"
+  }
+}

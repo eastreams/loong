@@ -183,6 +183,8 @@ when you pass the allowed command on the CLI.
 The repository now also carries a minimal manifest-first example under:
 
 - `examples/plugins-process/native-extension-python/`
+- `examples/plugins-process/native-extension-go/`
+- `examples/plugins-process/native-extension-rust/`
 
-Use it when you want a concrete `loong.plugin.json` plus runnable Python
-entrypoint instead of starting from an empty package root.
+Use them when you want concrete `loong.plugin.json` packages plus runnable
+entrypoints instead of starting from an empty package root.

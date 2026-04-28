@@ -1833,6 +1833,8 @@ edition = "2024"
 
 [dependencies]
 serde_json = "1"
+
+[workspace]
 "#;
 
 const RUST_EXTENSION_MAIN_RS: &str = r#"use serde_json::{Map, Value, json};
@@ -5322,6 +5324,13 @@ mod tests {
             fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
         let manifest: crate::kernel::PluginManifest =
             serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+        let scaffolded_cargo_toml = execution
+            .runtime_files_written
+            .iter()
+            .find(|path| path.ends_with("Cargo.toml"))
+            .expect("expected scaffolded Cargo.toml");
+        let scaffolded_cargo_toml_contents =
+            fs::read_to_string(scaffolded_cargo_toml).expect("Cargo.toml should exist");
         assert_eq!(
             manifest.metadata.get("command").map(String::as_str),
             Some("cargo")
@@ -5329,6 +5338,10 @@ mod tests {
         assert_eq!(
             manifest.metadata.get("args_json").map(String::as_str),
             Some("[\"run\",\"--quiet\",\"--manifest-path\",\"Cargo.toml\"]")
+        );
+        assert!(
+            scaffolded_cargo_toml_contents.contains("[workspace]"),
+            "scaffolded Cargo.toml should isolate nested workspace builds: {scaffolded_cargo_toml_contents}"
         );
     }
 
