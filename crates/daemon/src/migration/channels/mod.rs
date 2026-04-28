@@ -54,7 +54,7 @@ pub struct ChannelNextAction {
 
 pub(crate) const CHANNEL_CATALOG_ACTION_ID: &str = "channel_catalog";
 pub(crate) const CONFIGURED_CHANNELS_ACTION_ID: &str = "configured_channels";
-const CHANNEL_CATALOG_ACTION_LABEL: &str = "channels";
+const CHANNEL_CATALOG_ACTION_LABEL: &str = "choose a channel";
 
 struct ChannelAdapter {
     id: &'static str,
