@@ -2145,6 +2145,14 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
                 guidance.smoke_test_command,
                 guidance.reference_example_path
             ));
+            if !guidance.author_remediation_actions.is_empty() {
+                lines.push(format!(
+                    "  author_remediation_actions={}",
+                    format_native_extension_author_remediation_actions(
+                        &guidance.author_remediation_actions
+                    )
+                ));
+            }
         }
         if let Some(reason) = result.activation_reason.as_deref() {
             lines.push(format!("  activation_reason={reason}"));
@@ -2498,6 +2506,14 @@ fn render_plugin_doctor_result_lines(
             guidance.smoke_test_command,
             guidance.reference_example_path
         ));
+        if !guidance.author_remediation_actions.is_empty() {
+            lines.push(format!(
+                "  author_remediation_actions={}",
+                format_native_extension_author_remediation_actions(
+                    &guidance.author_remediation_actions
+                )
+            ));
+        }
         if !guidance.author_remediation_hints.is_empty() {
             lines.push(format!(
                 "  author_remediation_hints={}",
@@ -2516,6 +2532,31 @@ fn render_plugin_doctor_result_lines(
         lines.push(format!("  recommended_actions={recommended_actions}"));
     }
     lines
+}
+
+fn format_native_extension_author_remediation_actions(
+    actions: &[crate::native_extension_authoring::NativeExtensionAuthoringActionView],
+) -> String {
+    if actions.is_empty() {
+        return "-".to_owned();
+    }
+
+    actions
+        .iter()
+        .map(|action| {
+            let mut parts = vec![format!("kind={}", action.kind)];
+            if let Some(field_path) = action.field_path.as_deref() {
+                parts.push(format!("field={field_path}"));
+            }
+            if let Some(command) = action.command.as_deref() {
+                parts.push(format!("command={command}"));
+            }
+            parts.push(format!("blocking={}", action.blocking));
+            parts.push(format!("summary={}", action.summary));
+            parts.join("|")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn format_preflight_remediation_classes(
@@ -6369,11 +6410,45 @@ mod tests {
                 .iter()
                 .any(|hint| hint.contains("loong plugins doctor"))
         );
+        assert!(
+            guidance
+                .author_remediation_actions
+                .iter()
+                .any(|action| action.kind == "repair_extension_metadata"),
+            "doctor guidance should expose a typed repair action: {:?}",
+            guidance.author_remediation_actions
+        );
+        assert!(
+            guidance
+                .author_remediation_actions
+                .iter()
+                .any(|action| action.kind == "rerun_doctor"
+                    && action.command.as_deref()
+                        == Some(render_authoring_doctor_command(package_root.as_str()).as_str())),
+            "doctor guidance should expose a rerun-doctor action: {:?}",
+            guidance.author_remediation_actions
+        );
+        assert!(
+            guidance
+                .author_remediation_actions
+                .iter()
+                .any(|action| action.kind == "rerun_inventory"
+                    && action.command.as_deref()
+                        == Some(
+                            render_authoring_inventory_command(package_root.as_str()).as_str()
+                        )),
+            "doctor guidance should expose a rerun-inventory action: {:?}",
+            guidance.author_remediation_actions
+        );
 
         let rendered = render_plugins_doctor_text(&doctor_execution);
         assert!(
             rendered.contains("author_remediation_hints="),
             "doctor text should surface author remediation hints: {rendered}"
+        );
+        assert!(
+            rendered.contains("author_remediation_actions="),
+            "doctor text should surface structured author remediation actions: {rendered}"
         );
         assert!(
             rendered.contains("Repair native extension declaration metadata"),

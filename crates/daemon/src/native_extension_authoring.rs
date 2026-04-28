@@ -46,6 +46,8 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
     pub extension_events: Vec<String>,
     pub extension_host_actions: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub author_remediation_actions: Vec<NativeExtensionAuthoringActionView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,6 +60,17 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
     pub recommended_action_summaries: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub author_remediation_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeExtensionAuthoringActionView {
+    pub kind: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_path: Option<String>,
+    pub blocking: bool,
 }
 
 const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
@@ -236,6 +249,11 @@ pub(crate) fn build_native_extension_authoring_doctor_guidance(
         .iter()
         .map(|action| action.summary.clone())
         .collect();
+    guidance.author_remediation_actions = native_extension_author_remediation_actions(
+        guidance.package_root.as_str(),
+        &guidance.extension_metadata_issues,
+        Some(&result.recommended_actions),
+    );
     guidance.author_remediation_hints = native_extension_author_remediation_hints(
         &guidance.extension_metadata_issues,
         &guidance.recommended_action_summaries,
@@ -285,6 +303,8 @@ fn build_native_extension_authoring_view(
     extension_host_actions: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> NativeExtensionAuthoringGuidanceView {
+    let author_remediation_actions =
+        native_extension_author_remediation_actions(package_root, &extension_metadata_issues, None);
     let author_remediation_hints =
         native_extension_author_remediation_hints(&extension_metadata_issues, &[]);
     NativeExtensionAuthoringGuidanceView {
@@ -308,6 +328,7 @@ fn build_native_extension_authoring_view(
         extension_events,
         extension_host_actions,
         extension_metadata_issues,
+        author_remediation_actions,
         verdict: None,
         activation_ready: None,
         policy_summary: None,
@@ -335,6 +356,81 @@ fn native_extension_author_remediation_hints(
     hints.sort();
     hints.dedup();
     hints
+}
+
+fn native_extension_author_remediation_actions(
+    package_root: &str,
+    extension_metadata_issues: &[String],
+    recommended_actions: Option<&[crate::PluginPreflightRecommendedAction]>,
+) -> Vec<NativeExtensionAuthoringActionView> {
+    let mut actions = extension_metadata_issues
+        .iter()
+        .map(|issue| NativeExtensionAuthoringActionView {
+            kind: "repair_extension_metadata".to_owned(),
+            summary: format!("Repair native extension declaration metadata: {issue}"),
+            command: None,
+            field_path: parse_metadata_field_path_from_issue(issue),
+            blocking: true,
+        })
+        .collect::<Vec<_>>();
+
+    if !extension_metadata_issues.is_empty() {
+        actions.push(NativeExtensionAuthoringActionView {
+            kind: "rerun_doctor".to_owned(),
+            summary: "Rerun doctor after repairing native extension declaration metadata."
+                .to_owned(),
+            command: Some(render_authoring_doctor_command(package_root)),
+            field_path: None,
+            blocking: false,
+        });
+        actions.push(NativeExtensionAuthoringActionView {
+            kind: "rerun_inventory".to_owned(),
+            summary: "Rerun inventory to confirm the repaired native extension declaration truth."
+                .to_owned(),
+            command: Some(render_authoring_inventory_command(package_root)),
+            field_path: None,
+            blocking: false,
+        });
+    }
+
+    if let Some(recommended_actions) = recommended_actions {
+        actions.extend(recommended_actions.iter().map(|action| {
+            NativeExtensionAuthoringActionView {
+                kind: format!("preflight_{}", action.remediation_class.as_str()),
+                summary: action.summary.clone(),
+                command: action
+                    .operator_action
+                    .as_ref()
+                    .map(|_| render_authoring_actions_command(package_root)),
+                field_path: action.field_path.clone(),
+                blocking: action.blocking,
+            }
+        }));
+    }
+
+    actions.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.summary.cmp(&right.summary))
+            .then_with(|| left.field_path.cmp(&right.field_path))
+    });
+    actions.dedup_by(|left, right| {
+        left.kind == right.kind
+            && left.summary == right.summary
+            && left.command == right.command
+            && left.field_path == right.field_path
+            && left.blocking == right.blocking
+    });
+    actions
+}
+
+fn parse_metadata_field_path_from_issue(issue: &str) -> Option<String> {
+    let key = issue
+        .split('`')
+        .nth(1)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(format!("metadata.{key}"))
 }
 
 pub(crate) fn render_rust_extension_cargo_toml(plugin_id: &str) -> String {
