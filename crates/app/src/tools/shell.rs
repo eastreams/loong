@@ -210,8 +210,8 @@ mod tests {
         request: ToolCoreRequest,
         config: &ToolRuntimeConfig,
     ) -> Result<ToolCoreOutcome, String> {
-        let _env = shell_test_env();
         let _guard = acquire_subprocess_test_guard();
+        let _env = shell_test_env();
         execute_shell_tool_with_config(request, config)
     }
 
