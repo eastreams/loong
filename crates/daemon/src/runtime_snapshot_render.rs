@@ -396,7 +396,7 @@ fn render_tool_surface_summary(surfaces: &[crate::mvp::tools::ToolSurfaceState])
 
 fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -> Vec<String> {
     let mut lines = vec![format!(
-        "runtime_plugins inventory_status={} enabled={} roots_source={} readiness_evaluation={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={}",
+        "runtime_plugins inventory_status={} enabled={} roots_source={} readiness_evaluation={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={} shadowed_plugins={}",
         snapshot.inventory_status.as_str(),
         snapshot.enabled,
         crate::render_line_safe_text_value(&snapshot.roots_source),
@@ -420,6 +420,7 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         snapshot.ready_plugin_count,
         snapshot.setup_incomplete_plugin_count,
         snapshot.blocked_plugin_count,
+        snapshot.shadowed_plugin_ids.len(),
     )];
     if let Some(authoring_summary) = snapshot.native_extension_authoring_summary.as_ref() {
         let action_roles = authoring_summary
@@ -443,6 +444,15 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             crate::render_line_safe_text_value(&action_execution_kinds),
             authoring_summary.runnable_action_count,
             authoring_summary.allow_command_gated_action_count,
+        ));
+    }
+    if !snapshot.shadowed_plugin_ids.is_empty() {
+        lines.push(format!(
+            "  shadowed_plugin_ids={}",
+            crate::render_line_safe_text_values(
+                snapshot.shadowed_plugin_ids.iter().map(String::as_str),
+                ",",
+            )
         ));
     }
 
@@ -864,6 +874,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
         "ready_plugin_count": snapshot.ready_plugin_count,
         "setup_incomplete_plugin_count": snapshot.setup_incomplete_plugin_count,
         "blocked_plugin_count": snapshot.blocked_plugin_count,
+        "shadowed_plugin_ids": snapshot.shadowed_plugin_ids,
         "native_extension_authoring_summary": snapshot.native_extension_authoring_summary,
         "plugins": snapshot
             .plugins

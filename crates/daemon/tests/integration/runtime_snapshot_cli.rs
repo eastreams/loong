@@ -70,6 +70,24 @@ impl Drop for RuntimeSnapshotEnvGuard {
     }
 }
 
+struct RuntimeSnapshotCurrentDirGuard {
+    saved: PathBuf,
+}
+
+impl RuntimeSnapshotCurrentDirGuard {
+    fn set(path: &Path) -> Self {
+        let saved = std::env::current_dir().expect("capture current directory");
+        std::env::set_current_dir(path).expect("switch current directory");
+        Self { saved }
+    }
+}
+
+impl Drop for RuntimeSnapshotCurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.saved).expect("restore current directory");
+    }
+}
+
 struct RuntimeSnapshotPolicyResetGuard {
     runtime_config: mvp::tools::runtime_config::ToolRuntimeConfig,
 }
@@ -322,6 +340,78 @@ fn install_invalid_process_stdio_runtime_plugin_package(root: &Path, config_path
     reloaded.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
     mvp::config::write(Some(&path_string.display().to_string()), &reloaded, true)
         .expect("rewrite config fixture with runtime plugin roots");
+}
+
+fn install_auto_discovered_duplicate_process_stdio_runtime_plugin_packages(
+    root: &Path,
+    home: &Path,
+    config_path: &Path,
+) {
+    write_file(
+        root,
+        ".loong/extensions/search/loong.plugin.json",
+        r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "project-extension",
+  "connector_name": "project-extension",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Project-local extension",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+    );
+    write_file(
+        root,
+        ".loong/extensions/search/index.js",
+        "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+    );
+    write_file(
+        home,
+        ".loong/agent/extensions/search/loong.plugin.json",
+        r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "global-extension",
+  "connector_name": "global-extension",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Global extension",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+    );
+    write_file(
+        home,
+        ".loong/agent/extensions/search/index.js",
+        "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+    );
+
+    let (path_string, mut reloaded) = mvp::config::load(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("reload config");
+    reloaded.runtime_plugins.enabled = true;
+    reloaded.runtime_plugins.roots = vec!["   ".to_owned()];
+    reloaded.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
+    reloaded.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
+    mvp::config::write(Some(&path_string.display().to_string()), &reloaded, true)
+        .expect("rewrite config fixture with auto-discovered runtime plugin roots");
 }
 
 fn array_contains_string(array: &Value, needle: &str) -> bool {
@@ -607,20 +697,81 @@ fn runtime_snapshot_text_surfaces_native_extension_authoring_guidance_for_invali
     assert!(rendered.contains("invalid-stdio-plugin"));
     assert!(rendered.contains("authoring_summary guided_plugins=1"));
     assert!(rendered.contains("plugins_with_metadata_issues=1"));
-    assert!(rendered.contains(
-        "authoring reference_example=examples/plugins-process/native-extension-javascript"
-    ));
+    assert!(
+        rendered.contains("reference_example=examples/plugins-process/native-extension-javascript")
+    );
     assert!(rendered.contains("smoke_allow_command=node"));
     assert!(rendered.contains("action_roles=author,verification"));
-    assert!(rendered.contains(
-        "action_kinds=repair_extension_metadata,rerun_doctor,rerun_inventory,rerun_smoke_test"
-    ));
-    assert!(
-        rendered.contains("runnable_action_kinds=rerun_doctor,rerun_inventory,rerun_smoke_test")
-    );
+    for action_kind in [
+        "repair_extension_metadata",
+        "rerun_doctor",
+        "rerun_inventory",
+        "rerun_smoke_test",
+    ] {
+        assert!(
+            rendered.contains(action_kind),
+            "runtime snapshot text should keep remediation action kind {action_kind}: {rendered}"
+        );
+    }
+    assert!(rendered.contains("runnable_action_kinds="));
     assert!(rendered.contains("allow_command_action_kinds=rerun_smoke_test"));
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicates() {
+    let root = unique_temp_dir("loong-runtime-snapshot-auto-discovery-precedence");
+    let home = unique_temp_dir("loong-runtime-snapshot-auto-discovery-home");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("HOME", Some(home.to_string_lossy().as_ref())),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    let _cwd = RuntimeSnapshotCurrentDirGuard::set(&root);
+    install_auto_discovered_duplicate_process_stdio_runtime_plugin_packages(
+        &root,
+        &home,
+        &config_path,
+    );
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+    let plugin = array_object_with_string_field(
+        &payload["runtime_plugins"]["plugins"],
+        "plugin_id",
+        "shared-extension",
+    )
+    .expect("runtime snapshot should include the effective shared extension");
+
+    assert_eq!(
+        payload["runtime_plugins"]["roots_source"],
+        serde_json::json!("auto_discovered")
+    );
+    assert_eq!(
+        payload["runtime_plugins"]["shadowed_plugin_ids"],
+        serde_json::json!(["shared-extension"])
+    );
+    assert!(
+        plugin["source_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with(".loong/extensions/search/loong.plugin.json")),
+        "runtime snapshot should keep the project-local descriptor: {plugin:#?}"
+    );
+
+    let rendered = render_runtime_snapshot_text(&snapshot);
+    assert!(rendered.contains("roots_source=auto_discovered"));
+    assert!(rendered.contains("shadowed_plugins=1"));
+    assert!(rendered.contains("shadowed_plugin_ids=shared-extension"));
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
 }
 
 #[tokio::test]

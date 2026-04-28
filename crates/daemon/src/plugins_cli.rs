@@ -6410,6 +6410,14 @@ mod tests {
                 doc.contains("~/.loong/agent/extensions/"),
                 "doc should mention global Loong extension auto-discovery"
             );
+            assert!(
+                doc.contains("If the same `plugin_id` exists in both places"),
+                "doc should explain duplicate plugin-id precedence across auto-discovery roots"
+            );
+            assert!(
+                doc.contains("`.loong/extensions/` wins"),
+                "doc should state that project-local Loong extensions win precedence"
+            );
         }
     }
 

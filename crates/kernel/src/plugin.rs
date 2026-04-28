@@ -488,6 +488,38 @@ pub struct PluginScanReport {
     pub descriptors: Vec<PluginDescriptor>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginIdPrecedenceSelection<T> {
+    pub effective: Vec<T>,
+    pub shadowed_plugin_ids: Vec<String>,
+}
+
+pub fn prefer_first_plugin_ids<T, F>(
+    items: Vec<T>,
+    plugin_id_of: F,
+) -> PluginIdPrecedenceSelection<T>
+where
+    F: Fn(&T) -> &str,
+{
+    let mut seen_plugin_ids = BTreeSet::new();
+    let mut shadowed_plugin_ids = BTreeSet::new();
+    let mut effective = Vec::new();
+
+    for item in items {
+        let plugin_id = plugin_id_of(&item).trim().to_owned();
+        if seen_plugin_ids.insert(plugin_id.clone()) {
+            effective.push(item);
+        } else if !plugin_id.is_empty() {
+            shadowed_plugin_ids.insert(plugin_id);
+        }
+    }
+
+    PluginIdPrecedenceSelection {
+        effective,
+        shadowed_plugin_ids: shadowed_plugin_ids.into_iter().collect(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PluginAbsorbReport {
     pub absorbed_plugins: usize,
@@ -2722,6 +2754,55 @@ mod tests {
             .diagnostic_findings
             .iter()
             .find(|finding| finding.code == code && finding.plugin_id.as_deref() == Some(plugin_id))
+    }
+
+    #[test]
+    fn prefer_first_plugin_ids_keeps_first_entry_and_reports_shadowed_ids_once() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct Candidate {
+            plugin_id: &'static str,
+            source: &'static str,
+        }
+
+        let selection = prefer_first_plugin_ids(
+            vec![
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "project-local",
+                },
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "global",
+                },
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "fallback",
+                },
+                Candidate {
+                    plugin_id: "unique-extension",
+                    source: "unique",
+                },
+            ],
+            |candidate| candidate.plugin_id,
+        );
+
+        assert_eq!(
+            selection.effective,
+            vec![
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "project-local",
+                },
+                Candidate {
+                    plugin_id: "unique-extension",
+                    source: "unique",
+                },
+            ]
+        );
+        assert_eq!(
+            selection.shadowed_plugin_ids,
+            vec!["shared-extension".to_owned()]
+        );
     }
 
     #[test]

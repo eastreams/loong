@@ -6648,6 +6648,7 @@ mod tests {
         assert_eq!(payload["available"], json!(true));
         assert_eq!(payload["roots_source"], json!("auto_discovered"));
         assert_eq!(payload["returned_results"], json!(1));
+        assert_eq!(payload["shadowed_plugin_ids"], json!(["shared-extension"]));
         let plugin = payload["results"]
             .as_array()
             .and_then(|plugins| {
@@ -6656,8 +6657,12 @@ mod tests {
                     .find(|plugin| plugin["plugin_id"].as_str() == Some("shared-extension"))
             })
             .expect("shared extension should be present");
-        assert_eq!(plugin["provider_id"], json!("project-extension"));
-        assert_eq!(plugin["summary"], json!("Project-local extension"));
+        assert!(
+            plugin["source_path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with(".loong/extensions/search/loong.plugin.json")),
+            "project-local descriptor should win the precedence race: {plugin:#?}"
+        );
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&home).ok();

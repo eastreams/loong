@@ -2330,7 +2330,15 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
         let roots = config.resolved_roots();
 
-        assert_eq!(roots, vec![project_root, global_root]);
+        assert_eq!(roots.len(), 2);
+        assert!(
+            roots[0].ends_with(PathBuf::from(".loong/extensions")),
+            "expected project-local auto-discovery root first, got {roots:?}"
+        );
+        assert!(
+            roots[1].ends_with(PathBuf::from(".loong/agent/extensions")),
+            "expected global auto-discovery root second, got {roots:?}"
+        );
         assert_eq!(config.resolved_root_selection().source, "auto_discovered");
     }
 

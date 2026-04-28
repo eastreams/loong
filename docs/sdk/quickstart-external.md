@@ -204,6 +204,9 @@ auto-discovers runtime plugin packages from:
 This keeps the authoring lane open by default while preserving a Loong-native
 directory contract.
 
+If the same `plugin_id` exists in both places, `.loong/extensions/` wins and
+the global package becomes a shadowed duplicate on operator surfaces.
+
 ## Supported runnable templates
 
 | Language | `--source-language` | Scaffolded runtime files | Smoke `--allow-command` | Checked-in example |

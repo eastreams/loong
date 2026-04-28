@@ -40,6 +40,10 @@ Loong can auto-discover runtime plugin packages from:
 Use explicit `runtime_plugins.roots` only when you want to override that
 default discovery contract.
 
+If the same `plugin_id` exists in both places, `.loong/extensions/` wins and
+the global package is treated as a shadowed duplicate in inventory and runtime
+operator surfaces.
+
 ## Scaffold a package
 
 Start with `plugins init`.

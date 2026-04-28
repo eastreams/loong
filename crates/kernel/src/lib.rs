@@ -64,9 +64,10 @@ pub use plugin::{
     CURRENT_PLUGIN_HOST_API, CURRENT_PLUGIN_MANIFEST_API_VERSION, PACKAGE_MANIFEST_FILE_NAME,
     PluginAbsorbReport, PluginCompatibility, PluginCompatibilityMode, PluginCompatibilityShim,
     PluginContractDialect, PluginDescriptor, PluginDiagnosticCode, PluginDiagnosticFinding,
-    PluginDiagnosticPhase, PluginDiagnosticSeverity, PluginManifest, PluginScanReport,
-    PluginScanner, PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode, PluginSourceKind,
-    PluginTrustTier, format_plugin_provenance_summary, plugin_provenance_summary_for_descriptor,
+    PluginDiagnosticPhase, PluginDiagnosticSeverity, PluginIdPrecedenceSelection, PluginManifest,
+    PluginScanReport, PluginScanner, PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode,
+    PluginSourceKind, PluginTrustTier, format_plugin_provenance_summary,
+    plugin_provenance_summary_for_descriptor, prefer_first_plugin_ids,
 };
 pub use plugin_ir::{
     BridgeSupportMatrix, PluginActivationCandidate, PluginActivationInventoryEntry,

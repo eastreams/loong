@@ -64,7 +64,8 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
         );
     }
 
-    let resolved_roots = config.runtime_plugins.resolved_roots();
+    let root_selection = config.runtime_plugins.resolved_root_selection();
+    let resolved_roots = root_selection.roots;
     if resolved_roots.is_empty() {
         return Err(
             "managed bridge runtime is enabled but no runtime plugin roots were found; create `.loong/extensions/`, `~/.loong/agent/extensions/`, or set runtime_plugins.roots explicitly".to_owned(),
@@ -89,6 +90,14 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
         requested_account_id,
         config,
     );
+    let runtime_candidates = if root_selection.source == "auto_discovered" {
+        let selection = loong_kernel::prefer_first_plugin_ids(runtime_candidates, |candidate| {
+            candidate.plugin.plugin_id.as_str()
+        });
+        selection.effective
+    } else {
+        runtime_candidates
+    };
     let runnable_candidates =
         filter_runnable_runtime_candidates(config, &resolved_account, &runtime_candidates);
     if runnable_candidates.candidates.is_empty() && !runnable_candidates.failure_reasons.is_empty()
@@ -759,6 +768,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::test_support::{ScopedCurrentDir, ScopedEnv};
 
     fn sample_manifest(
         plugin_id: &str,
@@ -927,6 +937,58 @@ mod tests {
             .expect("entrypoint-backed process bridge should resolve");
 
         assert_eq!(binding.plugin.plugin_id, "qqbot-bridge-runtime");
+    }
+
+    #[test]
+    fn resolve_managed_bridge_runtime_binding_prefers_project_local_loong_extension_over_global_duplicate()
+     {
+        let project_root = TempDir::new().expect("create project root");
+        let home_root = TempDir::new().expect("create temp home");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home_root.path());
+        let _cwd = ScopedCurrentDir::new(project_root.path());
+
+        let mut project_manifest = sample_manifest(
+            "qqbot-bridge-runtime",
+            "qqbot",
+            "process_stdio",
+            vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+        );
+        project_manifest.endpoint = Some("http://127.0.0.1:9001/invoke".to_owned());
+        write_manifest(
+            &project_root.path().join(".loong/extensions"),
+            "qqbot-bridge-runtime",
+            &project_manifest,
+        );
+
+        let mut global_manifest = sample_manifest(
+            "qqbot-bridge-runtime",
+            "qqbot",
+            "process_stdio",
+            vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+        );
+        global_manifest.endpoint = Some("http://127.0.0.1:9002/invoke".to_owned());
+        write_manifest(
+            &home_root.path().join(".loong/agent/extensions"),
+            "qqbot-bridge-runtime",
+            &global_manifest,
+        );
+
+        let mut config = LoongConfig::default();
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec!["   ".to_owned()];
+        config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
+        config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
+        config.qqbot.enabled = true;
+        config.qqbot.app_id = Some(loong_contracts::SecretRef::Inline("10001".to_owned()));
+        config.qqbot.client_secret = Some(loong_contracts::SecretRef::Inline(
+            "client-secret".to_owned(),
+        ));
+
+        let binding = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
+            .expect("project-local auto-discovered bridge should win");
+
+        assert_eq!(binding.endpoint, "http://127.0.0.1:9001/invoke");
     }
 
     #[test]
