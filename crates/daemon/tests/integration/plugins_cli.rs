@@ -25,6 +25,7 @@ fn plugins_bridge_profiles_cli_parses_selected_profile_and_json_flag() {
                     );
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -75,6 +76,7 @@ fn plugins_inventory_cli_parses_bridge_profile_and_examples_flag() {
                     assert!(command.include_examples);
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -128,6 +130,7 @@ fn plugins_doctor_cli_defaults_to_sdk_release_profile() {
                     assert!(command.include_deferred);
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -195,6 +198,7 @@ fn plugins_actions_cli_parses_filters_and_global_json_after_subcommand() {
                     assert_eq!(command.requires_reload, Some(true));
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
@@ -245,6 +249,7 @@ fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
                     );
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
@@ -289,6 +294,7 @@ fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
                     );
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
@@ -344,7 +350,8 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                         Some("Tavily-backed search package")
                     );
                 }
-                other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -352,6 +359,43 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
+            }
+        }
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn plugins_invoke_extension_cli_parses_native_smoke_request() {
+    let cli = try_parse_cli([
+        "loong",
+        "plugins",
+        "invoke-extension",
+        "--root",
+        "/tmp/weather-python",
+        "--plugin-id",
+        "weather-python",
+        "--method",
+        "extension/event",
+        "--payload",
+        "{\"event\":\"session_start\"}",
+        "--allow-command",
+        "python3",
+    ])
+    .expect("plugins invoke-extension CLI should parse");
+
+    match cli.command {
+        Some(Commands::Plugins { json, command }) => {
+            assert!(!json);
+            match command {
+                loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(command) => {
+                    assert_eq!(command.root, "/tmp/weather-python");
+                    assert_eq!(command.plugin_id, "weather-python");
+                    assert_eq!(command.method, "extension/event");
+                    assert_eq!(command.payload, "{\"event\":\"session_start\"}");
+                    assert_eq!(command.allow_commands, vec!["python3".to_owned()]);
+                }
+                other => panic!("unexpected plugins subcommand parsed: {other:?}"),
             }
         }
         other => panic!("unexpected parse result: {other:?}"),

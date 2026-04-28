@@ -54,3 +54,79 @@ need to understand the line between:
 - doctor and setup readiness
 - install or activation failures
 - runtime policy denials
+
+## Native extension quickstart
+
+Today the shortest practical public authoring lane is a
+manifest-first `process_stdio` package.
+
+### 1. Scaffold the package
+
+Python:
+
+```bash
+loong plugins init ./weather-python \
+  --plugin-id weather-python \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language py
+```
+
+JavaScript:
+
+```bash
+loong plugins init ./weather-js \
+  --plugin-id weather-js \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language js
+```
+
+This writes:
+
+- `loong.plugin.json`
+- `README.md`
+- a runnable `index.py` or `index.js` stub
+
+### 2. Edit the manifest and runtime file
+
+The scaffolded manifest already declares the native extension contract fields
+that Loong inventories before execution.
+
+The scaffolded runtime file already handles a small starter surface:
+
+- `extension/event`
+- `extension/command`
+- `extension/resource`
+
+Replace it with your real implementation as the package becomes concrete.
+
+### 3. Validate the package contract
+
+```bash
+loong plugins doctor --root "./weather-python" --profile sdk-release
+```
+
+### 4. Inspect the package truth
+
+```bash
+loong plugins inventory --root "./weather-python"
+```
+
+### 5. Smoke-test the extension entrypoint
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-python" \
+  --plugin-id weather-python \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command python3
+```
+
+For JavaScript, replace `python3` with `node`.
+
+This smoke path is explicit by design: local process execution only happens
+when you pass the allowed command on the CLI.

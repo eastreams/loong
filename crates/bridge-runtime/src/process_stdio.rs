@@ -361,24 +361,51 @@ async fn cleanup_process_stdio_child(
 fn resolved_process_stdio_program(provider: &kernel::ProviderConfig) -> Option<String> {
     let command = non_empty_provider_metadata_value(provider, "command");
     if command.is_some() {
-        return command;
+        return command.map(|command| resolve_relative_process_path(provider, command));
     }
 
     let entrypoint = non_empty_provider_metadata_value(provider, "entrypoint");
     if let Some(entrypoint) = entrypoint
         && entrypoint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT
     {
-        return Some(entrypoint);
+        return Some(resolve_relative_process_path(provider, entrypoint));
     }
 
     let entrypoint_hint = non_empty_provider_metadata_value(provider, "entrypoint_hint");
     if let Some(entrypoint_hint) = entrypoint_hint
         && entrypoint_hint != DEFAULT_PROCESS_STDIO_ENTRYPOINT_HINT
     {
-        return Some(entrypoint_hint);
+        return Some(resolve_relative_process_path(provider, entrypoint_hint));
     }
 
     None
+}
+
+fn resolve_relative_process_path(provider: &kernel::ProviderConfig, raw: String) -> String {
+    let package_root = provider
+        .metadata
+        .get("plugin_package_root")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(package_root) = package_root else {
+        return raw;
+    };
+
+    let path = std::path::Path::new(raw.as_str());
+    if path.is_absolute() {
+        return raw;
+    }
+    if raw.starts_with('-') {
+        return raw;
+    }
+
+    let resolved = std::path::Path::new(package_root).join(path);
+    if !resolved.exists() {
+        return raw;
+    }
+
+    resolved.display().to_string()
 }
 
 fn non_empty_provider_metadata_value(

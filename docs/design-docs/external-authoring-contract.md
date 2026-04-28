@@ -50,6 +50,28 @@ They should declare:
 
 without implying trusted in-process execution.
 
+### Native Loong extensions
+
+Native extensions are the lowest-friction authoring lane on top of governed
+plugin packages.
+
+The intended ergonomic shape is:
+
+- scaffold a package root,
+- write a small local runtime file,
+- inspect declarations before execution,
+- smoke-test the runtime file through the governed bridge,
+- then promote the package through normal inventory / doctor / audit loops.
+
+For the current public authoring lane, Loong should stabilize:
+
+- `loong plugins init` for manifest-first scaffolding
+- a runnable local `process_stdio` entrypoint for supported authoring templates
+- `loong plugins invoke-extension` as a bounded smoke surface
+- inventory / doctor / operator surfaces that show extension declarations before execution
+
+without implying ungoverned in-process host loading.
+
 ### Workflow and flow assets
 
 These are strategically important, especially because promotion already points

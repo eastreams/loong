@@ -30,7 +30,10 @@ pub fn parse_process_args(provider: &kernel::ProviderConfig) -> Vec<String> {
     if let Some(args_json) = args_json {
         let parsed_args = serde_json::from_str::<Vec<String>>(args_json);
         if let Ok(parsed_args) = parsed_args {
-            return parsed_args;
+            return parsed_args
+                .into_iter()
+                .map(|arg| resolve_relative_process_path_arg(provider, arg))
+                .collect();
         }
     }
 
@@ -39,7 +42,37 @@ pub fn parse_process_args(provider: &kernel::ProviderConfig) -> Vec<String> {
         return Vec::new();
     };
 
-    args.split_whitespace().map(str::to_owned).collect()
+    args.split_whitespace()
+        .map(str::to_owned)
+        .map(|arg| resolve_relative_process_path_arg(provider, arg))
+        .collect()
+}
+
+fn resolve_relative_process_path_arg(provider: &kernel::ProviderConfig, arg: String) -> String {
+    let package_root = provider
+        .metadata
+        .get("plugin_package_root")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(package_root) = package_root else {
+        return arg;
+    };
+
+    let candidate = Path::new(arg.as_str());
+    if candidate.is_absolute() {
+        return arg;
+    }
+    if arg.starts_with('-') {
+        return arg;
+    }
+
+    let resolved = Path::new(package_root).join(candidate);
+    if !resolved.exists() {
+        return arg;
+    }
+
+    resolved.display().to_string()
 }
 
 pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> bool {

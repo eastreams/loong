@@ -4,6 +4,7 @@ use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
 use loong_app as mvp;
+use loong_bridge_runtime::{BridgeExecutionPolicy, execute_process_stdio_bridge_call};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,6 +35,7 @@ pub const PLUGINS_BRIDGE_TEMPLATE_SCHEMA_PURPOSE: &str = "bridge_support_materia
 pub const PLUGINS_PREFLIGHT_SCHEMA_PURPOSE: &str = "ecosystem_preflight_evaluation";
 pub const PLUGINS_ACTIONS_SCHEMA_PURPOSE: &str = "operator_action_plan";
 pub const PLUGINS_INIT_SCHEMA_PURPOSE: &str = "package_scaffold";
+pub const PLUGINS_INVOKE_EXTENSION_SCHEMA_PURPOSE: &str = "native_extension_smoke_probe";
 
 fn plugins_command_schema(purpose: &str) -> JsonSchemaDescriptor {
     let version = PLUGINS_COMMAND_SCHEMA_VERSION;
@@ -46,6 +48,8 @@ fn plugins_command_schema(purpose: &str) -> JsonSchemaDescriptor {
 pub enum PluginsCommands {
     /// Scaffold a new manifest-first plugin package root for external authors
     Init(PluginInitCommand),
+    /// Invoke a native process_stdio extension entrypoint through the governed bridge
+    InvokeExtension(PluginInvokeExtensionCommand),
     /// Inspect manifest-first package truth across one or more plugin roots
     Inventory(PluginInventoryCommand),
     /// Diagnose manifest-first plugin packages with author-facing remediation
@@ -311,6 +315,29 @@ pub struct PluginInitCommand {
     /// Optional one-line summary written to the manifest
     #[arg(long)]
     pub summary: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[command(
+    about = "Smoke-test a native process_stdio extension entrypoint through the governed bridge",
+    long_about = "Smoke-test a native process_stdio extension entrypoint through the governed bridge.\n\nThis command scans a package root, selects the named plugin package, and invokes one host-facing extension method through the same bounded process bridge used by runtime execution. It is intended for external authoring and local validation, not for widening trust policy."
+)]
+pub struct PluginInvokeExtensionCommand {
+    /// Package root containing the extension package manifest
+    #[arg(long = "root", value_name = "ROOT")]
+    pub root: String,
+    /// Stable plugin identity to select from the scanned root
+    #[arg(long)]
+    pub plugin_id: String,
+    /// Host-facing extension method to invoke, for example extension/event
+    #[arg(long)]
+    pub method: String,
+    /// JSON payload to pass as the method payload
+    #[arg(long, default_value = "{}")]
+    pub payload: String,
+    /// Explicit process command allowlist entries for the smoke probe
+    #[arg(long = "allow-command")]
+    pub allow_commands: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -751,13 +778,30 @@ pub struct PluginsInitExecution {
     pub source_language: Option<String>,
     pub adapter_family: String,
     pub entrypoint: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_files_written: Vec<String>,
     pub files_written: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginsInvokeExtensionExecution {
+    pub schema_version: u32,
+    pub schema: JsonSchemaDescriptor,
+    pub package_root: String,
+    pub plugin_id: String,
+    pub bridge_kind: String,
+    pub source_language: Option<String>,
+    pub method: String,
+    pub payload: Value,
+    pub response_payload: Value,
+    pub runtime_evidence: Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum PluginsCommandExecution {
     Init(Box<PluginsInitExecution>),
+    InvokeExtension(Box<PluginsInvokeExtensionExecution>),
     Inventory(Box<PluginsInventoryExecution>),
     Doctor(Box<PluginsDoctorExecution>),
     BridgeProfiles(Box<PluginsBridgeProfilesExecution>),
@@ -787,6 +831,12 @@ pub async fn execute_plugins_command(
         PluginsCommands::Init(command) => {
             let execution = execute_plugins_init(command)?;
             Ok(PluginsCommandExecution::Init(Box::new(execution)))
+        }
+        PluginsCommands::InvokeExtension(command) => {
+            let execution = execute_plugins_invoke_extension(command).await?;
+            Ok(PluginsCommandExecution::InvokeExtension(Box::new(
+                execution,
+            )))
         }
         PluginsCommands::Inventory(command) => {
             let context = build_plugin_inventory_context(
@@ -1176,6 +1226,12 @@ struct PluginPackageScaffoldManifestDocument {
     compatibility: PluginCompatibility,
 }
 
+#[derive(Debug, Clone)]
+struct PluginRuntimeScaffoldFile {
+    relative_path: String,
+    contents: String,
+}
+
 fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExecution> {
     let package_root = normalize_required_cli_value("package root", &command.package_root)?;
     let plugin_id = normalize_required_cli_value("--plugin-id", &command.plugin_id)?;
@@ -1201,6 +1257,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         summary,
         &scaffold_defaults,
     );
+    let runtime_scaffold_files = build_plugin_runtime_scaffold_files(&scaffold_defaults)?;
 
     let package_root_path = Path::new(package_root.as_str());
     ensure_empty_plugin_scaffold_root(package_root_path)?;
@@ -1215,6 +1272,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         package_root.as_str(),
         plugin_id.as_str(),
         bridge_kind.as_str(),
+        !runtime_scaffold_files.is_empty(),
     );
 
     write_plugin_scaffold_files(
@@ -1222,11 +1280,23 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         rendered_manifest.as_str(),
         &readme_path,
         rendered_readme.as_str(),
+        package_root_path,
+        &runtime_scaffold_files,
     )?;
 
     let manifest_path_string = manifest_path.display().to_string();
     let readme_path_string = readme_path.display().to_string();
-    let files_written = vec![manifest_path_string.clone(), readme_path_string.clone()];
+    let runtime_files_written = runtime_scaffold_files
+        .iter()
+        .map(|file| {
+            package_root_path
+                .join(file.relative_path.as_str())
+                .display()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    let mut files_written = vec![manifest_path_string.clone(), readme_path_string.clone()];
+    files_written.extend(runtime_files_written.iter().cloned());
 
     Ok(PluginsInitExecution {
         schema_version: PLUGINS_COMMAND_SCHEMA_VERSION,
@@ -1242,6 +1312,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         source_language: scaffold_defaults.source_language,
         adapter_family: scaffold_defaults.adapter_family,
         entrypoint: scaffold_defaults.entrypoint_hint,
+        runtime_files_written,
         files_written,
     })
 }
@@ -1261,6 +1332,8 @@ fn write_plugin_scaffold_files(
     rendered_manifest: &str,
     readme_path: &Path,
     rendered_readme: &str,
+    package_root: &Path,
+    runtime_scaffold_files: &[PluginRuntimeScaffoldFile],
 ) -> CliResult<()> {
     let manifest_write_result = fs::write(manifest_path, rendered_manifest);
     if let Err(error) = manifest_write_result {
@@ -1285,6 +1358,24 @@ fn write_plugin_scaffold_files(
             "write scaffold readme `{}` failed: {error}",
             readme_path.display()
         ));
+    }
+
+    for runtime_file in runtime_scaffold_files {
+        let runtime_path = package_root.join(runtime_file.relative_path.as_str());
+        if let Some(parent) = runtime_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "create scaffold runtime directory `{}` failed: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(&runtime_path, runtime_file.contents.as_str()).map_err(|error| {
+            format!(
+                "write scaffold runtime file `{}` failed: {error}",
+                runtime_path.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -1373,6 +1464,35 @@ fn build_plugin_scaffold_manifest(
     if let Some(source_language) = scaffold_defaults.source_language.as_ref() {
         metadata.insert("source_language".to_owned(), source_language.clone());
     }
+    if scaffold_defaults.bridge_kind == PluginBridgeKind::ProcessStdio {
+        let entry_file = process_stdio_scaffold_entry_file(scaffold_defaults);
+        let process_command = process_stdio_scaffold_command(scaffold_defaults);
+        metadata.insert("command".to_owned(), process_command.to_owned());
+        metadata.insert(
+            "args_json".to_owned(),
+            serde_json::to_string(&vec![entry_file]).unwrap_or_else(|_| "[]".to_owned()),
+        );
+        metadata.insert(
+            "loong_extension_contract".to_owned(),
+            "process_stdio_json_line_v1".to_owned(),
+        );
+        metadata.insert(
+            "loong_extension_facets_json".to_owned(),
+            "[\"events\",\"commands\",\"resources\"]".to_owned(),
+        );
+        metadata.insert(
+            "loong_extension_methods_json".to_owned(),
+            "[\"extension/event\",\"extension/command\",\"extension/resource\"]".to_owned(),
+        );
+        metadata.insert(
+            "loong_extension_events_json".to_owned(),
+            "[\"session_start\"]".to_owned(),
+        );
+        metadata.insert(
+            "loong_extension_host_actions_json".to_owned(),
+            "[]".to_owned(),
+        );
+    }
 
     let host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
     let compatibility = PluginCompatibility {
@@ -1431,13 +1551,162 @@ fn plugin_scaffold_manifest_document(
     })
 }
 
-fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kind: &str) -> String {
+fn build_plugin_runtime_scaffold_files(
+    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+) -> CliResult<Vec<PluginRuntimeScaffoldFile>> {
+    if scaffold_defaults.bridge_kind != PluginBridgeKind::ProcessStdio {
+        return Ok(Vec::new());
+    }
+
+    let Some(source_language) = scaffold_defaults.source_language.as_deref() else {
+        return Ok(Vec::new());
+    };
+
+    match source_language {
+        "python" => Ok(vec![PluginRuntimeScaffoldFile {
+            relative_path: "index.py".to_owned(),
+            contents: PYTHON_EXTENSION_STUB.to_owned(),
+        }]),
+        "javascript" => Ok(vec![PluginRuntimeScaffoldFile {
+            relative_path: "index.js".to_owned(),
+            contents: JAVASCRIPT_EXTENSION_STUB.to_owned(),
+        }]),
+        _ => Err(format!(
+            "plugins init only scaffolds runnable process_stdio extension entrypoints for source_language `python` or `javascript`; got `{source_language}`"
+        )),
+    }
+}
+
+fn process_stdio_scaffold_entry_file(
+    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+) -> String {
+    match scaffold_defaults.source_language.as_deref() {
+        Some("python") => "index.py".to_owned(),
+        Some("javascript") => "index.js".to_owned(),
+        _ => "index".to_owned(),
+    }
+}
+
+fn process_stdio_scaffold_command(
+    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+) -> &'static str {
+    match scaffold_defaults.source_language.as_deref() {
+        Some("python") => "python3",
+        Some("javascript") => "node",
+        _ => "",
+    }
+}
+
+const PYTHON_EXTENSION_STUB: &str = r#"#!/usr/bin/env python3
+import json
+import sys
+
+
+def build_extension_payload(operation, payload):
+    if operation == "extension/event":
+        return {
+            "ok": True,
+            "handled_event": payload.get("event", "unknown"),
+        }
+    if operation == "extension/command":
+        command_name = payload.get("command_name", "extension")
+        return {
+            "text": f"{command_name} command stub"
+        }
+    if operation == "extension/resource":
+        return {
+            "commands": [],
+            "tools": []
+        }
+    return {
+        "error": f"unsupported method: {operation}"
+    }
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    method = request.get("method", "")
+    payload = request.get("payload") or {}
+    if method == "tools/call":
+        operation = payload.get("operation", "")
+        extension_payload = payload.get("payload") or {}
+        response_payload = build_extension_payload(operation, extension_payload)
+    else:
+        response_payload = {"error": f"unsupported transport method: {method}"}
+    response = {"method": method, "id": request.get("id"), "payload": response_payload}
+    print(json.dumps(response), flush=True)
+"#;
+
+const JAVASCRIPT_EXTENSION_STUB: &str = r#"#!/usr/bin/env node
+const readline = require('node:readline');
+
+function buildExtensionPayload(operation, payload) {
+  if (operation === 'extension/event') {
+    return {
+      ok: true,
+      handled_event: payload.event ?? 'unknown',
+    };
+  }
+  if (operation === 'extension/command') {
+    const commandName = payload.command_name ?? 'extension';
+    return {
+      text: `${commandName} command stub`,
+    };
+  }
+  if (operation === 'extension/resource') {
+    return {
+      commands: [],
+      tools: [],
+    };
+  }
+  return {
+    error: `unsupported method: ${operation}`,
+  };
+}
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  crlfDelay: Infinity,
+});
+
+rl.on('line', (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return;
+  }
+  const request = JSON.parse(trimmed);
+  const method = request.method ?? '';
+  const payload = request.payload ?? {};
+  const responsePayload = method === 'tools/call'
+    ? buildExtensionPayload(payload.operation ?? '', payload.payload ?? {})
+    : { error: `unsupported transport method: ${method}` };
+  const response = {
+    method,
+    id: request.id ?? null,
+    payload: responsePayload,
+  };
+  process.stdout.write(`${JSON.stringify(response)}\\n`);
+});
+"#;
+
+fn render_plugin_scaffold_readme(
+    package_root: &str,
+    plugin_id: &str,
+    bridge_kind: &str,
+    has_runtime_entrypoint: bool,
+) -> String {
     let doctor_command =
         format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release");
     let actions_command =
         format!("loong plugins actions --root \"{package_root}\" --profile sdk-release");
+    let invoke_command = format!(
+        "loong plugins invoke-extension --root \"{package_root}\" --plugin-id \"{plugin_id}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command python3 --allow-command node"
+    );
 
-    [
+    let mut lines = vec![
         format!("# {plugin_id}"),
         String::new(),
         "This package was scaffolded by `loong plugins init`.".to_owned(),
@@ -1467,6 +1736,167 @@ fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kin
         "```bash".to_owned(),
         actions_command,
         "```".to_owned(),
+    ];
+    if has_runtime_entrypoint {
+        lines.extend([
+            String::new(),
+            "5. Smoke-test the native extension entrypoint through the governed process bridge:"
+                .to_owned(),
+            String::new(),
+            "```bash".to_owned(),
+            invoke_command,
+            "```".to_owned(),
+        ]);
+    }
+
+    lines.join("\n")
+}
+
+async fn execute_plugins_invoke_extension(
+    command: PluginInvokeExtensionCommand,
+) -> CliResult<PluginsInvokeExtensionExecution> {
+    let package_root = normalize_required_cli_value("--root", &command.root)?;
+    let plugin_id = normalize_required_cli_value("--plugin-id", &command.plugin_id)?;
+    let method = normalize_required_cli_value("--method", &command.method)?;
+    let payload = serde_json::from_str::<Value>(command.payload.as_str()).map_err(|error| {
+        format!("plugins invoke-extension requires --payload to be valid JSON: {error}")
+    })?;
+
+    let scanner = crate::kernel::PluginScanner::new();
+    let scan_report = scanner
+        .scan_path(package_root.as_str())
+        .map_err(|error| format!("scan extension package failed: {error}"))?;
+    let translator = crate::kernel::PluginTranslator::new();
+    let translation_report = translator.translate_scan_report(&scan_report);
+    let matching_entries = translation_report
+        .entries
+        .iter()
+        .filter(|entry| entry.plugin_id == plugin_id)
+        .collect::<Vec<_>>();
+    if matching_entries.is_empty() {
+        return Err(format!(
+            "plugins invoke-extension could not find plugin_id `{plugin_id}` under root `{package_root}`"
+        ));
+    }
+    if matching_entries.len() > 1 {
+        return Err(format!(
+            "plugins invoke-extension found multiple plugin entries named `{plugin_id}` under root `{package_root}`"
+        ));
+    }
+    let Some(plugin) = matching_entries.first().copied() else {
+        return Err(format!(
+            "plugins invoke-extension could not find plugin_id `{plugin_id}` under root `{package_root}`"
+        ));
+    };
+
+    if plugin.runtime.bridge_kind != PluginBridgeKind::ProcessStdio {
+        return Err(format!(
+            "plugins invoke-extension currently supports only process_stdio native extensions; plugin `{plugin_id}` declares bridge_kind `{}`",
+            plugin.runtime.bridge_kind.as_str()
+        ));
+    }
+
+    if command.allow_commands.is_empty() {
+        return Err(
+            "plugins invoke-extension requires at least one --allow-command for process_stdio smoke probes"
+                .to_owned(),
+        );
+    }
+
+    let provider = invoke_extension_provider_config(plugin);
+    let bridge_policy = BridgeExecutionPolicy {
+        execute_process_stdio: true,
+        execute_http_json: false,
+        allowed_process_commands: command
+            .allow_commands
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect::<BTreeSet<_>>(),
+    };
+    let channel = kernel::ChannelConfig {
+        channel_id: "native_extension".to_owned(),
+        provider_id: provider.provider_id.clone(),
+        endpoint: "local://native-extension".to_owned(),
+        enabled: true,
+        metadata: BTreeMap::new(),
+    };
+    let connector_command = loong_contracts::ConnectorCommand {
+        connector_name: provider.connector_name.clone(),
+        operation: method.clone(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: payload.clone(),
+    };
+
+    let outcome =
+        execute_process_stdio_bridge_call(&provider, &channel, &connector_command, &bridge_policy)
+            .await
+            .map_err(|failure| format!("plugins invoke-extension failed: {}", failure.reason))?;
+
+    Ok(PluginsInvokeExtensionExecution {
+        schema_version: PLUGINS_COMMAND_SCHEMA_VERSION,
+        schema: plugins_command_schema(PLUGINS_INVOKE_EXTENSION_SCHEMA_PURPOSE),
+        package_root,
+        plugin_id,
+        bridge_kind: plugin.runtime.bridge_kind.as_str().to_owned(),
+        source_language: Some(plugin.runtime.source_language.clone()),
+        method,
+        payload,
+        response_payload: outcome.response_payload,
+        runtime_evidence: outcome.runtime_evidence,
+    })
+}
+
+fn invoke_extension_provider_config(plugin: &crate::kernel::PluginIR) -> kernel::ProviderConfig {
+    let mut metadata = plugin.metadata.clone();
+    metadata.insert(
+        "plugin_package_root".to_owned(),
+        plugin.package_root.clone(),
+    );
+    metadata.insert("plugin_id".to_owned(), plugin.plugin_id.clone());
+    metadata.insert("plugin_source_path".to_owned(), plugin.source_path.clone());
+    metadata.insert(
+        "entrypoint_hint".to_owned(),
+        plugin.runtime.entrypoint_hint.clone(),
+    );
+    metadata.insert(
+        "source_language".to_owned(),
+        plugin.runtime.source_language.clone(),
+    );
+
+    kernel::ProviderConfig {
+        provider_id: plugin.provider_id.clone(),
+        connector_name: plugin.connector_name.clone(),
+        version: plugin
+            .plugin_version
+            .clone()
+            .unwrap_or_else(|| "0.0.0".to_owned()),
+        metadata,
+    }
+}
+
+fn render_plugins_invoke_extension_text(execution: &PluginsInvokeExtensionExecution) -> String {
+    let source_language = execution.source_language.as_deref().unwrap_or("-");
+    let response_payload = serde_json::to_string_pretty(&execution.response_payload)
+        .unwrap_or_else(|_| execution.response_payload.to_string());
+    let runtime_evidence = serde_json::to_string_pretty(&execution.runtime_evidence)
+        .unwrap_or_else(|_| execution.runtime_evidence.to_string());
+
+    [
+        format!(
+            "plugins invoke-extension package_root={} plugin_id={} bridge_kind={} source_language={} method={}",
+            execution.package_root,
+            execution.plugin_id,
+            execution.bridge_kind,
+            source_language,
+            execution.method
+        ),
+        "payload:".to_owned(),
+        execution.payload.to_string(),
+        "response_payload:".to_owned(),
+        response_payload,
+        "runtime_evidence:".to_owned(),
+        runtime_evidence,
     ]
     .join("\n")
 }
@@ -1476,6 +1906,10 @@ fn render_plugins_cli_text(execution: &PluginsCommandExecution) -> String {
         PluginsCommandExecution::Init(execution) => {
             ("plugins init", render_plugins_init_text(execution))
         }
+        PluginsCommandExecution::InvokeExtension(execution) => (
+            "plugins invoke-extension",
+            render_plugins_invoke_extension_text(execution),
+        ),
         PluginsCommandExecution::Inventory(execution) => (
             "plugins inventory",
             render_plugins_inventory_text(execution),
@@ -1521,6 +1955,12 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
     ));
     lines.push(format!("- manifest={}", execution.manifest_path));
     lines.push(format!("- readme={}", execution.readme_path));
+    if !execution.runtime_files_written.is_empty() {
+        lines.push(format!(
+            "- runtime_files={}",
+            execution.runtime_files_written.join(",")
+        ));
+    }
     lines.push(format!(
         "- next_steps=loong plugins doctor --root \"{}\" --profile sdk-release",
         execution.package_root
@@ -1529,6 +1969,13 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
         "- operator_actions=loong plugins actions --root \"{}\" --profile sdk-release",
         execution.package_root
     ));
+    if !execution.runtime_files_written.is_empty() {
+        lines.push(format!(
+            "- smoke_test=loong plugins invoke-extension --root \"{}\" --plugin-id \"{}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command python3 --allow-command node",
+            execution.package_root,
+            execution.plugin_id
+        ));
+    }
     lines.join("\n")
 }
 
@@ -3125,6 +3572,7 @@ mod tests {
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_PURPOSE, PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_SURFACE,
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_VERSION,
     };
+    use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir(prefix: &str) -> String {
@@ -4467,6 +4915,12 @@ mod tests {
         assert_eq!(execution.source_language.as_deref(), Some("python"));
         assert_eq!(execution.adapter_family, "python-stdio-adapter");
         assert_eq!(execution.entrypoint, "stdin/stdout::invoke");
+        assert_eq!(execution.runtime_files_written.len(), 1);
+        assert!(
+            execution.runtime_files_written[0].ends_with("index.py"),
+            "expected scaffolded runtime entrypoint, got {:?}",
+            execution.runtime_files_written
+        );
 
         let rendered_manifest =
             fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
@@ -4480,6 +4934,30 @@ mod tests {
         assert_eq!(
             manifest.metadata.get("adapter_family").map(String::as_str),
             Some("python-stdio-adapter")
+        );
+        assert_eq!(
+            manifest.metadata.get("command").map(String::as_str),
+            Some("python3")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_contract")
+                .map(String::as_str),
+            Some("process_stdio_json_line_v1")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_methods_json")
+                .map(String::as_str),
+            Some("[\"extension/event\",\"extension/command\",\"extension/resource\"]")
+        );
+        let scaffolded_entrypoint = fs::read_to_string(&execution.runtime_files_written[0])
+            .expect("process stdio scaffold should write runtime entrypoint");
+        assert!(
+            scaffolded_entrypoint.contains("extension/event"),
+            "expected event handler in scaffolded entrypoint: {scaffolded_entrypoint}"
         );
 
         let scanner = crate::kernel::PluginScanner::new();
@@ -4497,6 +4975,56 @@ mod tests {
         );
         assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
         assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_invoke_extension_runs_scaffolded_process_stdio_extension() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-invoke-extension");
+        let package_root = format!("{temp_root}/weather-python");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "weather-python".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("py".to_owned()),
+                version: "0.2.0".to_owned(),
+                summary: Some("Python weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("process stdio scaffold should succeed");
+
+        let PluginsCommandExecution::Init(init_execution) = execution else {
+            panic!("expected init execution");
+        };
+        assert_eq!(init_execution.runtime_files_written.len(), 1);
+
+        let invoke_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::InvokeExtension(PluginInvokeExtensionCommand {
+                root: package_root,
+                plugin_id: "weather-python".to_owned(),
+                method: "extension/event".to_owned(),
+                payload: "{\"event\":\"session_start\"}".to_owned(),
+                allow_commands: vec!["python3".to_owned()],
+            }),
+        })
+        .await
+        .expect("invoke-extension should execute scaffolded process stdio extension");
+
+        let PluginsCommandExecution::InvokeExtension(invoke_execution) = invoke_execution else {
+            panic!("expected invoke-extension execution");
+        };
+        assert_eq!(invoke_execution.bridge_kind, "process_stdio");
+        assert_eq!(invoke_execution.method, "extension/event");
+        assert_eq!(
+            invoke_execution.response_payload["handled_event"],
+            json!("session_start")
+        );
     }
 
     #[test]
@@ -4518,6 +5046,8 @@ mod tests {
             manifest_contents.as_str(),
             &readme_path,
             "# scaffold",
+            package_root,
+            &[],
         )
         .expect_err("readme directory should force scaffold rollback");
 

@@ -1,0 +1,163 @@
+---
+title: Native Extensions
+description: Scaffold, author, validate, inspect, and smoke-test manifest-first native extensions for Loong.
+---
+
+# Native Extensions
+
+Use this guide when you want **Pi-style local extension ergonomics** without giving up Loong's governed runtime path.
+
+Loong's native extension lane is:
+
+- **manifest-first**
+- **process-bridge governed**
+- **operator-inspectable before execution**
+
+The goal is simple:
+
+1. scaffold a package,
+2. write a small local runtime file,
+3. validate and inspect it,
+4. smoke-test it through the same governed bridge the runtime uses later.
+
+## What Loong means by a native extension
+
+A native extension is a **governed plugin package** whose manifest declares a small host-facing runtime contract such as:
+
+- `extension/event`
+- `extension/command`
+- `extension/resource`
+
+The current shortest authoring lane is a `process_stdio` package.
+
+## Scaffold a package
+
+Start with `plugins init`.
+
+### Python
+
+```bash
+loong plugins init ./weather-python \
+  --plugin-id weather-python \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language py \
+  --summary "Python weather extension"
+```
+
+### JavaScript
+
+```bash
+loong plugins init ./weather-js \
+  --plugin-id weather-js \
+  --provider-id weather \
+  --connector-name weather-stdio \
+  --bridge-kind process_stdio \
+  --source-language js \
+  --summary "JavaScript weather extension"
+```
+
+For `process_stdio`, Loong now scaffolds:
+
+- `loong.plugin.json`
+- `README.md`
+- a runnable `index.py` or `index.js` stub
+
+The generated manifest also includes the native extension metadata keys needed for inventory and audit surfaces, including:
+
+- `loong_extension_contract`
+- `loong_extension_facets_json`
+- `loong_extension_methods_json`
+- `loong_extension_events_json`
+- `loong_extension_host_actions_json`
+
+## Understand the generated stub
+
+The generated runtime file is intentionally small.
+
+It already handles the smallest useful host-facing surface:
+
+- `extension/event`
+- `extension/command`
+- `extension/resource`
+
+That makes it good enough for a first smoke test while staying easy to replace with your real implementation.
+
+## Validate and inspect the package
+
+Run the author-facing governance surfaces first:
+
+```bash
+loong plugins doctor --root "./weather-python" --profile sdk-release
+```
+
+Then inspect the package truth:
+
+```bash
+loong plugins inventory --root "./weather-python"
+```
+
+These surfaces tell you:
+
+- what Loong recognized,
+- whether setup is incomplete,
+- which extension declarations are visible before execution,
+- and what operator actions or remediation remain.
+
+## Smoke-test the extension runtime
+
+Use the explicit smoke path:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-python" \
+  --plugin-id weather-python \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command python3
+```
+
+Or for JavaScript:
+
+```bash
+loong plugins invoke-extension \
+  --root "./weather-js" \
+  --plugin-id weather-js \
+  --method extension/event \
+  --payload '{"event":"session_start"}' \
+  --allow-command node
+```
+
+This is intentionally explicit: the smoke probe only runs when you allow the process command on the CLI.
+
+## Suggested iteration loop
+
+1. `plugins init`
+2. edit `loong.plugin.json`
+3. replace the generated `index.py` / `index.js`
+4. `plugins doctor`
+5. `plugins inventory`
+6. `plugins invoke-extension`
+
+Repeat until:
+
+- declarations look right,
+- the smoke probe returns the payload you expect,
+- and doctor stops surfacing author-facing blockers you care about.
+
+## What this does not promise yet
+
+This guide is for the **non-TUI authoring lane**.
+
+It does **not** cover:
+
+- TUI extension discovery
+- TUI widget or panel hosting
+- TUI render-host integration
+
+Those are intentionally separate from the public authoring path.
+
+## Related docs
+
+- The repository also keeps source-facing authoring references under `docs/sdk/` and `docs/design-docs/` for maintainers who need the lower-level contracts behind this public guide.
