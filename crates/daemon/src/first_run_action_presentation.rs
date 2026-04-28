@@ -6,6 +6,38 @@ pub(crate) enum FirstRunActionGroup {
     ContinueSetup,
 }
 
+pub(crate) const fn first_run_group_for_setup_action_kind(
+    kind: crate::next_actions::SetupNextActionKind,
+) -> FirstRunActionGroup {
+    match kind {
+        crate::next_actions::SetupNextActionKind::Channel
+        | crate::next_actions::SetupNextActionKind::BrowserPreview => {
+            FirstRunActionGroup::ContinueSetup
+        }
+        crate::next_actions::SetupNextActionKind::Ask
+        | crate::next_actions::SetupNextActionKind::Chat
+        | crate::next_actions::SetupNextActionKind::Personalize
+        | crate::next_actions::SetupNextActionKind::Doctor => FirstRunActionGroup::GeneralFollowup,
+    }
+}
+
+pub(crate) const fn first_run_group_for_onboarding_action_kind(
+    kind: crate::onboard_finalize::OnboardingActionKind,
+) -> FirstRunActionGroup {
+    match kind {
+        crate::onboard_finalize::OnboardingActionKind::Channel
+        | crate::onboard_finalize::OnboardingActionKind::BrowserPreview => {
+            FirstRunActionGroup::ContinueSetup
+        }
+        crate::onboard_finalize::OnboardingActionKind::Ask
+        | crate::onboard_finalize::OnboardingActionKind::Chat
+        | crate::onboard_finalize::OnboardingActionKind::Personalize
+        | crate::onboard_finalize::OnboardingActionKind::Doctor => {
+            FirstRunActionGroup::GeneralFollowup
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FirstRunActionSections<T> {
     pub(crate) primary: Option<T>,
@@ -108,4 +140,63 @@ pub(crate) fn build_first_run_action_text_lines<T>(
     }
 
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_action_kind_groups_setup_extensions_separately() {
+        assert_eq!(
+            first_run_group_for_setup_action_kind(crate::next_actions::SetupNextActionKind::Ask),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_setup_action_kind(
+                crate::next_actions::SetupNextActionKind::Personalize,
+            ),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_setup_action_kind(
+                crate::next_actions::SetupNextActionKind::Channel,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+        assert_eq!(
+            first_run_group_for_setup_action_kind(
+                crate::next_actions::SetupNextActionKind::BrowserPreview,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+    }
+
+    #[test]
+    fn onboarding_action_kind_groups_setup_extensions_separately() {
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::Ask,
+            ),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::Personalize,
+            ),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::Channel,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::BrowserPreview,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+    }
 }

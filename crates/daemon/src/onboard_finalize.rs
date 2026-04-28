@@ -7,7 +7,9 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
-use crate::first_run_action_presentation::{FirstRunActionGroup, build_first_run_action_sections};
+use crate::first_run_action_presentation::{
+    build_first_run_action_sections, first_run_group_for_onboarding_action_kind,
+};
 use crate::onboard_types::OnboardingCredentialSummary;
 use mvp::tui_surface::{
     TuiActionSpec, TuiHeaderStyle, TuiKeyValueSpec, TuiScreenSpec, TuiSectionSpec,
@@ -493,13 +495,7 @@ fn render_onboarding_success_summary_with_style(
 fn build_onboarding_success_screen_spec(summary: &OnboardingSuccessSummary) -> TuiScreenSpec {
     let mut sections = build_first_run_action_sections(
         &summary.next_actions,
-        |action| {
-            if onboarding_action_is_continue_setup(action.kind) {
-                FirstRunActionGroup::ContinueSetup
-            } else {
-                FirstRunActionGroup::GeneralFollowup
-            }
-        },
+        |action| first_run_group_for_onboarding_action_kind(action.kind),
         |action| TuiActionSpec {
             label: action.label.clone(),
             command: action.command.clone(),
@@ -694,13 +690,6 @@ fn push_onboarding_enabled_channel_group_items(
             values: remaining_channels,
         });
     }
-}
-
-fn onboarding_action_is_continue_setup(kind: OnboardingActionKind) -> bool {
-    matches!(
-        kind,
-        OnboardingActionKind::Channel | OnboardingActionKind::BrowserPreview
-    )
 }
 
 pub(crate) fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult<String> {

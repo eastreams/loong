@@ -213,7 +213,9 @@ use channel_bridge_render::{
 pub(crate) use channel_bridge_render::{
     render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
 };
-use first_run_action_presentation::{FirstRunActionGroup, build_first_run_action_sections};
+use first_run_action_presentation::{
+    build_first_run_action_sections, first_run_group_for_setup_action_kind,
+};
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
@@ -1089,17 +1091,7 @@ fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConfig) 
     let render_width = mvp::presentation::detect_render_width();
     let mut sections = build_first_run_action_sections(
         &next_actions,
-        |action| {
-            if matches!(
-                action.kind,
-                next_actions::SetupNextActionKind::Channel
-                    | next_actions::SetupNextActionKind::BrowserPreview
-            ) {
-                FirstRunActionGroup::ContinueSetup
-            } else {
-                FirstRunActionGroup::GeneralFollowup
-            }
-        },
+        |action| first_run_group_for_setup_action_kind(action.kind),
         |action| mvp::tui_surface::TuiActionSpec {
             label: action.label.clone(),
             command: action.command.clone(),

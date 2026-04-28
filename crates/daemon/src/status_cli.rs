@@ -3,7 +3,9 @@ use loong_spec::CliResult;
 use serde::Serialize;
 use std::path::Path;
 
-use crate::first_run_action_presentation::{FirstRunActionGroup, build_first_run_action_sections};
+use crate::first_run_action_presentation::{
+    build_first_run_action_sections, first_run_group_for_setup_action_kind,
+};
 use crate::gateway::client::GatewayLocalClient;
 use crate::gateway::read_models::{
     GatewayAcpObservabilityReadModel, GatewayOperatorChannelsSummaryReadModel,
@@ -409,17 +411,7 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let web_boundary_note = web_access.separation_note.clone();
     let mut sections = build_first_run_action_sections(
         &status.next_actions,
-        |action| {
-            if matches!(
-                action.kind,
-                crate::next_actions::SetupNextActionKind::Channel
-                    | crate::next_actions::SetupNextActionKind::BrowserPreview
-            ) {
-                FirstRunActionGroup::ContinueSetup
-            } else {
-                FirstRunActionGroup::GeneralFollowup
-            }
-        },
+        |action| first_run_group_for_setup_action_kind(action.kind),
         |action| loong_app::tui_surface::TuiActionSpec {
             label: action.label.clone(),
             command: action.command.clone(),

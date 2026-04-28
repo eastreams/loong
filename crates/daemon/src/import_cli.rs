@@ -8,7 +8,7 @@ use loong_spec::CliResult;
 use serde::Serialize;
 
 use crate::first_run_action_presentation::{
-    FirstRunActionGroup, build_first_run_action_text_lines,
+    build_first_run_action_text_lines, first_run_group_for_setup_action_kind,
 };
 use crate::migration::{self, ImportCandidate, ImportSourceKind, SetupDomainKind};
 
@@ -533,15 +533,7 @@ fn build_import_apply_summary_body_lines(
     lines.extend(build_first_run_action_text_lines(
         &next_actions,
         width,
-        |action| {
-            if action.kind == crate::next_actions::SetupNextActionKind::Channel
-                || action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
-            {
-                FirstRunActionGroup::ContinueSetup
-            } else {
-                FirstRunActionGroup::GeneralFollowup
-            }
-        },
+        |action| first_run_group_for_setup_action_kind(action.kind),
         |action, width| {
             mvp::presentation::render_wrapped_text_line("next step: ", &action.command, width)
         },
