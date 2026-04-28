@@ -10,13 +10,10 @@ use std::fs;
 
 pub use crate::SecurityScanProfile;
 
-static DAEMON_TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 static DAEMON_GATEWAY_CONTROL_SURFACE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn lock_daemon_test_environment() -> MutexGuard<'static, ()> {
-    DAEMON_TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
+    mvp::test_support::lock_process_env_for_tests()
 }
 
 pub fn lock_gateway_control_surface_tests() -> MutexGuard<'static, ()> {

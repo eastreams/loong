@@ -10,15 +10,30 @@ use crate::{
 
 use super::{
     CHANNEL_OPERATION_SERVE_ID, ChannelPlatform, ChannelServeRuntimeSpec,
-    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
-    dispatch::validate_feishu_security_config,
     ensure_channel_operation_runtime_slot_available_in_dir,
-    feishu::build_gateway_feishu_ingress_router,
-    line::{build_gateway_line_ingress_router, gateway_line_ingress_path},
     runtime::state::ChannelOperationRuntimeTracker,
-    webhook::{build_gateway_webhook_ingress_router, gateway_webhook_ingress_path},
-    whatsapp::build_gateway_whatsapp_ingress_router,
 };
+
+#[cfg(feature = "channel-feishu")]
+use super::{
+    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, dispatch::validate_feishu_security_config,
+    feishu::build_gateway_feishu_ingress_router,
+};
+
+#[cfg(feature = "channel-line")]
+use super::{
+    LINE_RUNTIME_COMMAND_DESCRIPTOR,
+    line::{build_gateway_line_ingress_router, gateway_line_ingress_path},
+};
+
+#[cfg(feature = "channel-webhook")]
+use super::{
+    WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR,
+    webhook::{build_gateway_webhook_ingress_router, gateway_webhook_ingress_path},
+};
+
+#[cfg(feature = "channel-whatsapp")]
+use super::{WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, whatsapp::build_gateway_whatsapp_ingress_router};
 
 pub struct GatewayIngressMount {
     router: Router,
@@ -105,6 +120,7 @@ pub fn gateway_owned_runtime_channel_ids(
     Ok(channel_ids)
 }
 
+#[cfg(feature = "channel-feishu")]
 async fn mount_feishu_gateway_ingress(
     router: &mut Router,
     runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
@@ -154,6 +170,18 @@ async fn mount_feishu_gateway_ingress(
     Ok(())
 }
 
+#[cfg(not(feature = "channel-feishu"))]
+async fn mount_feishu_gateway_ingress(
+    _router: &mut Router,
+    _runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
+    _registered_paths: &mut BTreeSet<String>,
+    _resolved_path: &Path,
+    _config: &LoongConfig,
+) -> CliResult<()> {
+    Ok(())
+}
+
+#[cfg(feature = "channel-whatsapp")]
 async fn mount_whatsapp_gateway_ingress(
     router: &mut Router,
     runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
@@ -201,6 +229,18 @@ async fn mount_whatsapp_gateway_ingress(
     Ok(())
 }
 
+#[cfg(not(feature = "channel-whatsapp"))]
+async fn mount_whatsapp_gateway_ingress(
+    _router: &mut Router,
+    _runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
+    _registered_paths: &mut BTreeSet<String>,
+    _resolved_path: &Path,
+    _config: &LoongConfig,
+) -> CliResult<()> {
+    Ok(())
+}
+
+#[cfg(feature = "channel-line")]
 async fn mount_line_gateway_ingress(
     router: &mut Router,
     runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
@@ -226,7 +266,7 @@ async fn mount_line_gateway_ingress(
             path.as_str(),
         )?;
         let runtime = start_gateway_ingress_runtime(
-            super::LINE_RUNTIME_COMMAND_DESCRIPTOR.platform,
+            LINE_RUNTIME_COMMAND_DESCRIPTOR.platform,
             resolved.account.id.as_str(),
             resolved.account.label.as_str(),
         )
@@ -236,7 +276,7 @@ async fn mount_line_gateway_ingress(
             &resolved,
             resolved_path,
             bootstrap_channel_kernel_context(
-                super::LINE_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
+                LINE_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
                 config,
             )?,
             runtime.clone(),
@@ -248,6 +288,18 @@ async fn mount_line_gateway_ingress(
     Ok(())
 }
 
+#[cfg(not(feature = "channel-line"))]
+async fn mount_line_gateway_ingress(
+    _router: &mut Router,
+    _runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
+    _registered_paths: &mut BTreeSet<String>,
+    _resolved_path: &Path,
+    _config: &LoongConfig,
+) -> CliResult<()> {
+    Ok(())
+}
+
+#[cfg(feature = "channel-webhook")]
 async fn mount_webhook_gateway_ingress(
     router: &mut Router,
     runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
@@ -273,7 +325,7 @@ async fn mount_webhook_gateway_ingress(
             path.as_str(),
         )?;
         let runtime = start_gateway_ingress_runtime(
-            super::WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.platform,
+            WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.platform,
             resolved.account.id.as_str(),
             resolved.account.label.as_str(),
         )
@@ -283,7 +335,7 @@ async fn mount_webhook_gateway_ingress(
             &resolved,
             resolved_path,
             bootstrap_channel_kernel_context(
-                super::WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
+                WEBHOOK_RUNTIME_COMMAND_DESCRIPTOR.serve_bootstrap_agent_id,
                 config,
             )?,
             runtime.clone(),
@@ -292,6 +344,17 @@ async fn mount_webhook_gateway_ingress(
         runtime_trackers.push(runtime);
     }
 
+    Ok(())
+}
+
+#[cfg(not(feature = "channel-webhook"))]
+async fn mount_webhook_gateway_ingress(
+    _router: &mut Router,
+    _runtime_trackers: &mut Vec<Arc<ChannelOperationRuntimeTracker>>,
+    _registered_paths: &mut BTreeSet<String>,
+    _resolved_path: &Path,
+    _config: &LoongConfig,
+) -> CliResult<()> {
     Ok(())
 }
 
@@ -378,23 +441,87 @@ pub async fn shutdown_gateway_ingress_runtimes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "channel-feishu")]
     use crate::config::FeishuChannelServeMode;
+
+    #[cfg(feature = "channel-feishu")]
+    fn configure_feishu_gateway_ingress(
+        config: &mut LoongConfig,
+        expected: &mut BTreeSet<&'static str>,
+    ) {
+        config.feishu.enabled = true;
+        config.feishu.mode = Some(FeishuChannelServeMode::Webhook);
+        expected.insert("feishu");
+    }
+
+    #[cfg(not(feature = "channel-feishu"))]
+    fn configure_feishu_gateway_ingress(
+        _config: &mut LoongConfig,
+        _expected: &mut BTreeSet<&'static str>,
+    ) {
+    }
+
+    #[cfg(feature = "channel-whatsapp")]
+    fn configure_whatsapp_gateway_ingress(
+        config: &mut LoongConfig,
+        expected: &mut BTreeSet<&'static str>,
+    ) {
+        config.whatsapp.enabled = true;
+        expected.insert("whatsapp");
+    }
+
+    #[cfg(not(feature = "channel-whatsapp"))]
+    fn configure_whatsapp_gateway_ingress(
+        _config: &mut LoongConfig,
+        _expected: &mut BTreeSet<&'static str>,
+    ) {
+    }
+
+    #[cfg(feature = "channel-line")]
+    fn configure_line_gateway_ingress(
+        config: &mut LoongConfig,
+        expected: &mut BTreeSet<&'static str>,
+    ) {
+        config.line.enabled = true;
+        expected.insert("line");
+    }
+
+    #[cfg(not(feature = "channel-line"))]
+    fn configure_line_gateway_ingress(
+        _config: &mut LoongConfig,
+        _expected: &mut BTreeSet<&'static str>,
+    ) {
+    }
+
+    #[cfg(feature = "channel-webhook")]
+    fn configure_webhook_gateway_ingress(
+        config: &mut LoongConfig,
+        expected: &mut BTreeSet<&'static str>,
+    ) {
+        config.webhook.enabled = true;
+        expected.insert("webhook");
+    }
+
+    #[cfg(not(feature = "channel-webhook"))]
+    fn configure_webhook_gateway_ingress(
+        _config: &mut LoongConfig,
+        _expected: &mut BTreeSet<&'static str>,
+    ) {
+    }
 
     #[test]
     fn gateway_owned_runtime_channel_ids_follow_http_gateway_policy() {
         let mut config = LoongConfig::default();
-        config.feishu.enabled = true;
-        config.feishu.mode = Some(FeishuChannelServeMode::Webhook);
-        config.whatsapp.enabled = true;
-        config.line.enabled = true;
-        config.webhook.enabled = true;
+        let mut expected = BTreeSet::new();
+        configure_feishu_gateway_ingress(&mut config, &mut expected);
+        configure_whatsapp_gateway_ingress(&mut config, &mut expected);
+        configure_line_gateway_ingress(&mut config, &mut expected);
+        configure_webhook_gateway_ingress(&mut config, &mut expected);
 
         let owned = gateway_owned_runtime_channel_ids(&config)
             .expect("resolve gateway owned runtime channel ids");
-        assert!(owned.contains("feishu"));
-        assert!(owned.contains("whatsapp"));
-        assert!(owned.contains("line"));
-        assert!(owned.contains("webhook"));
+
+        assert_eq!(owned, expected);
     }
 
     #[test]
@@ -409,6 +536,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "channel-line")]
     fn gateway_line_ingress_path_uses_account_scoped_route() {
         let mut config = LoongConfig::default();
         config.line.enabled = true;
@@ -434,6 +562,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "channel-webhook")]
     fn gateway_webhook_ingress_path_prefers_public_path_and_falls_back_to_account_route() {
         let mut config = LoongConfig::default();
         config.webhook.enabled = true;
