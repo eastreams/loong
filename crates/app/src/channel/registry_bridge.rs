@@ -631,7 +631,7 @@ pub(super) const WHATSAPP_PERSONAL_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryD
         id: "whatsapp-personal",
         runtime: None,
         snapshot_builder: Some(build_whatsapp_personal_snapshots),
-        selection_order: 91,
+        selection_order: 39,
         selection_label: "personal qr-linked account bridge",
         blurb: "Plugin-backed personal WhatsApp surface that delegates QR login and session ownership to a local WhatsApp Web bridge while Loong owns the stable send and reply-loop contract.",
         implementation_status: ChannelCatalogImplementationStatus::PluginBacked,

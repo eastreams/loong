@@ -131,6 +131,8 @@ mod tests {
                         crate::whatsapp_personal_cli::WhatsappPersonalBridgeRunArgs {
                             config: None,
                             account: None,
+                            pairing_code_phone: None,
+                            custom_pairing_code: None,
                             skip_install: false,
                         }
                     ),
