@@ -15,10 +15,13 @@ use crate::kernel::{
     VerticalPackManifest, plugin_runtime_scaffold_defaults,
 };
 use crate::native_extension_authoring::{
-    PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT, PROCESS_STDIO_NATIVE_EXTENSION_EVENTS,
-    PROCESS_STDIO_NATIVE_EXTENSION_FACETS, PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS,
-    PROCESS_STDIO_NATIVE_EXTENSION_METHODS, process_stdio_native_extension_language_profile,
-    process_stdio_scaffold_args, render_rust_extension_cargo_toml,
+    NativeExtensionAuthoringGuidanceView, PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT,
+    PROCESS_STDIO_NATIVE_EXTENSION_EVENTS, PROCESS_STDIO_NATIVE_EXTENSION_FACETS,
+    PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
+    build_native_extension_authoring_guidance, process_stdio_native_extension_language_profile,
+    process_stdio_scaffold_args, render_authoring_actions_command, render_authoring_doctor_command,
+    render_authoring_inventory_command, render_authoring_smoke_test_command,
+    render_rust_extension_cargo_toml,
 };
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
@@ -610,6 +613,8 @@ pub struct PluginsDoctorExecution {
     pub summary: PluginsDoctorSummaryView,
     pub preflight_summary: PluginsPreflightSummaryView,
     pub returned_results: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_extension_authoring_guidance: Vec<NativeExtensionAuthoringGuidanceView>,
     pub results: Vec<PluginPreflightResult>,
 }
 
@@ -919,6 +924,8 @@ pub async fn execute_plugins_command(
                 decode_preflight_summary(&report, bridge_support_provenance.clone())?;
             let results = decode_preflight_results(&report)?;
             let summary = summarize_plugin_doctor_results(&results, &preflight_summary);
+            let native_extension_authoring_guidance =
+                build_plugins_doctor_native_extension_authoring_guidance(&results);
 
             Ok(PluginsCommandExecution::Doctor(Box::new(
                 PluginsDoctorExecution {
@@ -936,6 +943,7 @@ pub async fn execute_plugins_command(
                     summary,
                     preflight_summary,
                     returned_results: results.len(),
+                    native_extension_authoring_guidance,
                     results,
                 },
             )))
@@ -1289,9 +1297,9 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         summary,
         &scaffold_defaults,
     );
-    let doctor_command = render_plugins_doctor_command(package_root.as_str());
-    let inventory_command = render_plugins_inventory_command(package_root.as_str());
-    let operator_actions_command = render_plugins_actions_command(package_root.as_str());
+    let doctor_command = render_authoring_doctor_command(package_root.as_str());
+    let inventory_command = render_authoring_inventory_command(package_root.as_str());
+    let operator_actions_command = render_authoring_actions_command(package_root.as_str());
     let native_extension_authoring_profile = build_native_extension_authoring_profile(
         package_root.as_str(),
         plugin_id.as_str(),
@@ -1634,26 +1642,12 @@ fn build_plugin_runtime_scaffold_files(
         .collect())
 }
 
-fn render_plugins_doctor_command(package_root: &str) -> String {
-    format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release")
-}
-
-fn render_plugins_inventory_command(package_root: &str) -> String {
-    format!("loong plugins inventory --root \"{package_root}\"")
-}
-
-fn render_plugins_actions_command(package_root: &str) -> String {
-    format!("loong plugins actions --root \"{package_root}\" --profile sdk-release")
-}
-
 fn render_plugins_invoke_extension_command(
     package_root: &str,
     plugin_id: &str,
     allow_command: &str,
 ) -> String {
-    format!(
-        "loong plugins invoke-extension --root \"{package_root}\" --plugin-id \"{plugin_id}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command {allow_command}"
-    )
+    render_authoring_smoke_test_command(package_root, plugin_id, allow_command)
 }
 
 fn build_native_extension_authoring_profile(
@@ -1689,7 +1683,7 @@ fn build_native_extension_authoring_profile(
         command: profile.command.to_owned(),
         args: process_stdio_scaffold_args(profile),
         process_timeout_ms: profile.process_timeout_ms,
-        inventory_command: render_plugins_inventory_command(package_root),
+        inventory_command: render_authoring_inventory_command(package_root),
         smoke_allow_command: profile.smoke_allow_command.to_owned(),
         smoke_test_command: render_plugins_invoke_extension_command(
             package_root,
@@ -2145,6 +2139,11 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
 
 fn render_plugins_doctor_text(execution: &PluginsDoctorExecution) -> String {
     let preflight_summary = &execution.preflight_summary;
+    let authoring_guidance_by_plugin = execution
+        .native_extension_authoring_guidance
+        .iter()
+        .map(|guidance| (guidance.plugin_id.as_str(), guidance))
+        .collect::<BTreeMap<_, _>>();
     let mut lines = vec![format!(
         "plugins doctor profile={} query={} roots={} matched_plugins={} returned_plugins={} passed={} warned={} blocked={}",
         execution.profile,
@@ -2198,7 +2197,10 @@ fn render_plugins_doctor_text(execution: &PluginsDoctorExecution) -> String {
     ));
     lines.extend(render_bridge_profile_fit_lines(preflight_summary));
     for result in &execution.results {
-        lines.extend(render_plugin_doctor_result_lines(result));
+        let guidance = authoring_guidance_by_plugin
+            .get(result.plugin.plugin_id.as_str())
+            .copied();
+        lines.extend(render_plugin_doctor_result_lines(result, guidance));
     }
     lines.join("\n")
 }
@@ -2393,7 +2395,10 @@ fn render_plugins_preflight_text(execution: &PluginsPreflightExecution) -> Strin
     lines.join("\n")
 }
 
-fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<String> {
+fn render_plugin_doctor_result_lines(
+    result: &PluginPreflightResult,
+    guidance: Option<&NativeExtensionAuthoringGuidanceView>,
+) -> Vec<String> {
     let plugin = &result.plugin;
     let activation_status = inventory_result_status_label(plugin);
     let setup_surface = inventory_result_setup_surface_label(plugin);
@@ -2468,6 +2473,14 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
         "  policy_summary={} effective_flags={} remediation_classes={} operator_actions={}",
         result.policy_summary, effective_flags, remediation_classes, operator_action_kinds
     ));
+    if let Some(guidance) = guidance {
+        lines.push(format!(
+            "  authoring inventory_command={} smoke_test_command={} reference_example={}",
+            guidance.inventory_command,
+            guidance.smoke_test_command,
+            guidance.reference_example_path
+        ));
+    }
     lines.push(format!(
         "  blocking_diagnostics={} advisory_diagnostics={}",
         blocking_diagnostics, advisory_diagnostics
@@ -3437,6 +3450,15 @@ fn summarize_plugin_doctor_results(
         setup_surface_distribution,
         activation_status_distribution,
     }
+}
+
+fn build_plugins_doctor_native_extension_authoring_guidance(
+    results: &[PluginPreflightResult],
+) -> Vec<NativeExtensionAuthoringGuidanceView> {
+    results
+        .iter()
+        .filter_map(|result| build_native_extension_authoring_guidance(&result.plugin))
+        .collect()
 }
 
 fn count_preflight_result_operator_actions(result: &PluginPreflightResult) -> usize {
@@ -5899,6 +5921,121 @@ mod tests {
                 json!("session_start")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_doctor_surfaces_native_extension_authoring_guidance() {
+        let repo_root = repo_root();
+        let spec = checked_in_native_extension_example_specs()
+            .into_iter()
+            .find(|spec| spec.source_language_arg == "js")
+            .expect("javascript checked-in example should exist");
+        let package_root = repo_root
+            .join(spec.package_root_relative)
+            .display()
+            .to_string();
+        let scaffold_defaults = checked_in_native_extension_scaffold_defaults(&spec);
+        let profile = process_stdio_native_extension_language_profile(&scaffold_defaults)
+            .expect("checked-in example should map to a public authoring profile")
+            .expect("checked-in example should resolve a process stdio profile");
+
+        let doctor_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Doctor(PluginDoctorCommand {
+                source: PluginDoctorSourceArgs {
+                    scan: PluginScanSourceArgs {
+                        roots: vec![package_root.clone()],
+                        query: String::new(),
+                        limit: None,
+                        bridge_support: None,
+                        bridge_profile: None,
+                        bridge_support_delta: None,
+                        bridge_support_sha256: None,
+                        bridge_support_delta_sha256: None,
+                    },
+                    profile: PluginPreflightProfileArg::SdkRelease,
+                    policy_path: None,
+                    policy_sha256: None,
+                    policy_signature_public_key_base64: None,
+                    policy_signature_base64: None,
+                    policy_signature_algorithm: "ed25519".to_owned(),
+                },
+                include_passed: true,
+                include_warned: true,
+                include_blocked: true,
+                include_deferred: true,
+            }),
+        })
+        .await
+        .expect("doctor should validate checked-in example package");
+
+        let PluginsCommandExecution::Doctor(doctor_execution) = doctor_execution else {
+            panic!("expected doctor execution");
+        };
+        assert_eq!(
+            doctor_execution.native_extension_authoring_guidance.len(),
+            1
+        );
+        let guidance = &doctor_execution.native_extension_authoring_guidance[0];
+        assert_eq!(guidance.plugin_id, spec.plugin_id);
+        assert_eq!(guidance.package_root, package_root);
+        assert_eq!(
+            guidance.source_language,
+            scaffold_defaults
+                .source_language
+                .expect("checked-in example should resolve a source language")
+        );
+        assert_eq!(guidance.bridge_kind, "process_stdio");
+        assert_eq!(guidance.reference_example_path, spec.package_root_relative);
+        assert_eq!(
+            guidance.inventory_command,
+            render_authoring_inventory_command(package_root.as_str())
+        );
+        assert_eq!(guidance.smoke_allow_command, profile.smoke_allow_command);
+        assert_eq!(
+            guidance.smoke_test_command,
+            render_authoring_smoke_test_command(
+                package_root.as_str(),
+                spec.plugin_id,
+                profile.smoke_allow_command
+            )
+        );
+        assert_eq!(
+            guidance.extension_contract.as_deref(),
+            Some(PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT)
+        );
+        assert_eq!(
+            guidance.extension_methods,
+            PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            guidance.extension_events,
+            PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            guidance.extension_host_actions,
+            PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert!(guidance.extension_metadata_issues.is_empty());
+
+        let rendered = render_plugins_doctor_text(&doctor_execution);
+        assert!(
+            rendered.contains("authoring inventory_command="),
+            "doctor text should include authoring guidance: {rendered}"
+        );
+        assert!(
+            rendered.contains(spec.package_root_relative),
+            "doctor text should include the reference example path: {rendered}"
+        );
     }
 
     #[test]

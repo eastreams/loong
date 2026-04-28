@@ -1,4 +1,5 @@
-use crate::{CliResult, kernel};
+use crate::{CliResult, PluginInventoryResult, kernel};
+use serde::Serialize;
 
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FACETS: &[&str] =
@@ -22,6 +23,23 @@ pub(crate) struct ProcessStdioNativeExtensionLanguageProfile {
     pub smoke_allow_command: &'static str,
     pub example_package_root: &'static str,
     pub scaffold_files: &'static [RuntimeScaffoldTemplateFile],
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct NativeExtensionAuthoringGuidanceView {
+    pub plugin_id: String,
+    pub package_root: String,
+    pub source_language: String,
+    pub bridge_kind: String,
+    pub reference_example_path: String,
+    pub inventory_command: String,
+    pub smoke_allow_command: String,
+    pub smoke_test_command: String,
+    pub extension_contract: Option<String>,
+    pub extension_methods: Vec<String>,
+    pub extension_events: Vec<String>,
+    pub extension_host_actions: Vec<String>,
+    pub extension_metadata_issues: Vec<String>,
 }
 
 const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
@@ -110,6 +128,59 @@ pub(crate) fn process_stdio_scaffold_args(
         .iter()
         .map(|value| (*value).to_owned())
         .collect()
+}
+
+pub(crate) fn render_authoring_doctor_command(package_root: &str) -> String {
+    format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release")
+}
+
+pub(crate) fn render_authoring_inventory_command(package_root: &str) -> String {
+    format!("loong plugins inventory --root \"{package_root}\"")
+}
+
+pub(crate) fn render_authoring_actions_command(package_root: &str) -> String {
+    format!("loong plugins actions --root \"{package_root}\" --profile sdk-release")
+}
+
+pub(crate) fn render_authoring_smoke_test_command(
+    package_root: &str,
+    plugin_id: &str,
+    allow_command: &str,
+) -> String {
+    format!(
+        "loong plugins invoke-extension --root \"{package_root}\" --plugin-id \"{plugin_id}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command {allow_command}"
+    )
+}
+
+pub(crate) fn build_native_extension_authoring_guidance(
+    plugin: &PluginInventoryResult,
+) -> Option<NativeExtensionAuthoringGuidanceView> {
+    let bridge_kind = kernel::PluginBridgeKind::parse_label(&plugin.bridge_kind)?;
+    let scaffold_defaults =
+        kernel::plugin_runtime_scaffold_defaults(bridge_kind, plugin.source_language.as_deref())
+            .ok()?;
+    let profile = process_stdio_native_extension_language_profile(&scaffold_defaults).ok()??;
+    let source_language = scaffold_defaults.source_language?;
+
+    Some(NativeExtensionAuthoringGuidanceView {
+        plugin_id: plugin.plugin_id.clone(),
+        package_root: plugin.package_root.clone(),
+        source_language,
+        bridge_kind: plugin.bridge_kind.clone(),
+        reference_example_path: profile.example_package_root.to_owned(),
+        inventory_command: render_authoring_inventory_command(plugin.package_root.as_str()),
+        smoke_allow_command: profile.smoke_allow_command.to_owned(),
+        smoke_test_command: render_authoring_smoke_test_command(
+            plugin.package_root.as_str(),
+            plugin.plugin_id.as_str(),
+            profile.smoke_allow_command,
+        ),
+        extension_contract: plugin.extension_contract.clone(),
+        extension_methods: plugin.extension_methods.clone(),
+        extension_events: plugin.extension_events.clone(),
+        extension_host_actions: plugin.extension_host_actions.clone(),
+        extension_metadata_issues: plugin.extension_metadata_issues.clone(),
+    })
 }
 
 pub(crate) fn render_rust_extension_cargo_toml(plugin_id: &str) -> String {
