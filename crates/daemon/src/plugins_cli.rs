@@ -2544,7 +2544,10 @@ fn format_native_extension_author_remediation_actions(
     actions
         .iter()
         .map(|action| {
-            let mut parts = vec![format!("kind={}", action.kind)];
+            let mut parts = vec![
+                format!("kind={}", action.kind),
+                format!("role={}", action.role),
+            ];
             if let Some(field_path) = action.field_path.as_deref() {
                 parts.push(format!("field={field_path}"));
             }
@@ -6539,7 +6542,8 @@ mod tests {
             guidance
                 .author_remediation_actions
                 .iter()
-                .any(|action| action.kind == "repair_extension_metadata"),
+                .any(|action| action.kind == "repair_extension_metadata"
+                    && action.role == "author"),
             "doctor guidance should expose a typed repair action: {:?}",
             guidance.author_remediation_actions
         );
@@ -6548,6 +6552,7 @@ mod tests {
                 .author_remediation_actions
                 .iter()
                 .any(|action| action.kind == "rerun_doctor"
+                    && action.role == "verification"
                     && action.command.as_deref()
                         == Some(render_authoring_doctor_command(package_root.as_str()).as_str())),
             "doctor guidance should expose a rerun-doctor action: {:?}",
@@ -6558,6 +6563,7 @@ mod tests {
                 .author_remediation_actions
                 .iter()
                 .any(|action| action.kind == "rerun_inventory"
+                    && action.role == "verification"
                     && action.command.as_deref()
                         == Some(
                             render_authoring_inventory_command(package_root.as_str()).as_str()

@@ -65,6 +65,7 @@ pub(crate) struct NativeExtensionAuthoringGuidanceView {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct NativeExtensionAuthoringActionView {
     pub kind: String,
+    pub role: String,
     pub summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -383,6 +384,7 @@ fn native_extension_author_remediation_actions(
         .iter()
         .map(|issue| NativeExtensionAuthoringActionView {
             kind: "repair_extension_metadata".to_owned(),
+            role: "author".to_owned(),
             summary: format!("Repair native extension declaration metadata: {issue}"),
             command: None,
             field_path: parse_metadata_field_path_from_issue(issue),
@@ -393,6 +395,7 @@ fn native_extension_author_remediation_actions(
     if !extension_metadata_issues.is_empty() {
         actions.push(NativeExtensionAuthoringActionView {
             kind: "rerun_doctor".to_owned(),
+            role: "verification".to_owned(),
             summary: "Rerun doctor after repairing native extension declaration metadata."
                 .to_owned(),
             command: Some(render_authoring_doctor_command(package_root)),
@@ -401,6 +404,7 @@ fn native_extension_author_remediation_actions(
         });
         actions.push(NativeExtensionAuthoringActionView {
             kind: "rerun_inventory".to_owned(),
+            role: "verification".to_owned(),
             summary: "Rerun inventory to confirm the repaired native extension declaration truth."
                 .to_owned(),
             command: Some(render_authoring_inventory_command(package_root)),
@@ -413,6 +417,11 @@ fn native_extension_author_remediation_actions(
         actions.extend(recommended_actions.iter().map(|action| {
             NativeExtensionAuthoringActionView {
                 kind: format!("preflight_{}", action.remediation_class.as_str()),
+                role: if action.operator_action.is_some() {
+                    "operator".to_owned()
+                } else {
+                    "author".to_owned()
+                },
                 summary: action.summary.clone(),
                 command: action
                     .operator_action
@@ -432,6 +441,7 @@ fn native_extension_author_remediation_actions(
     });
     actions.dedup_by(|left, right| {
         left.kind == right.kind
+            && left.role == right.role
             && left.summary == right.summary
             && left.command == right.command
             && left.field_path == right.field_path
