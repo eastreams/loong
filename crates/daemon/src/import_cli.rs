@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::first_run_action_presentation::{
     build_first_run_action_text_lines, first_run_group_for_setup_action_kind,
+    render_first_run_action_text_item,
 };
 use crate::migration::{self, ImportCandidate, ImportSourceKind, SetupDomainKind};
 
@@ -534,23 +535,8 @@ fn build_import_apply_summary_body_lines(
         &next_actions,
         width,
         |action| first_run_group_for_setup_action_kind(action.kind),
-        |action, width| {
-            mvp::presentation::render_wrapped_text_line("next step: ", &action.command, width)
-        },
-        |action, width| {
-            let prefix = if action.kind == crate::next_actions::SetupNextActionKind::Channel
-                || action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
-            {
-                "continue setup: "
-            } else {
-                "also available: "
-            };
-            mvp::presentation::render_wrapped_text_line(
-                prefix,
-                &format!("{} · {}", action.label, action.command),
-                width,
-            )
-        },
+        |action, width| render_first_run_action_text_item(&action.label, &action.command, width),
+        |action, width| render_first_run_action_text_item(&action.label, &action.command, width),
     ));
     lines
 }
@@ -1055,29 +1041,23 @@ mod tests {
         assert!(rendered.contains("also available"), "{rendered}");
         assert!(rendered.contains("continue setup"), "{rendered}");
         assert!(
-            rendered.contains("also available: chat · loong chat --config '/tmp/config.toml'"),
+            rendered.contains("- chat: loong chat --config '/tmp/config.toml'"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("also available: teach Loong your working style ·"),
+            rendered.contains("- teach Loong your working style:"),
             "{rendered}"
         );
         assert!(
             rendered.contains("loong personalize --config '/tmp/config.toml'"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains("continue setup: choose a channel ·"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("- choose a channel:"), "{rendered}");
         assert!(
             rendered.contains("loong channels --config '/tmp/config.toml'"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains("continue setup: enable browser preview ·"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("- enable browser preview:"), "{rendered}");
         assert!(
             rendered.contains("loong skills enable-browser-preview --config"),
             "{rendered}"
