@@ -37,6 +37,15 @@ pub(crate) enum PersonalizeCliOutcome {
     Suppressed,
 }
 
+const PREFERRED_NAME_PROMPT: &str = "How should Loong address you? (optional)";
+const STANDING_BOUNDARIES_PROMPT: &str =
+    "Any standing boundaries Loong should keep in mind? (optional)";
+const TIMEZONE_PROMPT: &str = "Which timezone should Loong assume? (optional)";
+const LOCALE_PROMPT: &str = "Which locale should Loong default to? (optional)";
+const RESPONSE_DENSITY_PROMPT: &str = "How detailed should Loong usually be?";
+const INITIATIVE_LEVEL_PROMPT: &str = "How proactive should Loong be?";
+const REVIEW_ACTION_PROMPT: &str = "What should Loong do with this draft?";
+
 pub fn run_personalize_cli(config_path: Option<&str>) -> CliResult<()> {
     let mut ui = StdioOperatorUi::default();
     let now = OffsetDateTime::now_utc();
@@ -104,8 +113,7 @@ fn collect_personalization_draft(
 ) -> CliResult<PersonalizationDraft> {
     let preferred_name_default = existing_personalization
         .and_then(|personalization| personalization.preferred_name.as_deref());
-    let preferred_name =
-        prompt_optional_text(ui, "Preferred name (optional)", preferred_name_default)?;
+    let preferred_name = prompt_optional_text(ui, PREFERRED_NAME_PROMPT, preferred_name_default)?;
 
     let response_density_default =
         existing_personalization.and_then(|personalization| personalization.response_density);
@@ -117,19 +125,16 @@ fn collect_personalization_draft(
 
     let standing_boundaries_default = existing_personalization
         .and_then(|personalization| personalization.standing_boundaries.as_deref());
-    let standing_boundaries = prompt_optional_text(
-        ui,
-        "Standing boundaries (optional)",
-        standing_boundaries_default,
-    )?;
+    let standing_boundaries =
+        prompt_optional_text(ui, STANDING_BOUNDARIES_PROMPT, standing_boundaries_default)?;
 
     let timezone_default =
         existing_personalization.and_then(|personalization| personalization.timezone.as_deref());
-    let timezone = prompt_optional_text(ui, "Timezone (optional)", timezone_default)?;
+    let timezone = prompt_optional_text(ui, TIMEZONE_PROMPT, timezone_default)?;
 
     let locale_default =
         existing_personalization.and_then(|personalization| personalization.locale.as_deref());
-    let locale = prompt_optional_text(ui, "Locale (optional)", locale_default)?;
+    let locale = prompt_optional_text(ui, LOCALE_PROMPT, locale_default)?;
 
     Ok(PersonalizationDraft {
         preferred_name,
@@ -219,7 +224,7 @@ fn select_response_density(
         None => unset_option_index,
     };
     let selected_index = ui.select_one(
-        "Response density",
+        RESPONSE_DENSITY_PROMPT,
         &options,
         default_index,
         SelectInteractionMode::List,
@@ -303,7 +308,7 @@ fn select_initiative_level(
         None => unset_option_index,
     };
     let selected_index = ui.select_one(
-        "Initiative level",
+        INITIATIVE_LEVEL_PROMPT,
         &options,
         default_index,
         SelectInteractionMode::List,
@@ -338,19 +343,19 @@ fn select_review_action(
 
     let options = vec![
         SelectOption {
-            label: "save".to_owned(),
+            label: "use this draft".to_owned(),
             slug: "save".to_owned(),
-            description: "persist these preferences into advisory session profile state".to_owned(),
+            description: "save these preferences for future sessions".to_owned(),
             recommended: true,
         },
         SelectOption {
-            label: "skip for now".to_owned(),
+            label: "not now".to_owned(),
             slug: "skip".to_owned(),
             description: "leave the current config untouched".to_owned(),
             recommended: false,
         },
         SelectOption {
-            label: "suppress future suggestions".to_owned(),
+            label: "stop suggesting this".to_owned(),
             slug: "suppress".to_owned(),
             description:
                 "stop proactive suggestions without saving this draft; keep any existing saved preferences"
@@ -359,7 +364,7 @@ fn select_review_action(
         },
     ];
     let selected_index = ui.select_one(
-        "Review action",
+        REVIEW_ACTION_PROMPT,
         &options,
         Some(0),
         SelectInteractionMode::List,
@@ -544,6 +549,10 @@ mod tests {
     struct TestPromptUi {
         inputs: VecDeque<String>,
         printed_lines: Vec<String>,
+        prompt_labels: Vec<String>,
+        select_labels: Vec<String>,
+        select_option_labels: Vec<Vec<String>>,
+        confirm_messages: Vec<String>,
     }
 
     impl TestPromptUi {
@@ -552,6 +561,10 @@ mod tests {
             Self {
                 inputs: collected_inputs,
                 printed_lines: Vec::new(),
+                prompt_labels: Vec::new(),
+                select_labels: Vec::new(),
+                select_option_labels: Vec::new(),
+                confirm_messages: Vec::new(),
             }
         }
     }
@@ -562,7 +575,8 @@ mod tests {
             Ok(())
         }
 
-        fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
+        fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
+            self.prompt_labels.push(label.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim();
             if trimmed_input.is_empty() {
@@ -571,17 +585,20 @@ mod tests {
             Ok(trimmed_input.to_owned())
         }
 
-        fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+        fn prompt_required(&mut self, label: &str) -> CliResult<String> {
+            self.prompt_labels.push(label.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             Ok(next_input.trim().to_owned())
         }
 
-        fn prompt_allow_empty(&mut self, _label: &str) -> CliResult<String> {
+        fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
+            self.prompt_labels.push(label.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             Ok(next_input.trim().to_owned())
         }
 
-        fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
+        fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
+            self.confirm_messages.push(message.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim().to_ascii_lowercase();
             if trimmed_input.is_empty() {
@@ -592,11 +609,14 @@ mod tests {
 
         fn select_one(
             &mut self,
-            _label: &str,
+            label: &str,
             options: &[SelectOption],
             default: Option<usize>,
             _interaction_mode: SelectInteractionMode,
         ) -> CliResult<usize> {
+            self.select_labels.push(label.to_owned());
+            self.select_option_labels
+                .push(options.iter().map(|option| option.label.clone()).collect());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim();
             if trimmed_input.is_empty() {
@@ -1146,6 +1166,78 @@ mod tests {
                 .iter()
                 .any(|line| line == "- initiative level: ask before acting"),
             "review copy should stay human-readable instead of leaking schema ids: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn collect_personalization_draft_uses_guidance_prompt_labels() {
+        let mut ui = TestPromptUi::with_inputs(["", "", "", "", "", ""]);
+
+        let draft = collect_personalization_draft(&mut ui, None).expect("collect draft");
+
+        assert_eq!(
+            draft,
+            PersonalizationDraft {
+                preferred_name: None,
+                response_density: None,
+                initiative_level: None,
+                standing_boundaries: None,
+                timezone: None,
+                locale: None,
+            }
+        );
+        assert_eq!(
+            ui.prompt_labels,
+            vec![
+                "How should Loong address you? (optional)",
+                "Any standing boundaries Loong should keep in mind? (optional)",
+                "Which timezone should Loong assume? (optional)",
+                "Which locale should Loong default to? (optional)",
+            ],
+            "text prompts should read like operator guidance, not raw field labels: {:#?}",
+            ui.prompt_labels
+        );
+        assert_eq!(
+            ui.select_labels,
+            vec![
+                "How detailed should Loong usually be?",
+                "How proactive should Loong be?",
+            ],
+            "selection prompts should stay conversational and operator-facing: {:#?}",
+            ui.select_labels
+        );
+    }
+
+    #[test]
+    fn select_review_action_uses_guidance_option_copy() {
+        let mut ui = TestPromptUi::with_inputs([""]);
+        let draft = PersonalizationDraft {
+            preferred_name: None,
+            response_density: None,
+            initiative_level: None,
+            standing_boundaries: None,
+            timezone: None,
+            locale: None,
+        };
+
+        let action = select_review_action(&mut ui, &draft).expect("select review action");
+
+        assert_eq!(action, PersonalizeReviewAction::Save);
+        assert_eq!(
+            ui.select_labels,
+            vec!["What should Loong do with this draft?"],
+            "review action prompt should sound like guidance instead of a raw form action: {:#?}",
+            ui.select_labels
+        );
+        assert_eq!(
+            ui.select_option_labels,
+            vec![vec![
+                "use this draft".to_owned(),
+                "not now".to_owned(),
+                "stop suggesting this".to_owned(),
+            ]],
+            "review action options should stay operator-facing: {:#?}",
+            ui.select_option_labels
         );
     }
 }
