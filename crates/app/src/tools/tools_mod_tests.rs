@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ToolConfig;
 use crate::test_support::{ScopedEnv, ScopedLoongHome, unique_temp_dir};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -2387,6 +2388,69 @@ fn browser_companion_app_tool_click_uses_current_session_scope() {
     assert_eq!(request["action_class"], "write");
     assert_eq!(request["session_scope"], "root-session");
     assert_eq!(request["arguments"]["selector"], "#submit");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(feature = "tool-browser")]
+#[test]
+fn browser_companion_visible_app_tool_click_skips_env_recheck_when_runtime_ready() {
+    let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
+    let root = unique_tool_temp_dir("loongclaw-browser-companion-visible-app-click");
+    std::fs::create_dir_all(&root).expect("create fixture root");
+    let log_path = root.join("request.json");
+    let script_path = write_browser_companion_script(
+        &root,
+        "browser-companion-visible-app-click",
+        r#"{"ok":true,"result":{"clicked":true}}"#,
+        &log_path,
+    );
+    let runtime_config = browser_companion_runtime_config(&root, script_path.display().to_string());
+    let start = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "browser.companion.session.start".to_owned(),
+            payload: json!({
+                "url": "https://example.com",
+                BROWSER_SESSION_SCOPE_FIELD: "root-session"
+            }),
+        },
+        &runtime_config,
+    )
+    .expect("browser companion start should succeed");
+    let session_id = start.payload["session_id"]
+        .as_str()
+        .expect("session id should exist")
+        .to_owned();
+
+    let mut tool_config = crate::config::ToolConfig::default();
+    tool_config.browser_companion.enabled = true;
+    tool_config.browser_companion.command = Some(script_path.display().to_string());
+
+    let outcome = execute_app_tool_with_visibility_checked_config(
+        ToolCoreRequest {
+            tool_name: "browser.companion.click".to_owned(),
+            payload: json!({
+                "session_id": session_id,
+                "selector": "#submit"
+            }),
+        },
+        "root-session",
+        &crate::session::store::SessionStoreConfig::default(),
+        &tool_config,
+    )
+    .expect("browser companion visible click should succeed");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["action_class"], "write");
+    assert_eq!(outcome.payload["result"]["clicked"], true);
+
+    let request: Value = serde_json::from_str(
+        &std::fs::read_to_string(&log_path).expect("request log should exist"),
+    )
+    .expect("request log should be valid json");
+    assert_eq!(request["operation"], "click");
+    assert_eq!(request["action_class"], "write");
+    assert_eq!(request["session_scope"], "root-session");
 
     std::fs::remove_dir_all(&root).ok();
 }
