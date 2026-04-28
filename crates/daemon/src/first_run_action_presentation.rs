@@ -77,3 +77,35 @@ pub(crate) fn build_first_run_action_sections<T>(
 
     sections
 }
+
+pub(crate) fn build_first_run_action_text_lines<T>(
+    actions: &[T],
+    width: usize,
+    group_for_action: impl Fn(&T) -> FirstRunActionGroup,
+    render_primary: impl Fn(&T, usize) -> Vec<String>,
+    render_secondary: impl Fn(&T, usize) -> Vec<String>,
+) -> Vec<String> {
+    let grouped = partition_first_run_actions(actions, group_for_action);
+    let mut lines = Vec::new();
+
+    if let Some(primary) = grouped.primary {
+        lines.push("start here".to_owned());
+        lines.extend(render_primary(primary, width));
+    }
+
+    if !grouped.general_followups.is_empty() {
+        lines.push("also available".to_owned());
+        for action in grouped.general_followups {
+            lines.extend(render_secondary(action, width));
+        }
+    }
+
+    if !grouped.continue_setup.is_empty() {
+        lines.push("continue setup".to_owned());
+        for action in grouped.continue_setup {
+            lines.extend(render_secondary(action, width));
+        }
+    }
+
+    lines
+}
