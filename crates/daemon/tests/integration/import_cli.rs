@@ -691,14 +691,20 @@ fn import_cli_apply_summary_wraps_long_path_and_domains_for_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "next step: loong ask --config '/tmp/shared"),
-        "apply summary should keep the ask-next-step label visible before wrapping long command paths: {lines:#?}"
+            .any(|line| line == "- first answer: loong ask --config"),
+        "apply summary should keep the primary ask label visible before wrapping long command paths: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "  workspace/loong config.toml' --message"),
-        "apply summary should continue wrapped ask commands on an indented line: {lines:#?}"
+            .any(|line| line == "  '/tmp/shared workspace/loong config.toml'"),
+        "apply summary should continue the shell-quoted config path on an indented line: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "  --message 'Summarize this repository and"),
+        "apply summary should continue wrapped ask commands on an indented message line: {lines:#?}"
     );
 }
 
@@ -763,15 +769,14 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
     );
 
     assert!(
-        lines.iter().any(|line| {
-            line == "also available: chat · loong chat --config '/tmp/loong-config.toml'"
-        }),
+        lines
+            .iter()
+            .any(|line| line == "- chat: loong chat --config '/tmp/loong-config.toml'"),
         "apply summary should surface interactive chat immediately after the primary ask step: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| {
-            line
-                == "also available: Telegram · loong channels serve telegram --config '/tmp/loong-config.toml'"
+            line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
         }),
         "apply summary should continue surfacing registry-driven channel handoff commands after ask/chat: {lines:#?}"
     );
@@ -792,19 +797,17 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
 
     assert!(
         rendered.contains(
-            "next step: loong ask --config '/tmp/loong'\"'\"'s config.toml' --message 'Summarize this repository and suggest the best next step.'"
+            "- first answer: loong ask --config '/tmp/loong'\"'\"'s config.toml' --message 'Summarize this repository and suggest the best next step.'"
         ),
         "apply summary should shell-quote single quotes in the primary ask command and keep the suggested message shell-safe: {lines:#?}"
     );
     assert!(
-        rendered.contains(
-            "also available: chat · loong chat --config '/tmp/loong'\"'\"'s config.toml'"
-        ),
+        rendered.contains("- chat: loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
         "apply summary should shell-quote single quotes in the secondary chat command: {lines:#?}"
     );
     assert!(
         rendered.contains(
-            "also available: Telegram · loong channels serve telegram --config '/tmp/loong'\"'\"'s config.toml'"
+            "- Telegram: loong channels serve telegram --config '/tmp/loong'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in channel handoff commands: {lines:#?}"
     );
@@ -825,14 +828,14 @@ fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
 
     assert!(
         lines.iter().any(|line| {
-            line == "next step: loong channels serve telegram --config '/tmp/loong-config.toml'"
+            line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
         }),
         "apply summary should not hand users to CLI chat when the imported config has cli disabled: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| !line.starts_with("next step: loong ask --config")),
+            .all(|line| !line.starts_with("- first answer: loong ask --config")),
         "ask should not remain the primary handoff when cli is disabled: {lines:#?}"
     );
 }
@@ -893,7 +896,7 @@ fn import_cli_apply_summary_prefers_managed_bridge_doctor_handoff_when_preflight
     assert!(
         lines.iter().any(|line| {
             line == &format!(
-                "next step: {} doctor --config '/tmp/loong-config.toml'",
+                "- verify weixin managed bridge: {} doctor --config '/tmp/loong-config.toml'",
                 super::active_cli_command_name()
             )
         }),
@@ -903,7 +906,7 @@ fn import_cli_apply_summary_prefers_managed_bridge_doctor_handoff_when_preflight
         lines.iter().any(|line| {
             line
                 == &format!(
-                    "also available: first answer · {} ask --config '/tmp/loong-config.toml' --message 'Summarize this repository and suggest the best next step.'",
+                    "- first answer: {} ask --config '/tmp/loong-config.toml' --message 'Summarize this repository and suggest the best next step.'",
                     super::active_cli_command_name()
                 )
         }),

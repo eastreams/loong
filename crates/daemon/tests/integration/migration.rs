@@ -2016,7 +2016,7 @@ fn channel_registry_collects_catalog_action_when_no_service_channels_are_enabled
 
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].id, "channel_catalog");
-    assert_eq!(actions[0].label, "channels");
+    assert_eq!(actions[0].label, "choose a channel");
     assert_eq!(
         actions[0].command,
         "loong channels --config '/tmp/loong-config.toml'"

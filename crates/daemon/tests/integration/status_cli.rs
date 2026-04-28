@@ -311,11 +311,18 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
         assert!(payload["work_units"]["error"].is_string());
     }
     assert!(
+        payload["deep_dive_actions"]
+            .as_array()
+            .map(|actions| actions.len() >= 4)
+            .unwrap_or(false),
+        "status JSON should include typed drill-down actions: {payload:#?}"
+    );
+    assert!(
         payload["recipes"]
             .as_array()
             .map(|recipes| recipes.len() >= 4)
             .unwrap_or(false),
-        "status JSON should include drill-down recipes: {payload:#?}"
+        "status JSON should retain the command-only drill-down alias: {payload:#?}"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -441,7 +448,7 @@ fn doctor_cli_json_includes_schema_for_machine_readable_automation() {
 }
 
 #[test]
-fn status_cli_text_surfaces_section_summaries_and_recipes() {
+fn status_cli_text_surfaces_section_summaries_and_drill_down_actions() {
     let root = unique_temp_dir("loong-status-cli-text");
     let home_root = root.join("home");
     fs::create_dir_all(&home_root).expect("create home root");
@@ -468,7 +475,7 @@ fn status_cli_text_surfaces_section_summaries_and_recipes() {
     assert!(stdout.contains("runtime posture"));
     assert!(stdout.contains("[WARN] tool calling"));
     assert!(stdout.contains("enabled=false · availability=disabled"));
-    assert!(stdout.contains("deep dives"));
+    assert!(stdout.contains("inspect deeper"));
 
     fs::remove_dir_all(&root).ok();
 }
