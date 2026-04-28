@@ -7,6 +7,7 @@ use loong_app as mvp;
 use loong_spec::CliResult;
 use serde::Serialize;
 
+use crate::first_run_action_presentation::{FirstRunActionGroup, partition_first_run_actions};
 use crate::migration::{self, ImportCandidate, ImportSourceKind, SetupDomainKind};
 
 #[derive(Debug, Clone)]
@@ -527,53 +528,44 @@ fn build_import_apply_summary_body_lines(
     }
     let next_actions =
         crate::next_actions::collect_setup_next_actions(resolved_config, &config_path);
-    if let Some((primary, secondary)) = select_primary_import_apply_action(&next_actions) {
+    let grouped_actions = partition_first_run_actions(&next_actions, |action| {
+        if action.kind == crate::next_actions::SetupNextActionKind::Channel
+            || action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
+        {
+            FirstRunActionGroup::ContinueSetup
+        } else {
+            FirstRunActionGroup::GeneralFollowup
+        }
+    });
+    if let Some(primary) = grouped_actions.primary {
         lines.push("start here".to_owned());
         lines.extend(mvp::presentation::render_wrapped_text_line(
             "next step: ",
             &primary.command,
             width,
         ));
-        if !secondary.is_empty() {
+        if !grouped_actions.general_followups.is_empty() {
             lines.push("also available".to_owned());
         }
-        for action in secondary {
+        for action in grouped_actions.general_followups {
             lines.extend(mvp::presentation::render_wrapped_text_line(
                 "also available: ",
                 &format!("{} · {}", action.label, action.command),
                 width,
             ));
         }
+        if !grouped_actions.continue_setup.is_empty() {
+            lines.push("continue setup".to_owned());
+        }
+        for action in grouped_actions.continue_setup {
+            lines.extend(mvp::presentation::render_wrapped_text_line(
+                "continue setup: ",
+                &format!("{} · {}", action.label, action.command),
+                width,
+            ));
+        }
     }
     lines
-}
-
-fn select_primary_import_apply_action(
-    actions: &[crate::next_actions::SetupNextAction],
-) -> Option<(
-    &crate::next_actions::SetupNextAction,
-    Vec<&crate::next_actions::SetupNextAction>,
-)> {
-    let primary_index = actions
-        .iter()
-        .position(is_managed_bridge_doctor_action)
-        .unwrap_or(0);
-    let primary = actions.get(primary_index)?;
-    let mut secondary = Vec::new();
-
-    for (index, action) in actions.iter().enumerate() {
-        if index == primary_index {
-            continue;
-        }
-
-        secondary.push(action);
-    }
-
-    Some((primary, secondary))
-}
-
-fn is_managed_bridge_doctor_action(action: &crate::next_actions::SetupNextAction) -> bool {
-    crate::next_actions::is_managed_bridge_doctor_action(action)
 }
 
 #[derive(Serialize)]
@@ -1041,4 +1033,67 @@ fn format_channel_apply_conflicts(
         .collect::<Vec<_>>();
 
     summaries.join(" · ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_import_candidate() -> ImportCandidate {
+        ImportCandidate {
+            source_kind: ImportSourceKind::Environment,
+            source: "your current environment".to_owned(),
+            config: mvp::config::LoongConfig::default(),
+            surfaces: Vec::new(),
+            domains: Vec::new(),
+            channel_candidates: Vec::new(),
+            workspace_guidance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn render_import_apply_summary_lines_separates_continue_setup_actions() {
+        let candidate = sample_import_candidate();
+        let rendered = render_import_apply_summary_lines_for_width(
+            Path::new("/tmp/config.toml"),
+            &candidate,
+            &[],
+            &mvp::config::LoongConfig::default(),
+            false,
+            100,
+        )
+        .join("\n");
+
+        assert!(rendered.contains("start here"), "{rendered}");
+        assert!(rendered.contains("also available"), "{rendered}");
+        assert!(rendered.contains("continue setup"), "{rendered}");
+        assert!(
+            rendered.contains("also available: chat · loong chat --config '/tmp/config.toml'"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("also available: teach Loong your working style ·"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("loong personalize --config '/tmp/config.toml'"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("continue setup: choose a channel ·"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("loong channels --config '/tmp/config.toml'"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("continue setup: enable browser preview ·"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("loong skills enable-browser-preview --config"),
+            "{rendered}"
+        );
+    }
 }
