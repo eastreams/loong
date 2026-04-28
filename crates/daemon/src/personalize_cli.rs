@@ -14,15 +14,14 @@ use crate::operator_prompt::{
 };
 use crate::personalize_presentation::{
     PersonalizePromptKind, PersonalizeSelectKind, initiative_level_default_slug,
-    initiative_level_select_options,
-    personalize_cleared_message, personalize_memory_profile_deferred_message,
-    personalize_memory_profile_upgrade_prompt, personalize_memory_profile_upgraded_message,
-    personalize_current_value_line, personalize_prompt_label, personalize_review_intro,
-    personalize_saved_message, response_density_default_slug, personalize_select_keep_or_clear_hint,
+    initiative_level_select_options, personalize_cleared_message,
+    personalize_memory_profile_deferred_message, personalize_memory_profile_upgrade_prompt,
+    personalize_memory_profile_upgraded_message, personalize_prompt_label,
+    personalize_review_intro, personalize_saved_message, personalize_select_current_value_guidance,
     personalize_select_label, personalize_skip_message, personalize_suppressed_message,
-    personalize_text_keep_or_clear_hint,
-    personalize_suppressed_recovery_guidance, response_density_select_options,
-    review_action_default_slug, review_action_select_options,
+    personalize_suppressed_recovery_guidance, personalize_text_current_value_guidance,
+    response_density_default_slug, response_density_select_options, review_action_default_slug,
+    review_action_select_options,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,10 +167,7 @@ fn prompt_optional_text(
     current_value: Option<&str>,
 ) -> CliResult<Option<String>> {
     if let Some(default_value) = current_value {
-        let current_value_line = personalize_current_value_line(default_value);
-        let clear_hint_line = personalize_text_keep_or_clear_hint();
-        ui.print_line(current_value_line.as_str())?;
-        ui.print_line(clear_hint_line.as_str())?;
+        ui.print_line(personalize_text_current_value_guidance(default_value).as_str())?;
     }
 
     let selected_value = prompt_optional_operator_text(ui, label, current_value)?;
@@ -184,8 +180,9 @@ fn select_response_density(
     current_value: Option<mvp::config::ResponseDensity>,
 ) -> CliResult<Option<mvp::config::ResponseDensity>> {
     if let Some(current_value) = current_value {
-        ui.print_line(personalize_current_value_line(current_value.display_text()).as_str())?;
-        ui.print_line(personalize_select_keep_or_clear_hint())?;
+        ui.print_line(
+            personalize_select_current_value_guidance(current_value.display_text()).as_str(),
+        )?;
     }
 
     let options = response_density_select_options(current_value.is_some());
@@ -221,8 +218,9 @@ fn select_initiative_level(
     current_value: Option<mvp::config::InitiativeLevel>,
 ) -> CliResult<Option<mvp::config::InitiativeLevel>> {
     if let Some(current_value) = current_value {
-        ui.print_line(personalize_current_value_line(current_value.display_text()).as_str())?;
-        ui.print_line(personalize_select_keep_or_clear_hint())?;
+        ui.print_line(
+            personalize_select_current_value_guidance(current_value.display_text()).as_str(),
+        )?;
     }
 
     let options = initiative_level_select_options(current_value.is_some());
@@ -264,8 +262,10 @@ fn select_review_action(
 
     let has_meaningful_preferences = draft_has_meaningful_preferences(draft);
     let options = review_action_select_options(has_meaningful_preferences);
-    let default_index =
-        find_select_option_index(&options, review_action_default_slug(has_meaningful_preferences));
+    let default_index = find_select_option_index(
+        &options,
+        review_action_default_slug(has_meaningful_preferences),
+    );
     let selected_index = ui.select_one(
         personalize_select_label(PersonalizeSelectKind::ReviewAction),
         &options,
@@ -1287,16 +1287,7 @@ mod tests {
         let config_path = unique_config_path("recommended-defaults");
         let config_path_string = config_path.display().to_string();
         write_default_config(&config_path);
-        let mut ui = TestPromptUi::with_inputs([
-            "Chum",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "1",
-            "n",
-        ]);
+        let mut ui = TestPromptUi::with_inputs(["Chum", "", "", "", "", "", "1", "n"]);
 
         run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
             .expect("save flow should succeed");
@@ -1351,8 +1342,7 @@ mod tests {
         let existing = configured_personalization_for_tests();
         let mut ui = TestPromptUi::with_inputs(["", "", "", "", "", ""]);
 
-        let draft =
-            collect_personalization_draft(&mut ui, Some(&existing)).expect("collect draft");
+        let draft = collect_personalization_draft(&mut ui, Some(&existing)).expect("collect draft");
 
         assert_eq!(
             draft,
@@ -1366,22 +1356,52 @@ mod tests {
             }
         );
         assert!(
-            ui.printed_lines.iter().any(|line| line == "Current value: balanced"),
-            "response density should print its current value explicitly: {:#?}",
+            ui.printed_lines.iter().any(|line| {
+                line
+                    == "Current value: balanced · Enter keeps it · choose clear current value to remove it."
+            }),
+            "response density should print a compact current-value hint: {:#?}",
             ui.printed_lines
         );
         assert!(
             ui.printed_lines
                 .iter()
-                .any(|line| line == "Current value: ask before acting"),
-            "initiative should print its current value explicitly: {:#?}",
+                .any(|line| {
+                    line
+                        == "Current value: ask before acting · Enter keeps it · choose clear current value to remove it."
+                }),
+            "initiative should print a compact current-value hint: {:#?}",
+            ui.printed_lines
+        );
+    }
+
+    #[test]
+    fn collect_personalization_draft_existing_text_preferences_prints_compact_guidance() {
+        let existing = configured_personalization_for_tests();
+        let mut ui = TestPromptUi::with_inputs(["", "", "", "", "", ""]);
+
+        collect_personalization_draft(&mut ui, Some(&existing)).expect("collect draft");
+
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line == "Current value: Chum · Enter keeps it · - clears it."
+            }),
+            "text prompts should use the compact current-value guidance: {:#?}",
             ui.printed_lines
         );
         assert!(
             ui.printed_lines.iter().any(|line| {
-                line == "Press Enter to keep the current setting, or choose clear current value to remove it."
+                line
+                    == "Current value: Ask before destructive actions. · Enter keeps it · - clears it."
             }),
-            "enum selections should explain the keep/clear behavior: {:#?}",
+            "standing-boundary prompt should also use the compact guidance: {:#?}",
+            ui.printed_lines
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line == "Current value: Asia/Shanghai · Enter keeps it · - clears it."
+            }),
+            "timezone prompt should also use the compact guidance: {:#?}",
             ui.printed_lines
         );
     }
