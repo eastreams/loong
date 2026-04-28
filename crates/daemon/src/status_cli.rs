@@ -51,6 +51,12 @@ pub struct StatusCliAction {
     pub command: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StatusCliDrillDownAction {
+    pub label: String,
+    pub command: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusCliReadModel {
     pub config: String,
@@ -62,6 +68,9 @@ pub struct StatusCliReadModel {
     pub acp: StatusCliAcpReadModel,
     pub work_units: StatusCliWorkUnitReadModel,
     pub next_actions: Vec<StatusCliAction>,
+    pub deep_dive_actions: Vec<StatusCliDrillDownAction>,
+    // Keep the command-only alias for older automation while the typed surface lands.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recipes: Vec<String>,
 }
 
@@ -122,7 +131,8 @@ pub async fn collect_status_cli_read_model(
                 command: action.command,
             }),
     );
-    let recipes = build_status_cli_recipes(config_path_text);
+    let deep_dive_actions = build_status_cli_deep_dive_actions(config_path_text);
+    let recipes = build_status_cli_legacy_recipe_commands(&deep_dive_actions);
     let schema = StatusCliJsonSchema {
         version: STATUS_CLI_JSON_SCHEMA_VERSION,
         surface: "status",
@@ -139,6 +149,7 @@ pub async fn collect_status_cli_read_model(
         acp,
         work_units,
         next_actions,
+        deep_dive_actions,
         recipes,
     })
 }
@@ -354,7 +365,7 @@ fn load_persisted_acp_session_count(config: &mvp::config::LoongConfig) -> Option
     }
 }
 
-fn build_status_cli_recipes(config_path: &str) -> Vec<String> {
+fn build_status_cli_deep_dive_actions(config_path: &str) -> Vec<StatusCliDrillDownAction> {
     let command_name = crate::active_cli_command_name();
     let config_arg = crate::cli_handoff::shell_quote_argument(config_path);
     let gateway_recipe = format!("{command_name} gateway status");
@@ -367,12 +378,36 @@ fn build_status_cli_recipes(config_path: &str) -> Vec<String> {
         format!("{command_name} runtime work-unit health --config {config_arg} --json");
 
     vec![
-        gateway_recipe,
-        channels_recipe,
-        acp_observability_recipe,
-        acp_sessions_recipe,
-        work_units_recipe,
+        StatusCliDrillDownAction {
+            label: "gateway status".to_owned(),
+            command: gateway_recipe,
+        },
+        StatusCliDrillDownAction {
+            label: "channel inventory".to_owned(),
+            command: channels_recipe,
+        },
+        StatusCliDrillDownAction {
+            label: "ACP observability".to_owned(),
+            command: acp_observability_recipe,
+        },
+        StatusCliDrillDownAction {
+            label: "ACP sessions".to_owned(),
+            command: acp_sessions_recipe,
+        },
+        StatusCliDrillDownAction {
+            label: "work-unit health".to_owned(),
+            command: work_units_recipe,
+        },
     ]
+}
+
+fn build_status_cli_legacy_recipe_commands(
+    deep_dive_actions: &[StatusCliDrillDownAction],
+) -> Vec<String> {
+    deep_dive_actions
+        .iter()
+        .map(|action| action.command.clone())
+        .collect()
 }
 
 fn render_status_cli_text(status: &StatusCliReadModel) -> String {
@@ -749,16 +784,16 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         });
     }
 
-    if !status.recipes.is_empty() {
+    if !status.deep_dive_actions.is_empty() {
         sections.push(loong_app::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("deep dives".to_owned()),
+            title: Some("inspect deeper".to_owned()),
             inline_title_when_wide: false,
             items: status
-                .recipes
+                .deep_dive_actions
                 .iter()
-                .map(|recipe| loong_app::tui_surface::TuiActionSpec {
-                    label: "recipe".to_owned(),
-                    command: recipe.clone(),
+                .map(|action| loong_app::tui_surface::TuiActionSpec {
+                    label: action.label.clone(),
+                    command: action.command.clone(),
                 })
                 .collect(),
         });
@@ -1124,17 +1159,35 @@ mod tests {
     }
 
     #[test]
-    fn build_status_cli_recipes_use_grouped_runtime_commands() {
-        let recipes = build_status_cli_recipes("/tmp/config.toml");
+    fn build_status_cli_deep_dive_actions_use_typed_labels_and_commands() {
+        let actions = build_status_cli_deep_dive_actions("/tmp/config.toml");
 
         assert_eq!(
-            recipes,
+            actions,
             vec![
-                "loong gateway status".to_owned(),
-                "loong channels --config '/tmp/config.toml' --json".to_owned(),
-                "loong runtime acp observability --config '/tmp/config.toml' --json".to_owned(),
-                "loong runtime acp sessions --config '/tmp/config.toml' --json".to_owned(),
-                "loong runtime work-unit health --config '/tmp/config.toml' --json".to_owned(),
+                StatusCliDrillDownAction {
+                    label: "gateway status".to_owned(),
+                    command: "loong gateway status".to_owned(),
+                },
+                StatusCliDrillDownAction {
+                    label: "channel inventory".to_owned(),
+                    command: "loong channels --config '/tmp/config.toml' --json".to_owned(),
+                },
+                StatusCliDrillDownAction {
+                    label: "ACP observability".to_owned(),
+                    command: "loong runtime acp observability --config '/tmp/config.toml' --json"
+                        .to_owned(),
+                },
+                StatusCliDrillDownAction {
+                    label: "ACP sessions".to_owned(),
+                    command: "loong runtime acp sessions --config '/tmp/config.toml' --json"
+                        .to_owned(),
+                },
+                StatusCliDrillDownAction {
+                    label: "work-unit health".to_owned(),
+                    command: "loong runtime work-unit health --config '/tmp/config.toml' --json"
+                        .to_owned(),
+                },
             ]
         );
     }
@@ -1167,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn render_status_cli_text_surfaces_drill_down_recipes() {
+    fn render_status_cli_text_surfaces_drill_down_actions() {
         let gateway = sample_gateway_operator_summary();
         let status = StatusCliReadModel {
             config: "/tmp/config.toml".to_owned(),
@@ -1206,6 +1259,10 @@ mod tests {
                 kind: crate::next_actions::SetupNextActionKind::Ask,
                 label: "first answer".to_owned(),
                 command: "loong ask --config '/tmp/config.toml' --message 'hello'".to_owned(),
+            }],
+            deep_dive_actions: vec![StatusCliDrillDownAction {
+                label: "gateway status".to_owned(),
+                command: "loong gateway status".to_owned(),
             }],
             recipes: vec!["loong gateway status".to_owned()],
         };
@@ -1247,8 +1304,8 @@ mod tests {
         assert!(rendered.contains("service enabled ids: telegram"));
         assert!(rendered.contains("capability snapshot: abc123"));
         assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
-        assert!(rendered.contains("deep dives"));
-        assert!(rendered.contains("- recipe: loong gateway status"));
+        assert!(rendered.contains("inspect deeper"));
+        assert!(rendered.contains("- gateway status: loong gateway status"));
     }
 
     fn sample_gateway_operator_summary() -> GatewayOperatorSummaryReadModel {
@@ -1404,6 +1461,7 @@ mod tests {
                     command: "loong channels --config '/tmp/config.toml'".to_owned(),
                 },
             ],
+            deep_dive_actions: Vec::new(),
             recipes: Vec::new(),
         };
 
@@ -1533,6 +1591,7 @@ mod tests {
                     command: "loong channels --config '/tmp/config.toml'".to_owned(),
                 },
             ],
+            deep_dive_actions: Vec::new(),
             recipes: Vec::new(),
         };
 
@@ -1998,6 +2057,10 @@ mod tests {
                 kind: crate::next_actions::SetupNextActionKind::Doctor,
                 label: "inspect weixin managed bridge runtime (retrying)".to_owned(),
                 command: "loong doctor --config '/tmp/config.toml'".to_owned(),
+            }],
+            deep_dive_actions: vec![StatusCliDrillDownAction {
+                label: "gateway status".to_owned(),
+                command: "loong gateway status".to_owned(),
             }],
             recipes: vec!["loong gateway status".to_owned()],
         };
