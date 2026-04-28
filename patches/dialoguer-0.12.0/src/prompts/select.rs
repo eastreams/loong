@@ -1,8 +1,9 @@
-use std::{io, ops::Rem};
+use std::io;
 
 use console::{Key, Term};
 
 use crate::{
+    prompts::selection_cursor::{advance_selection_with_clamp, retreat_selection_with_clamp},
     theme::{render::TermThemeRenderer, SimpleTheme, Theme},
     Paging, Result,
 };
@@ -240,11 +241,11 @@ impl Select<'_> {
 
             match term.read_key()? {
                 Key::ArrowDown | Key::Tab | Key::Char('j') => {
-                    if sel == !0 {
-                        sel = 0;
-                    } else {
-                        sel = (sel as u64 + 1).rem(self.items.len() as u64) as usize;
-                    }
+                    sel = advance_selection_with_clamp(
+                        (sel != !0).then_some(sel),
+                        self.items.len(),
+                    )
+                    .unwrap_or(!0);
                 }
                 Key::Escape | Key::Char('q') => {
                     if allow_quit {
@@ -261,12 +262,11 @@ impl Select<'_> {
                     }
                 }
                 Key::ArrowUp | Key::BackTab | Key::Char('k') => {
-                    if sel == !0 {
-                        sel = self.items.len() - 1;
-                    } else {
-                        sel = ((sel as i64 - 1 + self.items.len() as i64)
-                            % (self.items.len() as i64)) as usize;
-                    }
+                    sel = retreat_selection_with_clamp(
+                        (sel != !0).then_some(sel),
+                        self.items.len(),
+                    )
+                    .unwrap_or(!0);
                 }
                 Key::ArrowLeft | Key::Char('h') => {
                     if paging.active {

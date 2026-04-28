@@ -12,6 +12,7 @@ use loong_spec::CliResult;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::personalize_presentation::personalize_action_title;
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
@@ -59,6 +60,69 @@ struct DoctorSummary {
     pass: usize,
     warn: usize,
     fail: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DoctorNextStepAction {
+    pub label: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DoctorNextStep {
+    Action(DoctorNextStepAction),
+    Guidance(String),
+}
+
+impl DoctorNextStep {
+    fn action(label: impl Into<String>, command: impl Into<String>) -> Self {
+        Self::Action(DoctorNextStepAction {
+            label: label.into(),
+            command: command.into(),
+        })
+    }
+
+    fn guidance(text: impl Into<String>) -> Self {
+        Self::Guidance(text.into())
+    }
+
+    fn render(&self) -> String {
+        match self {
+            DoctorNextStep::Action(action) => format!("{}: {}", action.label, action.command),
+            DoctorNextStep::Guidance(text) => text.clone(),
+        }
+    }
+
+    fn as_action_spec(&self) -> Option<mvp::tui_surface::TuiActionSpec> {
+        let DoctorNextStep::Action(action) = self else {
+            return None;
+        };
+
+        Some(mvp::tui_surface::TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        })
+    }
+
+    fn as_action(&self) -> Option<&DoctorNextStepAction> {
+        let DoctorNextStep::Action(action) = self else {
+            return None;
+        };
+
+        Some(action)
+    }
+}
+
+impl From<String> for DoctorNextStep {
+    fn from(value: String) -> Self {
+        DoctorNextStep::guidance(value)
+    }
+}
+
+impl From<&str> for DoctorNextStep {
+    fn from(value: &str) -> Self {
+        DoctorNextStep::guidance(value)
+    }
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
@@ -219,7 +283,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     }
 
     let summary = summarize_checks(&checks);
-    let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+    let next_steps = build_doctor_next_step_items_with_channel_surfaces_and_path_env(
         &checks,
         &config_path,
         &config,
@@ -227,6 +291,8 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         options.fix,
         path_env.as_deref(),
     );
+    let next_step_lines = doctor_next_step_lines(&next_steps);
+    let next_step_actions = doctor_next_step_actions(&next_steps);
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
         let payload = json!({
@@ -241,7 +307,8 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             "checks": checks,
             "fix_requested": options.fix,
             "applied_fixes": fixes,
-            "next_steps": next_steps,
+            "next_steps": next_step_lines,
+            "next_step_actions": next_step_actions,
         });
         let encoded = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize doctor output failed: {error}"))?;
@@ -2289,11 +2356,53 @@ fn summarize_checks(checks: &[DoctorCheck]) -> DoctorSummary {
     DoctorSummary { pass, warn, fail }
 }
 
+fn doctor_next_step_lines(next_steps: &[DoctorNextStep]) -> Vec<String> {
+    next_steps.iter().map(DoctorNextStep::render).collect()
+}
+
+fn doctor_next_step_actions(next_steps: &[DoctorNextStep]) -> Vec<DoctorNextStepAction> {
+    next_steps
+        .iter()
+        .filter_map(DoctorNextStep::as_action)
+        .cloned()
+        .collect()
+}
+
+fn doctor_primary_action_items(
+    next_steps: &[DoctorNextStep],
+    limit: usize,
+) -> Vec<mvp::tui_surface::TuiActionSpec> {
+    next_steps
+        .iter()
+        .filter_map(DoctorNextStep::as_action_spec)
+        .take(limit)
+        .collect()
+}
+
+fn doctor_followup_narrative_lines(
+    next_steps: &[DoctorNextStep],
+    primary_action_limit: usize,
+) -> Vec<String> {
+    let mut remaining_primary_actions = primary_action_limit;
+    let mut lines = Vec::new();
+
+    for step in next_steps {
+        if step.as_action().is_some() && remaining_primary_actions > 0 {
+            remaining_primary_actions -= 1;
+            continue;
+        }
+
+        lines.push(format!("- {}", step.render()));
+    }
+
+    lines
+}
+
 fn render_doctor_text(
     checks: &[DoctorCheck],
     summary: DoctorSummary,
     fixes: &[String],
-    next_steps: &[String],
+    next_steps: &[DoctorNextStep],
     config_path: &Path,
     fix_requested: bool,
 ) -> String {
@@ -2326,17 +2435,7 @@ fn render_doctor_text(
             .collect(),
     });
 
-    let action_items = next_steps
-        .iter()
-        .filter_map(|step| {
-            let (label, command) = step.split_once(": ")?;
-            Some(mvp::tui_surface::TuiActionSpec {
-                label: label.to_owned(),
-                command: command.to_owned(),
-            })
-        })
-        .take(3)
-        .collect::<Vec<_>>();
+    let action_items = doctor_primary_action_items(next_steps, 3);
     if !action_items.is_empty() {
         sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
             title: Some("start here".to_owned()),
@@ -2355,10 +2454,11 @@ fn render_doctor_text(
             lines: fix_lines,
         });
     }
-    if !next_steps.is_empty() {
+    let followup_lines = doctor_followup_narrative_lines(next_steps, 3);
+    if !followup_lines.is_empty() {
         sections.push(mvp::tui_surface::TuiSectionSpec::Narrative {
             title: Some("next actions".to_owned()),
-            lines: next_steps.iter().map(|step| format!("- {step}")).collect(),
+            lines: followup_lines,
         });
     }
 
@@ -2612,13 +2712,16 @@ fn build_doctor_next_steps(
     fix_requested: bool,
 ) -> Vec<String> {
     let path_env = env::var_os("PATH");
-    build_doctor_next_steps_with_path_env(
+    build_doctor_next_step_items_with_path_env(
         checks,
         config_path,
         config,
         fix_requested,
         path_env.as_deref(),
     )
+    .iter()
+    .map(DoctorNextStep::render)
+    .collect()
 }
 
 #[cfg(test)]
@@ -2630,7 +2733,29 @@ fn build_doctor_next_steps_with_path_env(
     path_env: Option<&OsStr>,
 ) -> Vec<String> {
     let inventory = mvp::channel::channel_inventory(config);
-    build_doctor_next_steps_with_channel_surfaces_and_path_env(
+    build_doctor_next_step_items_with_channel_surfaces_and_path_env(
+        checks,
+        config_path,
+        config,
+        &inventory.channel_surfaces,
+        fix_requested,
+        path_env,
+    )
+    .iter()
+    .map(DoctorNextStep::render)
+    .collect()
+}
+
+#[cfg(test)]
+fn build_doctor_next_step_items_with_path_env(
+    checks: &[DoctorCheck],
+    config_path: &Path,
+    config: &mvp::config::LoongConfig,
+    fix_requested: bool,
+    path_env: Option<&OsStr>,
+) -> Vec<DoctorNextStep> {
+    let inventory = mvp::channel::channel_inventory(config);
+    build_doctor_next_step_items_with_channel_surfaces_and_path_env(
         checks,
         config_path,
         config,
@@ -2640,6 +2765,7 @@ fn build_doctor_next_steps_with_path_env(
     )
 }
 
+#[cfg(test)]
 fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     checks: &[DoctorCheck],
     config_path: &Path,
@@ -2648,7 +2774,28 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     fix_requested: bool,
     path_env: Option<&OsStr>,
 ) -> Vec<String> {
-    let mut steps = Vec::new();
+    build_doctor_next_step_items_with_channel_surfaces_and_path_env(
+        checks,
+        config_path,
+        config,
+        channel_surfaces,
+        fix_requested,
+        path_env,
+    )
+    .iter()
+    .map(DoctorNextStep::render)
+    .collect()
+}
+
+fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
+    checks: &[DoctorCheck],
+    config_path: &Path,
+    config: &mvp::config::LoongConfig,
+    channel_surfaces: &[mvp::channel::ChannelSurface],
+    fix_requested: bool,
+    path_env: Option<&OsStr>,
+) -> Vec<DoctorNextStep> {
+    let mut steps: Vec<DoctorNextStep> = Vec::new();
     let config_path_display = config_path.display().to_string();
     let rerun_command =
         crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
@@ -2665,9 +2812,10 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
                 || check.name.ends_with("policy")
         })
     {
-        push_unique_step(
+        push_unique_action_step(
             &mut steps,
-            format!("Apply safe local repairs: {rerun_command} --fix"),
+            "Apply safe local repairs",
+            format!("{rerun_command} --fix"),
         );
     }
 
@@ -2843,11 +2991,10 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
                 provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
                     recommended_onboarding_model: Some(model),
                 } => {
-                    push_unique_step(
+                    push_unique_action_step(
                         &mut steps,
-                        format!(
-                            "Rerun onboarding and accept reviewed model `{model}`: {rerun_onboard_command}"
-                        ),
+                        format!("Rerun onboarding and accept reviewed model `{model}`"),
+                        &rerun_onboard_command,
                     );
                     push_unique_step(
                         &mut steps,
@@ -2979,9 +3126,10 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     if checks.iter().any(|check| {
         check.name == "runtime plugins inventory" && check.level != DoctorCheckLevel::Pass
     }) {
-        push_unique_step(
+        push_unique_action_step(
             &mut steps,
-            format!("Inspect runtime plugin inventory: {runtime_snapshot_json_command}"),
+            "Inspect runtime plugin inventory",
+            &runtime_snapshot_json_command,
         );
         push_unique_step(
             &mut steps,
@@ -3004,9 +3152,10 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
                     .any(|action| check.name.to_ascii_lowercase().contains(action.id)))
     }) {
         for action in &channel_actions {
-            push_unique_step(
+            push_unique_action_step(
                 &mut steps,
-                format!("Bring {} online: {}", action.label, action.command),
+                format!("Bring {} online", action.label),
+                action.command.clone(),
             );
         }
     }
@@ -3023,9 +3172,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             let prefix = match action.kind {
                 crate::next_actions::SetupNextActionKind::Ask => "Get a first answer",
                 crate::next_actions::SetupNextActionKind::Chat => "Continue in chat",
-                crate::next_actions::SetupNextActionKind::Personalize => {
-                    "Set your working preferences"
-                }
+                crate::next_actions::SetupNextActionKind::Personalize => personalize_action_title(),
                 crate::next_actions::SetupNextActionKind::Channel => "Open a channel",
                 crate::next_actions::SetupNextActionKind::BrowserPreview => {
                     match action.browser_preview_phase {
@@ -3051,7 +3198,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             {
                 browser_preview_needs_runtime_verify = true;
             }
-            push_unique_step(&mut steps, format!("{prefix}: {}", action.command));
+            push_unique_action_step(&mut steps, prefix, action.command);
         }
         if browser_preview_needs_runtime_verify {
             push_unique_step(
@@ -3066,14 +3213,14 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             .iter()
             .any(|check| check.level != DoctorCheckLevel::Pass)
     {
-        push_unique_step(&mut steps, format!("Re-run diagnostics: {rerun_command}"));
+        push_unique_action_step(&mut steps, "Re-run diagnostics", rerun_command);
     }
 
     steps
 }
 
 fn push_managed_bridge_discovery_next_steps(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     channel_surfaces: &[mvp::channel::ChannelSurface],
     rerun_command: &str,
 ) {
@@ -3103,18 +3250,19 @@ fn push_managed_bridge_discovery_next_steps(
     }
 
     let has_managed_bridge_guidance = steps.iter().any(|step| {
-        step.contains("Resolve managed bridge ambiguity")
-            || step.contains("Fix managed bridge selection")
-            || step.contains("Complete managed bridge setup")
+        let rendered = step.render();
+        rendered.contains("Resolve managed bridge ambiguity")
+            || rendered.contains("Fix managed bridge selection")
+            || rendered.contains("Complete managed bridge setup")
     });
 
     if has_managed_bridge_guidance {
-        push_unique_step(steps, format!("Re-run diagnostics: {rerun_command}"));
+        push_unique_action_step(steps, "Re-run diagnostics", rerun_command);
     }
 }
 
 fn push_managed_bridge_selection_next_step(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     surface: &mvp::channel::ChannelSurface,
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) {
@@ -3167,7 +3315,7 @@ fn push_managed_bridge_selection_next_step(
 }
 
 fn push_managed_bridge_ambiguity_next_step(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     surface: &mvp::channel::ChannelSurface,
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) {
@@ -3199,7 +3347,7 @@ fn push_managed_bridge_ambiguity_next_step(
 }
 
 fn push_managed_bridge_incomplete_setup_next_steps(
-    steps: &mut Vec<String>,
+    steps: &mut Vec<DoctorNextStep>,
     surface: &mvp::channel::ChannelSurface,
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) {
@@ -3472,10 +3620,20 @@ fn push_unique_action(
     }
 }
 
-fn push_unique_step(steps: &mut Vec<String>, step: String) {
-    if !steps.iter().any(|existing| existing == &step) {
+fn push_unique_step(steps: &mut Vec<DoctorNextStep>, step: impl Into<DoctorNextStep>) {
+    let step = step.into();
+    let rendered = step.render();
+    if !steps.iter().any(|existing| existing.render() == rendered) {
         steps.push(step);
     }
+}
+
+fn push_unique_action_step(
+    steps: &mut Vec<DoctorNextStep>,
+    label: impl Into<String>,
+    command: impl Into<String>,
+) {
+    push_unique_step(steps, DoctorNextStep::action(label, command));
 }
 
 #[cfg(test)]
@@ -6871,7 +7029,8 @@ mod tests {
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Set your working preferences: loong personalize --config '/tmp/loong.toml'"
+                step
+                    == "Teach Loong your working style: loong personalize --config '/tmp/loong.toml'"
             }),
             "green doctor runs should surface personalization as the third healthy-path suggestion: {next_steps:#?}"
         );
@@ -6900,6 +7059,36 @@ mod tests {
                 |step| step == "Verify browser preview runtime: agent-browser open example.com"
             ),
             "green doctor runs should not ask for runtime verification before preview has been enabled: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn doctor_followup_narrative_lines_skip_primary_action_duplicates() {
+        let next_steps = vec![
+            DoctorNextStep::action("Get a first answer", "loong ask --config '/tmp/loong.toml'"),
+            DoctorNextStep::action("Continue in chat", "loong chat --config '/tmp/loong.toml'"),
+            DoctorNextStep::action(
+                "Teach Loong your working style",
+                "loong personalize --config '/tmp/loong.toml'",
+            ),
+            DoctorNextStep::guidance(
+                "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loong.toml' --skip-model-probe",
+            ),
+            DoctorNextStep::action(
+                "Open a channel",
+                "loong channels --config '/tmp/loong.toml'",
+            ),
+        ];
+
+        let lines = doctor_followup_narrative_lines(&next_steps, 3);
+
+        assert_eq!(
+            lines,
+            vec![
+                "- If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loong.toml' --skip-model-probe"
+                    .to_owned(),
+                "- Open a channel: loong channels --config '/tmp/loong.toml'".to_owned(),
+            ]
         );
     }
 
@@ -6978,7 +7167,8 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Set your working preferences: loong personalize --config '/tmp/loong.toml'"
+                step
+                    == "Teach Loong your working style: loong personalize --config '/tmp/loong.toml'"
             }),
             "doctor should prioritize personalization ahead of generic browser preview when the healthy-path list is capped: {next_steps:#?}"
         );

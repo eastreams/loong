@@ -1,9 +1,10 @@
-use std::{io, ops::Rem};
+use std::io;
 
 use console::{Key, Term};
 use fuzzy_matcher::FuzzyMatcher;
 
 use crate::{
+    prompts::selection_cursor::{advance_selection_with_clamp, retreat_selection_with_clamp},
     theme::{render::TermThemeRenderer, SimpleTheme, Theme},
     Result,
 };
@@ -283,34 +284,23 @@ impl FuzzySelect<'_> {
                 (Key::ArrowUp | Key::BackTab, _, _) | (Key::Char('k'), _, true)
                     if !filtered_list.is_empty() =>
                 {
-                    if sel == Some(0) {
+                    if sel == Some(starting_row) && starting_row > 0 {
+                        starting_row -= 1;
+                    } else if sel.is_none() {
                         starting_row =
                             filtered_list.len().max(visible_term_rows) - visible_term_rows;
-                    } else if sel == Some(starting_row) {
-                        starting_row -= 1;
                     }
-                    sel = match sel {
-                        None => Some(filtered_list.len() - 1),
-                        Some(sel) => Some(
-                            ((sel as i64 - 1 + filtered_list.len() as i64)
-                                % (filtered_list.len() as i64))
-                                as usize,
-                        ),
-                    };
+                    sel = retreat_selection_with_clamp(sel, filtered_list.len());
                     term.flush()?;
                 }
                 (Key::ArrowDown | Key::Tab, _, _) | (Key::Char('j'), _, true)
                     if !filtered_list.is_empty() =>
                 {
-                    sel = match sel {
-                        None => Some(0),
-                        Some(sel) => {
-                            Some((sel as u64 + 1).rem(filtered_list.len() as u64) as usize)
-                        }
-                    };
+                    let previous = sel;
+                    sel = advance_selection_with_clamp(sel, filtered_list.len());
                     if sel == Some(visible_term_rows + starting_row) {
                         starting_row += 1;
-                    } else if sel == Some(0) {
+                    } else if previous.is_none() && sel == Some(0) {
                         starting_row = 0;
                     }
                     term.flush()?;

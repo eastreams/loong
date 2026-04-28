@@ -408,7 +408,7 @@ mod tests {
         assert!(profile_content.contains("## Session Profile"));
         assert!(profile_content.contains("Preferred name: Chum"));
         assert!(profile_content.contains("Response density: thorough"));
-        assert!(profile_content.contains("Initiative level: high_initiative"));
+        assert!(profile_content.contains("Initiative level: high initiative"));
         assert!(profile_content.contains("Ask before destructive actions."));
         assert!(profile_content.contains("Timezone: Asia/Shanghai"));
         assert!(!profile_content.contains("## Resolved Runtime Identity"));

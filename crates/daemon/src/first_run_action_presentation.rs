@@ -1,0 +1,210 @@
+use loong_app::tui_surface::{TuiActionSpec, TuiSectionSpec};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FirstRunActionGroup {
+    GeneralFollowup,
+    ContinueSetup,
+}
+
+pub(crate) const fn first_run_group_for_setup_action_kind(
+    kind: crate::next_actions::SetupNextActionKind,
+) -> FirstRunActionGroup {
+    match kind {
+        crate::next_actions::SetupNextActionKind::Channel
+        | crate::next_actions::SetupNextActionKind::BrowserPreview => {
+            FirstRunActionGroup::ContinueSetup
+        }
+        crate::next_actions::SetupNextActionKind::Ask
+        | crate::next_actions::SetupNextActionKind::Chat
+        | crate::next_actions::SetupNextActionKind::Personalize
+        | crate::next_actions::SetupNextActionKind::Doctor => FirstRunActionGroup::GeneralFollowup,
+    }
+}
+
+pub(crate) const fn first_run_group_for_onboarding_action_kind(
+    kind: crate::onboard_finalize::OnboardingActionKind,
+) -> FirstRunActionGroup {
+    match kind {
+        crate::onboard_finalize::OnboardingActionKind::Channel
+        | crate::onboard_finalize::OnboardingActionKind::BrowserPreview => {
+            FirstRunActionGroup::ContinueSetup
+        }
+        crate::onboard_finalize::OnboardingActionKind::Ask
+        | crate::onboard_finalize::OnboardingActionKind::Chat
+        | crate::onboard_finalize::OnboardingActionKind::Personalize
+        | crate::onboard_finalize::OnboardingActionKind::Doctor => {
+            FirstRunActionGroup::GeneralFollowup
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FirstRunActionSections<T> {
+    pub(crate) primary: Option<T>,
+    pub(crate) general_followups: Vec<T>,
+    pub(crate) continue_setup: Vec<T>,
+}
+
+pub(crate) fn partition_first_run_actions<T>(
+    actions: &[T],
+    group_for_action: impl Fn(&T) -> FirstRunActionGroup,
+) -> FirstRunActionSections<&T> {
+    let primary = actions.first();
+    let mut general_followups = Vec::new();
+    let mut continue_setup = Vec::new();
+
+    for action in actions.iter().skip(1) {
+        match group_for_action(action) {
+            FirstRunActionGroup::GeneralFollowup => general_followups.push(action),
+            FirstRunActionGroup::ContinueSetup => continue_setup.push(action),
+        }
+    }
+
+    FirstRunActionSections {
+        primary,
+        general_followups,
+        continue_setup,
+    }
+}
+
+pub(crate) fn build_first_run_action_sections<T>(
+    actions: &[T],
+    group_for_action: impl Fn(&T) -> FirstRunActionGroup,
+    to_action_spec: impl Fn(&T) -> TuiActionSpec,
+) -> Vec<TuiSectionSpec> {
+    let mut sections = Vec::new();
+    let grouped = partition_first_run_actions(actions, group_for_action);
+
+    if let Some(primary) = grouped.primary {
+        sections.push(TuiSectionSpec::ActionGroup {
+            title: Some("start here".to_owned()),
+            inline_title_when_wide: false,
+            items: vec![to_action_spec(primary)],
+        });
+    }
+
+    if !grouped.general_followups.is_empty() {
+        sections.push(TuiSectionSpec::ActionGroup {
+            title: Some("also available".to_owned()),
+            inline_title_when_wide: false,
+            items: grouped
+                .general_followups
+                .into_iter()
+                .map(&to_action_spec)
+                .collect(),
+        });
+    }
+
+    if !grouped.continue_setup.is_empty() {
+        sections.push(TuiSectionSpec::ActionGroup {
+            title: Some("continue setup".to_owned()),
+            inline_title_when_wide: false,
+            items: grouped
+                .continue_setup
+                .into_iter()
+                .map(&to_action_spec)
+                .collect(),
+        });
+    }
+
+    sections
+}
+
+pub(crate) fn build_first_run_action_text_lines<T>(
+    actions: &[T],
+    width: usize,
+    group_for_action: impl Fn(&T) -> FirstRunActionGroup,
+    render_primary: impl Fn(&T, usize) -> Vec<String>,
+    render_secondary: impl Fn(&T, usize) -> Vec<String>,
+) -> Vec<String> {
+    let grouped = partition_first_run_actions(actions, group_for_action);
+    let mut lines = Vec::new();
+
+    if let Some(primary) = grouped.primary {
+        lines.push("start here".to_owned());
+        lines.extend(render_primary(primary, width));
+    }
+
+    if !grouped.general_followups.is_empty() {
+        lines.push("also available".to_owned());
+        for action in grouped.general_followups {
+            lines.extend(render_secondary(action, width));
+        }
+    }
+
+    if !grouped.continue_setup.is_empty() {
+        lines.push("continue setup".to_owned());
+        for action in grouped.continue_setup {
+            lines.extend(render_secondary(action, width));
+        }
+    }
+
+    lines
+}
+
+pub(crate) fn render_first_run_action_text_item(
+    label: &str,
+    command: &str,
+    width: usize,
+) -> Vec<String> {
+    crate::mvp::presentation::render_wrapped_text_line("- ", &format!("{label}: {command}"), width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_action_kind_groups_setup_extensions_separately() {
+        assert_eq!(
+            first_run_group_for_setup_action_kind(crate::next_actions::SetupNextActionKind::Ask),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_setup_action_kind(
+                crate::next_actions::SetupNextActionKind::Personalize,
+            ),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_setup_action_kind(
+                crate::next_actions::SetupNextActionKind::Channel,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+        assert_eq!(
+            first_run_group_for_setup_action_kind(
+                crate::next_actions::SetupNextActionKind::BrowserPreview,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+    }
+
+    #[test]
+    fn onboarding_action_kind_groups_setup_extensions_separately() {
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::Ask,
+            ),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::Personalize,
+            ),
+            FirstRunActionGroup::GeneralFollowup
+        );
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::Channel,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+        assert_eq!(
+            first_run_group_for_onboarding_action_kind(
+                crate::onboard_finalize::OnboardingActionKind::BrowserPreview,
+            ),
+            FirstRunActionGroup::ContinueSetup
+        );
+    }
+}

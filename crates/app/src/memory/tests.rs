@@ -351,7 +351,7 @@ fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_p
     assert!(profile_content.contains("## Session Profile"));
     assert!(profile_content.contains("Preferred name: Chum"));
     assert!(profile_content.contains("Response density: balanced"));
-    assert!(profile_content.contains("Initiative level: ask_before_acting"));
+    assert!(profile_content.contains("Initiative level: ask before acting"));
     assert!(profile_content.contains("Ask before destructive actions."));
     assert!(profile_content.contains("Timezone: Asia/Shanghai"));
     assert!(!profile_content.contains("## Resolved Runtime Identity"));

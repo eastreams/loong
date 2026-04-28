@@ -9,8 +9,19 @@ use loong_spec::CliResult;
 use time::OffsetDateTime;
 
 use crate::operator_prompt::{
-    OPERATOR_CLEAR_INPUT_TOKEN, OperatorPromptUi, SelectInteractionMode, SelectOption,
-    StdioOperatorUi, prompt_optional_operator_text,
+    OperatorPromptUi, SelectInteractionMode, SelectOption, StdioOperatorUi,
+    prompt_optional_operator_text,
+};
+use crate::personalize_presentation::{
+    PersonalizePromptKind, PersonalizeSelectKind, initiative_level_default_slug,
+    initiative_level_select_options, personalize_cleared_message,
+    personalize_memory_profile_deferred_message, personalize_memory_profile_upgrade_prompt,
+    personalize_memory_profile_upgraded_message, personalize_prompt_label,
+    personalize_review_intro, personalize_saved_message, personalize_select_current_value_guidance,
+    personalize_select_label, personalize_skip_message, personalize_suppressed_message,
+    personalize_suppressed_recovery_guidance, personalize_text_current_value_guidance,
+    response_density_default_slug, response_density_select_options, review_action_default_slug,
+    review_action_select_options,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +77,7 @@ pub(crate) fn run_personalize_cli_with_ui(
             now,
         ),
         PersonalizeReviewAction::SkipForNow => {
-            ui.print_line("No changes saved.")?;
+            ui.print_line(personalize_skip_message())?;
             Ok(PersonalizeCliOutcome::Skipped)
         }
         PersonalizeReviewAction::SuppressFutureSuggestions => suppress_personalization(
@@ -91,9 +102,7 @@ fn print_suppressed_recovery_guidance(
         return Ok(());
     }
 
-    ui.print_line(
-        "Personalize suggestions are currently suppressed. Saving preferences here will re-enable them.",
-    )?;
+    ui.print_line(personalize_suppressed_recovery_guidance())?;
 
     Ok(())
 }
@@ -104,8 +113,11 @@ fn collect_personalization_draft(
 ) -> CliResult<PersonalizationDraft> {
     let preferred_name_default = existing_personalization
         .and_then(|personalization| personalization.preferred_name.as_deref());
-    let preferred_name =
-        prompt_optional_text(ui, "Preferred name (optional)", preferred_name_default)?;
+    let preferred_name = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::PreferredName),
+        preferred_name_default,
+    )?;
 
     let response_density_default =
         existing_personalization.and_then(|personalization| personalization.response_density);
@@ -119,17 +131,25 @@ fn collect_personalization_draft(
         .and_then(|personalization| personalization.standing_boundaries.as_deref());
     let standing_boundaries = prompt_optional_text(
         ui,
-        "Standing boundaries (optional)",
+        personalize_prompt_label(PersonalizePromptKind::StandingBoundaries),
         standing_boundaries_default,
     )?;
 
     let timezone_default =
         existing_personalization.and_then(|personalization| personalization.timezone.as_deref());
-    let timezone = prompt_optional_text(ui, "Timezone (optional)", timezone_default)?;
+    let timezone = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::Timezone),
+        timezone_default,
+    )?;
 
     let locale_default =
         existing_personalization.and_then(|personalization| personalization.locale.as_deref());
-    let locale = prompt_optional_text(ui, "Locale (optional)", locale_default)?;
+    let locale = prompt_optional_text(
+        ui,
+        personalize_prompt_label(PersonalizePromptKind::Locale),
+        locale_default,
+    )?;
 
     Ok(PersonalizationDraft {
         preferred_name,
@@ -147,11 +167,7 @@ fn prompt_optional_text(
     current_value: Option<&str>,
 ) -> CliResult<Option<String>> {
     if let Some(default_value) = current_value {
-        let current_value_line = format!("Current value: {default_value}");
-        let clear_hint_line =
-            format!("Press Enter to keep it, or type {OPERATOR_CLEAR_INPUT_TOKEN} to clear it.");
-        ui.print_line(current_value_line.as_str())?;
-        ui.print_line(clear_hint_line.as_str())?;
+        ui.print_line(personalize_text_current_value_guidance(default_value).as_str())?;
     }
 
     let selected_value = prompt_optional_operator_text(ui, label, current_value)?;
@@ -163,80 +179,34 @@ fn select_response_density(
     ui: &mut impl OperatorPromptUi,
     current_value: Option<mvp::config::ResponseDensity>,
 ) -> CliResult<Option<mvp::config::ResponseDensity>> {
-    let mut options = Vec::new();
-    let concise_option_index = options.len();
-    let concise_option = SelectOption {
-        label: "concise".to_owned(),
-        slug: "concise".to_owned(),
-        description: "keep responses brief and tightly scoped".to_owned(),
-        recommended: false,
-    };
-    options.push(concise_option);
-    let balanced_option_index = options.len();
-    let balanced_option = SelectOption {
-        label: "balanced".to_owned(),
-        slug: "balanced".to_owned(),
-        description: "balance speed, clarity, and context".to_owned(),
-        recommended: true,
-    };
-    options.push(balanced_option);
-    let thorough_option_index = options.len();
-    let thorough_option = SelectOption {
-        label: "thorough".to_owned(),
-        slug: "thorough".to_owned(),
-        description: "include deeper context and reasoning when useful".to_owned(),
-        recommended: false,
-    };
-    options.push(thorough_option);
-    let unset_option_index = if current_value.is_none() {
-        let unset_option = SelectOption {
-            label: "leave unset".to_owned(),
-            slug: "unset".to_owned(),
-            description: "do not save a response density preference yet".to_owned(),
-            recommended: false,
-        };
-        options.push(unset_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
-    let clear_option_index = if current_value.is_some() {
-        let clear_option = SelectOption {
-            label: "clear current value".to_owned(),
-            slug: "clear".to_owned(),
-            description: "remove the saved response density preference".to_owned(),
-            recommended: false,
-        };
-        options.push(clear_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
-    let default_index = match current_value {
-        Some(mvp::config::ResponseDensity::Concise) => Some(concise_option_index),
-        Some(mvp::config::ResponseDensity::Balanced) => Some(balanced_option_index),
-        Some(mvp::config::ResponseDensity::Thorough) => Some(thorough_option_index),
-        None => unset_option_index,
-    };
+    if let Some(current_value) = current_value {
+        ui.print_line(
+            personalize_select_current_value_guidance(current_value.display_text()).as_str(),
+        )?;
+    }
+
+    let options = response_density_select_options(current_value.is_some());
+    let default_index =
+        find_select_option_index(&options, response_density_default_slug(current_value));
     let selected_index = ui.select_one(
-        "Response density",
+        personalize_select_label(PersonalizeSelectKind::ResponseDensity),
         &options,
         default_index,
         SelectInteractionMode::List,
     )?;
-    if Some(selected_index) == unset_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "unset") {
         return Ok(None);
     }
-    if Some(selected_index) == clear_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "clear") {
         return Ok(None);
     }
-    if selected_index == concise_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "concise") {
         return Ok(Some(mvp::config::ResponseDensity::Concise));
     }
-    if selected_index == balanced_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "balanced") {
         return Ok(Some(mvp::config::ResponseDensity::Balanced));
     }
-    if selected_index == thorough_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "thorough") {
         return Ok(Some(mvp::config::ResponseDensity::Thorough));
     }
 
@@ -247,80 +217,34 @@ fn select_initiative_level(
     ui: &mut impl OperatorPromptUi,
     current_value: Option<mvp::config::InitiativeLevel>,
 ) -> CliResult<Option<mvp::config::InitiativeLevel>> {
-    let mut options = Vec::new();
-    let ask_before_acting_option_index = options.len();
-    let ask_before_acting_option = SelectOption {
-        label: "ask before acting".to_owned(),
-        slug: "ask_before_acting".to_owned(),
-        description: "confirm before taking non-trivial action".to_owned(),
-        recommended: false,
-    };
-    options.push(ask_before_acting_option);
-    let balanced_option_index = options.len();
-    let balanced_option = SelectOption {
-        label: "balanced".to_owned(),
-        slug: "balanced".to_owned(),
-        description: "default initiative with selective confirmation".to_owned(),
-        recommended: true,
-    };
-    options.push(balanced_option);
-    let high_initiative_option_index = options.len();
-    let high_initiative_option = SelectOption {
-        label: "high initiative".to_owned(),
-        slug: "high_initiative".to_owned(),
-        description: "move forward proactively unless risk is high".to_owned(),
-        recommended: false,
-    };
-    options.push(high_initiative_option);
-    let unset_option_index = if current_value.is_none() {
-        let unset_option = SelectOption {
-            label: "leave unset".to_owned(),
-            slug: "unset".to_owned(),
-            description: "do not save an initiative preference yet".to_owned(),
-            recommended: false,
-        };
-        options.push(unset_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
-    let clear_option_index = if current_value.is_some() {
-        let clear_option = SelectOption {
-            label: "clear current value".to_owned(),
-            slug: "clear".to_owned(),
-            description: "remove the saved initiative preference".to_owned(),
-            recommended: false,
-        };
-        options.push(clear_option);
-        Some(options.len() - 1)
-    } else {
-        None
-    };
-    let default_index = match current_value {
-        Some(mvp::config::InitiativeLevel::AskBeforeActing) => Some(ask_before_acting_option_index),
-        Some(mvp::config::InitiativeLevel::Balanced) => Some(balanced_option_index),
-        Some(mvp::config::InitiativeLevel::HighInitiative) => Some(high_initiative_option_index),
-        None => unset_option_index,
-    };
+    if let Some(current_value) = current_value {
+        ui.print_line(
+            personalize_select_current_value_guidance(current_value.display_text()).as_str(),
+        )?;
+    }
+
+    let options = initiative_level_select_options(current_value.is_some());
+    let default_index =
+        find_select_option_index(&options, initiative_level_default_slug(current_value));
     let selected_index = ui.select_one(
-        "Initiative level",
+        personalize_select_label(PersonalizeSelectKind::InitiativeLevel),
         &options,
         default_index,
         SelectInteractionMode::List,
     )?;
-    if Some(selected_index) == unset_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "unset") {
         return Ok(None);
     }
-    if Some(selected_index) == clear_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "clear") {
         return Ok(None);
     }
-    if selected_index == ask_before_acting_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "ask_before_acting") {
         return Ok(Some(mvp::config::InitiativeLevel::AskBeforeActing));
     }
-    if selected_index == balanced_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "balanced") {
         return Ok(Some(mvp::config::InitiativeLevel::Balanced));
     }
-    if selected_index == high_initiative_option_index {
+    if Some(selected_index) == find_select_option_index(&options, "high_initiative") {
         return Ok(Some(mvp::config::InitiativeLevel::HighInitiative));
     }
 
@@ -336,32 +260,16 @@ fn select_review_action(
         ui.print_line(line.as_str())?;
     }
 
-    let options = vec![
-        SelectOption {
-            label: "save".to_owned(),
-            slug: "save".to_owned(),
-            description: "persist these preferences into advisory session profile state".to_owned(),
-            recommended: true,
-        },
-        SelectOption {
-            label: "skip for now".to_owned(),
-            slug: "skip".to_owned(),
-            description: "leave the current config untouched".to_owned(),
-            recommended: false,
-        },
-        SelectOption {
-            label: "suppress future suggestions".to_owned(),
-            slug: "suppress".to_owned(),
-            description:
-                "stop proactive suggestions without saving this draft; keep any existing saved preferences"
-                    .to_owned(),
-            recommended: false,
-        },
-    ];
-    let selected_index = ui.select_one(
-        "Review action",
+    let has_meaningful_preferences = draft_has_meaningful_preferences(draft);
+    let options = review_action_select_options(has_meaningful_preferences);
+    let default_index = find_select_option_index(
         &options,
-        Some(0),
+        review_action_default_slug(has_meaningful_preferences),
+    );
+    let selected_index = ui.select_one(
+        personalize_select_label(PersonalizeSelectKind::ReviewAction),
+        &options,
+        default_index,
         SelectInteractionMode::List,
     )?;
 
@@ -373,22 +281,37 @@ fn select_review_action(
     }
 }
 
+fn find_select_option_index(options: &[SelectOption], slug: &str) -> Option<usize> {
+    options
+        .iter()
+        .position(|option| option.slug.eq_ignore_ascii_case(slug))
+}
+
+fn draft_has_meaningful_preferences(draft: &PersonalizationDraft) -> bool {
+    draft.preferred_name.is_some()
+        || draft.response_density.is_some()
+        || draft.initiative_level.is_some()
+        || draft.standing_boundaries.is_some()
+        || draft.timezone.is_some()
+        || draft.locale.is_some()
+}
+
 fn render_review_lines(draft: &PersonalizationDraft) -> Vec<String> {
     let preferred_name = draft.preferred_name.as_deref().unwrap_or("not set");
     let response_density = draft
         .response_density
-        .map(|value| value.as_str())
+        .map(|value| value.display_text())
         .unwrap_or("not set");
     let initiative_level = draft
         .initiative_level
-        .map(|value| value.as_str())
+        .map(|value| value.display_text())
         .unwrap_or("not set");
     let standing_boundaries = draft.standing_boundaries.as_deref().unwrap_or("not set");
     let timezone = draft.timezone.as_deref().unwrap_or("not set");
     let locale = draft.locale.as_deref().unwrap_or("not set");
 
     vec![
-        "Review operator preferences:".to_owned(),
+        personalize_review_intro().to_owned(),
         format!("- preferred name: {preferred_name}"),
         format!("- response density: {response_density}"),
         format!("- initiative level: {initiative_level}"),
@@ -416,10 +339,8 @@ fn save_personalization(
 
         config.memory.personalization = None;
         let saved_path = write_personalization_config(config, resolved_path)?;
-        let cleared_message = format!(
-            "Cleared operator preferences from {}.",
-            saved_path.display()
-        );
+        let cleared_message =
+            personalize_cleared_message(saved_path.display().to_string().as_str());
         ui.print_line(cleared_message.as_str())?;
 
         return Ok(PersonalizeCliOutcome::Saved {
@@ -432,10 +353,7 @@ fn save_personalization(
     let needs_memory_profile_upgrade =
         config.memory.profile != mvp::config::MemoryProfile::ProfilePlusWindow;
     if needs_memory_profile_upgrade {
-        let confirmed = ui.prompt_confirm(
-            "Upgrade memory profile to profile_plus_window so these preferences surface in Session Profile?",
-            true,
-        )?;
+        let confirmed = ui.prompt_confirm(personalize_memory_profile_upgrade_prompt(), true)?;
         if confirmed {
             config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
             upgraded_memory_profile = true;
@@ -447,16 +365,12 @@ fn save_personalization(
     config.memory.personalization = Some(personalization);
     let saved_path = write_personalization_config(config, resolved_path)?;
 
-    ui.print_line(format!("Saved operator preferences to {}.", saved_path.display()).as_str())?;
+    ui.print_line(personalize_saved_message(saved_path.display().to_string().as_str()).as_str())?;
     if upgraded_memory_profile {
-        ui.print_line(
-            "Memory profile upgraded to profile_plus_window so preferences project into Session Profile.",
-        )?;
+        ui.print_line(personalize_memory_profile_upgraded_message())?;
     }
     if declined_memory_profile_upgrade {
-        ui.print_line(
-            "Saved preferences without changing memory.profile; they will project once profile_plus_window is enabled.",
-        )?;
+        ui.print_line(personalize_memory_profile_deferred_message())?;
     }
 
     Ok(PersonalizeCliOutcome::Saved {
@@ -498,11 +412,7 @@ fn suppress_personalization(
     let saved_path = write_personalization_config(config, resolved_path)?;
 
     ui.print_line(
-        format!(
-            "Suppressed future personalize suggestions in {}.",
-            saved_path.display()
-        )
-        .as_str(),
+        personalize_suppressed_message(saved_path.display().to_string().as_str()).as_str(),
     )?;
 
     Ok(PersonalizeCliOutcome::Suppressed)
@@ -544,6 +454,11 @@ mod tests {
     struct TestPromptUi {
         inputs: VecDeque<String>,
         printed_lines: Vec<String>,
+        prompt_labels: Vec<String>,
+        select_labels: Vec<String>,
+        select_option_labels: Vec<Vec<String>>,
+        select_option_descriptions: Vec<Vec<String>>,
+        confirm_messages: Vec<String>,
     }
 
     impl TestPromptUi {
@@ -552,6 +467,11 @@ mod tests {
             Self {
                 inputs: collected_inputs,
                 printed_lines: Vec::new(),
+                prompt_labels: Vec::new(),
+                select_labels: Vec::new(),
+                select_option_labels: Vec::new(),
+                select_option_descriptions: Vec::new(),
+                confirm_messages: Vec::new(),
             }
         }
     }
@@ -562,7 +482,8 @@ mod tests {
             Ok(())
         }
 
-        fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
+        fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
+            self.prompt_labels.push(label.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim();
             if trimmed_input.is_empty() {
@@ -571,17 +492,20 @@ mod tests {
             Ok(trimmed_input.to_owned())
         }
 
-        fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
+        fn prompt_required(&mut self, label: &str) -> CliResult<String> {
+            self.prompt_labels.push(label.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             Ok(next_input.trim().to_owned())
         }
 
-        fn prompt_allow_empty(&mut self, _label: &str) -> CliResult<String> {
+        fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
+            self.prompt_labels.push(label.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             Ok(next_input.trim().to_owned())
         }
 
-        fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
+        fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
+            self.confirm_messages.push(message.to_owned());
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim().to_ascii_lowercase();
             if trimmed_input.is_empty() {
@@ -592,11 +516,20 @@ mod tests {
 
         fn select_one(
             &mut self,
-            _label: &str,
+            label: &str,
             options: &[SelectOption],
             default: Option<usize>,
             _interaction_mode: SelectInteractionMode,
         ) -> CliResult<usize> {
+            self.select_labels.push(label.to_owned());
+            self.select_option_labels
+                .push(options.iter().map(|option| option.label.clone()).collect());
+            self.select_option_descriptions.push(
+                options
+                    .iter()
+                    .map(|option| option.description.clone())
+                    .collect(),
+            );
             let next_input = self.inputs.pop_front().unwrap_or_default();
             let trimmed_input = next_input.trim();
             if trimmed_input.is_empty() {
@@ -1126,5 +1059,350 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn render_review_lines_uses_human_readable_initiative_copy() {
+        let draft = PersonalizationDraft {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(mvp::config::ResponseDensity::Balanced),
+            initiative_level: Some(mvp::config::InitiativeLevel::AskBeforeActing),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: Some("zh-CN".to_owned()),
+        };
+
+        let lines = render_review_lines(&draft);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "- initiative level: ask before acting"),
+            "review copy should stay human-readable instead of leaking schema ids: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn collect_personalization_draft_uses_guidance_prompt_labels() {
+        let mut ui = TestPromptUi::with_inputs(["", "", "", "", "", ""]);
+
+        let draft = collect_personalization_draft(&mut ui, None).expect("collect draft");
+
+        assert_eq!(
+            draft,
+            PersonalizationDraft {
+                preferred_name: None,
+                response_density: None,
+                initiative_level: None,
+                standing_boundaries: None,
+                timezone: None,
+                locale: None,
+            }
+        );
+        assert_eq!(
+            ui.prompt_labels,
+            vec![
+                "How should Loong address you? (optional)",
+                "Any standing boundaries Loong should keep in mind? (optional)",
+                "Which timezone should Loong assume? (optional)",
+                "Which locale should Loong default to? (optional)",
+            ],
+            "text prompts should read like operator guidance, not raw field labels: {:#?}",
+            ui.prompt_labels
+        );
+        assert_eq!(
+            ui.select_labels,
+            vec![
+                "How detailed should Loong usually be?",
+                "How proactive should Loong be?",
+            ],
+            "selection prompts should stay conversational and operator-facing: {:#?}",
+            ui.select_labels
+        );
+    }
+
+    #[test]
+    fn select_review_action_uses_guidance_option_copy() {
+        let mut ui = TestPromptUi::with_inputs([""]);
+        let draft = PersonalizationDraft {
+            preferred_name: None,
+            response_density: None,
+            initiative_level: None,
+            standing_boundaries: None,
+            timezone: None,
+            locale: None,
+        };
+
+        let action = select_review_action(&mut ui, &draft).expect("select review action");
+
+        assert_eq!(action, PersonalizeReviewAction::Save);
+        assert_eq!(
+            ui.select_labels,
+            vec!["What should Loong do with this draft?"],
+            "review action prompt should sound like guidance instead of a raw form action: {:#?}",
+            ui.select_labels
+        );
+        assert_eq!(
+            ui.select_option_labels,
+            vec![vec![
+                "use this draft".to_owned(),
+                "not now".to_owned(),
+                "stop suggesting this".to_owned(),
+            ]],
+            "review action options should stay operator-facing: {:#?}",
+            ui.select_option_labels
+        );
+    }
+
+    #[test]
+    fn select_response_density_uses_guidance_option_copy() {
+        let mut ui = TestPromptUi::with_inputs([""]);
+
+        let selection = select_response_density(&mut ui, None).expect("select response density");
+
+        assert_eq!(selection, None);
+        assert_eq!(
+            ui.select_labels,
+            vec!["How detailed should Loong usually be?"],
+            "response density prompt should stay operator-facing: {:#?}",
+            ui.select_labels
+        );
+        assert_eq!(
+            ui.select_option_labels,
+            vec![vec![
+                "concise".to_owned(),
+                "balanced".to_owned(),
+                "thorough".to_owned(),
+                "leave unset".to_owned(),
+            ]],
+            "response density option labels should remain stable: {:#?}",
+            ui.select_option_labels
+        );
+        assert_eq!(
+            ui.select_option_descriptions,
+            vec![vec![
+                "keep responses brief and tightly scoped".to_owned(),
+                "balance speed, clarity, and context".to_owned(),
+                "include deeper context and reasoning when useful".to_owned(),
+                "do not save a response density preference yet".to_owned(),
+            ]],
+            "response density option descriptions should come from one guidance source: {:#?}",
+            ui.select_option_descriptions
+        );
+    }
+
+    #[test]
+    fn select_initiative_level_uses_guidance_option_copy() {
+        let mut ui = TestPromptUi::with_inputs([""]);
+
+        let selection = select_initiative_level(&mut ui, None).expect("select initiative level");
+
+        assert_eq!(selection, None);
+        assert_eq!(
+            ui.select_labels,
+            vec!["How proactive should Loong be?"],
+            "initiative prompt should stay operator-facing: {:#?}",
+            ui.select_labels
+        );
+        assert_eq!(
+            ui.select_option_labels,
+            vec![vec![
+                "ask before acting".to_owned(),
+                "balanced".to_owned(),
+                "high initiative".to_owned(),
+                "leave unset".to_owned(),
+            ]],
+            "initiative option labels should remain stable: {:#?}",
+            ui.select_option_labels
+        );
+        assert_eq!(
+            ui.select_option_descriptions,
+            vec![vec![
+                "confirm before taking non-trivial action".to_owned(),
+                "default initiative with selective confirmation".to_owned(),
+                "move forward proactively unless risk is high".to_owned(),
+                "do not save an initiative preference yet".to_owned(),
+            ]],
+            "initiative option descriptions should come from one guidance source: {:#?}",
+            ui.select_option_descriptions
+        );
+    }
+
+    #[test]
+    fn personalize_cli_save_with_upgrade_uses_guidance_messages() {
+        let config_path = unique_config_path("save-guidance-copy");
+        let config_path_string = config_path.display().to_string();
+        write_default_config(&config_path);
+        let mut ui = TestPromptUi::with_inputs([
+            "Chum",
+            "3",
+            "3",
+            "Ask before destructive actions.",
+            "Asia/Shanghai",
+            "zh-CN",
+            "1",
+            "y",
+        ]);
+
+        let outcome =
+            run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
+                .expect("save flow should succeed");
+
+        assert_eq!(
+            outcome,
+            PersonalizeCliOutcome::Saved {
+                upgraded_memory_profile: true
+            }
+        );
+        assert_eq!(
+            ui.confirm_messages,
+            vec![
+                "Let Loong surface these preferences in Session Profile by upgrading memory profile?"
+            ],
+            "memory-profile upgrade prompt should sound like operator guidance: {:#?}",
+            ui.confirm_messages
+        );
+        assert!(
+            ui.printed_lines
+                .iter()
+                .any(|line| { line.contains("Saved how Loong should work with you to") }),
+            "save flow should confirm the guidance outcome, got: {:#?}",
+            ui.printed_lines
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line.contains(
+                    "Memory profile upgraded to profile_plus_window so Loong can surface these preferences in Session Profile."
+                )
+            }),
+            "upgrade follow-up should use the guidance copy, got: {:#?}",
+            ui.printed_lines
+        );
+
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn personalize_cli_blank_density_and_initiative_use_recommended_defaults() {
+        let config_path = unique_config_path("recommended-defaults");
+        let config_path_string = config_path.display().to_string();
+        write_default_config(&config_path);
+        let mut ui = TestPromptUi::with_inputs(["Chum", "", "", "", "", "", "1", "n"]);
+
+        run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
+            .expect("save flow should succeed");
+        let load_result =
+            mvp::config::load(Some(config_path_string.as_str())).expect("reload config");
+        let (_, loaded_config) = load_result;
+        let personalization = loaded_config
+            .memory
+            .personalization
+            .expect("saved personalization");
+
+        assert_eq!(personalization.preferred_name.as_deref(), Some("Chum"));
+        assert_eq!(
+            personalization.response_density,
+            Some(mvp::config::ResponseDensity::Balanced),
+            "blank response density should follow the recommended balanced default"
+        );
+        assert_eq!(
+            personalization.initiative_level,
+            Some(mvp::config::InitiativeLevel::Balanced),
+            "blank initiative should follow the recommended balanced default"
+        );
+
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn personalize_cli_explicit_empty_draft_defaults_to_skip_instead_of_error() {
+        let config_path = unique_config_path("empty-draft-skip-default");
+        let config_path_string = config_path.display().to_string();
+        write_default_config(&config_path);
+        let mut ui = TestPromptUi::with_inputs(["", "unset", "unset", "", "", "", ""]);
+
+        let outcome =
+            run_personalize_cli_with_ui(Some(config_path_string.as_str()), &mut ui, fixed_now())
+                .expect("explicit empty draft should skip instead of failing");
+
+        assert_eq!(outcome, PersonalizeCliOutcome::Skipped);
+        assert!(
+            ui.printed_lines
+                .iter()
+                .any(|line| line == "No changes saved."),
+            "empty-draft default should take the skip path: {:#?}",
+            ui.printed_lines
+        );
+
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn collect_personalization_draft_existing_enum_preferences_prints_current_value_guidance() {
+        let existing = configured_personalization_for_tests();
+        let mut ui = TestPromptUi::with_inputs(["", "", "", "", "", ""]);
+
+        let draft = collect_personalization_draft(&mut ui, Some(&existing)).expect("collect draft");
+
+        assert_eq!(
+            draft,
+            PersonalizationDraft {
+                preferred_name: Some("Chum".to_owned()),
+                response_density: Some(mvp::config::ResponseDensity::Balanced),
+                initiative_level: Some(mvp::config::InitiativeLevel::AskBeforeActing),
+                standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+                timezone: Some("Asia/Shanghai".to_owned()),
+                locale: Some("zh-CN".to_owned()),
+            }
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line
+                    == "Current value: balanced · Enter keeps it · choose clear current value to remove it."
+            }),
+            "response density should print a compact current-value hint: {:#?}",
+            ui.printed_lines
+        );
+        assert!(
+            ui.printed_lines
+                .iter()
+                .any(|line| {
+                    line
+                        == "Current value: ask before acting · Enter keeps it · choose clear current value to remove it."
+                }),
+            "initiative should print a compact current-value hint: {:#?}",
+            ui.printed_lines
+        );
+    }
+
+    #[test]
+    fn collect_personalization_draft_existing_text_preferences_prints_compact_guidance() {
+        let existing = configured_personalization_for_tests();
+        let mut ui = TestPromptUi::with_inputs(["", "", "", "", "", ""]);
+
+        collect_personalization_draft(&mut ui, Some(&existing)).expect("collect draft");
+
+        assert!(
+            ui.printed_lines
+                .iter()
+                .any(|line| { line == "Current value: Chum · Enter keeps it · - clears it." }),
+            "text prompts should use the compact current-value guidance: {:#?}",
+            ui.printed_lines
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line
+                    == "Current value: Ask before destructive actions. · Enter keeps it · - clears it."
+            }),
+            "standing-boundary prompt should also use the compact guidance: {:#?}",
+            ui.printed_lines
+        );
+        assert!(
+            ui.printed_lines.iter().any(|line| {
+                line == "Current value: Asia/Shanghai · Enter keeps it · - clears it."
+            }),
+            "timezone prompt should also use the compact guidance: {:#?}",
+            ui.printed_lines
+        );
     }
 }

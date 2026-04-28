@@ -57,6 +57,11 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
         relative_dir: "browser-companion-preview",
     },
     BundledExternalSkill {
+        skill_id: "byted-web-search",
+        source_path: "bundled://byted-web-search",
+        relative_dir: "byted-web-search",
+    },
+    BundledExternalSkill {
         skill_id: "design-md",
         source_path: "bundled://design-md",
         relative_dir: "design-md",
@@ -315,6 +320,14 @@ const BUNDLED_PREINSTALL_TARGETS: &[BundledPreinstallTarget] = &[
         recommended: true,
     },
     BundledPreinstallTarget {
+        install_id: "byted-web-search",
+        display_name: "Byted Web Search",
+        summary: "Volcengine web search workflow for live facts, citations, and China-friendly web or image search",
+        skill_ids: &["byted-web-search"],
+        kind: BundledPreinstallTargetKind::Skill,
+        recommended: false,
+    },
+    BundledPreinstallTarget {
         install_id: "skill-creator",
         display_name: "skill-creator",
         summary: "Anthropic's multi-file skill authoring and evaluation workflow",
@@ -529,6 +542,7 @@ mod tests {
         for skill_id in [
             "find-skills",
             "agent-browser",
+            "byted-web-search",
             "skill-creator",
             "pdf",
             "docx",
@@ -581,6 +595,12 @@ mod tests {
                 .iter()
                 .any(|target| target.install_id == "minimax-office"),
             "onboarding registry should include the minimax office pack"
+        );
+        assert!(
+            targets
+                .iter()
+                .any(|target| target.install_id == "byted-web-search"),
+            "onboarding registry should include the bundled byted web search skill"
         );
     }
 

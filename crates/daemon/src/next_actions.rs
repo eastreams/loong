@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 
+use crate::personalize_presentation::personalize_action_label;
 use loong_app as mvp;
+use serde::Serialize;
 
 pub use mvp::chat::DEFAULT_FIRST_PROMPT as DEFAULT_FIRST_ASK_MESSAGE;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SetupNextActionKind {
     Ask,
     Chat,
@@ -86,7 +88,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
                 kind: SetupNextActionKind::Personalize,
                 channel_action_id: None,
                 browser_preview_phase: None,
-                label: "working preferences".to_owned(),
+                label: personalize_action_label().to_owned(),
                 command: crate::cli_handoff::format_subcommand_with_config(
                     "personalize",
                     config_path,
@@ -506,6 +508,7 @@ fn managed_bridge_runtime_doctor_action_label(
     format!("inspect managed bridge runtimes: {rendered_surface_ids}")
 }
 
+#[cfg(test)]
 pub(crate) fn is_managed_bridge_doctor_action(action: &SetupNextAction) -> bool {
     let is_doctor = action.kind == SetupNextActionKind::Doctor;
     let label = action.label.as_str();
@@ -759,7 +762,7 @@ mod tests {
             Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID)
         );
         assert_eq!(action.browser_preview_phase, None);
-        assert_eq!(action.label, "channels");
+        assert_eq!(action.label, "choose a channel");
         assert_eq!(action.command, "loong channels --config '/tmp/loong.toml'");
     }
 
@@ -776,7 +779,7 @@ mod tests {
         assert_eq!(actions[0].kind, SetupNextActionKind::Ask);
         assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
         assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
-        assert_eq!(actions[2].label, "working preferences");
+        assert_eq!(actions[2].label, personalize_action_label());
         assert_eq!(
             actions[2].command,
             "loong personalize --config '/tmp/loong.toml'"

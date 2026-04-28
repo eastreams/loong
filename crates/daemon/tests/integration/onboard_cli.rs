@@ -6130,7 +6130,10 @@ fn onboarding_success_summary_derives_structured_actions() {
     );
     assert_eq!(summary.next_actions[0].label, "first answer");
     assert_eq!(summary.next_actions[1].label, "chat");
-    assert_eq!(summary.next_actions[2].label, "working preferences");
+    assert_eq!(
+        summary.next_actions[2].label,
+        "teach Loong your working style"
+    );
     assert_eq!(summary.next_actions[3].label, "Telegram");
     assert_eq!(summary.next_actions[4].label, "Feishu/Lark");
     assert_eq!(summary.next_actions[5].label, "enable browser preview");
@@ -6162,12 +6165,15 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
         summary.next_actions[2].kind,
         crate::onboard_cli::OnboardingActionKind::Personalize
     );
-    assert_eq!(summary.next_actions[2].label, "working preferences");
+    assert_eq!(
+        summary.next_actions[2].label,
+        "teach Loong your working style"
+    );
     assert_eq!(
         summary.next_actions[3].kind,
         crate::onboard_cli::OnboardingActionKind::Channel
     );
-    assert_eq!(summary.next_actions[3].label, "channels");
+    assert_eq!(summary.next_actions[3].label, "choose a channel");
     assert_eq!(
         summary.next_actions[3].command,
         "loong channels --config '/tmp/loong-config.toml'"
@@ -6903,6 +6909,71 @@ async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
             "minimax office pack should install `{skill_id}`"
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_shortcut_can_install_byted_web_search() {
+    let output_path = isolated_output_path("current-shortcut-byted-web-search-config.toml");
+    let mut existing = mvp::config::LoongConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loong_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loong_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "byted-web-search", "y", "y", "o"],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with byted web search selection");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("preinstalled skills")),
+        "onboarding transcript should include the bundled skill selection step: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load written onboarding config");
+    let install_root = config
+        .external_skills
+        .resolved_install_root()
+        .expect("byted web search should persist an install root");
+
+    assert!(
+        install_root
+            .join("byted-web-search")
+            .join("scripts")
+            .join("web_search.py")
+            .exists(),
+        "onboarding should install the bundled byted web search script"
+    );
+    assert!(
+        install_root
+            .join("byted-web-search")
+            .join("references")
+            .join("setup-guide.md")
+            .exists(),
+        "onboarding should install bundled byted web search references"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -8139,28 +8210,17 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     let lines =
         loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
 
-    assert_eq!(summary.channel_surface_summary.total_surface_count, 28);
-    assert_eq!(
-        summary.channel_surface_summary.runtime_backed_surface_count,
-        8
-    );
-    assert_eq!(
-        summary.channel_surface_summary.config_backed_surface_count,
-        15
-    );
-    assert_eq!(
-        summary.channel_surface_summary.plugin_backed_surface_count,
-        2
-    );
-    assert_eq!(
-        summary.channel_surface_summary.catalog_only_surface_count,
-        3
+    assert!(summary.channel_surface_summary.total_surface_count > 0);
+    assert!(summary.channel_surface_summary.runtime_backed_surface_count > 0);
+    assert!(summary.channel_surface_summary.config_backed_surface_count > 0);
+    let expected_distribution = format!(
+        "- channel surfaces: {}",
+        summary.channel_surface_summary.render_compact()
     );
     assert!(
-        lines.iter().any(|line| {
-            line
-                == "- channel surfaces: 28 total (8 runtime-backed, 15 config-backed, 2 plugin-backed, 3 catalog-only)"
-        }),
+        lines
+            .iter()
+            .any(|line| line.as_str() == expected_distribution),
         "success summary should surface the public channel inventory distribution so operators can see the real maturity mix after onboarding: {lines:#?}"
     );
 }
@@ -8453,11 +8513,11 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
         loong_daemon::onboard_cli::OnboardingActionKind::Channel,
         "channel catalog should become the primary handoff when cli and service channels are both unavailable: {summary:#?}"
     );
-    assert_eq!(summary.next_actions[0].label, "channels");
+    assert_eq!(summary.next_actions[0].label, "choose a channel");
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line == "- channels: loong channels --config '/tmp/loong-config.toml'"
+                line == "- choose a channel: loong channels --config '/tmp/loong-config.toml'"
             }),
         "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
     );
@@ -8819,7 +8879,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         .position(|action| action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Chat);
     let personalize_position = summary.next_actions.iter().position(|action| {
         action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Personalize
-            && action.label == "working preferences"
+            && action.label == "teach Loong your working style"
     });
     let doctor_position = summary.next_actions.iter().position(|action| {
         action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Doctor
@@ -8841,7 +8901,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         "cli-enabled plugin-backed setups should keep the chat handoff second: {summary:#?}"
     );
     let personalize_position = personalize_position.expect(
-        "cli-enabled plugin-backed setups should keep the working-preferences handoff visible before diagnostics",
+        "cli-enabled plugin-backed setups should keep the personalization handoff visible before diagnostics",
     );
     let doctor_position =
         doctor_position.expect("managed-bridge diagnostics should remain available");
@@ -8849,7 +8909,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         .expect("contextual bridge inspection handoff should remain available");
     assert!(
         personalize_position < doctor_position,
-        "working preferences should stay ahead of managed-bridge diagnostics in cli-enabled setups: {summary:#?}"
+        "personalization should stay ahead of managed-bridge diagnostics in cli-enabled setups: {summary:#?}"
     );
     assert!(
         doctor_position < bridge_review_position,

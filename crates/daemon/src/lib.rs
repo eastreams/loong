@@ -143,6 +143,7 @@ mod external_skills_policy_probe;
 pub mod feishu_cli;
 mod feishu_onboarding;
 pub mod feishu_support;
+mod first_run_action_presentation;
 pub mod gateway;
 pub mod import_cli;
 mod managed_plugin_bridge_runtime;
@@ -163,6 +164,7 @@ mod onboarding_model_policy;
 mod operator_inventory_cli;
 pub mod operator_prompt;
 pub mod personalize_cli;
+mod personalize_presentation;
 mod plugin_bridge_account_summary;
 pub mod plugins_cli;
 mod provider_credential_policy;
@@ -215,11 +217,15 @@ use channel_bridge_render::{
 pub(crate) use channel_bridge_render::{
     render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
 };
+use first_run_action_presentation::{
+    build_first_run_action_sections, first_run_group_for_setup_action_kind,
+};
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
+use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
 pub use runtime_snapshot_render::render_runtime_snapshot_text;
 pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_acp_json, runtime_snapshot_context_engine_json,
@@ -698,8 +704,8 @@ pub enum Commands {
         skip_model_probe: bool,
     },
     #[command(
-        about = "Capture optional operator preferences for future sessions",
-        long_about = "Capture optional operator preferences for future sessions.\n\nThis command stores advisory working preferences such as preferred name, response density, initiative level, and standing boundaries. Rerun it any time to update or clear saved preferences. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first."
+        about = PERSONALIZE_COMMAND_ABOUT,
+        long_about = PERSONALIZE_COMMAND_LONG_ABOUT
     )]
     Personalize {
         /// Config file path to update (defaults to auto-discovery)
@@ -1092,35 +1098,15 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
 fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConfig) -> String {
     let config_path_display = config_path.display().to_string();
     let next_actions = next_actions::collect_setup_next_actions(config, &config_path_display);
-    let primary_action = next_actions.first().cloned();
-    let secondary_actions = next_actions.iter().skip(1).cloned().collect::<Vec<_>>();
     let render_width = mvp::presentation::detect_render_width();
-    let mut sections = Vec::new();
-
-    if let Some(primary_action) = primary_action {
-        sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: false,
-            items: vec![mvp::tui_surface::TuiActionSpec {
-                label: primary_action.label,
-                command: primary_action.command,
-            }],
-        });
-    }
-
-    if !secondary_actions.is_empty() {
-        sections.push(mvp::tui_surface::TuiSectionSpec::ActionGroup {
-            title: Some("also available".to_owned()),
-            inline_title_when_wide: false,
-            items: secondary_actions
-                .into_iter()
-                .map(|action| mvp::tui_surface::TuiActionSpec {
-                    label: action.label,
-                    command: action.command,
-                })
-                .collect(),
-        });
-    }
+    let mut sections = build_first_run_action_sections(
+        &next_actions,
+        |action| first_run_group_for_setup_action_kind(action.kind),
+        |action| mvp::tui_surface::TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        },
+    );
 
     sections.push(mvp::tui_surface::TuiSectionSpec::KeyValues {
         title: Some("saved setup".to_owned()),
@@ -4640,4 +4626,40 @@ pub fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {
     fs::write(path, serialized)
         .map_err(|error| format!("write JSON output file failed: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_cli_command;
+
+    #[test]
+    fn build_cli_command_personalize_subcommand_uses_guidance_copy() {
+        let command = build_cli_command("loong");
+        let personalize = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == "personalize")
+            .expect("personalize subcommand");
+
+        let about = personalize
+            .get_about()
+            .map(ToString::to_string)
+            .expect("personalize about");
+        let long_about = personalize
+            .get_long_about()
+            .map(ToString::to_string)
+            .expect("personalize long_about");
+
+        assert!(
+            about.contains("Teach Loong your working style"),
+            "personalize about should match the operator-facing guidance copy: {about}"
+        );
+        assert!(
+            long_about.contains("Teach Loong your working style"),
+            "personalize help should lead with the same guidance copy: {long_about}"
+        );
+        assert!(
+            !long_about.contains("working preferences"),
+            "personalize help should not fall back to the older field-oriented wording: {long_about}"
+        );
+    }
 }

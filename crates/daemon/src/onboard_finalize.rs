@@ -7,6 +7,9 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
+use crate::first_run_action_presentation::{
+    build_first_run_action_sections, first_run_group_for_onboarding_action_kind,
+};
 use crate::onboard_types::OnboardingCredentialSummary;
 use mvp::tui_surface::{
     TuiActionSpec, TuiHeaderStyle, TuiKeyValueSpec, TuiScreenSpec, TuiSectionSpec,
@@ -490,34 +493,14 @@ fn render_onboarding_success_summary_with_style(
 }
 
 fn build_onboarding_success_screen_spec(summary: &OnboardingSuccessSummary) -> TuiScreenSpec {
-    let mut sections = Vec::new();
-
-    if let Some(primary) = summary.next_actions.first() {
-        sections.push(TuiSectionSpec::ActionGroup {
-            title: Some("start here".to_owned()),
-            inline_title_when_wide: false,
-            items: vec![TuiActionSpec {
-                label: primary.label.clone(),
-                command: primary.command.clone(),
-            }],
-        });
-    }
-
-    if summary.next_actions.len() > 1 {
-        sections.push(TuiSectionSpec::ActionGroup {
-            title: Some("also available".to_owned()),
-            inline_title_when_wide: false,
-            items: summary
-                .next_actions
-                .iter()
-                .skip(1)
-                .map(|action| TuiActionSpec {
-                    label: action.label.clone(),
-                    command: action.command.clone(),
-                })
-                .collect(),
-        });
-    }
+    let mut sections = build_first_run_action_sections(
+        &summary.next_actions,
+        |action| first_run_group_for_onboarding_action_kind(action.kind),
+        |action| TuiActionSpec {
+            label: action.label.clone(),
+            command: action.command.clone(),
+        },
+    );
 
     sections.push(TuiSectionSpec::KeyValues {
         title: Some("saved setup".to_owned()),
@@ -713,4 +696,110 @@ pub(crate) fn format_backup_timestamp_at(timestamp: OffsetDateTime) -> CliResult
     timestamp
         .format(BACKUP_TIMESTAMP_FORMAT)
         .map_err(|error| format!("format backup timestamp failed: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::personalize_presentation::personalize_action_label;
+
+    fn sample_success_summary() -> OnboardingSuccessSummary {
+        OnboardingSuccessSummary {
+            import_source: None,
+            config_path: "/tmp/loong.toml".to_owned(),
+            config_status: None,
+            provider: "OpenAI".to_owned(),
+            saved_provider_profiles: vec!["openai".to_owned()],
+            model: "gpt-5.4".to_owned(),
+            transport: "ready".to_owned(),
+            provider_endpoint: None,
+            credential: None,
+            prompt_mode: "native prompt pack".to_owned(),
+            personality: None,
+            prompt_addendum: None,
+            memory_profile: "profile_plus_window".to_owned(),
+            web_search_provider: "none".to_owned(),
+            web_search_credential: None,
+            memory_path: None,
+            channel_surface_summary: OnboardingChannelSurfaceSummary {
+                total_surface_count: 4,
+                runtime_backed_surface_count: 2,
+                config_backed_surface_count: 1,
+                plugin_backed_surface_count: 1,
+                catalog_only_surface_count: 0,
+            },
+            channels: vec!["cli".to_owned()],
+            runtime_backed_channels: Vec::new(),
+            plugin_backed_channels: Vec::new(),
+            outbound_only_channels: Vec::new(),
+            suggested_channels: vec!["Telegram (telegram)".to_owned()],
+            domain_outcomes: Vec::new(),
+            next_actions: vec![
+                OnboardingAction {
+                    kind: OnboardingActionKind::Ask,
+                    label: "first answer".to_owned(),
+                    command: "loong ask --config '/tmp/loong.toml'".to_owned(),
+                },
+                OnboardingAction {
+                    kind: OnboardingActionKind::Chat,
+                    label: "chat".to_owned(),
+                    command: "loong chat --config '/tmp/loong.toml'".to_owned(),
+                },
+                OnboardingAction {
+                    kind: OnboardingActionKind::Personalize,
+                    label: personalize_action_label().to_owned(),
+                    command: "loong personalize --config '/tmp/loong.toml'".to_owned(),
+                },
+                OnboardingAction {
+                    kind: OnboardingActionKind::Channel,
+                    label: "channels".to_owned(),
+                    command: "loong channels --config '/tmp/loong.toml'".to_owned(),
+                },
+                OnboardingAction {
+                    kind: OnboardingActionKind::BrowserPreview,
+                    label: "browser preview".to_owned(),
+                    command: "loong browser preview --config '/tmp/loong.toml'".to_owned(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn build_onboarding_success_screen_spec_separates_continue_setup_actions() {
+        let summary = sample_success_summary();
+
+        let spec = build_onboarding_success_screen_spec(&summary);
+
+        assert!(
+            spec.sections.iter().any(|section| matches!(
+                section,
+                TuiSectionSpec::ActionGroup { title: Some(title), items, .. }
+                    if title == "start here"
+                        && items.len() == 1
+                        && items[0].label == "first answer"
+            )),
+            "expected the primary action to stay in start here: {spec:#?}"
+        );
+        assert!(
+            spec.sections.iter().any(|section| matches!(
+                section,
+                TuiSectionSpec::ActionGroup { title: Some(title), items, .. }
+                    if title == "also available"
+                        && items.iter().all(|item| item.label != "channels" && item.label != "browser preview")
+                        && items.iter().any(|item| item.label == "chat")
+                        && items.iter().any(|item| item.label == personalize_action_label())
+            )),
+            "expected general follow-up actions to stay separate from setup surfaces: {spec:#?}"
+        );
+        assert!(
+            spec.sections.iter().any(|section| matches!(
+                section,
+                TuiSectionSpec::ActionGroup { title: Some(title), items, .. }
+                    if title == "continue setup"
+                        && items.iter().any(|item| item.label == "channels")
+                        && items.iter().any(|item| item.label == "browser preview")
+            )),
+            "expected setup-surface actions to be grouped under continue setup: {spec:#?}"
+        );
+    }
 }

@@ -125,12 +125,12 @@ fn render_advisory_personalization(
     }
 
     if let Some(response_density) = personalization.response_density {
-        let response_density_text = response_density.as_str();
+        let response_density_text = response_density.display_text();
         lines.push(format!("Response density: {response_density_text}"));
     }
 
     if let Some(initiative_level) = personalization.initiative_level {
-        let initiative_level_text = initiative_level.as_str();
+        let initiative_level_text = initiative_level.display_text();
         lines.push(format!("Initiative level: {initiative_level_text}"));
     }
 
@@ -423,7 +423,7 @@ mod tests {
         assert!(rendered.contains("Operator prefers concise shell output."));
         assert!(rendered.contains("Preferred name: Chum"));
         assert!(rendered.contains("Response density: balanced"));
-        assert!(rendered.contains("Initiative level: ask_before_acting"));
+        assert!(rendered.contains("Initiative level: ask before acting"));
         assert!(rendered.contains("Timezone: Asia/Shanghai"));
         assert!(rendered.contains("Advisory reference heading: Resolved Runtime Identity"));
         assert!(!rendered.contains("\n## Resolved Runtime Identity\n"));

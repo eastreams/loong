@@ -724,6 +724,14 @@ pub(super) fn format_cli_chat_live_tool_activity_lines(
     let mut lines = Vec::new();
 
     for tool_snapshot in tool_snapshots {
+        if let Some(plan_update) = cli_chat_live_plan_update_from_tool_snapshot(tool_snapshot) {
+            lines.extend(format_cli_chat_live_plan_activity_lines(
+                tool_snapshot,
+                &plan_update,
+            ));
+            continue;
+        }
+
         let status = tool_snapshot.status.as_str().replace('_', " ");
         let name = tool_snapshot.name.as_deref().unwrap_or("pending");
         let tool_call_id = tool_snapshot.tool_call_id.as_str();
@@ -838,6 +846,8 @@ fn build_cli_chat_live_surface_message_spec(
         };
         sections.push(status_section);
     }
+
+    sections.extend(build_cli_chat_live_plan_sections(snapshot));
 
     if let Some(preview_section) = build_cli_chat_live_preview_section(snapshot) {
         sections.push(preview_section);
@@ -1229,17 +1239,270 @@ fn build_cli_chat_live_preview_section(
     })
 }
 
-fn build_cli_chat_live_tool_section(
-    snapshot: &CliChatLiveSurfaceSnapshot,
-) -> Option<TuiSectionSpec> {
-    if snapshot.tools.is_empty() {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CliChatLivePlanUpdatePreview {
+    explanation: Option<String>,
+    items: Vec<TuiChecklistItemSpec>,
+}
+
+fn build_cli_chat_live_plan_sections(snapshot: &CliChatLiveSurfaceSnapshot) -> Vec<TuiSectionSpec> {
+    let Some(plan_update) = snapshot
+        .tools
+        .iter()
+        .rev()
+        .find_map(cli_chat_live_plan_update_from_tool_snapshot)
+    else {
+        return Vec::new();
+    };
+
+    let mut sections = Vec::new();
+    let lines = match plan_update.explanation {
+        Some(explanation) => vec![explanation],
+        None => vec!["The operator refreshed the active plan.".to_owned()],
+    };
+    sections.push(TuiSectionSpec::Callout {
+        tone: TuiCalloutTone::Info,
+        title: Some("updated plan".to_owned()),
+        lines,
+    });
+
+    if !plan_update.items.is_empty() {
+        sections.push(TuiSectionSpec::Checklist {
+            title: Some("plan items".to_owned()),
+            items: plan_update.items,
+        });
+    }
+
+    sections
+}
+
+fn cli_chat_live_plan_update_from_tool_snapshot(
+    tool_snapshot: &CliChatLiveToolSnapshot,
+) -> Option<CliChatLivePlanUpdatePreview> {
+    let request_summary = tool_snapshot.request_summary.as_deref()?;
+    let request_summary_json = serde_json::from_str::<serde_json::Value>(request_summary).ok()?;
+    let summary_tool_name = request_summary_json
+        .get("tool")
+        .and_then(serde_json::Value::as_str)
+        .or(tool_snapshot.name.as_deref())?;
+    if !is_cli_chat_live_update_plan_tool(summary_tool_name) {
         return None;
     }
 
-    let lines = format_cli_chat_live_tool_activity_lines(snapshot.tools.as_slice());
+    let request = request_summary_json.get("request")?;
+    let explanation = request
+        .get("explanation")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let items = request
+        .get("plan")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(cli_chat_live_plan_item_from_value)
+        .collect::<Vec<_>>();
+
+    if explanation.is_none() && items.is_empty() {
+        return None;
+    }
+
+    Some(CliChatLivePlanUpdatePreview { explanation, items })
+}
+
+fn is_cli_chat_live_update_plan_tool(tool_name: &str) -> bool {
+    let normalized = tool_name
+        .trim()
+        .replace(['-', ' '], "_")
+        .to_ascii_lowercase();
+    normalized == "update_plan"
+}
+
+fn cli_chat_live_plan_item_from_value(value: &serde_json::Value) -> Option<TuiChecklistItemSpec> {
+    let step = value
+        .get("step")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let status = value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("pending");
+
+    Some(TuiChecklistItemSpec {
+        status: cli_chat_live_plan_item_status(status),
+        label: step.to_owned(),
+        detail: status.replace('_', " "),
+    })
+}
+
+fn cli_chat_live_plan_item_status(status: &str) -> TuiChecklistStatus {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "completed" => TuiChecklistStatus::Pass,
+        "failed" | "blocked" | "cancelled" => TuiChecklistStatus::Fail,
+        _ => TuiChecklistStatus::Warn,
+    }
+}
+
+fn cli_chat_live_plan_status_marker(status: TuiChecklistStatus) -> &'static str {
+    match status {
+        TuiChecklistStatus::Pass => "[OK]",
+        TuiChecklistStatus::Warn => "[WARN]",
+        TuiChecklistStatus::Fail => "[FAIL]",
+    }
+}
+
+fn format_cli_chat_live_plan_activity_lines(
+    tool_snapshot: &CliChatLiveToolSnapshot,
+    plan_update: &CliChatLivePlanUpdatePreview,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let status = tool_snapshot.status.as_str().replace('_', " ");
+    let name = tool_snapshot.name.as_deref().unwrap_or("update_plan");
+    let tool_call_id = tool_snapshot.tool_call_id.as_str();
+    let header_line = if let Some(detail) = tool_snapshot.detail.as_deref() {
+        format!("[{status}] {name} (id={tool_call_id}) - {detail}")
+    } else {
+        format!("[{status}] {name} (id={tool_call_id})")
+    };
+    lines.push(header_line);
+
+    if let Some(explanation) = plan_update.explanation.as_deref() {
+        lines.push(format!("summary: {explanation}"));
+    }
+
+    for item in &plan_update.items {
+        let marker = cli_chat_live_plan_status_marker(item.status);
+        lines.push(format!("{marker} {} - {}", item.label, item.detail));
+    }
+
+    if let Some(duration_ms) = tool_snapshot.duration_ms {
+        let exit_code = match tool_snapshot.exit_code {
+            Some(exit_code) => exit_code.to_string(),
+            None => "-".to_owned(),
+        };
+        lines.push(format!("metrics: {duration_ms}ms · exit={exit_code}"));
+    }
+
+    lines
+}
+
+fn build_cli_chat_live_tool_section(
+    snapshot: &CliChatLiveSurfaceSnapshot,
+) -> Option<TuiSectionSpec> {
+    let tool_snapshots = snapshot
+        .tools
+        .iter()
+        .filter(|tool_snapshot| {
+            cli_chat_live_plan_update_from_tool_snapshot(tool_snapshot).is_none()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if tool_snapshots.is_empty() {
+        return None;
+    }
+
+    let lines = format_cli_chat_live_tool_activity_lines(tool_snapshots.as_slice());
 
     Some(TuiSectionSpec::Narrative {
         title: Some("tool activity".to_owned()),
         lines,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conversation::ExecutionLane;
+    use serde_json::json;
+
+    fn empty_output() -> CliChatLiveOutputView {
+        CliChatLiveOutputView::new()
+    }
+
+    fn update_plan_snapshot() -> CliChatLiveSurfaceSnapshot {
+        CliChatLiveSurfaceSnapshot {
+            phase: ConversationTurnPhase::RunningTools,
+            provider_round: Some(1),
+            lane: Some(ExecutionLane::Safe),
+            tool_call_count: 1,
+            message_count: Some(4),
+            estimated_tokens: Some(128),
+            first_token_latency_ms: None,
+            draft_preview: None,
+            tools: vec![CliChatLiveToolSnapshot {
+                tool_call_id: "call-plan".to_owned(),
+                name: Some("update_plan".to_owned()),
+                request_summary: Some(
+                    json!({
+                        "tool": "update_plan",
+                        "request": {
+                            "explanation": "Keep the operator loop tight while deepening setup quality.",
+                            "plan": [
+                                {
+                                    "step": "Inspect current onboarding friction",
+                                    "status": "completed"
+                                },
+                                {
+                                    "step": "Deepen the live updated-plan rendering seam",
+                                    "status": "in_progress"
+                                },
+                                {
+                                    "step": "Validate channel follow-up guidance",
+                                    "status": "pending"
+                                }
+                            ]
+                        }
+                    })
+                    .to_string(),
+                ),
+                args: String::new(),
+                status: ConversationTurnToolState::Completed,
+                detail: Some("plan refreshed".to_owned()),
+                stdout: empty_output(),
+                stderr: empty_output(),
+                file_change: None,
+                duration_ms: Some(12),
+                exit_code: Some(0),
+            }],
+        }
+    }
+
+    #[test]
+    fn build_cli_chat_live_surface_message_spec_promotes_update_plan_into_checklist_section() {
+        let snapshot = update_plan_snapshot();
+
+        let spec = build_cli_chat_live_surface_message_spec(&snapshot);
+
+        assert!(
+            spec.sections.iter().any(|section| matches!(
+                section,
+                TuiSectionSpec::Callout { title: Some(title), lines, .. }
+                    if title == "updated plan"
+                        && lines.iter().any(|line| line.contains("Keep the operator loop tight"))
+            )),
+            "expected an updated-plan callout, got: {spec:#?}"
+        );
+        assert!(
+            spec.sections.iter().any(|section| matches!(
+                section,
+                TuiSectionSpec::Checklist { title: Some(title), items }
+                    if title == "plan items"
+                        && items.len() == 3
+                        && items[0].label == "Inspect current onboarding friction"
+                        && items[1].label == "Deepen the live updated-plan rendering seam"
+                        && items[2].label == "Validate channel follow-up guidance"
+            )),
+            "expected plan items checklist, got: {spec:#?}"
+        );
+        assert!(
+            !spec.sections.iter().any(|section| matches!(
+                section,
+                TuiSectionSpec::Narrative { title: Some(title), .. } if title == "tool activity"
+            )),
+            "updated plan should not be duplicated inside generic tool activity: {spec:#?}"
+        );
+    }
 }
