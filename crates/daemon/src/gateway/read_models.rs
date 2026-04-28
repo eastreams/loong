@@ -367,6 +367,7 @@ pub struct GatewayRuntimePluginInventorySummaryReadModel {
     pub roots_source: Option<String>,
     pub returned_results: Option<usize>,
     pub loaded_plugins: Option<usize>,
+    pub shadowed_plugin_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_extension_authoring_summary:
         Option<crate::native_extension_authoring::NativeExtensionAuthoringSummaryView>,
@@ -1202,6 +1203,7 @@ fn build_runtime_plugin_inventory_summary_read_model(
         roots_source: inventory.roots_source.clone(),
         returned_results: inventory.returned_results,
         loaded_plugins,
+        shadowed_plugin_count: Some(inventory.shadowed_plugin_ids.len()),
         native_extension_authoring_summary: inventory.native_extension_authoring_summary.clone(),
         activation_attestation_integrity_distribution,
         runtime_health_status_distribution,

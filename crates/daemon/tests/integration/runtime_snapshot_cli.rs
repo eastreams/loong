@@ -516,6 +516,7 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
             returned_results: Some(1),
             summary: None,
             native_extension_authoring_summary: None,
+            shadowed_plugin_ids: Vec::new(),
             results: Vec::new(),
         }),
     )

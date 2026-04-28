@@ -516,6 +516,7 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
             returned_results: Some(1),
             summary: None,
             native_extension_authoring_summary: None,
+            shadowed_plugin_ids: Vec::new(),
             results: Vec::new(),
         }),
     );

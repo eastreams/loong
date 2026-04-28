@@ -579,6 +579,8 @@ pub struct RuntimePluginInventoryReadModel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_extension_authoring_summary: Option<NativeExtensionAuthoringSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadowed_plugin_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<RuntimePluginInventoryResultView>,
 }
 
@@ -1176,6 +1178,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
+            shadowed_plugin_ids: Vec::new(),
             results: Vec::new(),
         };
     }
@@ -1196,6 +1199,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
+            shadowed_plugin_ids: Vec::new(),
             results: Vec::new(),
         };
     }
@@ -1221,30 +1225,45 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
     };
 
     match execute_plugins_command(options).await {
-        Ok(PluginsCommandExecution::Inventory(execution)) => RuntimePluginInventoryReadModel {
-            available: true,
-            reason: None,
-            error: None,
-            roots_source,
-            returned_results: Some(execution.returned_results),
-            summary: Some(execution.summary),
-            native_extension_authoring_summary: summarize_native_extension_authoring_guidance(
-                &execution.native_extension_authoring_guidance,
-            ),
-            results: execution
-                .results
-                .into_iter()
-                .map(|result| RuntimePluginInventoryResultView {
-                    plugin_id: result.plugin_id,
-                    source_path: result.source_path,
-                    activation_status: result.activation_status,
-                    activation_reason: result.activation_reason,
-                    loaded: result.loaded,
-                    activation_attestation: result.activation_attestation,
-                    runtime_health: result.runtime_health,
-                })
-                .collect(),
-        },
+        Ok(PluginsCommandExecution::Inventory(execution)) => {
+            let (effective_results, shadowed_plugin_ids) =
+                if roots_source.as_deref() == Some("auto_discovered") {
+                    let selection = kernel::prefer_first_plugin_ids(execution.results, |result| {
+                        result.plugin_id.as_str()
+                    });
+                    (selection.effective, selection.shadowed_plugin_ids)
+                } else {
+                    (execution.results, Vec::new())
+                };
+            let summary = summarize_plugin_inventory_results(&effective_results);
+            let native_extension_authoring_guidance =
+                build_plugins_inventory_native_extension_authoring_guidance(&effective_results);
+
+            RuntimePluginInventoryReadModel {
+                available: true,
+                reason: None,
+                error: None,
+                roots_source,
+                returned_results: Some(effective_results.len()),
+                summary: Some(summary),
+                native_extension_authoring_summary: summarize_native_extension_authoring_guidance(
+                    &native_extension_authoring_guidance,
+                ),
+                shadowed_plugin_ids,
+                results: effective_results
+                    .into_iter()
+                    .map(|result| RuntimePluginInventoryResultView {
+                        plugin_id: result.plugin_id,
+                        source_path: result.source_path,
+                        activation_status: result.activation_status,
+                        activation_reason: result.activation_reason,
+                        loaded: result.loaded,
+                        activation_attestation: result.activation_attestation,
+                        runtime_health: result.runtime_health,
+                    })
+                    .collect(),
+            }
+        }
         Ok(_) => RuntimePluginInventoryReadModel {
             available: false,
             reason: Some("unexpected_plugins_command_variant".to_owned()),
@@ -1253,6 +1272,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
+            shadowed_plugin_ids: Vec::new(),
             results: Vec::new(),
         },
         Err(error) => RuntimePluginInventoryReadModel {
@@ -1263,6 +1283,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             returned_results: None,
             summary: None,
             native_extension_authoring_summary: None,
+            shadowed_plugin_ids: Vec::new(),
             results: Vec::new(),
         },
     }

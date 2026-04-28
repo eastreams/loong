@@ -762,6 +762,7 @@ fn render_status_runtime_plugin_inventory_summary(
     let loaded_plugins = render_optional_usize(inventory.loaded_plugins);
     let reason = inventory.reason.as_deref().unwrap_or("-");
     let roots_source = inventory.roots_source.as_deref().unwrap_or("-");
+    let shadowed_plugins = render_optional_usize(inventory.shadowed_plugin_count);
     let authoring_summary = inventory.native_extension_authoring_summary.as_ref();
     let guided_plugins = authoring_summary
         .map(|summary| summary.guided_plugins.to_string())
@@ -777,8 +778,17 @@ fn render_status_runtime_plugin_inventory_summary(
         .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "available={} roots_source={} returned_results={} loaded_plugins={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
-        inventory.available, roots_source, returned_results, loaded_plugins, guided_plugins, metadata_issues, runnable_actions, allow_command_gated_actions, reason
+        "available={} roots_source={} returned_results={} loaded_plugins={} shadowed_plugins={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
+        inventory.available,
+        roots_source,
+        returned_results,
+        loaded_plugins,
+        shadowed_plugins,
+        guided_plugins,
+        metadata_issues,
+        runnable_actions,
+        allow_command_gated_actions,
+        reason
     )
 }
 
@@ -953,6 +963,7 @@ mod tests {
                         roots_source: Some("configured".to_owned()),
                         returned_results: Some(1),
                         loaded_plugins: Some(0),
+                        shadowed_plugin_count: Some(0),
                         native_extension_authoring_summary: Some(
                             crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
                                 guided_plugins: 1,
@@ -1039,6 +1050,7 @@ mod tests {
                         allow_command_gated_action_count: 1,
                     },
                 ),
+                shadowed_plugin_ids: Vec::new(),
                 results: Vec::new(),
             }),
             next_actions: vec![StatusCliAction {
@@ -1075,6 +1087,7 @@ mod tests {
         assert!(rendered.contains("runtime plugin inventory"));
         assert!(rendered.contains("roots_source=configured"));
         assert!(rendered.contains("returned_results=1"));
+        assert!(rendered.contains("shadowed_plugins=0"));
         assert!(rendered.contains("guided_plugins=1"));
         assert!(rendered.contains("metadata_issues=1"));
         assert!(rendered.contains("runnable_actions=3"));
@@ -1212,6 +1225,7 @@ mod tests {
                         allow_command_gated_action_count: 1,
                     },
                 ),
+                shadowed_plugin_ids: Vec::new(),
                 results: Vec::new(),
             }),
             next_actions: Vec::new(),

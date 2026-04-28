@@ -6582,6 +6582,87 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[tokio::test]
+    async fn doctor_runtime_plugin_inventory_json_payload_prefers_project_local_loong_extensions_over_global_duplicates()
+     {
+        let root = browser_companion_temp_dir("runtime-plugins-auto-discovery-precedence");
+        let home = browser_companion_temp_dir("runtime-plugins-auto-discovery-home");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", &home);
+        let _cwd = DoctorCliCurrentDirGuard::set(&root);
+        let mut config = runtime_plugins_test_config(&root, true);
+        config.runtime_plugins.roots = vec!["   ".to_owned()];
+
+        let project_root = root.join(".loong/extensions/search");
+        let global_root = home.join(".loong/agent/extensions/search");
+        std::fs::create_dir_all(&project_root).expect("create project runtime root");
+        std::fs::create_dir_all(&global_root).expect("create global runtime root");
+
+        std::fs::write(
+            project_root.join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "project-extension",
+  "connector_name": "project-extension",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Project-local extension",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "python",
+    "command": "python3",
+    "args_json": "[\"index.py\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+        )
+        .expect("write project-local runtime plugin manifest");
+        std::fs::write(
+            global_root.join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "global-extension",
+  "connector_name": "global-extension",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Global extension",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "python",
+    "command": "python3",
+    "args_json": "[\"index.py\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+        )
+        .expect("write global runtime plugin manifest");
+
+        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+
+        assert_eq!(payload["available"], json!(true));
+        assert_eq!(payload["roots_source"], json!("auto_discovered"));
+        assert_eq!(payload["returned_results"], json!(1));
+        let plugin = payload["results"]
+            .as_array()
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|plugin| plugin["plugin_id"].as_str() == Some("shared-extension"))
+            })
+            .expect("shared extension should be present");
+        assert_eq!(plugin["provider_id"], json!("project-extension"));
+        assert_eq!(plugin["summary"], json!("Project-local extension"));
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&home).ok();
+    }
+
     #[test]
     fn build_doctor_next_steps_guides_runtime_plugin_enablement_when_disabled() {
         let checks = vec![DoctorCheck {
