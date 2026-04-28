@@ -545,6 +545,8 @@ pub struct PluginsInventoryExecution {
     pub bridge_support_delta_sha256: Option<String>,
     pub summary: PluginsInventorySummaryView,
     pub returned_results: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_extension_authoring_guidance: Vec<NativeExtensionAuthoringGuidanceView>,
     pub results: Vec<PluginInventoryResult>,
 }
 
@@ -888,6 +890,8 @@ pub async fn execute_plugins_command(
             let bridge_support_provenance = context.bridge_support_provenance();
             let results = decode_plugin_inventory_results(&report)?;
             let summary = summarize_plugin_inventory_results(&results);
+            let native_extension_authoring_guidance =
+                build_plugins_inventory_native_extension_authoring_guidance(&results);
 
             Ok(PluginsCommandExecution::Inventory(Box::new(
                 PluginsInventoryExecution {
@@ -903,6 +907,7 @@ pub async fn execute_plugins_command(
                     bridge_support_delta_sha256: context.bridge_support_delta_sha256,
                     returned_results: results.len(),
                     summary,
+                    native_extension_authoring_guidance,
                     results,
                 },
             )))
@@ -2020,6 +2025,11 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
 }
 
 fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> String {
+    let authoring_guidance_by_plugin = execution
+        .native_extension_authoring_guidance
+        .iter()
+        .map(|guidance| (guidance.plugin_id.as_str(), guidance))
+        .collect::<BTreeMap<_, _>>();
     let mut lines = vec![format!(
         "plugins inventory query={} roots={} returned_plugins={} ready={} setup_incomplete={} blocked={} deferred={} loaded={}",
         display_text_or_dash(Some(execution.query.as_str())),
@@ -2059,6 +2069,9 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
         format_rollup_map(&execution.summary.runtime_health_status_distribution)
     ));
     for result in &execution.results {
+        let guidance = authoring_guidance_by_plugin
+            .get(result.plugin_id.as_str())
+            .copied();
         let activation_status = inventory_result_status_label(result);
         let setup_surface = inventory_result_setup_surface_label(result);
         let source_language = result.source_language.as_deref().unwrap_or("-");
@@ -2128,6 +2141,14 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
                 extension_events,
                 extension_host_actions,
                 extension_metadata_issues
+            ));
+        }
+        if let Some(guidance) = guidance {
+            lines.push(format!(
+                "  authoring inventory_command={} smoke_test_command={} reference_example={}",
+                guidance.inventory_command,
+                guidance.smoke_test_command,
+                guidance.reference_example_path
             ));
         }
         if let Some(reason) = result.activation_reason.as_deref() {
@@ -3458,6 +3479,15 @@ fn build_plugins_doctor_native_extension_authoring_guidance(
     results
         .iter()
         .filter_map(|result| build_native_extension_authoring_guidance(&result.plugin))
+        .collect()
+}
+
+fn build_plugins_inventory_native_extension_authoring_guidance(
+    results: &[PluginInventoryResult],
+) -> Vec<NativeExtensionAuthoringGuidanceView> {
+    results
+        .iter()
+        .filter_map(build_native_extension_authoring_guidance)
         .collect()
 }
 
@@ -5921,6 +5951,94 @@ mod tests {
                 json!("session_start")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_inventory_surfaces_native_extension_authoring_guidance() {
+        let repo_root = repo_root();
+        let spec = checked_in_native_extension_example_specs()
+            .into_iter()
+            .find(|spec| spec.source_language_arg == "js")
+            .expect("javascript checked-in example should exist");
+        let package_root = repo_root
+            .join(spec.package_root_relative)
+            .display()
+            .to_string();
+        let scaffold_defaults = checked_in_native_extension_scaffold_defaults(&spec);
+        let profile = process_stdio_native_extension_language_profile(&scaffold_defaults)
+            .expect("checked-in example should map to a public authoring profile")
+            .expect("checked-in example should resolve a process stdio profile");
+
+        let inventory_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Inventory(PluginInventoryCommand {
+                source: PluginScanSourceArgs {
+                    roots: vec![package_root.clone()],
+                    query: String::new(),
+                    limit: None,
+                    bridge_support: None,
+                    bridge_profile: None,
+                    bridge_support_delta: None,
+                    bridge_support_sha256: None,
+                    bridge_support_delta_sha256: None,
+                },
+                include_ready: true,
+                include_blocked: true,
+                include_deferred: true,
+                include_examples: false,
+            }),
+        })
+        .await
+        .expect("inventory should read checked-in example package");
+
+        let PluginsCommandExecution::Inventory(inventory_execution) = inventory_execution else {
+            panic!("expected inventory execution");
+        };
+        assert_eq!(
+            inventory_execution
+                .native_extension_authoring_guidance
+                .len(),
+            1
+        );
+        let guidance = &inventory_execution.native_extension_authoring_guidance[0];
+        assert_eq!(guidance.plugin_id, spec.plugin_id);
+        assert_eq!(guidance.package_root, package_root);
+        assert_eq!(
+            guidance.source_language,
+            scaffold_defaults
+                .source_language
+                .expect("checked-in example should resolve a source language")
+        );
+        assert_eq!(guidance.bridge_kind, "process_stdio");
+        assert_eq!(guidance.reference_example_path, spec.package_root_relative);
+        assert_eq!(
+            guidance.inventory_command,
+            render_authoring_inventory_command(package_root.as_str())
+        );
+        assert_eq!(guidance.smoke_allow_command, profile.smoke_allow_command);
+        assert_eq!(
+            guidance.smoke_test_command,
+            render_authoring_smoke_test_command(
+                package_root.as_str(),
+                spec.plugin_id,
+                profile.smoke_allow_command
+            )
+        );
+        assert_eq!(
+            guidance.extension_contract.as_deref(),
+            Some(PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT)
+        );
+        assert!(guidance.extension_metadata_issues.is_empty());
+
+        let rendered = render_plugins_inventory_text(&inventory_execution);
+        assert!(
+            rendered.contains("authoring inventory_command="),
+            "inventory text should include authoring guidance: {rendered}"
+        );
+        assert!(
+            rendered.contains(spec.package_root_relative),
+            "inventory text should include the reference example path: {rendered}"
+        );
     }
 
     #[tokio::test]
