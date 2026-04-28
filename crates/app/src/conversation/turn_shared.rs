@@ -11,14 +11,17 @@ use super::turn_engine::{
 use super::turn_engine::{ToolIntent, ToolResultEnvelope};
 use serde::Serialize;
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::CliResult;
+#[cfg(test)]
+use crate::tools::ToolView;
 
 #[path = "turn_shared_approval.rs"]
 mod approval;
 #[path = "turn_shared_control.rs"]
 mod control;
+#[path = "turn_shared_external_skill.rs"]
+mod external_skill;
 #[path = "turn_shared_followup_tail.rs"]
 mod followup_tail;
 #[path = "turn_shared_payload.rs"]
@@ -39,6 +42,10 @@ pub use control::{
     ParsedToolDrivenContinuationReply, ToolDrivenContinuationState,
     missing_tool_call_followup_payload, next_conversation_turn_id,
     parse_tool_driven_continuation_reply, tool_loop_circuit_breaker_reply,
+};
+pub use external_skill::{
+    ExternalSkillInvokeContext, external_skill_invoke_context_from_payload_summary,
+    parse_external_skill_invoke_context,
 };
 pub(crate) use control::{
     ToolDrivenFollowupContractMode, render_tool_followup_continuation_contract,
@@ -75,9 +82,8 @@ pub(crate) use followup_tail::{
 };
 pub use tool_result::{reduce_followup_payload_for_model, tool_result_contains_truncation_signal};
 use tool_result::{
-    envelope_uses_external_skill_context, followup_prompt_needs_truncation_hint,
-    followup_prompt_uses_discovery_guidance, parse_tool_result_continuation,
-    parse_tool_result_followup_context,
+    followup_prompt_needs_truncation_hint, followup_prompt_uses_discovery_guidance,
+    parse_tool_result_continuation, parse_tool_result_followup_context,
     proactive_followup_continuation_context,
 };
 pub(crate) use control::sanitize_reply_text;
@@ -129,16 +135,6 @@ pub fn decide_provider_turn_request_action(
             }
         },
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalSkillInvokeContext {
-    pub skill_id: String,
-    pub display_name: String,
-    pub instructions: String,
-    pub skill_root: Option<PathBuf>,
-    pub allowed_tools: Vec<String>,
-    pub blocked_tools: Vec<String>,
 }
 
 #[cfg(test)]
@@ -220,63 +216,6 @@ pub fn build_discovery_recovery_followup_user_prompt(
     sections.join("\n\n")
 }
 
-pub fn parse_external_skill_invoke_context(
-    tool_result_text: &str,
-) -> Option<ExternalSkillInvokeContext> {
-    tool_result_text
-        .trim()
-        .lines()
-        .filter_map(parse_external_skill_invoke_context_line)
-        .next()
-}
-
-pub fn external_skill_invoke_context_from_payload_summary(
-    payload_json: &Value,
-) -> Option<ExternalSkillInvokeContext> {
-    let instructions = payload_json
-        .get("instructions")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?
-        .to_owned();
-    let skill_id = payload_json
-        .get("skill_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("external-skill")
-        .to_owned();
-    let display_name = payload_json
-        .get("display_name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(skill_id.as_str())
-        .to_owned();
-    let skill_root = payload_json
-        .get("skill_root")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let metadata = payload_json.get("metadata").and_then(Value::as_object);
-    let allowed_tools = metadata
-        .and_then(|metadata| metadata.get("allowed_tools"))
-        .map(parse_external_skill_tool_restrictions)
-        .unwrap_or_default();
-    let blocked_tools = metadata
-        .and_then(|metadata| metadata.get("blocked_tools"))
-        .map(parse_external_skill_tool_restrictions)
-        .unwrap_or_default();
-    Some(ExternalSkillInvokeContext {
-        skill_id,
-        display_name,
-        instructions,
-        skill_root,
-        allowed_tools,
-        blocked_tools,
-    })
-}
 
 pub async fn request_completion_with_raw_fallback_detailed<R: ConversationRuntime + ?Sized>(
     runtime: &R,
@@ -355,32 +294,6 @@ fn append_followup_warning(messages: &mut Vec<Value>, loop_warning_reason: Optio
     }
 }
 
-fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
-    let tool_result_line = ToolResultLine::parse(line)?;
-    let envelope = serde_json::to_value(tool_result_line.envelope()).ok()?;
-    let uses_external_skill_context = envelope_uses_external_skill_context(&envelope);
-    let uses_legacy_carrier = tool_result_line.tool_name() == "external_skills.invoke";
-    if !uses_legacy_carrier && !uses_external_skill_context {
-        return None;
-    }
-    if tool_result_line.payload_truncated() {
-        return None;
-    }
-    let payload_json = tool_result_line.payload_summary_json()?;
-    external_skill_invoke_context_from_payload_summary(&payload_json)
-}
-
-fn parse_external_skill_tool_restrictions(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
 
 #[cfg(test)]
 pub(crate) fn parse_tool_result_followup_for_test(messages: &[Value]) -> (Value, Value) {
@@ -417,6 +330,7 @@ pub(crate) fn parse_tool_result_followup_for_test(messages: &[Value]) -> (Value,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use crate::conversation::turn_engine::{
         ApprovalRequirement, ApprovalRequirementKind, TurnFailure, TurnResult,
     };
@@ -643,6 +557,92 @@ mod tests {
         assert_eq!(non_tool_kernel.raw_reply(), None);
         assert_eq!(non_tool_kernel.followup_payload(), None);
         assert_eq!(non_tool_kernel.fallback_reply(), "plain reply");
+    }
+
+    #[tokio::test]
+    async fn request_completion_with_raw_fallback_detailed_preserves_state_and_uses_raw_reply_body() {
+        #[derive(Clone)]
+        struct StateOnlyRuntime;
+
+        #[async_trait]
+        impl ConversationRuntime for StateOnlyRuntime {
+            fn tool_view(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<ToolView> {
+                Ok(crate::tools::runtime_tool_view())
+            }
+
+            async fn build_messages(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _include_system_prompt: bool,
+                _tool_view: &ToolView,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<Vec<Value>> {
+                Ok(Vec::new())
+            }
+
+            async fn request_completion(
+                &self,
+                _config: &LoongConfig,
+                _messages: &[Value],
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<String> {
+                Ok("[followup_state:continue]".to_owned())
+            }
+
+            async fn request_turn(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _turn_id: &str,
+                _messages: &[Value],
+                _tool_view: &ToolView,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<ProviderTurn> {
+                Ok(ProviderTurn::default())
+            }
+
+            async fn request_turn_streaming(
+                &self,
+                _config: &LoongConfig,
+                _session_id: &str,
+                _turn_id: &str,
+                _messages: &[Value],
+                _tool_view: &ToolView,
+                _binding: ConversationRuntimeBinding<'_>,
+                _on_token: crate::provider::StreamingTokenCallback,
+            ) -> CliResult<ProviderTurn> {
+                Ok(ProviderTurn::default())
+            }
+
+            async fn persist_turn(
+                &self,
+                _session_id: &str,
+                _role: &str,
+                _content: &str,
+                _binding: ConversationRuntimeBinding<'_>,
+            ) -> CliResult<()> {
+                Ok(())
+            }
+        }
+
+        let reply = request_completion_with_raw_fallback_detailed(
+            &StateOnlyRuntime,
+            &LoongConfig::default(),
+            &[],
+            ConversationRuntimeBinding::direct(),
+            "<think>hidden</think>fallback body",
+            None,
+        )
+        .await;
+
+        assert_eq!(reply.state, Some(ToolDrivenContinuationState::Continue));
+        assert_eq!(reply.reply, "fallback body");
     }
 
     #[test]
