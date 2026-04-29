@@ -1045,59 +1045,16 @@ fn build_responses_request_body(
     }
 
     if include_tool_schema && !tool_definitions.is_empty() {
-        let mut tools = tool_definitions.to_vec();
-        if responses_native_web_search_enabled(config) {
-            trim_function_web_query_mode_for_native_web_search(&mut tools);
-            tools.push(json!({ "type": "web_search" }));
-        }
+        let tools = super::native_tool_surface::responses_tool_definitions_with_native_search(
+            config,
+            tool_definitions,
+        );
         body.insert("tools".to_owned(), Value::Array(tools));
         body.insert("tool_choice".to_owned(), json!("auto"));
         body.insert("parallel_tool_calls".to_owned(), Value::Bool(true));
     }
 
     Value::Object(body)
-}
-
-fn responses_native_web_search_enabled(config: &LoongConfig) -> bool {
-    config.tools.web_search.enabled
-        && matches!(config.provider.kind, crate::config::ProviderKind::Openai)
-}
-
-fn trim_function_web_query_mode_for_native_web_search(tools: &mut [Value]) {
-    for tool in tools {
-        let Some(function) = tool.get_mut("function").and_then(Value::as_object_mut) else {
-            continue;
-        };
-        let tool_name = function.get("name").and_then(Value::as_str);
-        if tool_name != Some("web") {
-            continue;
-        }
-
-        function.insert(
-            "description".to_owned(),
-            Value::String("Fetch a URL or send HTTP requests".to_owned()),
-        );
-
-        let Some(parameters) = function
-            .get_mut("parameters")
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-        let Some(properties) = parameters
-            .get_mut("properties")
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-
-        for key in ["query", "provider", "max_results"] {
-            properties.remove(key);
-        }
-
-        parameters.remove("anyOf");
-        parameters.insert("required".to_owned(), json!(["url"]));
-    }
 }
 
 fn build_responses_input_items(messages: &[Value]) -> (Option<String>, Vec<Value>) {

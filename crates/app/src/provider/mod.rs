@@ -27,6 +27,7 @@ mod http_client_runtime;
 mod mock_transport;
 mod model_candidate_cooldown_runtime;
 mod model_candidate_resolver_runtime;
+mod native_tool_surface;
 mod policy;
 mod profile_health_policy;
 mod profile_health_runtime;

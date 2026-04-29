@@ -265,7 +265,8 @@ fn build_prompt_fragments_from_prompt_sources(
     let system_text = system_prompt.trim().to_owned();
     let capability_snapshot =
         tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
-    let native_web_search_section = render_native_web_search_section_if_needed(config);
+    let native_web_search_section =
+        super::native_tool_surface::native_web_search_prompt_section(config);
     let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let execution_discipline_section = render_execution_discipline_section();
     let workspace_guidance_section = workspace_guidance_model
@@ -590,30 +591,6 @@ fn render_governed_runtime_binding_section(binding: ProviderRuntimeBinding<'_>) 
     format!(
         "## Governed Runtime Binding\n- session_mode: {}\n- kernel_binding: {kernel_binding}",
         binding.session_mode().as_str()
-    )
-}
-
-fn render_native_web_search_section_if_needed(config: &LoongConfig) -> Option<String> {
-    let responses_mode = matches!(
-        config.provider.wire_api,
-        crate::config::ProviderWireApi::Responses
-    );
-    let openai_provider = matches!(config.provider.kind, crate::config::ProviderKind::Openai);
-    if !(responses_mode && openai_provider && config.tools.web_search.enabled) {
-        return None;
-    }
-
-    Some(
-        [
-            "## Native Query Search".to_owned(),
-            "- This OpenAI Responses profile exposes native `web_search` for query-style public web search."
-                .to_owned(),
-            "- Use native `web_search` for search queries."
-                .to_owned(),
-            "- Use `web` for direct URL fetches and low-level HTTP requests."
-                .to_owned(),
-        ]
-        .join("\n"),
     )
 }
 
