@@ -85,12 +85,6 @@ fn env_value_falsey(value: &str) -> bool {
     )
 }
 
-fn mouse_capture_enabled() -> bool {
-    env::var("LOONG_TUI_MOUSE_CAPTURE")
-        .map(|value| !env_value_falsey(value.as_str()))
-        .unwrap_or(true)
-}
-
 fn alt_screen_mode() -> AltScreenMode {
     match env::var("LOONG_TUI_ALT_SCREEN")
         .ok()
@@ -115,6 +109,12 @@ fn alternate_screen_enabled() -> bool {
     }
 }
 
+fn mouse_capture_enabled(use_alt_screen: bool) -> bool {
+    env::var("LOONG_TUI_MOUSE_CAPTURE")
+        .map(|value| !env_value_falsey(value.as_str()))
+        .unwrap_or(use_alt_screen)
+}
+
 pub(super) async fn run_cli_chat_surface(
     config_path: Option<&str>,
     session_hint: Option<&str>,
@@ -134,7 +134,7 @@ pub(super) async fn run_cli_chat_surface(
         )
         .map_err(|e| format!("failed to enter alternate screen: {}", e))?;
     }
-    let capture_mouse = mouse_capture_enabled();
+    let capture_mouse = mouse_capture_enabled(use_alt_screen);
     if capture_mouse {
         crossterm::execute!(stdout, EnableMouseCapture)
             .map_err(|e| format!("failed to enable mouse capture: {}", e))?;
@@ -214,18 +214,22 @@ mod tests {
     fn mouse_capture_defaults_to_enabled_and_honors_explicit_disable() {
         let mut env = ScopedEnv::new();
         env.remove("LOONG_TUI_MOUSE_CAPTURE");
-        assert!(mouse_capture_enabled());
+        assert!(mouse_capture_enabled(true));
+        assert!(!mouse_capture_enabled(false));
 
         env.set("LOONG_TUI_MOUSE_CAPTURE", "0");
         assert!(env_value_falsey("0"));
-        assert!(!mouse_capture_enabled());
+        assert!(!mouse_capture_enabled(true));
+        assert!(!mouse_capture_enabled(false));
 
         env.set("LOONG_TUI_MOUSE_CAPTURE", "false");
         assert!(env_value_falsey("false"));
-        assert!(!mouse_capture_enabled());
+        assert!(!mouse_capture_enabled(true));
+        assert!(!mouse_capture_enabled(false));
 
         env.set("LOONG_TUI_MOUSE_CAPTURE", "1");
-        assert!(mouse_capture_enabled());
+        assert!(mouse_capture_enabled(true));
+        assert!(mouse_capture_enabled(false));
     }
 
     #[test]
@@ -247,6 +251,27 @@ mod tests {
         env.set("LOONG_TUI_ALT_SCREEN", "never");
         assert_eq!(alt_screen_mode(), AltScreenMode::Never);
         assert!(!alternate_screen_enabled());
+    }
+
+    #[test]
+    fn mouse_capture_follows_alt_screen_policy_when_not_overridden() {
+        let mut env = ScopedEnv::new();
+        env.remove("LOONG_TUI_MOUSE_CAPTURE");
+        env.remove("LOONG_TUI_ALT_SCREEN");
+        env.remove("ZELLIJ");
+        env.remove("ZELLIJ_SESSION_NAME");
+
+        let use_alt_screen = alternate_screen_enabled();
+        assert!(use_alt_screen);
+        assert!(mouse_capture_enabled(use_alt_screen));
+
+        env.set("ZELLIJ", "1");
+        let use_alt_screen = alternate_screen_enabled();
+        assert!(!use_alt_screen);
+        assert!(!mouse_capture_enabled(use_alt_screen));
+
+        env.set("LOONG_TUI_MOUSE_CAPTURE", "1");
+        assert!(mouse_capture_enabled(use_alt_screen));
     }
 
     #[test]
