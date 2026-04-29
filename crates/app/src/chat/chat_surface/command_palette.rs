@@ -1,4 +1,5 @@
 use crate::chat::chat_surface::i18n::{I18nService, Language, SurfaceCopy};
+use crate::chat::chat_surface::scroll_state::ScrollState;
 use crate::chat::chat_surface::utils::*;
 use crate::config::ProviderKind;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -223,8 +224,7 @@ pub struct CommandPalette {
     settings_focus: SettingsSurfaceFocus,
     skills: Vec<SkillEntry>,
     mode: PaletteMode,
-    state: ListState,
-    scroll_offset: usize,
+    scroll_state: ScrollState,
     i18n: I18nService,
 }
 
@@ -257,8 +257,7 @@ impl CommandPalette {
             settings_focus: SettingsSurfaceFocus::Overview,
             skills,
             mode: PaletteMode::Commands,
-            state: ListState::default(),
-            scroll_offset: 0,
+            scroll_state: ScrollState::new(),
             i18n: I18nService::new(lang),
         }
     }
@@ -267,8 +266,7 @@ impl CommandPalette {
         self.mode = PaletteMode::Commands;
         self.query = query.trim().trim_start_matches(['/', ':']).to_string();
         self.settings_status = None;
-        self.state.select(Some(0));
-        self.scroll_offset = 0;
+        self.scroll_state.reset();
     }
 
     pub fn show_settings(
@@ -291,8 +289,8 @@ impl CommandPalette {
             })
             .or_else(|| self.first_selectable_index())
             .unwrap_or(0);
-        self.state.select(Some(selected_index));
-        self.scroll_offset = 0;
+        self.scroll_state.selected_idx = Some(selected_index);
+        self.scroll_state.scroll_top = 0;
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -300,8 +298,7 @@ impl CommandPalette {
         self.mode = PaletteMode::Skills;
         self.query = query.trim().trim_start_matches('$').to_string();
         self.settings_status = None;
-        self.state.select(Some(0));
-        self.scroll_offset = 0;
+        self.scroll_state.reset();
     }
 
     pub fn has_skills(&self) -> bool {
@@ -342,26 +339,16 @@ impl CommandPalette {
                 Style::default().fg(SURFACE_DIM_GRAY),
             )])));
             let list = List::new(items).highlight_style(Style::default());
-            f.render_stateful_widget(list, area, &mut self.state);
+            let mut visible_state = ListState::default();
+            f.render_stateful_widget(list, area, &mut visible_state);
             return;
         }
 
-        let selected = self
-            .state
-            .selected()
-            .unwrap_or(0)
+        let selected = self.selected_index_for(&filtered);
+        let start = self
+            .scroll_state
+            .scroll_top
             .min(filtered.len().saturating_sub(1));
-        let selected = if filtered.get(selected).is_some_and(|entry| entry.selectable) {
-            selected
-        } else {
-            selectable_indices(&filtered)
-                .into_iter()
-                .next()
-                .unwrap_or(selected)
-        };
-        self.state.select(Some(selected));
-        self.sync_scroll(selected, filtered.len());
-        let start = self.scroll_offset.min(filtered.len().saturating_sub(1));
         let end = (start + visible_rows).min(filtered.len());
         let visible = filtered.get(start..end).unwrap_or(&[]);
 
@@ -498,27 +485,17 @@ impl CommandPalette {
                 items.push(ListItem::new(Line::from("")));
             }
             let list = List::new(items).highlight_style(Style::default());
-            f.render_stateful_widget(list, list_area, &mut self.state);
+            let mut visible_state = ListState::default();
+            f.render_stateful_widget(list, list_area, &mut visible_state);
             f.render_widget(Paragraph::new(skill_popup_hint_line()), hint_area);
             return;
         }
 
-        let selected = self
-            .state
-            .selected()
-            .unwrap_or(0)
+        let selected = self.selected_index_for(&filtered);
+        let start = self
+            .scroll_state
+            .scroll_top
             .min(filtered.len().saturating_sub(1));
-        let selected = if filtered.get(selected).is_some_and(|entry| entry.selectable) {
-            selected
-        } else {
-            selectable_indices(&filtered)
-                .into_iter()
-                .next()
-                .unwrap_or(selected)
-        };
-        self.state.select(Some(selected));
-        self.sync_scroll(selected, filtered.len());
-        let start = self.scroll_offset.min(filtered.len().saturating_sub(1));
         let end = (start + visible_rows).min(filtered.len());
         let visible = filtered.get(start..end).unwrap_or(&[]);
 
@@ -700,27 +677,17 @@ impl CommandPalette {
                 Style::default().fg(SURFACE_DIM_GRAY),
             )]))];
             let list = List::new(items).highlight_style(Style::default());
-            f.render_stateful_widget(list, list_area, &mut self.state);
+            let mut visible_state = ListState::default();
+            f.render_stateful_widget(list, list_area, &mut visible_state);
             f.render_widget(Paragraph::new(self.settings_footer_line()), footer_area);
             return;
         }
 
-        let selected = self
-            .state
-            .selected()
-            .unwrap_or(0)
+        let selected = self.selected_index_for(&filtered);
+        let start = self
+            .scroll_state
+            .scroll_top
             .min(filtered.len().saturating_sub(1));
-        let selected = if filtered.get(selected).is_some_and(|entry| entry.selectable) {
-            selected
-        } else {
-            selectable_indices(&filtered)
-                .into_iter()
-                .next()
-                .unwrap_or(selected)
-        };
-        self.state.select(Some(selected));
-        self.sync_scroll(selected, filtered.len());
-        let start = self.scroll_offset.min(filtered.len().saturating_sub(1));
         let end = (start + visible_rows.min(list_area.height as usize)).min(filtered.len());
         let visible = filtered.get(start..end).unwrap_or(&[]);
 
@@ -844,23 +811,8 @@ impl CommandPalette {
                 if total == 0 {
                     return None;
                 }
-                let filtered = self.filtered_items();
-                let selectable = selectable_indices(&filtered);
-                let first_selectable = selectable.first().copied()?;
                 let page = Self::visible_rows_for_total(total).max(1);
-                let current = self
-                    .state
-                    .selected()
-                    .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
-                    .unwrap_or(first_selectable);
-                let current_pos = selectable
-                    .iter()
-                    .position(|idx| *idx == current)
-                    .unwrap_or(0);
-                let next_pos = current_pos.saturating_sub(page);
-                let index = selectable.get(next_pos).copied()?;
-                self.state.select(Some(index));
-                self.sync_scroll(index, total);
+                self.jump_selection_by_page(-(page as isize));
                 None
             }
             KeyCode::PageDown => {
@@ -868,23 +820,8 @@ impl CommandPalette {
                 if total == 0 {
                     return None;
                 }
-                let filtered = self.filtered_items();
-                let selectable = selectable_indices(&filtered);
-                let first_selectable = selectable.first().copied()?;
                 let page = Self::visible_rows_for_total(total).max(1);
-                let current = self
-                    .state
-                    .selected()
-                    .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
-                    .unwrap_or(first_selectable);
-                let current_pos = selectable
-                    .iter()
-                    .position(|idx| *idx == current)
-                    .unwrap_or(0);
-                let next_pos = (current_pos + page).min(selectable.len().saturating_sub(1));
-                let index = selectable.get(next_pos).copied()?;
-                self.state.select(Some(index));
-                self.sync_scroll(index, total);
+                self.jump_selection_by_page(page as isize);
                 None
             }
             KeyCode::Home => {
@@ -897,8 +834,9 @@ impl CommandPalette {
                     .into_iter()
                     .next()
                     .unwrap_or(0);
-                self.state.select(Some(index));
-                self.sync_scroll(index, total);
+                self.scroll_state.selected_idx = Some(index);
+                self.scroll_state
+                    .ensure_visible(total, Self::visible_rows_for_total(total));
                 None
             }
             KeyCode::End => {
@@ -911,14 +849,14 @@ impl CommandPalette {
                     .into_iter()
                     .last()
                     .unwrap_or(total - 1);
-                self.state.select(Some(index));
-                self.sync_scroll(index, total);
+                self.scroll_state.selected_idx = Some(index);
+                self.scroll_state
+                    .ensure_visible(total, Self::visible_rows_for_total(total));
                 None
             }
             KeyCode::Backspace => {
                 self.query.pop();
-                self.state.select(Some(0));
-                self.scroll_offset = 0;
+                self.scroll_state.reset();
                 None
             }
             KeyCode::Char(':') if self.mode == PaletteMode::Commands && self.query.is_empty() => {
@@ -927,8 +865,7 @@ impl CommandPalette {
             KeyCode::Char('$') if self.mode == PaletteMode::Skills && self.query.is_empty() => None,
             KeyCode::Char(c) => {
                 self.query.push(c);
-                self.state.select(Some(0));
-                self.scroll_offset = 0;
+                self.scroll_state.reset();
                 None
             }
             KeyCode::Left
@@ -986,15 +923,16 @@ impl CommandPalette {
                 if row >= visible_rows {
                     return None;
                 }
-                let index = self.scroll_offset.saturating_add(row);
+                let index = self.scroll_state.scroll_top.saturating_add(row);
                 if index >= filtered.len() {
                     return None;
                 }
                 if filtered.get(index).is_none_or(|entry| !entry.selectable) {
                     return None;
                 }
-                self.state.select(Some(index));
-                self.sync_scroll(index, filtered.len());
+                self.scroll_state.selected_idx = Some(index);
+                self.scroll_state
+                    .ensure_visible(filtered.len(), Self::visible_rows_for_total(filtered.len()));
                 self.selected_action()
             }
             MouseEventKind::Down(_)
@@ -1013,8 +951,8 @@ impl CommandPalette {
     fn selected_action(&self) -> Option<CommandAction> {
         let filtered = self.filtered_items();
         let index = self
-            .state
-            .selected()
+            .scroll_state
+            .selected_idx
             .unwrap_or(0)
             .min(filtered.len().saturating_sub(1));
         filtered
@@ -1154,20 +1092,6 @@ impl CommandPalette {
         entry.command.to_owned()
     }
 
-    fn sync_scroll(&mut self, selected: usize, total: usize) {
-        let visible_rows = Self::visible_rows_for_total(total);
-        if total <= visible_rows {
-            self.scroll_offset = 0;
-            return;
-        }
-
-        if selected < self.scroll_offset {
-            self.scroll_offset = selected;
-        } else if selected >= self.scroll_offset + visible_rows {
-            self.scroll_offset = selected + 1 - visible_rows;
-        }
-    }
-
     fn visible_rows_for_total(total: usize) -> usize {
         total.clamp(1, Self::VISIBLE_ROWS)
     }
@@ -1185,11 +1109,12 @@ impl CommandPalette {
             .filter_map(|(idx, entry)| entry.selectable.then_some(idx))
             .collect::<Vec<_>>();
         let Some(first_selectable) = selectable.first().copied() else {
+            self.scroll_state.reset();
             return;
         };
         let current = self
-            .state
-            .selected()
+            .scroll_state
+            .selected_idx
             .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
             .unwrap_or(first_selectable);
         let current_pos = selectable
@@ -1210,12 +1135,62 @@ impl CommandPalette {
         let Some(index) = selectable.get(next_pos).copied() else {
             return;
         };
-        self.state.select(Some(index));
-        self.sync_scroll(index, total);
+        self.scroll_state.selected_idx = Some(index);
+        self.scroll_state
+            .ensure_visible(total, Self::visible_rows_for_total(total));
     }
 
     fn first_selectable_index(&self) -> Option<usize> {
         self.settings.iter().position(|entry| entry.selectable)
+    }
+
+    fn selected_index_for(&mut self, filtered: &[PaletteItem]) -> usize {
+        let selectable = selectable_indices(filtered);
+        if selectable.is_empty() {
+            self.scroll_state.reset();
+            return 0;
+        }
+        self.scroll_state.clamp_selection(filtered.len());
+        let selected = self
+            .scroll_state
+            .selected_idx
+            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
+            .unwrap_or_else(|| selectable.first().copied().unwrap_or(0));
+        self.scroll_state.selected_idx = Some(selected);
+        self.scroll_state
+            .ensure_visible(filtered.len(), Self::visible_rows_for_total(filtered.len()));
+        selected
+    }
+
+    fn jump_selection_by_page(&mut self, delta: isize) {
+        let filtered = self.filtered_items();
+        let selectable = selectable_indices(&filtered);
+        let Some(first_selectable) = selectable.first().copied() else {
+            self.scroll_state.reset();
+            return;
+        };
+        let current = self
+            .scroll_state
+            .selected_idx
+            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
+            .unwrap_or(first_selectable);
+        let current_pos = selectable
+            .iter()
+            .position(|idx| *idx == current)
+            .unwrap_or(0);
+        let next_pos = if delta.is_negative() {
+            current_pos.saturating_sub(delta.unsigned_abs())
+        } else {
+            current_pos
+                .saturating_add(delta as usize)
+                .min(selectable.len().saturating_sub(1))
+        };
+        let Some(index) = selectable.get(next_pos).copied() else {
+            return;
+        };
+        self.scroll_state.selected_idx = Some(index);
+        self.scroll_state
+            .ensure_visible(filtered.len(), Self::visible_rows_for_total(filtered.len()));
     }
 }
 
