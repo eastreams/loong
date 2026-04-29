@@ -3892,8 +3892,8 @@ mod tests {
         );
 
         assert!(
-            lines.first().is_some_and(|line| line.starts_with("LOONG")),
-            "chat startup should now use the shared compact brand header: {lines:#?}"
+            lines.iter().any(|line| line.contains("v0.1.2-alpha.1")),
+            "chat startup should now surface the richer branded header: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| line
@@ -3979,6 +3979,47 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("- working directory: /workspace/project")),
             "chat startup should still surface the working directory override: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_startup_output_uses_rich_shell_when_requested() {
+        let lines = operator_surfaces::render_cli_chat_startup_output_with_width(
+            &CliChatStartupSummary {
+                config_path: "/tmp/loong.toml".to_owned(),
+                memory_label: "/tmp/loong.db".to_owned(),
+                session_id: "default".to_owned(),
+                context_engine_id: "threaded".to_owned(),
+                context_engine_source: "config".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
+                acp_enabled: false,
+                dispatch_enabled: false,
+                conversation_routing: "automatic".to_owned(),
+                allowed_channels: vec!["cli".to_owned()],
+                acp_backend_id: "builtin".to_owned(),
+                acp_backend_source: "default".to_owned(),
+                explicit_acp_request: false,
+                event_stream_enabled: false,
+                bootstrap_mcp_servers: Vec::new(),
+                working_directory: None,
+            },
+            80,
+            true,
+        );
+
+        assert!(
+            lines.iter().any(|line| line.contains("chat ready")),
+            "rich startup shell should keep the guided startup title visible: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("│") || line.contains("╭") || line.contains("╰")),
+            "rich startup shell should render inside shell blocks instead of plain lines: {lines:#?}"
         );
     }
 

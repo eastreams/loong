@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 #[cfg(feature = "memory-sqlite")]
 use std::collections::BTreeSet;
 
@@ -31,6 +33,7 @@ use crate::tui_surface::TuiMessageSpec;
 use crate::tui_surface::TuiScreenSpec;
 use crate::tui_surface::TuiSectionSpec;
 use crate::tui_surface::render_tui_screen_spec;
+use crate::tui_surface::render_tui_screen_spec_ratatui;
 
 use super::CLI_CHAT_COMPACT_COMMAND;
 use super::CLI_CHAT_HELP_COMMAND;
@@ -134,7 +137,12 @@ pub(super) fn print_cli_chat_startup(
     options: &CliChatOptions,
 ) -> CliResult<()> {
     let summary = build_cli_chat_startup_summary(runtime, options)?;
-    for line in render_cli_chat_startup_lines(&summary) {
+    let use_rich_shell = std::io::stdout().is_terminal();
+    for line in render_cli_chat_startup_output_with_width(
+        &summary,
+        detect_cli_chat_render_width(),
+        use_rich_shell,
+    ) {
         println!("{line}");
     }
     Ok(())
@@ -281,9 +289,17 @@ pub(super) fn build_cli_chat_startup_summary(
     })
 }
 
-fn render_cli_chat_startup_lines(summary: &CliChatStartupSummary) -> Vec<String> {
-    let render_width = detect_cli_chat_render_width();
-    render_cli_chat_startup_lines_with_width(summary, render_width)
+pub(super) fn render_cli_chat_startup_output_with_width(
+    summary: &CliChatStartupSummary,
+    width: usize,
+    use_rich_shell: bool,
+) -> Vec<String> {
+    let screen_spec = build_cli_chat_startup_screen_spec(summary);
+    if use_rich_shell {
+        return render_tui_screen_spec_ratatui(&screen_spec, width, false);
+    }
+
+    render_tui_screen_spec(&screen_spec, width, false)
 }
 
 pub(super) fn should_run_missing_config_onboard(read: usize, input: &str) -> bool {
@@ -383,12 +399,12 @@ fn build_cli_chat_missing_config_decline_message_spec(onboard_hint: &str) -> Tui
     }
 }
 
+#[cfg(test)]
 pub(super) fn render_cli_chat_startup_lines_with_width(
     summary: &CliChatStartupSummary,
     width: usize,
 ) -> Vec<String> {
-    let screen_spec = build_cli_chat_startup_screen_spec(summary);
-    render_tui_screen_spec(&screen_spec, width, false)
+    render_cli_chat_startup_output_with_width(summary, width, false)
 }
 
 pub(super) fn render_cli_chat_status_lines_with_width(
