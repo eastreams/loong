@@ -2400,6 +2400,15 @@ fn build_assistant_contents(text: &str) -> Vec<MessageContent> {
         return vec![parse_compaction_content(text)];
     }
 
+    if !assistant_text_has_explicit_structure(text) {
+        let mut contents = Vec::new();
+        append_markdown_or_image_contents(text, &mut contents);
+        if contents.is_empty() {
+            contents.push(MessageContent::Markdown(text.to_owned()));
+        }
+        return contents;
+    }
+
     let sections = super::super::parse_cli_chat_markdown_sections(text);
     let mut contents = Vec::new();
 
@@ -2451,6 +2460,19 @@ fn build_assistant_contents(text: &str) -> Vec<MessageContent> {
     }
 
     contents
+}
+
+fn assistant_text_has_explicit_structure(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        trimmed.starts_with("```")
+            || trimmed.starts_with('>')
+            || super::super::parse_markdown_heading(trimmed).is_some()
+    })
 }
 
 fn parse_provider_error_content(body: &str) -> MessageContent {
@@ -6324,6 +6346,18 @@ mod tests {
             contents.get(1),
             Some(MessageContent::Image { alt, url })
                 if alt == "plan" && url == "https://example.com/plan.png"
+        ));
+    }
+
+    #[test]
+    fn plain_assistant_reply_preserves_raw_text_without_section_rewrite() {
+        let text = "可以。但我需要先看你当前项目里“配置在哪里”。\n\n我可以直接帮你改成 Responses API endpoint，常见位置包括：\n• .env\n• config.*\n• openai / client 初始化代码";
+        let contents = build_assistant_contents(text);
+
+        assert!(matches!(
+            contents.as_slice(),
+            [MessageContent::Markdown(markdown)]
+                if markdown == text
         ));
     }
 
