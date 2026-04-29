@@ -484,12 +484,20 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
                 .to_owned(),
         ],
     };
+    let compose_section = TuiSectionSpec::Narrative {
+        title: Some("compose".to_owned()),
+        lines: vec![
+            ">".to_owned(),
+            "Enter send · ? help · : or / command menu".to_owned(),
+        ],
+    };
     let sections = vec![
         snapshot_section,
         fast_lane_section,
         start_here_section,
         command_deck_section,
         narrative_section,
+        compose_section,
     ];
 
     TuiScreenSpec {
