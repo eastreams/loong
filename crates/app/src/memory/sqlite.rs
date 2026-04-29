@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 
 use super::{
     CanonicalMemoryKind, CanonicalMemoryRecord, DerivedMemoryKind, MEMORY_OP_APPEND_TURN,
-    MEMORY_OP_CLEAR_SESSION, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryAuthority,
-    MemoryRecallMode, MemoryRecordStatus, MemoryScope, MemoryTrustLevel,
+    MEMORY_OP_CLEAR_SESSION, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_TRANSCRIPT, MEMORY_OP_WINDOW,
+    MemoryAuthority, MemoryRecallMode, MemoryRecordStatus, MemoryScope, MemoryTrustLevel,
     ParsedWorkspaceMemoryDocument, WindowTurn, WorkspaceMemoryDocumentKind,
     WorkspaceMemoryDocumentLocation, canonical_memory_record_from_persisted_turn,
     collect_workspace_memory_document_locations, parse_workspace_memory_document,
@@ -652,6 +652,43 @@ pub(super) fn load_window(
             "turns": window.turns,
             "turn_count": window.turn_count,
             "db_path": window.db_path.display().to_string(),
+        }),
+    })
+}
+
+pub(super) fn load_transcript(
+    request: MemoryCoreRequest,
+    config: &MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| "memory.transcript payload must be an object".to_owned())?;
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "memory.transcript requires payload.session_id".to_owned())?;
+    let page_size = payload
+        .get("page_size")
+        .and_then(Value::as_u64)
+        .unwrap_or(256)
+        .clamp(1, 512) as usize;
+    let turns = transcript_direct_paged(session_id, page_size, config)?;
+    let runtime = acquire_memory_runtime(config)?;
+    let path = runtime.path().to_path_buf();
+
+    Ok(MemoryCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "sqlite-core",
+            "operation": MEMORY_OP_TRANSCRIPT,
+            "session_id": session_id,
+            "page_size": page_size,
+            "turns": turns,
+            "turn_count": turns.len(),
+            "db_path": path.display().to_string(),
         }),
     })
 }

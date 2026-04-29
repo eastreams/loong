@@ -4749,7 +4749,11 @@ fn collect_context_engine_runtime_snapshot_reports_compaction_and_selection() {
     );
     assert_eq!(snapshot.compaction.min_messages, Some(7));
     assert_eq!(snapshot.compaction.trigger_estimated_tokens, None);
+    assert_eq!(snapshot.compaction.preserve_recent_turns, 6);
+    assert_eq!(snapshot.compaction.preserve_recent_estimated_tokens, None);
     assert!(!snapshot.compaction.fail_open);
+    assert_eq!(snapshot.compaction.hygiene_strategy(), "turn_floor_only");
+    assert_eq!(snapshot.compaction.diagnostics_surface(), "turn_checkpoint");
 }
 
 #[tokio::test]
@@ -27876,6 +27880,429 @@ fn compact_window_emits_continuity_boundary_and_structured_sections() {
     assert!(summary.contains("Does not replace Runtime Self Context"));
 }
 
+#[test]
+fn compact_window_shrinks_recent_tail_when_token_budget_is_tighter_than_turn_budget() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let huge_recent_payload = "recent ".repeat(80);
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "older reply".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "middle ask".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: huge_recent_payload.clone(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: huge_recent_payload.clone(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: huge_recent_payload,
+            ts: Some(6),
+        },
+    ];
+
+    let compacted = compact_window(
+        &turns,
+        CompactPolicy::new(3).with_recent_token_budget(Some(320)),
+    )
+    .expect("should compact");
+
+    assert_eq!(compacted.len(), 3);
+    assert!(compacted[0].content.contains("Compacted 4 earlier turns"));
+    assert_eq!(compacted[1].content, "recent ".repeat(80));
+    assert_eq!(compacted[2].content, "recent ".repeat(80));
+}
+
+#[test]
+fn compact_window_keeps_single_recent_turn_even_when_last_turn_exceeds_token_budget() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let giant_turn = "final ".repeat(160);
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "older reply".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: giant_turn.clone(),
+            ts: Some(4),
+        },
+    ];
+
+    let compacted = compact_window(
+        &turns,
+        CompactPolicy::new(2).with_recent_token_budget(Some(64)),
+    )
+    .expect("should compact");
+
+    assert_eq!(compacted.len(), 2);
+    assert!(compacted[0].content.contains("Compacted 3 earlier turns"));
+    assert_eq!(compacted[1].content, giant_turn);
+}
+
+#[test]
+fn compact_window_compacts_retained_tool_outcome_payloads_before_budgeting() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let tool_outcome_content = crate::memory::build_tool_outcome_content(
+        "turn-search",
+        "call-search",
+        json!({
+            "tool_name": "tool.search",
+            "status": "ok",
+            "payload": {
+                "query": "status",
+                "returned": 1,
+                "results": [
+                    {
+                        "tool_id": "file.read",
+                        "summary": "Read a file",
+                        "lease": "lease-read",
+                        "why": ["noise ".repeat(120)],
+                        "schema_preview": {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "very long schema"
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+            "error_code": null,
+            "human_reason": null,
+            "audit_event_id": null
+        }),
+    );
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "older reply".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: tool_outcome_content.clone(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(5),
+        },
+    ];
+
+    let compacted = compact_window(
+        &turns,
+        CompactPolicy::new(3).with_recent_token_budget(Some(320)),
+    )
+    .expect("should compact");
+
+    assert_eq!(compacted.len(), 4);
+    assert!(compacted[0].content.contains("Compacted 2 earlier turns"));
+    assert_eq!(compacted[2].content, "recent ask");
+    assert_eq!(compacted[3].content, "recent reply");
+    assert!(
+        compacted[1].content.len() < tool_outcome_content.len(),
+        "retained tool outcome should be compacted before reinstallation"
+    );
+    assert!(!compacted[1].content.contains("schema_preview"));
+    assert!(!compacted[1].content.contains("\"why\""));
+}
+
+#[test]
+fn compact_window_compacts_retained_tool_result_lines_before_budgeting() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let tool_result_line = format!(
+        "[ok] {}",
+        json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": serde_json::to_string(&json!({
+                "query": "status",
+                "returned": 1,
+                "results": [{
+                    "tool_id": "file.read",
+                    "summary": "Read a file",
+                    "lease": "lease-read",
+                    "why": ["noise ".repeat(120)],
+                    "schema_preview": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "very long schema"
+                            }
+                        }
+                    }
+                }]
+            }))
+            .expect("encode tool result payload summary"),
+            "payload_chars": 4096,
+            "payload_truncated": false
+        })
+    );
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "older reply".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: tool_result_line.clone(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(5),
+        },
+    ];
+
+    let compacted = compact_window(
+        &turns,
+        CompactPolicy::new(3).with_recent_token_budget(Some(320)),
+    )
+    .expect("should compact");
+
+    assert_eq!(compacted.len(), 4);
+    assert!(compacted[0].content.contains("Compacted 2 earlier turns"));
+    assert_eq!(compacted[2].content, "recent ask");
+    assert_eq!(compacted[3].content, "recent reply");
+    assert!(
+        compacted[1].content.len() < tool_result_line.len(),
+        "retained tool result line should be compacted before reinstallation"
+    );
+    assert!(!compacted[1].content.contains("schema_preview"));
+    assert!(!compacted[1].content.contains("\"why\""));
+}
+
+#[test]
+fn compact_window_summary_prunes_old_tool_result_line_noise_before_rendering() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let payload_summary = r#"{"query":"status","returned":1,"results":[{"tool_id":"file.read","schema_preview":{"type":"object","properties":{"path":{"type":"string","description":"very long schema"}}},"why":["noise noise noise noise noise noise noise noise noise noise"],"summary":"Read a file","lease":"lease-read"}]}"#;
+    let tool_result_line = format!(
+        "[ok] {}",
+        json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": payload_summary,
+            "payload_chars": payload_summary.chars().count(),
+            "payload_truncated": false
+        })
+    );
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: tool_result_line,
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(3),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(
+        !summary.contains("schema_preview"),
+        "older tool result lines should be pruned before summary rendering: {summary}"
+    );
+    assert!(
+        !summary.contains("\"why\""),
+        "older tool result lines should drop noisy explanatory fields before summary rendering: {summary}"
+    );
+    assert!(
+        summary.contains("tool_id") || summary.contains("file.read"),
+        "pruned summary should still preserve actionable discovery identity: {summary}"
+    );
+}
+
+#[test]
+fn prepare_compaction_window_demotes_low_signal_recent_turn_before_high_signal_recent_user_turn() {
+    use super::compaction::CompactPolicy;
+    use super::compaction_preparation::prepare_compaction_window;
+
+    let tool_result_line = format!(
+        "[ok] {}",
+        json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": serde_json::to_string(&json!({
+                "query": "status",
+                "returned": 1,
+                "results": [{
+                    "tool_id": "file.read",
+                    "summary": "Read a file",
+                    "lease": "lease-read",
+                    "why": ["noise ".repeat(120)],
+                    "schema_preview": {"type": "object"}
+                }]
+            }))
+            .expect("encode tool result payload summary"),
+            "payload_chars": 4096,
+            "payload_truncated": false
+        })
+    );
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: tool_result_line,
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "keep this user intent".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "keep this reply".into(),
+            ts: Some(4),
+        },
+    ];
+
+    let preparation = prepare_compaction_window(
+        &turns,
+        CompactPolicy::new(3).with_recent_token_budget(Some(40)),
+    )
+    .expect("should prepare compaction");
+
+    assert_eq!(preparation.summary_turns.len(), 2);
+    assert_eq!(preparation.summary_turns[0].content, "older ask");
+    assert!(
+        preparation.summary_turns[1].content.contains("tool.search")
+            || preparation.summary_turns[1].content.contains("file.read"),
+        "low-signal recent assistant turn should be demoted into summary inputs"
+    );
+    assert_eq!(preparation.retained_turns.len(), 2);
+    assert_eq!(
+        preparation.retained_turns[0].content,
+        "keep this user intent"
+    );
+    assert_eq!(preparation.retained_turns[1].content, "keep this reply");
+}
+
+#[test]
+fn prune_compaction_window_inputs_compacts_tool_result_lines_and_marks_low_signal() {
+    use super::compaction_pruning::prune_compaction_window_inputs;
+
+    let tool_result_line = format!(
+        "[ok] {}",
+        json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": serde_json::to_string(&json!({
+                "query": "status",
+                "returned": 1,
+                "results": [{
+                    "tool_id": "file.read",
+                    "summary": "Read a file",
+                    "lease": "lease-read",
+                    "why": ["noise ".repeat(120)],
+                    "schema_preview": {"type": "object"}
+                }]
+            }))
+            .expect("encode tool result payload summary"),
+            "payload_chars": 4096,
+            "payload_truncated": false
+        })
+    );
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: tool_result_line.clone(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "keep this user intent".into(),
+            ts: Some(2),
+        },
+    ];
+
+    let pruned = prune_compaction_window_inputs(&turns);
+
+    assert_eq!(pruned.len(), 2);
+    assert!(pruned[0].low_signal);
+    assert!(pruned[0].turn.content.len() < tool_result_line.len());
+    assert!(!pruned[0].turn.content.contains("schema_preview"));
+    assert!(!pruned[0].turn.content.contains("\"why\""));
+    assert!(!pruned[1].low_signal);
+    assert_eq!(pruned[1].turn.content, "keep this user intent");
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn default_context_engine_metadata_advertises_context_compaction() {
@@ -28256,7 +28683,8 @@ async fn default_context_engine_compact_context_retries_conflict_and_preserves_c
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn default_context_engine_compact_context_skips_incomplete_extended_snapshot() {
+async fn default_context_engine_compact_context_fails_closed_when_transcript_fallback_is_incomplete()
+ {
     use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
 
     let window_turns = json!(
@@ -28278,7 +28706,7 @@ async fn default_context_engine_compact_context_skips_incomplete_extended_snapsh
     config.memory.sliding_window = 32;
 
     let engine = DefaultContextEngine;
-    engine
+    let error = engine
         .compact_context(
             &config,
             "default-context-engine-incomplete-compaction-snapshot",
@@ -28286,7 +28714,11 @@ async fn default_context_engine_compact_context_skips_incomplete_extended_snapsh
             &kernel_ctx,
         )
         .await
-        .expect("default engine should skip incomplete compaction snapshots");
+        .expect_err("default engine should fail closed when transcript fallback is incomplete");
+    assert!(
+        error.contains("incomplete snapshot"),
+        "unexpected error: {error}"
+    );
 
     let captured = invocations.lock().expect("invocations lock").clone();
     let window_requests = captured
@@ -28304,10 +28736,118 @@ async fn default_context_engine_compact_context_skips_incomplete_extended_snapsh
         json!(true)
     );
     assert_eq!(window_requests[0].payload["limit"], json!(512));
+    let transcript_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_TRANSCRIPT)
+        .collect::<Vec<_>>();
+    assert_eq!(transcript_requests.len(), 1);
     assert!(
         replace_requests.is_empty(),
         "compaction should fail closed instead of rewriting from an incomplete snapshot"
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_compacts_sessions_longer_than_extended_window() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-extended-window-fallback");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 4;
+
+    let memory_config = session_store_config_from_config(&config);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-extended-window-fallback",
+        &memory_config,
+    );
+
+    for turn in 0..513 {
+        let role = if turn % 2 == 0 { "user" } else { "assistant" };
+        append_session_turn_direct(
+            "default-context-engine-extended-window-fallback",
+            role,
+            &format!("turn {turn}"),
+            &memory_config,
+        )
+        .expect("seed transcript turn");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(
+            &config,
+            "default-context-engine-extended-window-fallback",
+            &[],
+            &kernel_ctx,
+        )
+        .await
+        .expect("default engine should compact sessions beyond the extended window");
+
+    let turns = window_session_turns(
+        "default-context-engine-extended-window-fallback",
+        16,
+        &memory_config,
+    )
+    .expect("load compacted turns");
+
+    assert_eq!(turns.len(), 5);
+    assert!(is_compacted_summary_content(turns[0].content.as_str()));
+    assert_eq!(turns[1].content, "turn 509");
+    assert_eq!(turns[4].content, "turn 512");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_shrinks_recent_tail_to_fit_token_budget() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-recent-tail-token-budget");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 4;
+    config.conversation.compact_trigger_estimated_tokens = Some(320);
+
+    let memory_config = session_store_config_from_config(&config);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-recent-tail-token-budget",
+        &memory_config,
+    );
+    let huge_recent_payload = "recent ".repeat(80);
+    let session_id = "default-context-engine-recent-tail-token-budget";
+
+    for (role, content) in [
+        ("user", "older ask".to_owned()),
+        ("assistant", "older reply".to_owned()),
+        ("assistant", huge_recent_payload.clone()),
+        ("user", huge_recent_payload.clone()),
+        ("assistant", huge_recent_payload.clone()),
+        ("user", huge_recent_payload.clone()),
+    ] {
+        append_session_turn_direct(session_id, role, &content, &memory_config)
+            .expect("seed transcript turn");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine should shrink the retained tail when it exceeds the token budget");
+
+    let turns = window_session_turns(session_id, 16, &memory_config).expect("load compacted turns");
+
+    assert_eq!(turns.len(), 3);
+    assert!(is_compacted_summary_content(turns[0].content.as_str()));
+    assert!(turns[0].content.contains("Compacted 4 earlier turns"));
+    assert_eq!(turns[1].content, huge_recent_payload);
+    assert_eq!(turns[2].content, "recent ".repeat(80));
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -28681,11 +29221,39 @@ async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_whe
     config.conversation.compact_enabled = true;
     config.conversation.compact_min_messages = Some(1);
     config.conversation.compact_trigger_estimated_tokens = Some(1);
+    config.conversation.compact_preserve_recent_turns = 3;
+    config.conversation.compact_preserve_recent_estimated_tokens = Some(320);
     config.conversation.compact_fail_open = true;
 
     let session_id = "session-turn-checkpoint-compaction-failed-open";
     let mem_config = session_store_config_from_config(&config);
+    let tool_result_line = format!(
+        "[ok] {}",
+        json!({
+            "status": "ok",
+            "tool": "tool.search",
+            "tool_call_id": "call-search",
+            "payload_summary": serde_json::to_string(&json!({
+                "query": "status",
+                "returned": 1,
+                "results": [{
+                    "tool_id": "file.read",
+                    "summary": "Read a file",
+                    "lease": "lease-read",
+                    "why": ["noise ".repeat(120)],
+                    "schema_preview": {"type": "object"}
+                }]
+            }))
+            .expect("encode tool result payload summary"),
+            "payload_chars": 4096,
+            "payload_truncated": false
+        })
+    );
 
+    append_session_turn_direct(session_id, "user", "older ask", &mem_config)
+        .expect("persist older user turn");
+    append_session_turn_direct(session_id, "assistant", &tool_result_line, &mem_config)
+        .expect("persist noisy assistant tool result");
     append_session_turn_direct(session_id, "user", "hello", &mem_config)
         .expect("persist user turn");
     append_session_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
@@ -28739,6 +29307,18 @@ async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_whe
         checkpoint_summary.latest_compaction,
         Some(TurnCheckpointProgressStatus::FailedOpen)
     );
+    let diagnostics = checkpoint_summary
+        .latest_compaction_diagnostics
+        .expect("failed-open checkpoint summary should retain compaction diagnostics");
+    assert!(
+        diagnostics.total_turns >= 6,
+        "auto compaction diagnostics should reflect the seeded transcript plus the new turn"
+    );
+    assert!(
+        diagnostics.assistant_turns >= 3,
+        "auto compaction diagnostics should include the assistant-side history it pruned"
+    );
+    assert_eq!(diagnostics.tool_result_line_prunes, 1);
 
     let _ = std::fs::remove_file(&db_path);
 }

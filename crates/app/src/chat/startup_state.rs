@@ -17,6 +17,7 @@ pub(super) struct CliChatStartupSummary {
     pub(super) compaction_min_messages: Option<usize>,
     pub(super) compaction_trigger_estimated_tokens: Option<usize>,
     pub(super) compaction_preserve_recent_turns: usize,
+    pub(super) compaction_preserve_recent_estimated_tokens: Option<usize>,
     pub(super) compaction_fail_open: bool,
     pub(super) acp_enabled: bool,
     pub(super) dispatch_enabled: bool,
@@ -51,6 +52,10 @@ pub(super) fn build_cli_chat_startup_summary(
             .config
             .conversation
             .compact_preserve_recent_turns(),
+        compaction_preserve_recent_estimated_tokens: runtime
+            .config
+            .conversation
+            .compact_preserve_recent_estimated_tokens(),
         compaction_fail_open: compaction.fail_open,
         acp_enabled: runtime.config.acp.enabled,
         dispatch_enabled: runtime.config.acp.dispatch_enabled(),

@@ -13,6 +13,7 @@ use crate::memory::stage::PlannerDiagnosticsSnapshot;
 
 pub const MEMORY_OP_APPEND_TURN: &str = "append_turn";
 pub const MEMORY_OP_WINDOW: &str = "window";
+pub const MEMORY_OP_TRANSCRIPT: &str = "transcript";
 pub const MEMORY_OP_CLEAR_SESSION: &str = "clear_session";
 pub const MEMORY_OP_READ_CONTEXT: &str = "read_context";
 pub const MEMORY_OP_REPLACE_TURNS: &str = "replace_turns";
@@ -23,6 +24,7 @@ pub const MEMORY_OP_READ_STAGE_ENVELOPE: &str = "read_stage_envelope";
 pub enum MemoryCoreOperation {
     AppendTurn,
     Window,
+    Transcript,
     ClearSession,
     ReadContext,
     ReplaceTurns,
@@ -34,6 +36,7 @@ impl MemoryCoreOperation {
         match self {
             Self::AppendTurn => MEMORY_OP_APPEND_TURN,
             Self::Window => MEMORY_OP_WINDOW,
+            Self::Transcript => MEMORY_OP_TRANSCRIPT,
             Self::ClearSession => MEMORY_OP_CLEAR_SESSION,
             Self::ReadContext => MEMORY_OP_READ_CONTEXT,
             Self::ReplaceTurns => MEMORY_OP_REPLACE_TURNS,
@@ -46,6 +49,7 @@ impl MemoryCoreOperation {
         match normalized.as_str() {
             MEMORY_OP_APPEND_TURN => Some(Self::AppendTurn),
             MEMORY_OP_WINDOW => Some(Self::Window),
+            MEMORY_OP_TRANSCRIPT => Some(Self::Transcript),
             MEMORY_OP_CLEAR_SESSION => Some(Self::ClearSession),
             MEMORY_OP_READ_CONTEXT => Some(Self::ReadContext),
             MEMORY_OP_REPLACE_TURNS => Some(Self::ReplaceTurns),
@@ -197,6 +201,16 @@ pub fn build_window_request(session_id: &str, limit: usize) -> MemoryCoreRequest
         payload: json!({
             "session_id": session_id,
             "limit": limit,
+        }),
+    }
+}
+
+pub fn build_transcript_request(session_id: &str, page_size: usize) -> MemoryCoreRequest {
+    MemoryCoreRequest {
+        operation: MEMORY_OP_TRANSCRIPT.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "page_size": page_size,
         }),
     }
 }

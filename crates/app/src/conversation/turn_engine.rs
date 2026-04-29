@@ -49,7 +49,7 @@ use super::autonomy_policy::{
 };
 use super::runtime::{SessionContext, load_default_conversation_runtime};
 use super::runtime_binding::ConversationRuntimeBinding;
-use super::tool_result_compaction::compact_tool_search_payload_summary;
+use super::tool_result_compaction::compact_tool_result_payload_value;
 use super::turn_observer::{ConversationTurnObserverHandle, ConversationTurnRuntimeEvent};
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
@@ -2414,61 +2414,6 @@ fn build_tool_result_envelope(
         payload_chars,
         payload_truncated,
     }
-}
-
-fn compact_tool_result_payload_value(
-    tool_name: &str,
-    payload: &serde_json::Value,
-) -> serde_json::Value {
-    if let Some(compacted_payload) = compact_continuation_payload_summary(payload) {
-        return compacted_payload;
-    }
-
-    if tool_name == "tool.search" {
-        let compacted_payload = compact_tool_search_payload_summary(payload);
-
-        if let Some(compacted_payload) = compacted_payload {
-            return compacted_payload;
-        }
-    }
-
-    payload.clone()
-}
-
-fn compact_continuation_payload_summary(payload: &serde_json::Value) -> Option<serde_json::Value> {
-    let payload_object = payload.as_object()?;
-    let continuation_object = payload_object.get("continuation")?.as_object()?;
-
-    let mut compacted = serde_json::Map::new();
-    for key in [
-        "mode",
-        "profile",
-        "label",
-        "state",
-        "wait_status",
-        "task_id",
-    ] {
-        if let Some(value) = payload_object.get(key) {
-            compacted.insert(key.to_owned(), value.clone());
-        }
-    }
-
-    let mut compacted_continuation = serde_json::Map::new();
-    for key in [
-        "state",
-        "is_terminal",
-        "recommended_tool",
-        "recommended_payload",
-    ] {
-        if let Some(value) = continuation_object.get(key) {
-            compacted_continuation.insert(key.to_owned(), value.clone());
-        }
-    }
-    compacted.insert(
-        "continuation".to_owned(),
-        Value::Object(compacted_continuation),
-    );
-    Some(Value::Object(compacted))
 }
 
 fn summarize_tool_result_payload(

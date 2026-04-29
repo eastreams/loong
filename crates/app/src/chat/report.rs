@@ -357,6 +357,17 @@ fn build_turn_checkpoint_health_message_spec(
         });
     }
 
+    if let Some(compaction_diagnostics) = summary.latest_compaction_diagnostics.as_ref() {
+        sections.push(TuiSectionSpec::KeyValues {
+            title: Some("compaction diagnostics".to_owned()),
+            items: compaction_diagnostics
+                .key_value_pairs()
+                .into_iter()
+                .map(|(key, value)| tui_plain_item(key, value))
+                .collect(),
+        });
+    }
+
     if let Some(probe) = diagnostics.runtime_probe() {
         let probe_lines = vec![
             format!("action: {}", probe.action().as_str()),

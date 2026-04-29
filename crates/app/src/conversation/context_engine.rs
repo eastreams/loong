@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
 use loong_contracts::Capability;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::config::LoongConfig;
 use crate::{CliResult, KernelContext};
@@ -13,7 +13,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 #[cfg(feature = "memory-sqlite")]
-use super::compaction::{CompactPolicy, compact_window};
+use super::compaction::{compact_window, compaction_policy_from_config};
+#[cfg(feature = "memory-sqlite")]
+use super::load_compaction_session_snapshot;
 use super::runtime_binding::ConversationRuntimeBinding;
 
 pub const CONTEXT_ENGINE_API_VERSION: u16 = 1;
@@ -338,19 +340,6 @@ pub struct DefaultContextEngine;
 pub struct LegacyContextEngine;
 
 #[cfg(feature = "memory-sqlite")]
-struct CompactionWindowSnapshot {
-    turns: Vec<memory::WindowTurn>,
-    turn_count: Option<usize>,
-}
-
-#[cfg(feature = "memory-sqlite")]
-impl CompactionWindowSnapshot {
-    fn is_complete_session_snapshot(&self) -> bool {
-        matches!(self.turn_count, Some(turn_count) if turn_count == self.turns.len())
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
 enum PersistMemoryWindowOutcome {
     Persisted,
     Conflict,
@@ -385,25 +374,21 @@ impl ConversationContextEngine for DefaultContextEngine {
             const MAX_COMPACTION_CONFLICT_RETRIES: usize = 3;
 
             for _ in 0..MAX_COMPACTION_CONFLICT_RETRIES {
-                let snapshot = load_memory_window_snapshot(config, session_id, kernel_ctx).await?;
-                if !snapshot.is_complete_session_snapshot() {
+                let snapshot = load_compaction_session_snapshot(session_id, kernel_ctx).await?;
+                let Some(compact_policy) = compaction_policy_from_config(config) else {
                     return Ok(());
-                }
-                let preserve_recent_turns = config
-                    .conversation
-                    .compact_preserve_recent_turns()
-                    .min(config.memory.sliding_window.saturating_sub(1));
-                if preserve_recent_turns == 0 {
-                    return Ok(());
-                }
-                let Some(compacted) =
-                    compact_window(&snapshot.turns, CompactPolicy::new(preserve_recent_turns))
-                else {
+                };
+                let Some(compacted) = compact_window(&snapshot.turns, compact_policy) else {
                     return Ok(());
                 };
 
-                match persist_memory_window(session_id, &compacted, snapshot.turn_count, kernel_ctx)
-                    .await?
+                match persist_memory_window(
+                    session_id,
+                    &compacted,
+                    Some(snapshot.turn_count),
+                    kernel_ctx,
+                )
+                .await?
                 {
                     PersistMemoryWindowOutcome::Persisted => return Ok(()),
                     PersistMemoryWindowOutcome::Conflict => continue,
@@ -510,48 +495,6 @@ impl ConversationContextEngine for LegacyContextEngine {
     ) -> CliResult<Vec<Value>> {
         crate::provider::build_messages_for_session(config, session_id, include_system_prompt)
     }
-}
-
-async fn load_memory_window_snapshot(
-    config: &LoongConfig,
-    session_id: &str,
-    kernel_ctx: &KernelContext,
-) -> CliResult<CompactionWindowSnapshot> {
-    const MAX_COMPACTION_WINDOW_TURNS: usize = 512;
-
-    let request = loong_contracts::MemoryCoreRequest {
-        operation: memory::MEMORY_OP_WINDOW.to_owned(),
-        payload: json!({
-            "session_id": session_id,
-            "limit": MAX_COMPACTION_WINDOW_TURNS,
-            "allow_extended_limit": true,
-        }),
-    };
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let outcome = kernel_ctx
-        .kernel
-        .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-        )
-        .await
-        .map_err(|error| format!("load memory window via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        return Err(format!(
-            "load memory window via kernel returned non-ok status: {}",
-            outcome.status
-        ));
-    }
-
-    let _ = config;
-    Ok(CompactionWindowSnapshot {
-        turns: memory::decode_window_turns(&outcome.payload),
-        turn_count: memory::decode_window_turn_count(&outcome.payload),
-    })
 }
 
 async fn persist_memory_window(

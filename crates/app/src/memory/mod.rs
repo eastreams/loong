@@ -52,20 +52,20 @@ pub use orchestrator::{
 pub use orchestrator::{MemoryOrchestratorTestFaults, ScopedMemoryOrchestratorTestFaults};
 pub use protocol::{
     MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_READ_CONTEXT,
-    MEMORY_OP_READ_STAGE_ENVELOPE, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryContextEntry,
-    MemoryContextKind, MemoryCoreOperation, WindowTurn, build_append_turn_request,
-    build_read_context_request, build_read_context_request_with_workspace_root,
-    build_read_stage_envelope_request, build_read_stage_envelope_request_with_workspace_root,
-    build_replace_turns_request, build_replace_turns_request_with_expectation,
-    build_window_request, decode_memory_context_entries, decode_stage_envelope,
-    decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
-    parse_exact_memory_core_operation,
+    MEMORY_OP_READ_STAGE_ENVELOPE, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_TRANSCRIPT, MEMORY_OP_WINDOW,
+    MemoryContextEntry, MemoryContextKind, MemoryCoreOperation, WindowTurn,
+    build_append_turn_request, build_read_context_request,
+    build_read_context_request_with_workspace_root, build_read_stage_envelope_request,
+    build_read_stage_envelope_request_with_workspace_root, build_replace_turns_request,
+    build_replace_turns_request_with_expectation, build_transcript_request, build_window_request,
+    decode_memory_context_entries, decode_stage_envelope, decode_window_turn_count,
+    decode_window_turns, encode_stage_envelope_payload, parse_exact_memory_core_operation,
 };
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use sqlite::{CanonicalMemorySearchHit, WorkspaceMemoryIndexedSearchHit};
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
-use sqlite_core::{append_turn, clear_session, load_window, replace_turns};
+use sqlite_core::{append_turn, clear_session, load_transcript, load_window, replace_turns};
 pub use stage::{
     DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
     MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryRetrievalStrategy,
@@ -122,6 +122,7 @@ pub fn supported_memory_core_operations(backend: MemoryBackendKind) -> Vec<Memor
             {
                 operations.push(MemoryCoreOperation::AppendTurn);
                 operations.push(MemoryCoreOperation::Window);
+                operations.push(MemoryCoreOperation::Transcript);
                 operations.push(MemoryCoreOperation::ClearSession);
                 operations.push(MemoryCoreOperation::ReplaceTurns);
             }
@@ -155,6 +156,7 @@ pub(crate) fn execute_builtin_backend_memory_core(
         MemoryBackendKind::Sqlite => match parsed_operation {
             Some(MemoryCoreOperation::AppendTurn) => append_turn(request, config),
             Some(MemoryCoreOperation::Window) => load_window(request, config),
+            Some(MemoryCoreOperation::Transcript) => load_transcript(request, config),
             Some(MemoryCoreOperation::ClearSession) => clear_session(request, config),
             Some(MemoryCoreOperation::ReadContext) => context::read_context(request, config),
             Some(MemoryCoreOperation::ReplaceTurns) => replace_turns(request, config),

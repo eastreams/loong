@@ -2589,6 +2589,7 @@ compact_enabled = true
 compact_min_messages = 6
 compact_trigger_estimated_tokens = 120
 compact_preserve_recent_turns = 4
+compact_preserve_recent_estimated_tokens = 96
 compact_fail_open = false
 "#;
         let parsed =
@@ -2600,6 +2601,12 @@ compact_fail_open = false
             Some(120)
         );
         assert_eq!(parsed.conversation.compact_preserve_recent_turns(), 4);
+        assert_eq!(
+            parsed
+                .conversation
+                .compact_preserve_recent_estimated_tokens(),
+            Some(96)
+        );
         assert!(!parsed.conversation.compaction_fail_open());
         assert!(!parsed.conversation.should_compact(5));
         assert!(parsed.conversation.should_compact(6));
@@ -2623,6 +2630,7 @@ compact_fail_open = false
         assert!(config.compaction_fail_open());
         assert_eq!(config.compact_preserve_recent_turns(), 6);
         assert_eq!(config.compact_trigger_estimated_tokens(), None);
+        assert_eq!(config.compact_preserve_recent_estimated_tokens(), None);
         assert!(!config.should_compact(0));
         assert!(!config.should_compact_with_estimate(0, None));
         assert!(!config.should_compact_with_estimate(100, Some(10_000)));
@@ -2656,6 +2664,20 @@ compact_fail_open = false
         assert!(!config.should_compact_with_estimate(0, Some(49)));
         assert!(config.should_compact_with_estimate(0, Some(50)));
         assert!(!config.should_compact_with_estimate(100, None));
+        assert_eq!(config.compact_preserve_recent_estimated_tokens(), Some(50));
+    }
+
+    #[test]
+    fn conversation_compaction_recent_token_budget_falls_back_to_trigger_threshold() {
+        let mut config = ConversationConfig {
+            compact_trigger_estimated_tokens: Some(120),
+            ..ConversationConfig::default()
+        };
+
+        assert_eq!(config.compact_preserve_recent_estimated_tokens(), Some(120));
+
+        config.compact_preserve_recent_estimated_tokens = Some(64);
+        assert_eq!(config.compact_preserve_recent_estimated_tokens(), Some(64));
     }
 
     #[test]

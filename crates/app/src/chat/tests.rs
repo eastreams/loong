@@ -967,6 +967,7 @@ fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
             compaction_min_messages: Some(6),
             compaction_trigger_estimated_tokens: Some(120),
             compaction_preserve_recent_turns: 4,
+            compaction_preserve_recent_estimated_tokens: Some(96),
             compaction_fail_open: false,
             acp_enabled: true,
             dispatch_enabled: true,
@@ -1040,6 +1041,7 @@ fn render_cli_chat_startup_lines_surface_explicit_acp_overrides() {
             compaction_min_messages: Some(6),
             compaction_trigger_estimated_tokens: Some(120),
             compaction_preserve_recent_turns: 4,
+            compaction_preserve_recent_estimated_tokens: Some(96),
             compaction_fail_open: false,
             acp_enabled: true,
             dispatch_enabled: true,
@@ -1088,6 +1090,7 @@ fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
             compaction_min_messages: Some(6),
             compaction_trigger_estimated_tokens: Some(120),
             compaction_preserve_recent_turns: 4,
+            compaction_preserve_recent_estimated_tokens: Some(96),
             compaction_fail_open: false,
             acp_enabled: true,
             dispatch_enabled: true,
@@ -1291,6 +1294,43 @@ fn render_turn_checkpoint_status_health_lines_surface_non_durable_sessions() {
             .iter()
             .any(|line| line.contains("checkpoint durable: no")),
         "status health should surface checkpoint durability explicitly: {lines:#?}"
+    );
+}
+
+#[test]
+fn render_turn_checkpoint_status_health_lines_surface_compaction_diagnostics() {
+    let summary = TurnCheckpointEventSummary {
+        checkpoint_events: 1,
+        latest_compaction_diagnostics: Some(crate::conversation::ContextCompactionDiagnostics {
+            summary_turn_count: 4,
+            retained_turn_count: 3,
+            demoted_recent_turn_count: 1,
+            total_turns: 7,
+            assistant_turns: 3,
+            low_signal_turns: 1,
+            tool_result_line_prunes: 1,
+            tool_outcome_record_prunes: 0,
+        }),
+        checkpoint_durable: true,
+        reply_durable: true,
+        ..TurnCheckpointEventSummary::default()
+    };
+    let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+    let lines = ops::render_turn_checkpoint_status_health_lines_with_width(
+        "session-health",
+        &diagnostics,
+        80,
+    );
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("compaction diagnostics")),
+        "status health should surface compaction diagnostics as a dedicated section: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("summary turns: 4")),
+        "status health should surface compaction rollup values: {lines:#?}"
     );
 }
 
@@ -1587,6 +1627,7 @@ fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
         compaction_min_messages: Some(6),
         compaction_trigger_estimated_tokens: Some(12_000),
         compaction_preserve_recent_turns: 4,
+        compaction_preserve_recent_estimated_tokens: Some(4_096),
         compaction_fail_open: true,
         acp_enabled: true,
         dispatch_enabled: true,
@@ -1620,6 +1661,12 @@ fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
         "status output should surface the compaction token trigger: {lines:#?}"
     );
     assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("preserve recent tokens: 4096")),
+        "status output should surface the recent-tail token budget: {lines:#?}"
+    );
+    assert!(
         lines.iter().any(|line| line.contains("note: next moves")),
         "status output should append the operator controls callout: {lines:#?}"
     );
@@ -1634,14 +1681,18 @@ fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
 #[test]
 fn render_manual_compaction_lines_surface_structured_result() {
     let result = ManualCompactionResult {
-            status: ManualCompactionStatus::Applied,
-            before_turns: 8,
-            after_turns: 3,
-            estimated_tokens_before: Some(1200),
-            estimated_tokens_after: Some(420),
-            summary_headline: Some("Compacted 6 earlier turns".to_owned()),
-            detail: "Compacted 6 earlier turns. Session-local recall only. It does not replace Runtime Self Context.".to_owned(),
-        };
+        status: ManualCompactionStatus::Applied,
+        before_turns: 8,
+        after_turns: 3,
+        estimated_tokens_before: Some(1200),
+        estimated_tokens_after: Some(420),
+        summary_headline: Some("Compacted 6 earlier turns".to_owned()),
+        prune_summary: Some(
+            "summary:6 retained:3 demoted:1 low_signal:2 tool_results:1 tool_outcomes:0"
+                .to_owned(),
+        ),
+        detail: "Compacted 6 earlier turns. Session-local recall only. It does not replace Runtime Self Context.".to_owned(),
+    };
 
     let lines = render_manual_compaction_lines_with_width("session-compact", &result, 80);
 
@@ -1657,6 +1708,12 @@ fn render_manual_compaction_lines_surface_structured_result() {
     assert!(
         lines.iter().any(|line| line.contains("tokens after: 420")),
         "manual compaction should surface token estimates: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("prune: summary:6 retained:3 demoted:1")),
+        "manual compaction should surface the prune summary rollup: {lines:#?}"
     );
     assert!(
         lines
@@ -2624,6 +2681,7 @@ fn manual_compaction_status_from_report_maps_failed_open() {
         status: TurnCheckpointProgressStatus::FailedOpen,
         estimated_tokens_before: Some(420),
         estimated_tokens_after: Some(420),
+        diagnostics: None,
     };
 
     let status =
@@ -2683,6 +2741,12 @@ async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
             .summary_headline
             .as_deref()
             .is_some_and(|headline| headline.contains("Compacted 6 earlier turns"))
+    );
+    assert!(
+        result
+            .prune_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("summary:6"))
     );
     assert!(
         result.detail.contains("Runtime Self Context"),

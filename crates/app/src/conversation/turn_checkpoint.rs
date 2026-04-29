@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 
 use crate::CliResult;
 
+use super::ContextCompactionDiagnostics;
 use super::analytics::{
     TurnCheckpointEventSummary,
     TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
@@ -583,13 +584,66 @@ pub(super) async fn persist_turn_checkpoint_event<R: ConversationRuntime + ?Size
 ) -> CliResult<()> {
     let checkpoint = serde_json::to_value(checkpoint)
         .map_err(|error| format!("serialize turn checkpoint failed: {error}"))?;
-    persist_turn_checkpoint_event_value(
+    persist_turn_checkpoint_event_value_with_compaction_diagnostics(
         runtime,
         session_id,
         &checkpoint,
         stage,
         progress,
         failure,
+        None,
+        binding,
+    )
+    .await
+}
+
+pub(super) async fn persist_turn_checkpoint_event_with_compaction_diagnostics<
+    R: ConversationRuntime + ?Sized,
+>(
+    runtime: &R,
+    session_id: &str,
+    checkpoint: &TurnCheckpointSnapshot,
+    stage: TurnCheckpointStage,
+    progress: TurnCheckpointFinalizationProgress,
+    failure: Option<TurnCheckpointFailure>,
+    compaction_diagnostics: Option<&ContextCompactionDiagnostics>,
+    binding: ConversationRuntimeBinding<'_>,
+) -> CliResult<()> {
+    let checkpoint = serde_json::to_value(checkpoint)
+        .map_err(|error| format!("serialize turn checkpoint failed: {error}"))?;
+    persist_turn_checkpoint_event_value_with_compaction_diagnostics(
+        runtime,
+        session_id,
+        &checkpoint,
+        stage,
+        progress,
+        failure,
+        compaction_diagnostics,
+        binding,
+    )
+    .await
+}
+
+pub(super) async fn persist_turn_checkpoint_event_value_with_compaction_diagnostics<
+    R: ConversationRuntime + ?Sized,
+>(
+    runtime: &R,
+    session_id: &str,
+    checkpoint: &Value,
+    stage: TurnCheckpointStage,
+    progress: TurnCheckpointFinalizationProgress,
+    failure: Option<TurnCheckpointFailure>,
+    compaction_diagnostics: Option<&ContextCompactionDiagnostics>,
+    binding: ConversationRuntimeBinding<'_>,
+) -> CliResult<()> {
+    persist_turn_checkpoint_event_payload(
+        runtime,
+        session_id,
+        checkpoint,
+        stage,
+        progress,
+        failure,
+        compaction_diagnostics,
         binding,
     )
     .await
@@ -604,6 +658,22 @@ pub(super) async fn persist_turn_checkpoint_event_value<R: ConversationRuntime +
     failure: Option<TurnCheckpointFailure>,
     binding: ConversationRuntimeBinding<'_>,
 ) -> CliResult<()> {
+    persist_turn_checkpoint_event_value_with_compaction_diagnostics(
+        runtime, session_id, checkpoint, stage, progress, failure, None, binding,
+    )
+    .await
+}
+
+async fn persist_turn_checkpoint_event_payload<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    checkpoint: &Value,
+    stage: TurnCheckpointStage,
+    progress: TurnCheckpointFinalizationProgress,
+    failure: Option<TurnCheckpointFailure>,
+    compaction_diagnostics: Option<&ContextCompactionDiagnostics>,
+    binding: ConversationRuntimeBinding<'_>,
+) -> CliResult<()> {
     persist_conversation_event(
         runtime,
         session_id,
@@ -614,6 +684,7 @@ pub(super) async fn persist_turn_checkpoint_event_value<R: ConversationRuntime +
             "checkpoint": checkpoint,
             "finalization_progress": progress,
             "failure": failure,
+            "compaction_diagnostics": compaction_diagnostics,
         }),
         binding,
     )
