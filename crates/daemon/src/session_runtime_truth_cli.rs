@@ -180,10 +180,30 @@ pub(crate) fn render_turn_checkpoint_summary(turn_checkpoint: Option<&Value>) ->
         .get("latest_compaction")
         .and_then(Value::as_str)
         .unwrap_or("-");
+    let compaction_diagnostics = render_turn_checkpoint_compaction_diagnostics(summary);
 
-    format!(
+    let mut rendered = format!(
         "session_state={session_state} durable={durable} reply_durable={reply_durable} requires_recovery={requires_recovery} stage={stage} after_turn={after_turn} compaction={compaction}"
-    )
+    );
+    if let Some(compaction_diagnostics) = compaction_diagnostics {
+        rendered.push(' ');
+        rendered.push_str(compaction_diagnostics.as_str());
+    }
+    rendered
+}
+
+fn render_turn_checkpoint_compaction_diagnostics(summary: &Value) -> Option<String> {
+    let diagnostics = summary.get("latest_compaction_diagnostics")?.as_object()?;
+    let summary_turns = diagnostics.get("summary_turn_count")?.as_u64()?;
+    let retained_turns = diagnostics.get("retained_turn_count")?.as_u64()?;
+    let demoted_recent_turns = diagnostics.get("demoted_recent_turn_count")?.as_u64()?;
+    let low_signal_turns = diagnostics.get("low_signal_turns")?.as_u64()?;
+    let tool_result_line_prunes = diagnostics.get("tool_result_line_prunes")?.as_u64()?;
+    let tool_outcome_record_prunes = diagnostics.get("tool_outcome_record_prunes")?.as_u64()?;
+
+    Some(format!(
+        "compaction_diag=summary:{summary_turns} retained:{retained_turns} demoted:{demoted_recent_turns} low_signal:{low_signal_turns} tool_results:{tool_result_line_prunes} tool_outcomes:{tool_outcome_record_prunes}"
+    ))
 }
 
 fn render_bool_flag(value: bool) -> &'static str {
@@ -195,4 +215,63 @@ fn runtime_truth_summary_limit(
 ) -> usize {
     let scaled_limit = memory_config.sliding_window.saturating_mul(4);
     scaled_limit.clamp(16, 128)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn render_turn_checkpoint_summary_includes_compaction_diagnostics_when_present() {
+        let payload = json!({
+            "available": true,
+            "summary": {
+                "session_state": "finalized",
+                "checkpoint_durable": true,
+                "reply_durable": true,
+                "requires_recovery": false,
+                "latest_stage": "finalized",
+                "latest_after_turn": "completed",
+                "latest_compaction": "failed_open",
+                "latest_compaction_diagnostics": {
+                    "summary_turn_count": 6,
+                    "retained_turn_count": 3,
+                    "demoted_recent_turn_count": 1,
+                    "total_turns": 9,
+                    "assistant_turns": 4,
+                    "low_signal_turns": 2,
+                    "tool_result_line_prunes": 1,
+                    "tool_outcome_record_prunes": 0
+                }
+            }
+        });
+
+        let rendered = super::render_turn_checkpoint_summary(Some(&payload));
+
+        assert!(rendered.contains("session_state=finalized"));
+        assert!(rendered.contains("compaction=failed_open"));
+        assert!(rendered.contains("compaction_diag=summary:6 retained:3 demoted:1"));
+        assert!(rendered.contains("tool_results:1"));
+    }
+
+    #[test]
+    fn render_turn_checkpoint_summary_omits_compaction_diagnostics_when_missing() {
+        let payload = json!({
+            "available": true,
+            "summary": {
+                "session_state": "finalized",
+                "checkpoint_durable": true,
+                "reply_durable": true,
+                "requires_recovery": false,
+                "latest_stage": "finalized",
+                "latest_after_turn": "completed",
+                "latest_compaction": "skipped"
+            }
+        });
+
+        let rendered = super::render_turn_checkpoint_summary(Some(&payload));
+
+        assert!(rendered.contains("compaction=skipped"));
+        assert!(!rendered.contains("compaction_diag="));
+    }
 }

@@ -13,6 +13,7 @@ use crate::gateway::read_models::{
 use crate::gateway::service::default_gateway_owner_status;
 use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owner_status};
 use crate::mvp;
+use crate::runtime_snapshot_compaction_presentation::build_compaction_hygiene_status_values;
 use crate::supervisor::LoadedSupervisorConfig;
 
 const STATUS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
@@ -389,6 +390,8 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
     let active_provider_label_option = runtime.active_provider_label.as_deref();
     let active_provider_label = active_provider_label_option.unwrap_or("-");
     let capability_snapshot_sha256 = runtime.capability_snapshot_sha256.as_str();
+    let compaction_hygiene = &runtime.compaction_hygiene;
+    let compaction_presentation = build_compaction_hygiene_status_values(compaction_hygiene);
     let visible_direct_tools = if runtime.visible_direct_tool_names.is_empty() {
         "-".to_owned()
     } else {
@@ -569,6 +572,10 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
                 key: "web boundary".to_owned(),
                 value: web_boundary_note,
             },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "compaction hygiene".to_owned(),
+                value: compaction_presentation.hygiene.clone(),
+            },
         ],
     });
     sections.push(loong_app::tui_surface::TuiSectionSpec::KeyValues {
@@ -717,6 +724,26 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "capability snapshot".to_owned(),
                 value: capability_snapshot_sha256.to_owned(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "compaction samples".to_owned(),
+                value: compaction_presentation.samples.clone(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "compaction prunes".to_owned(),
+                value: compaction_presentation.prunes.clone(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "compaction pressure".to_owned(),
+                value: compaction_presentation.pressure.clone(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "compaction trend".to_owned(),
+                value: compaction_presentation.trend.clone(),
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "compaction repairability".to_owned(),
+                value: compaction_presentation.repairability,
             },
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "ACP".to_owned(),
@@ -1047,6 +1074,65 @@ mod tests {
     };
     use crate::gateway::state::{GatewayOwnerMode, GatewayOwnerStatus};
 
+    fn sample_compaction_hygiene_state() -> crate::RuntimeSnapshotCompactionHygieneState {
+        crate::RuntimeSnapshotCompactionHygieneState {
+            strategy: "turn_floor_only".to_owned(),
+            diagnostics_surface: "turn_checkpoint".to_owned(),
+            evidence_status: "ok".to_owned(),
+            trend_scope: "primary_lineage".to_owned(),
+            primary_lineage:
+                crate::runtime_snapshot_compaction_hygiene::RuntimeSnapshotCompactionLineageState {
+                    root_session_id: Some("root-session".to_owned()),
+                    sampled_session_count: 2,
+                    compaction_sample_count: 2,
+                    latest_compaction_status: Some(
+                        crate::mvp::conversation::TurnCheckpointProgressStatus::FailedOpen,
+                    ),
+                    compaction_failure_streak: 1,
+                    checkpoint_event_count: 3,
+                    checkpoint_failure_streak: 2,
+                    checkpoint_repair_action: Some(
+                        crate::mvp::conversation::TurnCheckpointRecoveryAction::RunCompaction,
+                    ),
+                    checkpoint_repair_manual_reason: None,
+                },
+            overall_window:
+                crate::runtime_snapshot_compaction_hygiene::RuntimeSnapshotCompactionHygieneWindow {
+                    sampled_session_count: 4,
+                    sessions_with_diagnostics: 2,
+                    sampled_session_read_errors: 0,
+                    failed_open_session_count: 1,
+                    total_demoted_recent_turns: 3,
+                    total_low_signal_turns: 4,
+                    total_tool_result_prunes: 2,
+                    total_tool_outcome_prunes: 1,
+                },
+            recent_window:
+                crate::runtime_snapshot_compaction_hygiene::RuntimeSnapshotCompactionHygieneWindow {
+                    sampled_session_count: 2,
+                    sessions_with_diagnostics: 1,
+                    sampled_session_read_errors: 0,
+                    failed_open_session_count: 1,
+                    total_demoted_recent_turns: 2,
+                    total_low_signal_turns: 2,
+                    total_tool_result_prunes: 1,
+                    total_tool_outcome_prunes: 0,
+                },
+            baseline_window:
+                crate::runtime_snapshot_compaction_hygiene::RuntimeSnapshotCompactionHygieneWindow {
+                    sampled_session_count: 2,
+                    sessions_with_diagnostics: 1,
+                    sampled_session_read_errors: 0,
+                    failed_open_session_count: 0,
+                    total_demoted_recent_turns: 1,
+                    total_low_signal_turns: 2,
+                    total_tool_result_prunes: 1,
+                    total_tool_outcome_prunes: 1,
+                },
+            error: None,
+        }
+    }
+
     #[test]
     fn build_status_cli_recipes_use_grouped_runtime_commands() {
         let recipes = build_status_cli_recipes("/tmp/config.toml");
@@ -1156,6 +1242,7 @@ mod tests {
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
+                compaction_hygiene: sample_compaction_hygiene_state(),
                 tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
                     availability: "ready".to_owned(),
                     structured_tool_schema_enabled: true,
@@ -1256,9 +1343,31 @@ mod tests {
         assert!(rendered.contains("credential_ready=true"));
         assert!(rendered.contains("web boundary"));
         assert!(rendered.contains("ordinary network access stays separately governed"));
+        assert!(rendered.contains("compaction hygiene"));
+        assert!(rendered.contains("turn_floor_only"));
+        assert!(rendered.contains("posture=degraded"));
+        assert!(rendered.contains("surface=turn_checkpoint"));
+        assert!(rendered.contains("coverage=2/4 (50.0%)"));
         assert!(rendered.contains("channel and recovery detail"));
         assert!(rendered.contains("enabled channels: telegram"));
         assert!(rendered.contains("service enabled ids: telegram"));
+        assert!(rendered.contains("compaction samples"));
+        assert!(rendered.contains("compaction prunes"));
+        assert!(rendered.contains("compaction pressure"));
+        assert!(rendered.contains("compaction trend"));
+        assert!(rendered.contains("updated_at_desc"));
+        assert!(rendered.contains("scope=primary_lineage"));
+        assert!(rendered.contains("root=root-session"));
+        assert!(rendered.contains("latest=failed_open"));
+        assert!(rendered.contains("failure_streak=1"));
+        assert!(rendered.contains("continuity=broken"));
+        assert!(rendered.contains("compaction repairability"));
+        assert!(rendered.contains("retryable"));
+        assert!(rendered.contains("action=run_compaction"));
+        assert!(rendered.contains("recovery_posture=retry_exhausted"));
+        assert!(rendered.contains("reliability=worsening"));
+        assert!(rendered.contains("rate=1/2 (50.0%)"));
+        assert!(rendered.contains("demoted_recent=1.500/session"));
         assert!(rendered.contains("capability snapshot: abc123"));
         assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
         assert!(rendered.contains("deep dives"));
@@ -1362,6 +1471,7 @@ mod tests {
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
+                compaction_hygiene: sample_compaction_hygiene_state(),
                 tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
                     availability: "ready".to_owned(),
                     structured_tool_schema_enabled: true,
@@ -1510,6 +1620,7 @@ mod tests {
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
+                compaction_hygiene: sample_compaction_hygiene_state(),
                 tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
                     availability: "ready".to_owned(),
                     structured_tool_schema_enabled: true,
@@ -1646,6 +1757,7 @@ mod tests {
                 capability_snapshot_sha256: "abc123".to_owned(),
                 active_provider_profile_id: Some("demo".to_owned()),
                 active_provider_label: Some("Demo".to_owned()),
+                compaction_hygiene: sample_compaction_hygiene_state(),
                 tool_calling: crate::gateway::read_models::GatewayToolCallingReadModel {
                     availability: "ready".to_owned(),
                     structured_tool_schema_enabled: true,

@@ -386,6 +386,7 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub capability_snapshot_sha256: String,
     pub active_provider_profile_id: Option<String>,
     pub active_provider_label: Option<String>,
+    pub compaction_hygiene: crate::RuntimeSnapshotCompactionHygieneState,
     pub tool_calling: GatewayToolCallingReadModel,
     pub web_access: GatewayWebAccessReadModel,
 }
@@ -698,7 +699,10 @@ pub fn build_runtime_snapshot_read_model(
         purpose: "experiment_reproducibility",
     };
     let provider = crate::runtime_snapshot_provider_json(&snapshot.provider);
-    let context_engine = crate::runtime_snapshot_context_engine_json(&snapshot.context_engine);
+    let context_engine = crate::runtime_snapshot_context_engine_json(
+        &snapshot.context_engine,
+        &snapshot.compaction_hygiene,
+    );
     let memory_system = crate::runtime_snapshot_memory_system_json(&snapshot.memory_system);
     let acp = crate::runtime_snapshot_acp_json(&snapshot.acp);
     let inventory = build_channel_inventory_read_model(config.as_str(), &snapshot.channels);
@@ -1516,6 +1520,9 @@ fn build_operator_runtime_summary_read_model(
     let active_provider_profile_id =
         json_string_field(&runtime_snapshot.provider, "active_profile_id");
     let active_provider_label = json_string_field(&runtime_snapshot.provider, "active_label");
+    let compaction_hygiene = runtime_snapshot.context_engine.get("compaction_hygiene");
+    let compaction_hygiene =
+        crate::RuntimeSnapshotCompactionHygieneState::decode_or_unknown(compaction_hygiene);
     let tool_calling = runtime_snapshot.tools.tool_calling.clone();
     let web_access = runtime_snapshot.tools.web_access.clone();
 
@@ -1531,6 +1538,7 @@ fn build_operator_runtime_summary_read_model(
         capability_snapshot_sha256,
         active_provider_profile_id,
         active_provider_label,
+        compaction_hygiene,
         tool_calling,
         web_access,
     }
