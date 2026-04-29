@@ -2224,7 +2224,7 @@ fn render_assistant_code_line(line: &str, content_width: usize) -> Vec<Line<'sta
         .saturating_sub(crate::presentation::display_width(gutter))
         .max(1);
 
-    crate::presentation::render_wrapped_display_line(code, code_width)
+    crate::presentation::render_wrapped_plain_display_line(code, code_width)
         .into_iter()
         .map(|wrapped| {
             let mut spans = vec![Span::raw("  ")];
@@ -2307,7 +2307,7 @@ fn render_user_markdown_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<Line
             continue;
         }
         for wrapped in
-            crate::presentation::render_wrapped_display_line(line.as_str(), content_width)
+            crate::presentation::render_wrapped_plain_display_line(line.as_str(), content_width)
         {
             rendered.push(Line::from(vec![Span::styled(
                 wrapped,
@@ -5200,7 +5200,7 @@ mod tests {
         SURFACE_TOOL_BG, SURFACE_USER_MSG_BG,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-    use ratatui::{Terminal, backend::TestBackend, style::Color};
+    use ratatui::{Terminal, backend::TestBackend, style::Color, text::Line};
     use std::time::Duration;
 
     #[test]
@@ -6363,6 +6363,31 @@ mod tests {
     }
 
     #[test]
+    fn user_markdown_preserves_plain_label_like_text() {
+        let line = Line::from("source: imported config at ~/.loong/config.toml");
+        let rendered = super::render_user_markdown_lines(vec![line], 24)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("source: imported"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("~/.loong/config.toml"))
+        );
+    }
+
+    #[test]
     fn rendered_system_line_preserves_plain_label_like_text() {
         let mut list = MessageList::new();
         list.add_rendered_lines(vec![
@@ -6385,7 +6410,11 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("source: imported config"))
         );
-        assert!(rendered.iter().any(|line| line.contains("~/.loong/agents/loong")));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("~/.loong/agents/loong"))
+        );
     }
 
     #[test]
