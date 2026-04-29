@@ -3,6 +3,25 @@ use serde_json::{Value, json};
 use crate::config::{LoongConfig, ProviderKind, ProviderWireApi};
 use crate::tools::{self, ToolSurfaceState, ToolView};
 
+pub(super) fn provider_request_tool_definitions(
+    config: &LoongConfig,
+    tool_view: &ToolView,
+    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<Value>, String> {
+    let runtime_tool_view =
+        tools::runtime_tool_view_with_runtime_config(&config.tools, tool_runtime_config);
+    let base_tool_definitions = if tool_view == &runtime_tool_view {
+        tools::provider_tool_definitions_with_config(Some(tool_runtime_config))
+    } else {
+        tools::try_provider_tool_definitions_for_view(tool_view)?
+    };
+
+    Ok(responses_tool_definitions_with_native_search(
+        config,
+        base_tool_definitions.as_slice(),
+    ))
+}
+
 pub(super) fn openai_responses_native_web_search_active(config: &LoongConfig) -> bool {
     config.tools.web_search.enabled
         && matches!(config.provider.kind, ProviderKind::Openai)

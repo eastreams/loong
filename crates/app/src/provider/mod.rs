@@ -255,13 +255,11 @@ pub async fn request_turn_in_view_with_retry_progress(
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let runtime_tool_view =
-        crate::tools::runtime_tool_view_with_runtime_config(&config.tools, &tool_runtime_config);
-    let tool_definitions = if tool_view == &runtime_tool_view {
-        crate::tools::provider_tool_definitions_with_config(Some(&tool_runtime_config))
-    } else {
-        crate::tools::try_provider_tool_definitions_for_view(tool_view)?
-    };
+    let tool_definitions = native_tool_surface::provider_request_tool_definitions(
+        config,
+        tool_view,
+        &tool_runtime_config,
+    )?;
     request_across_model_candidates(
         &config.provider,
         binding,
@@ -342,13 +340,11 @@ pub async fn request_turn_streaming_in_view_with_retry_progress(
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let runtime_tool_view =
-        crate::tools::runtime_tool_view_with_runtime_config(&config.tools, &tool_runtime_config);
-    let tool_definitions = if tool_view == &runtime_tool_view {
-        crate::tools::provider_tool_definitions_with_config(Some(&tool_runtime_config))
-    } else {
-        crate::tools::try_provider_tool_definitions_for_view(tool_view)?
-    };
+    let tool_definitions = native_tool_surface::provider_request_tool_definitions(
+        config,
+        tool_view,
+        &tool_runtime_config,
+    )?;
     request_across_model_candidates(
         &config.provider,
         binding,
