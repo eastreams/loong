@@ -144,6 +144,58 @@ pub(crate) async fn dispatch_turn_start_hook_for_request(
         .map(|_| ())
 }
 
+pub(crate) fn resolve_acp_session_key_for_request(
+    config: &mvp::config::LoongConfig,
+    session_id: &str,
+    request: &mvp::agent_runtime::AgentTurnRequest,
+) -> CliResult<String> {
+    let address = crate::build_acp_dispatch_address(
+        session_id,
+        request.channel_id.as_deref(),
+        request.conversation_id.as_deref(),
+        request.account_id.as_deref(),
+        request.participant_id.as_deref(),
+        request.thread_id.as_deref(),
+    )?;
+    let route = mvp::acp::derive_acp_conversation_route_for_address(config, &address)?;
+    Ok(route.session_key)
+}
+
+pub(crate) fn acp_session_exists(
+    acp_manager: &mvp::acp::AcpSessionManager,
+    session_key: &str,
+) -> CliResult<bool> {
+    Ok(acp_manager
+        .list_sessions()?
+        .iter()
+        .any(|metadata| metadata.session_key == session_key))
+}
+
+pub(crate) async fn dispatch_session_start_hook_for_new_acp_session(
+    config: &mvp::config::LoongConfig,
+    acp_manager: &mvp::acp::AcpSessionManager,
+    session_key: &str,
+    session_hint: Option<&str>,
+    request: &mvp::agent_runtime::AgentTurnRequest,
+    session_existed_before: bool,
+) -> CliResult<()> {
+    if session_existed_before {
+        return Ok(());
+    }
+    if !acp_session_exists(acp_manager, session_key)? {
+        return Ok(());
+    }
+
+    let mut payload = trusted_host_request_context_payload(session_hint, request);
+    let Some(payload_object) = payload.as_object_mut() else {
+        return Err("trusted host session_start payload must be an object".to_owned());
+    };
+    payload_object.insert("session_key".to_owned(), json!(session_key));
+    dispatch_trusted_host_hook(config, "session_start", payload)
+        .await
+        .map(|_| ())
+}
+
 pub(crate) async fn dispatch_turn_end_hook_for_success(
     config: &mvp::config::LoongConfig,
     session_hint: Option<&str>,
