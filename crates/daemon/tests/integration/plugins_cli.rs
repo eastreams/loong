@@ -26,6 +26,7 @@ fn plugins_bridge_profiles_cli_parses_selected_profile_and_json_flag() {
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -77,6 +78,7 @@ fn plugins_inventory_cli_parses_bridge_profile_and_examples_flag() {
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -131,6 +133,7 @@ fn plugins_doctor_cli_defaults_to_sdk_release_profile() {
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
@@ -199,6 +202,7 @@ fn plugins_actions_cli_parses_filters_and_global_json_after_subcommand() {
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
@@ -250,6 +254,7 @@ fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
@@ -295,6 +300,7 @@ fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::Init(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
@@ -354,6 +360,7 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                     );
                 }
                 other @ loong_daemon::plugins_cli::PluginsCommands::InvokeExtension(_)
+                | other @ loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Doctor(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loong_daemon::plugins_cli::PluginsCommands::Inventory(_)
@@ -406,6 +413,43 @@ fn plugins_invoke_extension_cli_parses_native_smoke_request() {
 }
 
 #[test]
+fn plugins_invoke_host_hook_cli_parses_trusted_host_probe_request() {
+    let cli = try_parse_cli([
+        "loong",
+        "plugins",
+        "invoke-host-hook",
+        "--root",
+        "/tmp/weather-host",
+        "--plugin-id",
+        "weather-host",
+        "--hook",
+        "turn_start",
+        "--payload",
+        "{\"turn_id\":\"demo-turn\"}",
+        "--allow-command",
+        "node",
+    ])
+    .expect("plugins invoke-host-hook CLI should parse");
+
+    match cli.command {
+        Some(Commands::Plugins { json, command }) => {
+            assert!(!json);
+            match command {
+                loong_daemon::plugins_cli::PluginsCommands::InvokeHostHook(command) => {
+                    assert_eq!(command.root, "/tmp/weather-host");
+                    assert_eq!(command.plugin_id, "weather-host");
+                    assert_eq!(command.hook, "turn_start");
+                    assert_eq!(command.payload, "{\"turn_id\":\"demo-turn\"}");
+                    assert_eq!(command.allow_commands, vec!["node".to_owned()]);
+                }
+                other => panic!("unexpected plugins subcommand parsed: {other:?}"),
+            }
+        }
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
 fn plugins_help_mentions_preflight_and_action_plan() {
     let help = render_cli_help(["plugins"]);
     let help_lists_init_subcommand = help.lines().any(|line| {
@@ -418,6 +462,7 @@ fn plugins_help_mentions_preflight_and_action_plan() {
     assert!(help.contains("doctor"), "help: {help}");
     assert!(help_lists_init_subcommand, "help: {help}");
     assert!(help.contains("inventory"), "help: {help}");
+    assert!(help.contains("invoke-host-hook"), "help: {help}");
     assert!(help.contains("bridge-profiles"), "help: {help}");
     assert!(help.contains("bridge-template"), "help: {help}");
     assert!(help.contains("actions"), "help: {help}");
