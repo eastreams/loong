@@ -169,6 +169,16 @@ pub fn window_session_turns(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub fn transcript_session_turns_paged(
+    session_id: &str,
+    page_size: usize,
+    config: &SessionStoreConfig,
+) -> Result<Vec<SessionTranscriptTurn>, String> {
+    let runtime_config = config.as_memory_runtime_config();
+    crate::memory::transcript_direct_paged(session_id, page_size, &runtime_config)
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub fn load_session_prompt_context(
     session_id: &str,
     config: &SessionStoreConfig,

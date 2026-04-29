@@ -36,6 +36,24 @@ pub(super) fn load_window(
     }
 }
 
+pub(super) fn load_transcript(
+    request: MemoryCoreRequest,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (request, config);
+        return Err(
+            "sqlite memory is disabled in this build (enable feature `memory-sqlite`)".to_owned(),
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    {
+        sqlite::load_transcript(request, config)
+    }
+}
+
 pub(super) fn clear_session(
     request: MemoryCoreRequest,
     config: &runtime_config::MemoryRuntimeConfig,

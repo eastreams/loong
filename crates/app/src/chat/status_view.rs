@@ -54,6 +54,10 @@ pub(super) fn build_cli_chat_runtime_sections(
         .compaction_trigger_estimated_tokens
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_owned());
+    let compaction_preserve_recent_estimated_tokens = summary
+        .compaction_preserve_recent_estimated_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
     let runtime_value = format!(
         "ACP enabled={} dispatch_enabled={} routing={} backend={} ({}) allowed_channels={allowed_channels}",
         summary.acp_enabled,
@@ -90,6 +94,10 @@ pub(super) fn build_cli_chat_runtime_sections(
             tui_plain_item(
                 "preserve recent",
                 summary.compaction_preserve_recent_turns.to_string(),
+            ),
+            tui_plain_item(
+                "preserve recent tokens",
+                compaction_preserve_recent_estimated_tokens,
             ),
             tui_plain_item("fail open", summary.compaction_fail_open.to_string()),
         ],

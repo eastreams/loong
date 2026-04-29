@@ -84,6 +84,7 @@ pub(super) fn fallback_startup_summary(session_id: &str) -> ops::CliChatStartupS
         compaction_min_messages: None,
         compaction_trigger_estimated_tokens: None,
         compaction_preserve_recent_turns: 0,
+        compaction_preserve_recent_estimated_tokens: None,
         compaction_fail_open: false,
         acp_enabled: false,
         dispatch_enabled: false,

@@ -484,6 +484,112 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         encoded["tools"]["tool_calling"]["structured_tool_schema_enabled"],
         true
     );
+    assert_eq!(
+        encoded["context_engine"]["compaction"]["preserve_recent_turns"],
+        serde_json::json!(6)
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction"]["hygiene"]["strategy"],
+        serde_json::json!("turn_floor_only")
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction"]["hygiene"]["diagnostics_surface"],
+        serde_json::json!("turn_checkpoint")
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["strategy"],
+        serde_json::json!("turn_floor_only")
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["diagnostics_surface"],
+        serde_json::json!("turn_checkpoint")
+    );
+    #[cfg(feature = "memory-sqlite")]
+    let expected_evidence_status = serde_json::json!("no_evidence");
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_evidence_status = serde_json::json!("idle");
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["evidence_status"],
+        expected_evidence_status
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["sampled_session_read_errors"],
+        serde_json::json!(0)
+    );
+    #[cfg(feature = "memory-sqlite")]
+    let expected_diagnostics_coverage_milli = serde_json::json!(0);
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_diagnostics_coverage_milli = serde_json::json!(null);
+    let expected_failed_open_rate_milli = serde_json::json!(null);
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["diagnostics_coverage_milli"],
+        expected_diagnostics_coverage_milli
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["failed_open_rate_milli"],
+        expected_failed_open_rate_milli
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["posture"],
+        serde_json::json!("idle")
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["sample_order"],
+        serde_json::json!("updated_at_desc")
+    );
+    #[cfg(feature = "memory-sqlite")]
+    let expected_trend_scope = serde_json::json!("recent_sessions_fallback");
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_trend_scope = serde_json::json!("idle");
+    let expected_reliability_trend = serde_json::json!("insufficient_history");
+    #[cfg(feature = "memory-sqlite")]
+    let expected_continuity_health = serde_json::json!("scope_limited");
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_continuity_health = serde_json::json!("idle");
+    #[cfg(feature = "memory-sqlite")]
+    let expected_continuity_repairability = serde_json::json!("scope_limited");
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_continuity_repairability = serde_json::json!("idle");
+    #[cfg(feature = "memory-sqlite")]
+    let expected_recovery_posture = serde_json::json!("scope_limited");
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_recovery_posture = serde_json::json!("idle");
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["trend_scope"],
+        expected_trend_scope
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["reliability_trend"],
+        expected_reliability_trend
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["trend_scope"],
+        expected_trend_scope
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["continuity_health"],
+        expected_continuity_health
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["continuity_repairability"],
+        expected_continuity_repairability
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["metrics"]["recovery_posture"],
+        expected_recovery_posture
+    );
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["strategy"],
+        serde_json::json!("turn_floor_only")
+    );
+    #[cfg(feature = "memory-sqlite")]
+    let expected_recent_window_sampled_session_count = serde_json::json!(1);
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_recent_window_sampled_session_count = serde_json::json!(0);
+    assert_eq!(
+        encoded["context_engine"]["compaction_hygiene"]["recent_window"]["sampled_session_count"],
+        expected_recent_window_sampled_session_count
+    );
     assert!(encoded["provider"]["transport_runtime"]["failover_total_events"].is_number());
     assert!(encoded["provider"]["transport_runtime"]["failover_by_reason"].is_object());
     assert!(encoded["provider"]["transport_runtime"]["failover_by_stage"].is_object());

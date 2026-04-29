@@ -412,6 +412,16 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
                     "after_turn": "completed",
                     "compaction": "completed"
                 },
+                "compaction_diagnostics": {
+                    "summary_turn_count": 6,
+                    "retained_turn_count": 3,
+                    "demoted_recent_turn_count": 1,
+                    "total_turns": 9,
+                    "assistant_turns": 4,
+                    "low_signal_turns": 2,
+                    "tool_result_line_prunes": 1,
+                    "tool_outcome_record_prunes": 0
+                },
                 "failure": null
             }
         }),
@@ -566,6 +576,10 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     assert!(
         rendered.contains("compaction=completed"),
         "status render should surface turn-checkpoint compaction detail: {rendered}"
+    );
+    assert!(
+        rendered.contains("compaction_diag=summary:6 retained:3 demoted:1"),
+        "status render should surface compact diagnostics detail: {rendered}"
     );
 }
 

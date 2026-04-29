@@ -1,3 +1,6 @@
+use super::compaction_preparation::prepare_compaction_window;
+use super::tool_result_line::ToolResultLine;
+use crate::config::LoongConfig;
 use crate::memory::WindowTurn;
 use crate::runtime_self_continuity;
 
@@ -15,41 +18,78 @@ const COMPACTED_SUMMARY_DISCLAIMER: &str =
 const USER_CONTEXT_HEADING: &str = "User context:";
 const ASSISTANT_PROGRESS_HEADING: &str = "Assistant progress:";
 const OMITTED_CONTEXT_PREFIX: &str = "More omitted context:";
+pub(super) const MIN_ADAPTIVE_RECENT_TAIL_TOKEN_BUDGET: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactPolicy {
     preserve_recent_turns: usize,
+    preserve_recent_estimated_tokens: Option<usize>,
 }
 
 impl CompactPolicy {
     pub fn new(preserve_recent_turns: usize) -> Self {
         Self {
             preserve_recent_turns,
+            preserve_recent_estimated_tokens: None,
         }
+    }
+
+    pub fn with_recent_token_budget(
+        mut self,
+        preserve_recent_estimated_tokens: Option<usize>,
+    ) -> Self {
+        self.preserve_recent_estimated_tokens =
+            preserve_recent_estimated_tokens.filter(|value| *value > 0);
+        self
+    }
+
+    pub(super) fn preserve_recent_turns(self) -> usize {
+        self.preserve_recent_turns
+    }
+
+    pub(super) fn preserve_recent_estimated_tokens(self) -> Option<usize> {
+        self.preserve_recent_estimated_tokens
     }
 }
 
-pub fn compact_window(turns: &[WindowTurn], policy: CompactPolicy) -> Option<Vec<WindowTurn>> {
-    let preserve = policy.preserve_recent_turns.min(turns.len());
-    if turns.len() <= preserve {
+pub(super) fn compaction_policy_from_config(config: &LoongConfig) -> Option<CompactPolicy> {
+    let preserve_recent_turns = config
+        .conversation
+        .compact_preserve_recent_turns()
+        .min(config.memory.sliding_window.saturating_sub(1));
+    if preserve_recent_turns == 0 {
         return None;
     }
+    let recent_token_budget = config
+        .conversation
+        .compact_preserve_recent_estimated_tokens()
+        .filter(|threshold| *threshold >= MIN_ADAPTIVE_RECENT_TAIL_TOKEN_BUDGET);
+    Some(CompactPolicy::new(preserve_recent_turns).with_recent_token_budget(recent_token_budget))
+}
 
-    let split_at = turns.len() - preserve;
-    let (older, recent) = turns.split_at(split_at);
-    if older.len() == 1 && older.first().is_some_and(is_compacted_summary_turn) {
+pub fn compact_window(turns: &[WindowTurn], policy: CompactPolicy) -> Option<Vec<WindowTurn>> {
+    let preparation = prepare_compaction_window(turns, policy)?;
+    if preparation.summary_turns.len() == 1
+        && preparation
+            .summary_turns
+            .first()
+            .is_some_and(is_compacted_summary_turn)
+    {
         return None;
     }
 
     let summary = WindowTurn {
         role: "user".to_owned(),
-        content: render_compacted_summary(older.len(), older),
-        ts: older.last().and_then(|turn| turn.ts),
+        content: render_compacted_summary(
+            preparation.compacted_turn_count(),
+            preparation.summary_turns.as_slice(),
+        ),
+        ts: preparation.summary_turns.last().and_then(|turn| turn.ts),
     };
 
-    let mut compacted = Vec::with_capacity(recent.len() + 1);
+    let mut compacted = Vec::with_capacity(preparation.retained_turns.len() + 1);
     compacted.push(summary);
-    compacted.extend_from_slice(recent);
+    compacted.extend(preparation.retained_turns);
     Some(compacted)
 }
 
@@ -370,10 +410,34 @@ fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
         }];
     }
 
+    let summarized_content = summarize_tool_result_line_content(&turn.content)
+        .unwrap_or_else(|| summarize_turn_content(&turn.content));
     vec![RenderedSummaryLine {
-        text: format!("{}: {}", turn.role, summarize_turn_content(&turn.content)),
+        text: format!("{}: {}", turn.role, summarized_content),
         is_user: turn.role == "user",
     }]
+}
+
+fn summarize_tool_result_line_content(content: &str) -> Option<String> {
+    let tool_result_line = ToolResultLine::parse(content.trim())?;
+    let canonical_tool_name = crate::tools::canonical_tool_name(tool_result_line.tool_name());
+    let visible_tool_name = crate::tools::user_visible_tool_name(canonical_tool_name);
+    let payload_summary = tool_result_line.payload_summary_str().trim();
+    if payload_summary.is_empty() {
+        return Some(visible_tool_name);
+    }
+
+    let normalized_payload_summary = payload_summary
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let reserved_chars = visible_tool_name.chars().count().saturating_add(3);
+    let available_summary_chars = SUMMARY_TURN_EXCERPT_CHARS
+        .saturating_sub(reserved_chars)
+        .max(16);
+    let bounded_payload_summary =
+        trim_to_chars(&normalized_payload_summary, available_summary_chars);
+    Some(format!("{visible_tool_name}: {bounded_payload_summary}"))
 }
 
 fn is_compacted_summary_turn(turn: &WindowTurn) -> bool {

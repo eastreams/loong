@@ -10,6 +10,24 @@ pub(crate) fn compact_tool_search_payload_summary_str(payload_summary: &str) -> 
     is_smaller.then_some(compacted_summary_str)
 }
 
+pub(crate) fn compact_tool_result_payload_value(tool_name: &str, payload: &Value) -> Value {
+    if let Some(compacted_payload) = compact_continuation_payload_summary(payload) {
+        return compacted_payload;
+    }
+
+    if tool_name == "tool.search" {
+        if let Some(compacted_payload) = compact_tool_search_payload_summary(payload) {
+            return compacted_payload;
+        }
+
+        if let Some(compacted_payload) = compact_tool_payload_summary_carrier(payload) {
+            return compacted_payload;
+        }
+    }
+
+    payload.clone()
+}
+
 pub(crate) fn compact_tool_search_payload_summary(payload: &Value) -> Option<Value> {
     let payload_object = payload.as_object()?;
     let results = payload_object.get("results")?.as_array()?;
@@ -41,6 +59,54 @@ pub(crate) fn compact_tool_search_payload_summary(payload: &Value) -> Option<Val
         ),
     );
 
+    Some(Value::Object(compacted))
+}
+
+fn compact_continuation_payload_summary(payload: &Value) -> Option<Value> {
+    let payload_object = payload.as_object()?;
+    let continuation_object = payload_object.get("continuation")?.as_object()?;
+
+    let mut compacted = serde_json::Map::new();
+    for key in [
+        "mode",
+        "profile",
+        "label",
+        "state",
+        "wait_status",
+        "task_id",
+    ] {
+        if let Some(value) = payload_object.get(key) {
+            compacted.insert(key.to_owned(), value.clone());
+        }
+    }
+
+    let mut compacted_continuation = serde_json::Map::new();
+    for key in [
+        "state",
+        "is_terminal",
+        "recommended_tool",
+        "recommended_payload",
+    ] {
+        if let Some(value) = continuation_object.get(key) {
+            compacted_continuation.insert(key.to_owned(), value.clone());
+        }
+    }
+    compacted.insert(
+        "continuation".to_owned(),
+        Value::Object(compacted_continuation),
+    );
+    Some(Value::Object(compacted))
+}
+
+fn compact_tool_payload_summary_carrier(payload: &Value) -> Option<Value> {
+    let payload_object = payload.as_object()?;
+    let payload_summary = payload_object.get("payload_summary")?.as_str()?;
+    let compacted_summary = compact_tool_search_payload_summary_str(payload_summary)?;
+    let mut compacted = payload_object.clone();
+    compacted.insert(
+        "payload_summary".to_owned(),
+        Value::String(compacted_summary),
+    );
     Some(Value::Object(compacted))
 }
 

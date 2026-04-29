@@ -1,3 +1,4 @@
+use super::checkpoint_api::load_compaction_preparation_diagnostics;
 use super::*;
 
 pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
@@ -26,13 +27,23 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
     )
     .await?;
 
-    persist_turn_checkpoint_event(
+    let compaction_diagnostics = if checkpoint.finalization.attempts_context_compaction() {
+        load_compaction_preparation_diagnostics(config, session_id, binding)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    persist_turn_checkpoint_event_with_compaction_diagnostics(
         runtime,
         session_id,
         checkpoint,
         TurnCheckpointStage::PostPersist,
         TurnCheckpointFinalizationProgress::pending(checkpoint),
         None,
+        compaction_diagnostics.as_ref(),
         binding,
     )
     .await?;
@@ -61,7 +72,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
             {
                 Ok(()) => TurnCheckpointProgressStatus::Completed,
                 Err(error) => {
-                    persist_turn_checkpoint_event(
+                    persist_turn_checkpoint_event_with_compaction_diagnostics(
                         runtime,
                         session_id,
                         checkpoint,
@@ -74,6 +85,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
                             step: TurnCheckpointFailureStep::AfterTurn,
                             error: error.clone(),
                         }),
+                        compaction_diagnostics.as_ref(),
                         binding,
                     )
                     .await?;
@@ -100,7 +112,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
         {
             Ok(outcome) => outcome.checkpoint_status(),
             Err(error) => {
-                persist_turn_checkpoint_event(
+                persist_turn_checkpoint_event_with_compaction_diagnostics(
                     runtime,
                     session_id,
                     checkpoint,
@@ -113,6 +125,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
                         step: TurnCheckpointFailureStep::Compaction,
                         error: error.clone(),
                     }),
+                    compaction_diagnostics.as_ref(),
                     binding,
                 )
                 .await?;
@@ -122,7 +135,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
     } else {
         TurnCheckpointProgressStatus::Skipped
     };
-    persist_turn_checkpoint_event(
+    persist_turn_checkpoint_event_with_compaction_diagnostics(
         runtime,
         session_id,
         checkpoint,
@@ -132,6 +145,7 @@ pub(super) async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized
             compaction: compaction_status,
         },
         None,
+        compaction_diagnostics.as_ref(),
         binding,
     )
     .await?;

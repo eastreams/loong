@@ -4,6 +4,11 @@ mod announce;
 mod approval_resolution;
 mod autonomy_policy;
 mod compaction;
+mod compaction_diagnostics;
+mod compaction_preparation;
+mod compaction_pruning;
+mod compaction_retention;
+mod compaction_snapshot;
 mod context_engine;
 mod context_engine_registry;
 mod delegate_support;
@@ -27,6 +32,8 @@ mod tool_discovery_state;
 mod tool_input_contract;
 mod tool_loop_supervisor;
 mod tool_result_compaction;
+mod tool_result_line;
+mod tool_result_reduction;
 mod trust_projection;
 mod turn_budget;
 mod turn_checkpoint;
@@ -67,6 +74,9 @@ pub use analytics::{
     summarize_prompt_frame_events, summarize_safe_lane_events, summarize_turn_checkpoint_events,
 };
 pub(crate) use compaction::{COMPACTED_SUMMARY_PREFIX, is_compacted_summary_content};
+pub(crate) use compaction_diagnostics::ContextCompactionDiagnostics;
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use compaction_snapshot::{CompactionSessionSnapshot, load_compaction_session_snapshot};
 pub use context_engine::{
     AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextArtifactDescriptor,
     ContextArtifactKind, ContextEngineBootstrapResult, ContextEngineCapability,
@@ -143,11 +153,11 @@ pub use turn_checkpoint::{
     TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
     TurnCheckpointTailRepairStatus,
 };
+pub(crate) use turn_coordinator::ContextCompactionReport;
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use turn_coordinator::run_started_delegate_child_turn_with_runtime;
 pub use turn_coordinator::{
-    ContextCompactionReport, ConversationTurnCoordinator, ConversationTurnOutcome,
-    spawn_background_delegate_with_runtime,
+    ConversationTurnCoordinator, ConversationTurnOutcome, spawn_background_delegate_with_runtime,
 };
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,

@@ -226,6 +226,7 @@ use super::turn_checkpoint::{
     TurnCheckpointTailRuntimeEligibility, TurnFinalizationCheckpoint, TurnLaneExecutionSnapshot,
     TurnPreparationSnapshot, TurnReplyCheckpoint, checkpoint_context_fingerprint_sha256,
     persist_turn_checkpoint_event, persist_turn_checkpoint_event_value,
+    persist_turn_checkpoint_event_with_compaction_diagnostics,
     restore_analytics_turn_checkpoint_progress_status, turn_checkpoint_result_kind,
 };
 use super::turn_engine::{

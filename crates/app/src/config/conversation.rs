@@ -18,6 +18,8 @@ pub struct ConversationConfig {
     pub compact_trigger_estimated_tokens: Option<usize>,
     #[serde(default = "default_compact_preserve_recent_turns")]
     pub compact_preserve_recent_turns: usize,
+    #[serde(default)]
+    pub compact_preserve_recent_estimated_tokens: Option<usize>,
     #[serde(default = "default_true")]
     pub compact_fail_open: bool,
     #[serde(default)]
@@ -33,6 +35,7 @@ impl Default for ConversationConfig {
             compact_min_messages: None,
             compact_trigger_estimated_tokens: None,
             compact_preserve_recent_turns: default_compact_preserve_recent_turns(),
+            compact_preserve_recent_estimated_tokens: None,
             compact_fail_open: default_true(),
             turn_loop: ConversationTurnLoopConfig::default(),
         }
@@ -92,6 +95,12 @@ impl ConversationConfig {
 
     pub fn compact_preserve_recent_turns(&self) -> usize {
         self.compact_preserve_recent_turns.max(1)
+    }
+
+    pub fn compact_preserve_recent_estimated_tokens(&self) -> Option<usize> {
+        self.compact_preserve_recent_estimated_tokens
+            .filter(|value| *value > 0)
+            .or_else(|| self.compact_trigger_estimated_tokens())
     }
 
     pub fn should_compact(&self, message_count: usize) -> bool {

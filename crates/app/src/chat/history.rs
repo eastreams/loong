@@ -3,15 +3,19 @@ use std::collections::BTreeSet;
 
 #[cfg(feature = "memory-sqlite")]
 use loong_contracts::Capability;
-#[cfg(feature = "memory-sqlite")]
-use serde_json::json;
 
 use crate::CliResult;
 use crate::config::LoongConfig;
 #[cfg(any(test, feature = "memory-sqlite"))]
+use crate::conversation::CompactionSessionSnapshot;
+#[cfg(any(test, feature = "memory-sqlite"))]
+use crate::conversation::ContextCompactionDiagnostics;
+#[cfg(any(test, feature = "memory-sqlite"))]
 use crate::conversation::ContextCompactionReport;
 use crate::conversation::ConversationRuntimeBinding;
 use crate::conversation::ConversationTurnCoordinator;
+#[cfg(any(test, feature = "memory-sqlite"))]
+use crate::conversation::load_compaction_session_snapshot;
 #[cfg(any(test, feature = "memory-sqlite"))]
 use crate::memory;
 #[cfg(any(test, feature = "memory-sqlite"))]
@@ -41,6 +45,7 @@ pub(super) struct ManualCompactionResult {
     pub(super) estimated_tokens_before: Option<usize>,
     pub(super) estimated_tokens_after: Option<usize>,
     pub(super) summary_headline: Option<String>,
+    pub(super) prune_summary: Option<String>,
     pub(super) detail: String,
 }
 
@@ -49,13 +54,6 @@ pub(super) enum ManualCompactionStatus {
     Applied,
     NoChange,
     FailedOpen,
-}
-
-#[cfg(feature = "memory-sqlite")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ManualCompactionWindowSnapshot {
-    turns: Vec<memory::WindowTurn>,
-    turn_count: Option<usize>,
 }
 
 pub(super) fn render_cli_chat_history_lines_with_width(
@@ -117,6 +115,13 @@ fn build_manual_compaction_message_spec(
                 "summary",
                 result
                     .summary_headline
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
+            ),
+            tui_plain_item(
+                "prune",
+                result
+                    .prune_summary
                     .clone()
                     .unwrap_or_else(|| "-".to_owned()),
             ),
@@ -244,6 +249,7 @@ pub(super) async fn load_manual_compaction_result(
     let after_turns = resolve_manual_compaction_turn_count(&after_snapshot);
     let summary_headline = extract_manual_compaction_summary_headline(&after_snapshot);
     let status = manual_compaction_status_from_report(&report)?;
+    let prune_summary = format_manual_compaction_prune_summary(&report.diagnostics);
     let detail = build_manual_compaction_detail(status, &summary_headline);
 
     Ok(ManualCompactionResult {
@@ -253,6 +259,7 @@ pub(super) async fn load_manual_compaction_result(
         estimated_tokens_before: report.estimated_tokens_before,
         estimated_tokens_after: report.estimated_tokens_after,
         summary_headline,
+        prune_summary,
         detail,
     })
 }
@@ -261,53 +268,21 @@ pub(super) async fn load_manual_compaction_result(
 async fn load_manual_compaction_window_snapshot(
     session_id: &str,
     binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<ManualCompactionWindowSnapshot> {
-    const MAX_MANUAL_COMPACTION_WINDOW_TURNS: usize = 512;
-
+) -> CliResult<CompactionSessionSnapshot> {
     let kernel_ctx = binding
         .kernel_context()
         .ok_or_else(|| "manual compaction requires a kernel-bound session".to_owned())?;
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let request = loong_contracts::MemoryCoreRequest {
-        operation: memory::MEMORY_OP_WINDOW.to_owned(),
-        payload: json!({
-            "session_id": session_id,
-            "limit": MAX_MANUAL_COMPACTION_WINDOW_TURNS,
-            "allow_extended_limit": true,
-        }),
-    };
-    let outcome = kernel_ctx
-        .kernel
-        .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-        )
-        .await
-        .map_err(|error| format!("load compaction window via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        let status = outcome.status;
-        let message = format!("load compaction window via kernel returned non-ok status: {status}");
-        return Err(message);
-    }
-
-    let turns = memory::decode_window_turns(&outcome.payload);
-    let turn_count = memory::decode_window_turn_count(&outcome.payload);
-
-    Ok(ManualCompactionWindowSnapshot { turns, turn_count })
+    load_compaction_session_snapshot(session_id, kernel_ctx).await
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn resolve_manual_compaction_turn_count(snapshot: &ManualCompactionWindowSnapshot) -> usize {
-    snapshot.turn_count.unwrap_or(snapshot.turns.len())
+fn resolve_manual_compaction_turn_count(snapshot: &CompactionSessionSnapshot) -> usize {
+    snapshot.turn_count
 }
 
 #[cfg(feature = "memory-sqlite")]
 fn extract_manual_compaction_summary_headline(
-    snapshot: &ManualCompactionWindowSnapshot,
+    snapshot: &CompactionSessionSnapshot,
 ) -> Option<String> {
     let first_turn = snapshot.turns.first()?;
     let content = first_turn.content.trim();
@@ -321,6 +296,14 @@ fn extract_manual_compaction_summary_headline(
         .find(|line| line.starts_with(crate::conversation::COMPACTED_SUMMARY_PREFIX))
         .or_else(|| content.lines().next().map(str::trim))?;
     Some(headline.to_owned())
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_manual_compaction_prune_summary(
+    diagnostics: &Option<ContextCompactionDiagnostics>,
+) -> Option<String> {
+    let diagnostics = diagnostics.as_ref()?;
+    Some(diagnostics.compact_summary())
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]

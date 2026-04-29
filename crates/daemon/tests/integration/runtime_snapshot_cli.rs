@@ -598,6 +598,46 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("provider active_profile=deepseek-lab"));
     assert!(rendered.contains("provider transport cache_entries="));
     assert!(rendered.contains("context_engine selected="));
+    assert!(rendered.contains("hygiene_strategy=turn_floor_only"));
+    assert!(rendered.contains("diagnostics_surface=turn_checkpoint"));
+    #[cfg(feature = "memory-sqlite")]
+    let expected_compaction_hygiene_line =
+        "context_engine compaction_hygiene evidence_status=no_evidence";
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_compaction_hygiene_line = "context_engine compaction_hygiene evidence_status=idle";
+    assert!(rendered.contains(expected_compaction_hygiene_line));
+    assert!(rendered.contains("posture=idle"));
+    #[cfg(feature = "memory-sqlite")]
+    let expected_diagnostics_coverage_line = "diagnostics_coverage=0/1 (0.0%)";
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_diagnostics_coverage_line = "diagnostics_coverage=0/0 (-)";
+    assert!(rendered.contains(expected_diagnostics_coverage_line));
+    assert!(rendered.contains("failed_open_rate=0/0 (-)"));
+    assert!(rendered.contains("context_engine compaction_pressure demoted_recent_avg=-"));
+    #[cfg(feature = "memory-sqlite")]
+    let expected_compaction_trend_line =
+        "context_engine compaction_trend scope=recent_sessions_fallback";
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_compaction_trend_line = "context_engine compaction_trend scope=idle";
+    assert!(rendered.contains(expected_compaction_trend_line));
+    assert!(rendered.contains("sample_order=updated_at_desc"));
+    #[cfg(feature = "memory-sqlite")]
+    let expected_continuity_line = "continuity=scope_limited";
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_continuity_line = "continuity=idle";
+    #[cfg(feature = "memory-sqlite")]
+    let expected_repairability_line =
+        "context_engine compaction_repairability repairability=scope_limited";
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_repairability_line = "context_engine compaction_repairability repairability=idle";
+    #[cfg(feature = "memory-sqlite")]
+    let expected_recovery_posture_line = "recovery_posture=scope_limited";
+    #[cfg(not(feature = "memory-sqlite"))]
+    let expected_recovery_posture_line = "recovery_posture=idle";
+    assert!(rendered.contains(expected_continuity_line));
+    assert!(rendered.contains(expected_repairability_line));
+    assert!(rendered.contains(expected_recovery_posture_line));
+    assert!(rendered.contains("reliability=insufficient_history"));
     assert!(rendered.contains("memory selected="));
     assert!(rendered.contains("acp enabled=true"));
     assert!(rendered.contains("acp mcp_servers=1"));

@@ -1135,7 +1135,25 @@ pub struct ContextCompactionPolicySnapshot {
     pub enabled: bool,
     pub min_messages: Option<usize>,
     pub trigger_estimated_tokens: Option<usize>,
+    pub preserve_recent_turns: usize,
+    pub preserve_recent_estimated_tokens: Option<usize>,
     pub fail_open: bool,
+}
+
+impl ContextCompactionPolicySnapshot {
+    pub fn hygiene_strategy(&self) -> &'static str {
+        if !self.enabled {
+            return "disabled";
+        }
+        if self.preserve_recent_estimated_tokens.is_some() {
+            return "turn_floor_plus_token_budget";
+        }
+        "turn_floor_only"
+    }
+
+    pub fn diagnostics_surface(&self) -> &'static str {
+        "turn_checkpoint"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1218,6 +1236,10 @@ pub fn collect_context_engine_runtime_snapshot(
         enabled: config.conversation.compact_enabled,
         min_messages: config.conversation.compact_min_messages(),
         trigger_estimated_tokens: config.conversation.compact_trigger_estimated_tokens(),
+        preserve_recent_turns: config.conversation.compact_preserve_recent_turns(),
+        preserve_recent_estimated_tokens: config
+            .conversation
+            .compact_preserve_recent_estimated_tokens(),
         fail_open: config.conversation.compaction_fail_open(),
     };
 

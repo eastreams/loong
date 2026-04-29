@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::ContextCompactionDiagnostics;
 use super::prompt_fragments::PromptFrameLayer;
 use super::prompt_frame::PromptFrameSummary;
 use super::safe_lane_failure::{
@@ -348,6 +349,7 @@ pub struct TurnCheckpointEventSummary {
     pub latest_identity_present: Option<bool>,
     pub latest_runs_after_turn: Option<bool>,
     pub latest_attempts_context_compaction: Option<bool>,
+    pub latest_compaction_diagnostics: Option<ContextCompactionDiagnostics>,
     pub stage_counts: BTreeMap<String, u32>,
     pub session_state: TurnCheckpointSessionState,
     pub checkpoint_durable: bool,
@@ -1378,6 +1380,11 @@ fn fold_turn_checkpoint_event_record(
         .and_then(|finalization| finalization.get("attempts_context_compaction"))
         .and_then(Value::as_bool)
         .or_else(|| legacy_persist_reply.then_some(true));
+    summary.latest_compaction_diagnostics = record
+        .payload
+        .get("compaction_diagnostics")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok());
 
     record.payload.get("checkpoint").cloned()
 }
