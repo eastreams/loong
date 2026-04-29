@@ -367,6 +367,30 @@ pub fn render_wrapped_display_line(line: &str, width: usize) -> Vec<String> {
     render_wrapped_text_line_with_continuation(indent, indent, trimmed, width)
 }
 
+pub fn render_wrapped_plain_display_line(line: &str, width: usize) -> Vec<String> {
+    if line.trim().is_empty() {
+        return vec![String::new()];
+    }
+
+    let indent_width = line
+        .chars()
+        .take_while(|character| character.is_ascii_whitespace())
+        .count();
+    let indent = &line[..indent_width];
+    let trimmed = &line[indent_width..];
+
+    if let Some((prefix, continuation_prefix, rest)) = parse_display_list_item(indent, trimmed) {
+        return render_wrapped_text_line_with_continuation(
+            &prefix,
+            &continuation_prefix,
+            rest,
+            width,
+        );
+    }
+
+    render_wrapped_text_line_with_continuation(indent, indent, trimmed, width)
+}
+
 fn parse_display_list_item<'a>(
     indent: &str,
     trimmed: &'a str,
@@ -793,6 +817,22 @@ mod tests {
             vec![
                 "    source: Codex config at".to_owned(),
                 "      ~/.codex/agents/loong/config.toml".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn presentation_plain_display_line_does_not_promote_label_value_layout() {
+        let lines = render_wrapped_plain_display_line(
+            "    source: Codex config at ~/.codex/agents/loong/config.toml",
+            48,
+        );
+
+        assert_eq!(
+            lines,
+            vec![
+                "    source: Codex config at".to_owned(),
+                "    ~/.codex/agents/loong/config.toml".to_owned(),
             ]
         );
     }

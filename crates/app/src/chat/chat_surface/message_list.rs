@@ -2209,7 +2209,7 @@ fn render_assistant_plain_line(
     content_width: usize,
     style: Style,
 ) -> Vec<Line<'static>> {
-    crate::presentation::render_wrapped_display_line(line, content_width)
+    crate::presentation::render_wrapped_plain_display_line(line, content_width)
         .into_iter()
         .map(|wrapped| Line::from(vec![Span::raw("  "), Span::styled(wrapped, style)]))
         .collect()

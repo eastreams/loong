@@ -240,7 +240,7 @@ fn render_cli_chat_card_body_line(line: &str, inner_width: usize) -> Vec<String>
         );
     }
 
-    crate::presentation::render_wrapped_display_line(line, inner_width)
+    crate::presentation::render_wrapped_plain_display_line(line, inner_width)
 }
 
 pub(super) fn parse_cli_chat_markdown_sections(text: &str) -> Vec<TuiSectionSpec> {
