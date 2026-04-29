@@ -1063,7 +1063,7 @@ fn render_rendered_system_line(line: &str, width: u16) -> Vec<Line<'static>> {
         Style::default().fg(SURFACE_DARK_GRAY)
     };
 
-    crate::presentation::render_wrapped_display_line(line, content_width)
+    crate::presentation::render_wrapped_plain_display_line(line, content_width)
         .into_iter()
         .map(|wrapped| Line::from(vec![Span::styled(wrapped, style)]))
         .collect()
@@ -1112,7 +1112,7 @@ fn render_system_activity_headline(line: &str, content_width: usize) -> Option<V
     let body_width = content_width
         .saturating_sub(2 + crate::presentation::display_width(label) + 1)
         .max(1);
-    let wrapped = crate::presentation::render_wrapped_display_line(body, body_width);
+    let wrapped = crate::presentation::render_wrapped_plain_display_line(body, body_width);
 
     Some(
         wrapped
@@ -1162,7 +1162,7 @@ fn render_system_activity_child(line: &str, content_width: usize) -> Option<Vec<
     let body_width = content_width
         .saturating_sub(2 + 2 + crate::presentation::display_width(label) + 1)
         .max(1);
-    let wrapped = crate::presentation::render_wrapped_display_line(body, body_width);
+    let wrapped = crate::presentation::render_wrapped_plain_display_line(body, body_width);
 
     Some(
         wrapped
@@ -3809,7 +3809,7 @@ fn render_run_tool_preview_block(preview: &RunToolPreview, width: u16) -> Vec<Li
     ));
 
     if let Some(metrics) = preview.metrics.as_deref() {
-        for wrapped in crate::presentation::render_wrapped_display_line(
+        for wrapped in crate::presentation::render_wrapped_plain_display_line(
             metrics,
             width.saturating_sub(12).max(1) as usize,
         ) {
@@ -4525,7 +4525,7 @@ fn render_tool_detail_lines(line: &str, width: u16) -> Vec<Line<'static>> {
                     + crate::presentation::display_width(label_text.as_str()),
             )
             .max(1);
-        let mut wrapped = crate::presentation::render_wrapped_display_line(body, body_width);
+        let mut wrapped = crate::presentation::render_wrapped_plain_display_line(body, body_width);
         if wrapped.is_empty() {
             wrapped.push(String::new());
         }
@@ -4620,7 +4620,7 @@ fn render_tool_detail_lines(line: &str, width: u16) -> Vec<Line<'static>> {
             .saturating_sub(crate::presentation::display_width(&prefix))
             .max(1);
         let wrapped =
-            crate::presentation::render_wrapped_display_line(body.trim_start(), body_width);
+            crate::presentation::render_wrapped_plain_display_line(body.trim_start(), body_width);
         let continuation_prefix = " ".repeat(crate::presentation::display_width(&prefix));
         return wrapped
             .into_iter()
@@ -4640,7 +4640,7 @@ fn render_tool_detail_lines(line: &str, width: u16) -> Vec<Line<'static>> {
             .collect();
     }
 
-    crate::presentation::render_wrapped_display_line(line, content_width)
+    crate::presentation::render_wrapped_plain_display_line(line, content_width)
         .into_iter()
         .map(|wrapped_line| {
             Line::from(vec![
@@ -5096,7 +5096,7 @@ fn render_image_block_lines(alt: &str, url: &str, width: u16) -> Vec<Line<'stati
     let content_width = width.saturating_sub(10).max(1) as usize;
 
     for (index, wrapped) in
-        crate::presentation::render_wrapped_display_line(alt_text.as_str(), content_width)
+        crate::presentation::render_wrapped_plain_display_line(alt_text.as_str(), content_width)
             .into_iter()
             .enumerate()
     {
@@ -5117,7 +5117,8 @@ fn render_image_block_lines(alt: &str, url: &str, width: u16) -> Vec<Line<'stati
 
     if !source.is_empty() {
         let source_width = width.saturating_sub(10).max(1) as usize;
-        let source_lines = crate::presentation::render_wrapped_display_line(source, source_width);
+        let source_lines =
+            crate::presentation::render_wrapped_plain_display_line(source, source_width);
         for (index, wrapped) in source_lines.iter().take(2).enumerate() {
             let label = if index == 0 { "source: " } else { "        " };
             rendered.push(Line::from(vec![
@@ -5150,7 +5151,7 @@ fn render_image_block_lines(alt: &str, url: &str, width: u16) -> Vec<Line<'stati
     };
     let action_width = width.saturating_sub(11).max(1) as usize;
     for (index, wrapped) in
-        crate::presentation::render_wrapped_display_line(action_text, action_width)
+        crate::presentation::render_wrapped_plain_display_line(action_text, action_width)
             .into_iter()
             .enumerate()
     {
@@ -6359,6 +6360,32 @@ mod tests {
             [MessageContent::Markdown(markdown)]
                 if markdown == text
         ));
+    }
+
+    #[test]
+    fn rendered_system_line_preserves_plain_label_like_text() {
+        let mut list = MessageList::new();
+        list.add_rendered_lines(vec![
+            "source: imported config at ~/.loong/agents/loong/config.toml".to_owned(),
+        ]);
+
+        let rendered = list
+            .get_rendered_lines(24)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("source: imported config"))
+        );
+        assert!(rendered.iter().any(|line| line.contains("~/.loong/agents/loong")));
     }
 
     #[test]
