@@ -517,6 +517,14 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
+                    precedence_rule: "project_local_over_global".to_owned(),
+                    project_local_root: ".loong/extensions/".to_owned(),
+                    global_root: "~/.loong/agent/extensions/".to_owned(),
+                    shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                    recommended_action: Some("review_global_duplicate".to_owned()),
+                    resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                }),
             results: Vec::new(),
         }),
     );
@@ -533,6 +541,10 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
     assert_eq!(
         encoded["runtime_plugin_inventory"]["shadowed_plugin_ids"],
         serde_json::json!(["shared-extension"])
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
+        serde_json::json!("project_local_over_global")
     );
 
     fs::remove_dir_all(&root).ok();
@@ -563,6 +575,14 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
+                    precedence_rule: "project_local_over_global".to_owned(),
+                    project_local_root: ".loong/extensions/".to_owned(),
+                    global_root: "~/.loong/agent/extensions/".to_owned(),
+                    shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                    recommended_action: Some("review_global_duplicate".to_owned()),
+                    resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                }),
             results: Vec::new(),
         }),
     );
@@ -688,6 +708,10 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     assert_eq!(
         encoded["runtime"]["runtime_plugin_inventory"]["shadowed_plugin_ids"],
         serde_json::json!(["shared-extension"])
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["recommended_action"],
+        serde_json::json!("review_global_duplicate")
     );
 
     fs::remove_dir_all(&root).ok();

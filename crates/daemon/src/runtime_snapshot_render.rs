@@ -455,6 +455,18 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             )
         ));
     }
+    if let Some(discovery_guidance) = snapshot.discovery_guidance.as_ref() {
+        let recommended_action = crate::render_line_safe_optional_text_value(
+            discovery_guidance.recommended_action.as_deref(),
+        );
+        lines.push(format!(
+            "  discovery_guidance precedence_rule={} precedence_roots={}>{} recommended_action={}",
+            crate::render_line_safe_text_value(&discovery_guidance.precedence_rule),
+            crate::render_line_safe_text_value(&discovery_guidance.project_local_root),
+            crate::render_line_safe_text_value(&discovery_guidance.global_root),
+            recommended_action,
+        ));
+    }
 
     if let Some(error) = snapshot.inventory_error.as_deref() {
         let rendered_error = crate::render_line_safe_text_value(error);
@@ -875,6 +887,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
         "setup_incomplete_plugin_count": snapshot.setup_incomplete_plugin_count,
         "blocked_plugin_count": snapshot.blocked_plugin_count,
         "shadowed_plugin_ids": snapshot.shadowed_plugin_ids,
+        "discovery_guidance": snapshot.discovery_guidance,
         "native_extension_authoring_summary": snapshot.native_extension_authoring_summary,
         "plugins": snapshot
             .plugins

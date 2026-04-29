@@ -607,6 +607,7 @@ fn runtime_snapshot_artifact_payload_can_embed_live_plugin_inventory_truth() {
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             results: Vec::new(),
         }),
     )
@@ -758,6 +759,14 @@ fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicate
         payload["runtime_plugins"]["shadowed_plugin_ids"],
         serde_json::json!(["shared-extension"])
     );
+    assert_eq!(
+        payload["runtime_plugins"]["discovery_guidance"]["precedence_rule"],
+        serde_json::json!("project_local_over_global")
+    );
+    assert_eq!(
+        payload["runtime_plugins"]["discovery_guidance"]["recommended_action"],
+        serde_json::json!("review_global_duplicate")
+    );
     assert!(
         plugin["source_path"]
             .as_str()
@@ -769,6 +778,8 @@ fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicate
     assert!(rendered.contains("roots_source=auto_discovered"));
     assert!(rendered.contains("shadowed_plugins=1"));
     assert!(rendered.contains("shadowed_plugin_ids=shared-extension"));
+    assert!(rendered.contains("precedence_rule=project_local_over_global"));
+    assert!(rendered.contains("recommended_action=review_global_duplicate"));
 
     fs::remove_dir_all(&root).ok();
     fs::remove_dir_all(&home).ok();

@@ -6649,6 +6649,14 @@ mod tests {
         assert_eq!(payload["roots_source"], json!("auto_discovered"));
         assert_eq!(payload["returned_results"], json!(1));
         assert_eq!(payload["shadowed_plugin_ids"], json!(["shared-extension"]));
+        assert_eq!(
+            payload["discovery_guidance"]["precedence_rule"],
+            json!("project_local_over_global")
+        );
+        assert_eq!(
+            payload["discovery_guidance"]["recommended_action"],
+            json!("review_global_duplicate")
+        );
         let plugin = payload["results"]
             .as_array()
             .and_then(|plugins| {

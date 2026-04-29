@@ -371,6 +371,9 @@ pub struct GatewayRuntimePluginInventorySummaryReadModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shadowed_plugin_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_guidance:
+        Option<crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub native_extension_authoring_summary:
         Option<crate::native_extension_authoring::NativeExtensionAuthoringSummaryView>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1207,6 +1210,7 @@ fn build_runtime_plugin_inventory_summary_read_model(
         loaded_plugins,
         shadowed_plugin_count: Some(inventory.shadowed_plugin_ids.len()),
         shadowed_plugin_ids: inventory.shadowed_plugin_ids.clone(),
+        discovery_guidance: inventory.discovery_guidance.clone(),
         native_extension_authoring_summary: inventory.native_extension_authoring_summary.clone(),
         activation_attestation_integrity_distribution,
         runtime_health_status_distribution,

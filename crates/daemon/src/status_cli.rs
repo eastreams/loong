@@ -768,6 +768,16 @@ fn render_status_runtime_plugin_inventory_summary(
     } else {
         inventory.shadowed_plugin_ids.join(",")
     };
+    let precedence_rule = inventory
+        .discovery_guidance
+        .as_ref()
+        .map(|guidance| guidance.precedence_rule.as_str())
+        .unwrap_or("-");
+    let recommended_action = inventory
+        .discovery_guidance
+        .as_ref()
+        .and_then(|guidance| guidance.recommended_action.as_deref())
+        .unwrap_or("-");
     let authoring_summary = inventory.native_extension_authoring_summary.as_ref();
     let guided_plugins = authoring_summary
         .map(|summary| summary.guided_plugins.to_string())
@@ -783,13 +793,15 @@ fn render_status_runtime_plugin_inventory_summary(
         .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "available={} roots_source={} returned_results={} loaded_plugins={} shadowed_plugins={} shadowed_plugin_ids={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
+        "available={} roots_source={} returned_results={} loaded_plugins={} shadowed_plugins={} shadowed_plugin_ids={} precedence_rule={} recommended_action={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
         inventory.available,
         roots_source,
         returned_results,
         loaded_plugins,
         shadowed_plugins,
         shadowed_plugin_ids,
+        precedence_rule,
+        recommended_action,
         guided_plugins,
         metadata_issues,
         runnable_actions,
@@ -971,6 +983,16 @@ mod tests {
                         loaded_plugins: Some(0),
                         shadowed_plugin_count: Some(1),
                         shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                        discovery_guidance: Some(
+                            crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView {
+                                precedence_rule: "project_local_over_global".to_owned(),
+                                project_local_root: ".loong/extensions/".to_owned(),
+                                global_root: "~/.loong/agent/extensions/".to_owned(),
+                                shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                                recommended_action: Some("review_global_duplicate".to_owned()),
+                                resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                            },
+                        ),
                         native_extension_authoring_summary: Some(
                             crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
                                 guided_plugins: 1,
@@ -1058,6 +1080,16 @@ mod tests {
                     },
                 ),
                 shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                discovery_guidance: Some(
+                    crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView {
+                        precedence_rule: "project_local_over_global".to_owned(),
+                        project_local_root: ".loong/extensions/".to_owned(),
+                        global_root: "~/.loong/agent/extensions/".to_owned(),
+                        shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                        recommended_action: Some("review_global_duplicate".to_owned()),
+                        resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                    },
+                ),
                 results: Vec::new(),
             }),
             next_actions: vec![StatusCliAction {
@@ -1097,6 +1129,8 @@ mod tests {
         assert!(rendered.contains("returned_results=1"));
         assert!(rendered.contains("shadowed_plugins=1"));
         assert!(rendered.contains("shadowed_plugin_ids=shared-extension"));
+        assert!(rendered.contains("precedence_rule=project_local_over_global"));
+        assert!(rendered.contains("recommended_action=review_global_duplicate"));
         assert!(rendered.contains("guided_plugins=1"));
         assert!(rendered.contains("metadata_issues=1"));
         assert!(rendered.contains("runnable_actions=3"));
@@ -1235,6 +1269,16 @@ mod tests {
                     },
                 ),
                 shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                discovery_guidance: Some(
+                    crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView {
+                        precedence_rule: "project_local_over_global".to_owned(),
+                        project_local_root: ".loong/extensions/".to_owned(),
+                        global_root: "~/.loong/agent/extensions/".to_owned(),
+                        shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                        recommended_action: Some("review_global_duplicate".to_owned()),
+                        resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                    },
+                ),
                 results: Vec::new(),
             }),
             next_actions: Vec::new(),
@@ -1254,6 +1298,10 @@ mod tests {
         assert_eq!(
             value["runtime_plugin_inventory"]["shadowed_plugin_ids"],
             json!(["shared-extension"])
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
+            json!("project_local_over_global")
         );
         assert_eq!(
             value["runtime_plugin_inventory"]["native_extension_authoring_summary"]["guided_plugins"],

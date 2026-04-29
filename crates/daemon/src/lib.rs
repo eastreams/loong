@@ -69,6 +69,7 @@ pub use self::operator_inventory_cli::{
     render_channel_surfaces_text, render_channel_target_kind_ids, run_channels_cli,
     run_list_context_engines_cli, run_list_memory_systems_cli, run_safe_lane_summary_cli,
 };
+pub use self::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView;
 pub use loong_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
@@ -165,6 +166,7 @@ pub mod provider_presentation;
 mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
+mod runtime_plugin_discovery;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_render;
 mod runtime_snapshot_types;
@@ -2453,6 +2455,8 @@ pub struct RuntimeSnapshotRuntimePluginsState {
     pub setup_incomplete_plugin_count: usize,
     pub blocked_plugin_count: usize,
     pub shadowed_plugin_ids: Vec<String>,
+    pub discovery_guidance:
+        Option<crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView>,
     pub native_extension_authoring_summary:
         Option<crate::native_extension_authoring::NativeExtensionAuthoringSummaryView>,
     pub plugins: Vec<RuntimeSnapshotRuntimePluginState>,
@@ -2989,6 +2993,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             setup_incomplete_plugin_count: 0,
             blocked_plugin_count: 0,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             native_extension_authoring_summary: None,
             plugins: Vec::new(),
         };
@@ -3017,6 +3022,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             setup_incomplete_plugin_count: 0,
             blocked_plugin_count: 0,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             native_extension_authoring_summary: None,
             plugins: Vec::new(),
         };
@@ -3048,6 +3054,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                     setup_incomplete_plugin_count: 0,
                     blocked_plugin_count: 0,
                     shadowed_plugin_ids: Vec::new(),
+                    discovery_guidance: None,
                     native_extension_authoring_summary: None,
                     plugins: Vec::new(),
                 };
@@ -3076,6 +3083,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 setup_incomplete_plugin_count: 0,
                 blocked_plugin_count: 0,
                 shadowed_plugin_ids: Vec::new(),
+                discovery_guidance: None,
                 native_extension_authoring_summary: None,
                 plugins: Vec::new(),
             };
@@ -3280,6 +3288,11 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 .filter_map(|plugin| plugin.authoring_guidance.clone())
                 .collect::<Vec<_>>(),
         );
+    let discovery_guidance =
+        crate::runtime_plugin_discovery::build_runtime_plugin_discovery_guidance(
+            Some(roots_source.as_str()),
+            &shadowed_plugin_ids,
+        );
 
     RuntimeSnapshotRuntimePluginsState {
         enabled: true,
@@ -3298,6 +3311,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
         setup_incomplete_plugin_count: activation.setup_incomplete_plugins,
         blocked_plugin_count: activation.blocked_plugins,
         shadowed_plugin_ids,
+        discovery_guidance,
         native_extension_authoring_summary,
         plugins,
     }

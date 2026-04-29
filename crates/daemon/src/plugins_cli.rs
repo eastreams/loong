@@ -580,6 +580,9 @@ pub struct RuntimePluginInventoryReadModel {
     pub native_extension_authoring_summary: Option<NativeExtensionAuthoringSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shadowed_plugin_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_guidance:
+        Option<crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<RuntimePluginInventoryResultView>,
 }
@@ -1179,6 +1182,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             results: Vec::new(),
         };
     }
@@ -1200,6 +1204,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             results: Vec::new(),
         };
     }
@@ -1238,6 +1243,11 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             let summary = summarize_plugin_inventory_results(&effective_results);
             let native_extension_authoring_guidance =
                 build_plugins_inventory_native_extension_authoring_guidance(&effective_results);
+            let discovery_guidance =
+                crate::runtime_plugin_discovery::build_runtime_plugin_discovery_guidance(
+                    roots_source.as_deref(),
+                    &shadowed_plugin_ids,
+                );
 
             RuntimePluginInventoryReadModel {
                 available: true,
@@ -1250,6 +1260,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
                     &native_extension_authoring_guidance,
                 ),
                 shadowed_plugin_ids,
+                discovery_guidance,
                 results: effective_results
                     .into_iter()
                     .map(|result| RuntimePluginInventoryResultView {
@@ -1273,6 +1284,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             results: Vec::new(),
         },
         Err(error) => RuntimePluginInventoryReadModel {
@@ -1284,6 +1296,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             summary: None,
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
+            discovery_guidance: None,
             results: Vec::new(),
         },
     }
