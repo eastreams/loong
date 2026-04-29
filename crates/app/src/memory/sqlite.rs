@@ -1650,10 +1650,10 @@ fn preserve_session_tree_before_rebuild(
     conn: &Connection,
     session_id: &str,
     turns: &[WindowTurn],
-    fallback_ts: i64,
+    rewrite_ts: i64,
 ) -> Result<(), String> {
     let new_tail_turn_index: i64 = turns.len() as i64;
-    let preservation_ts: i64 = turns.last().and_then(|turn| turn.ts).unwrap_or(fallback_ts);
+    let preservation_ts: i64 = rewrite_ts;
 
     // --- Drop non-active heads whose target would dangle.
     //
@@ -1702,11 +1702,14 @@ fn preserve_session_tree_before_rebuild(
             "new_tail_turn_index": new_tail_turn_index,
             "content_snapshot": content_snapshot,
         });
+        let payload_json = payload.to_string();
+        let search_text =
+            session_event_search_text("session_tree_rewrite_dropped_head", payload_json.as_str());
         conn.execute(
             "INSERT INTO session_events(
                 session_id, event_kind, actor_session_id, payload_json, search_text, ts
-             ) VALUES (?1, 'session_tree_rewrite_dropped_head', NULL, ?2, '', ?3)",
-            rusqlite::params![session_id, payload.to_string(), preservation_ts],
+             ) VALUES (?1, 'session_tree_rewrite_dropped_head', NULL, ?2, ?3, ?4)",
+            rusqlite::params![session_id, payload_json, search_text, preservation_ts],
         )
         .map_err(|error| format!("record dropped head event failed: {error}"))?;
         conn.execute(
@@ -1801,11 +1804,16 @@ fn preserve_session_tree_before_rebuild(
             "original_source_end_node_id":   if source_end_drop   { source_end_node_id.clone()   } else { None },
             "new_tail_turn_index": new_tail_turn_index,
         });
+        let payload_json = payload.to_string();
+        let search_text = session_event_search_text(
+            "session_tree_rewrite_nulled_artifact_refs",
+            payload_json.as_str(),
+        );
         conn.execute(
             "INSERT INTO session_events(
                 session_id, event_kind, actor_session_id, payload_json, search_text, ts
-             ) VALUES (?1, 'session_tree_rewrite_nulled_artifact_refs', NULL, ?2, '', ?3)",
-            rusqlite::params![session_id, payload.to_string(), preservation_ts],
+             ) VALUES (?1, 'session_tree_rewrite_nulled_artifact_refs', NULL, ?2, ?3, ?4)",
+            rusqlite::params![session_id, payload_json, search_text, preservation_ts],
         )
         .map_err(|error| format!("record nulled artifact event failed: {error}"))?;
 
@@ -1841,6 +1849,7 @@ fn rebuild_linear_session_tree_for_turns(
     conn: &Connection,
     session_id: &str,
     turns: &[WindowTurn],
+    rewrite_ts: i64,
 ) -> Result<(), String> {
     let session_exists: bool = conn
         .query_row(
@@ -1873,7 +1882,7 @@ fn rebuild_linear_session_tree_for_turns(
     // capturing original content) and null the out-of-range *_node_id
     // columns on artifacts (their own `payload_json` / `summary_text`
     // survive, so the artifact's self-contained content is not lost).
-    preserve_session_tree_before_rebuild(conn, session_id, turns, root_created_at)?;
+    preserve_session_tree_before_rebuild(conn, session_id, turns, rewrite_ts)?;
 
     conn.execute(
         "DELETE FROM session_nodes WHERE session_id = ?1",
@@ -2133,7 +2142,8 @@ fn replace_turns_internal(
                     })?;
             }
 
-            rebuild_linear_session_tree_for_turns(&tx, session_id, turns)?;
+            let rewrite_ts = unix_ts_now();
+            rebuild_linear_session_tree_for_turns(&tx, session_id, turns, rewrite_ts)?;
 
             tx.commit()
                 .map_err(|error| format!("commit memory replace transaction failed: {error}"))?;
