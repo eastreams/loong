@@ -1436,9 +1436,10 @@ pub(super) fn render_cli_chat_live_compact_lines_with_width(
             lines.push(String::new());
         }
         for raw_line in format_cli_chat_live_tool_activity_lines(snapshot.tools.as_slice()) {
-            for wrapped in
-                crate::presentation::render_wrapped_display_line(raw_line.as_str(), wrap_width)
-            {
+            for wrapped in crate::presentation::render_wrapped_literal_display_line(
+                raw_line.as_str(),
+                wrap_width,
+            ) {
                 lines.push(wrapped);
             }
         }
@@ -1542,7 +1543,7 @@ fn render_live_preview_segment_lines(segment: &str, wrap_width: usize) -> Vec<St
 
         if let Some(split_bullets) = split_live_preview_inline_bullet_runs(trimmed) {
             for bullet_line in split_bullets {
-                rendered.extend(crate::presentation::render_wrapped_display_line(
+                rendered.extend(crate::presentation::render_wrapped_plain_display_line(
                     bullet_line.as_str(),
                     wrap_width,
                 ));
@@ -1550,7 +1551,7 @@ fn render_live_preview_segment_lines(segment: &str, wrap_width: usize) -> Vec<St
             continue;
         }
 
-        rendered.extend(crate::presentation::render_wrapped_display_line(
+        rendered.extend(crate::presentation::render_wrapped_plain_display_line(
             trimmed, wrap_width,
         ));
     }
@@ -1815,7 +1816,7 @@ fn wrap_live_preview_diff_line(line: &str, wrap_width: usize) -> Vec<String> {
         }
     }
 
-    crate::presentation::render_wrapped_display_line(line, wrap_width)
+    crate::presentation::render_wrapped_literal_display_line(line, wrap_width)
 }
 
 fn wrap_with_prefix(
@@ -1829,13 +1830,13 @@ fn wrap_with_prefix(
     let first_width = wrap_width.saturating_sub(prefix_width).max(1);
     let continuation_body_width = wrap_width.saturating_sub(continuation_width).max(1);
 
-    let wrapped_body = crate::presentation::render_wrapped_display_line(body, first_width);
+    let wrapped_body = crate::presentation::render_wrapped_literal_display_line(body, first_width);
     let mut rendered = Vec::new();
     for (index, line) in wrapped_body.into_iter().enumerate() {
         if index == 0 {
             rendered.push(format!("{prefix}{line}"));
         } else {
-            for continuation_line in crate::presentation::render_wrapped_display_line(
+            for continuation_line in crate::presentation::render_wrapped_literal_display_line(
                 line.as_str(),
                 continuation_body_width,
             ) {
@@ -3421,6 +3422,61 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("func RequiresOpenAIWSV2Continuation"))
         );
+    }
+
+    #[test]
+    fn live_preview_preserves_plain_label_like_text_without_label_layout() {
+        let lines = render_live_preview_segment_lines(
+            "source: imported config at ~/.loong/config.toml",
+            24,
+        );
+
+        assert_eq!(
+            lines,
+            vec![
+                "source: imported config".to_owned(),
+                "at ~/.loong/config.toml".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_render_preserves_literal_plus_prefix_in_tool_preview_lines() {
+        let snapshot = CliChatLiveSurfaceSnapshot {
+            phase: ConversationTurnPhase::RunningTools,
+            provider_round: Some(1),
+            lane: Some(ExecutionLane::Fast),
+            tool_call_count: 1,
+            message_count: Some(3),
+            estimated_tokens: Some(900),
+            first_token_latency_ms: None,
+            draft_preview: None,
+            tools: vec![CliChatLiveToolSnapshot {
+                tool_call_id: "call-plus".to_owned(),
+                name: Some("edit".to_owned()),
+                request_summary: None,
+                args: String::new(),
+                status: ConversationTurnToolState::Completed,
+                detail: Some("ok".to_owned()),
+                stdout: empty_output(),
+                stderr: empty_output(),
+                file_change: Some(CliChatLiveFileChangeView {
+                    path: "src/lib.rs".to_owned(),
+                    operation: ToolFileChangeKind::Edit,
+                    added_lines: 1,
+                    removed_lines: 0,
+                    preview: Some("+ added ~/.loong/config.toml".to_owned()),
+                }),
+                duration_ms: None,
+                exit_code: None,
+            }],
+        };
+
+        let lines = render_cli_chat_live_compact_lines_with_width(&snapshot, 40);
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("+ added ~/.loong/config.toml"));
+        assert!(!joined.contains("- added ~/.loong/config.toml"));
     }
 
     #[test]

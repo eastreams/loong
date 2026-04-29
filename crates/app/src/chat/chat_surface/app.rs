@@ -2294,7 +2294,7 @@ fn render_onboarding_wrapped_line(
 ) -> Vec<Line<'static>> {
     let prefix_width = crate::presentation::display_width(prefix);
     let body_width = content_width.saturating_sub(prefix_width).max(1);
-    let mut wrapped = crate::presentation::render_wrapped_display_line(text, body_width);
+    let mut wrapped = crate::presentation::render_wrapped_plain_display_line(text, body_width);
     if wrapped.is_empty() {
         wrapped.push(String::new());
     }
@@ -5488,7 +5488,7 @@ fn render_pending_live_line(
         return lines;
     }
 
-    crate::presentation::render_wrapped_display_line(line, content_width)
+    crate::presentation::render_wrapped_plain_display_line(line, content_width)
         .into_iter()
         .map(|wrapped| Line::from(vec![Span::raw("  "), Span::styled(wrapped, default_style)]))
         .collect()
@@ -5505,7 +5505,8 @@ fn render_pending_tool_headline_line(
     let label_text = format!("{label} ");
     let prefix_width = 2 + crate::presentation::display_width(label_text.as_str());
     let body_width = content_width.saturating_sub(prefix_width).max(1);
-    let mut wrapped = crate::presentation::render_wrapped_display_line(rest.trim(), body_width);
+    let mut wrapped =
+        crate::presentation::render_wrapped_literal_display_line(rest.trim(), body_width);
     if wrapped.is_empty() {
         wrapped.push(String::new());
     }
@@ -5623,7 +5624,8 @@ fn render_pending_tool_child_line(line: &str, content_width: usize) -> Option<Ve
     let (label_style, body_style) = pending_tool_child_styles(label);
     let prefix_width = 2 + crate::presentation::display_width(label_text.as_str());
     let body_width = content_width.saturating_sub(prefix_width).max(1);
-    let mut wrapped = crate::presentation::render_wrapped_display_line(rest.trim(), body_width);
+    let mut wrapped =
+        crate::presentation::render_wrapped_literal_display_line(rest.trim(), body_width);
     if wrapped.is_empty() {
         wrapped.push(String::new());
     }
@@ -5714,7 +5716,7 @@ fn render_pending_tool_sample_line(line: &str, content_width: usize) -> Option<V
     let sample_width = content_width.saturating_sub(4).max(1);
 
     Some(
-        crate::presentation::render_wrapped_display_line(sample, sample_width)
+        crate::presentation::render_wrapped_literal_display_line(sample, sample_width)
             .into_iter()
             .enumerate()
             .map(|(index, wrapped_line)| {
@@ -5870,7 +5872,7 @@ fn push_pending_input_lines(
     let displayed_messages = messages.len().min(max_preview_messages);
     for (message, message_style) in messages.iter().take(max_preview_messages) {
         let wrapped_lines =
-            crate::presentation::render_wrapped_display_line(message, content_width);
+            crate::presentation::render_wrapped_literal_display_line(message, content_width);
         let wrapped_count = wrapped_lines.len();
         for (line_index, wrapped) in wrapped_lines.into_iter().take(3).enumerate() {
             let prefix = if line_index == 0 {
@@ -6408,7 +6410,7 @@ mod tests {
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Style};
     use std::collections::BTreeSet;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
@@ -7809,6 +7811,116 @@ description: "actual description"
             .find(|span| span.content.as_ref().contains("- denied"))
             .expect("sample span");
         assert_eq!(sample_span.style.fg, Some(super::SURFACE_RED));
+    }
+
+    #[test]
+    fn pending_live_generic_line_preserves_plain_label_like_text() {
+        let rendered = super::render_pending_live_line(
+            "source: imported config at ~/.loong/config.toml",
+            24,
+            Style::default(),
+            std::time::Instant::now(),
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line == "  source: imported config")
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line == "  at ~/.loong/config.toml")
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line == "    at ~/.loong/config.toml")
+        );
+    }
+
+    #[test]
+    fn pending_tool_activity_preserves_literal_plus_prefix() {
+        let rendered = super::build_pending_lines(
+            Some(std::time::Instant::now()),
+            &[
+                "• Called + added ~/.loong/config.toml".to_owned(),
+                "  ↳ stderr + added ~/.loong/config.toml".to_owned(),
+                "    + added ~/.loong/config.toml".to_owned(),
+            ],
+            1,
+            &std::collections::VecDeque::new(),
+            &std::collections::VecDeque::new(),
+            48,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("• Called + added"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("↳ stderr + added"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("+ added ~/.loong/config.toml"))
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("• Called - added"))
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("↳ stderr - added"))
+        );
+    }
+
+    #[test]
+    fn pending_queue_preview_preserves_literal_plus_prefix() {
+        let mut pending_queue = std::collections::VecDeque::new();
+        pending_queue.push_back("+ added ~/.loong/config.toml".to_owned());
+
+        let rendered = super::build_pending_lines(
+            Some(std::time::Instant::now()),
+            &[],
+            1,
+            &std::collections::VecDeque::new(),
+            &pending_queue,
+            42,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("↳ + added")));
+        assert!(!rendered.iter().any(|line| line.contains("↳ - added")));
     }
 
     #[test]
