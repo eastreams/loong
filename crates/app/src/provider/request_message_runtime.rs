@@ -264,9 +264,9 @@ fn build_prompt_fragments_from_prompt_sources(
     let system_prompt = config.cli.resolved_system_prompt();
     let system_text = system_prompt.trim().to_owned();
     let provider_tool_surface = super::native_tool_surface::provider_tool_surface(config);
-    let capability_snapshot =
-        provider_tool_surface.capability_snapshot(tool_view, tool_runtime_config);
-    let native_tool_sections = provider_tool_surface.prompt_sections();
+    let prompt_surface = provider_tool_surface.prompt_surface(tool_view, tool_runtime_config);
+    let capability_snapshot = prompt_surface.capability_snapshot;
+    let native_tool_sections = prompt_surface.prompt_sections;
     let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let execution_discipline_section = render_execution_discipline_section();
     let workspace_guidance_section = workspace_guidance_model

@@ -14,6 +14,17 @@ pub(super) struct ProviderNativePromptSection {
     pub(super) content: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProviderToolRequestSurface {
+    pub(super) tool_definitions: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProviderToolPromptSurface {
+    pub(super) capability_snapshot: String,
+    pub(super) prompt_sections: Vec<ProviderNativePromptSection>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderWebSurfaceMode {
     StandardQuerySearch,
@@ -44,12 +55,12 @@ pub(super) fn provider_tool_surface(config: &LoongConfig) -> ProviderToolSurface
 }
 
 impl ProviderToolSurface {
-    pub(super) fn request_tool_definitions(
+    pub(super) fn request_surface(
         self,
         config: &LoongConfig,
         tool_view: &ToolView,
         tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-    ) -> Result<Vec<Value>, String> {
+    ) -> Result<ProviderToolRequestSurface, String> {
         let runtime_tool_view =
             tools::runtime_tool_view_with_runtime_config(&config.tools, tool_runtime_config);
         let base_tool_definitions = if tool_view == &runtime_tool_view {
@@ -61,27 +72,32 @@ impl ProviderToolSurface {
         let tools = self
             .web_surface_mode
             .apply_to_tool_definitions(base_tool_definitions);
-        Ok(self.append_native_tool_specs(tools))
+        Ok(ProviderToolRequestSurface {
+            tool_definitions: self.append_native_tool_specs(tools),
+        })
     }
 
-    pub(super) fn prompt_sections(self) -> Vec<ProviderNativePromptSection> {
-        self.native_tools
-            .iter()
-            .filter_map(|kind| kind.prompt_section())
-            .collect()
-    }
-
-    pub(super) fn capability_snapshot(
+    pub(super) fn prompt_surface(
         self,
         view: &ToolView,
         tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-    ) -> String {
+    ) -> ProviderToolPromptSurface {
         let direct_states = self.web_surface_mode.visible_direct_tool_states(view);
-        tools::capability_snapshot_for_direct_states_with_config(
+        let capability_snapshot = tools::capability_snapshot_for_direct_states_with_config(
             view,
             tool_runtime_config,
             direct_states,
-        )
+        );
+        let prompt_sections = self
+            .native_tools
+            .iter()
+            .filter_map(|kind| kind.prompt_section())
+            .collect();
+
+        ProviderToolPromptSurface {
+            capability_snapshot,
+            prompt_sections,
+        }
     }
 
     fn append_native_tool_specs(self, mut tools: Vec<Value>) -> Vec<Value> {
