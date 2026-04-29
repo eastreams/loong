@@ -173,6 +173,7 @@ mod provider_model_probe_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
 mod query_search_guidance;
+mod query_search_surface;
 mod runtime_access;
 pub mod runtime_capability_cli;
 pub mod runtime_cli;
