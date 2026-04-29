@@ -410,7 +410,7 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
         items: vec![first_prompt_action],
     };
     let command_deck_section = TuiSectionSpec::ActionGroup {
-        title: Some("command deck".to_owned()),
+        title: Some("quick commands".to_owned()),
         inline_title_when_wide: false,
         items: vec![
             TuiActionSpec {
@@ -433,7 +433,7 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
     };
     let narrative_section = TuiSectionSpec::Callout {
         tone: TuiCalloutTone::Info,
-        title: Some("how this surface works".to_owned()),
+        title: Some("how chat works".to_owned()),
         lines: vec![
             "Type your request in the composer to run the next assistant turn.".to_owned(),
             "Use the status and history surfaces for runtime posture, transcript review, and shortcuts.".to_owned(),
@@ -446,8 +446,8 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
     sections.extend(runtime_sections);
 
     TuiScreenSpec {
-        header_style: TuiHeaderStyle::Compact,
-        subtitle: Some("interactive chat".to_owned()),
+        header_style: TuiHeaderStyle::Brand,
+        subtitle: Some("guided first turn shell".to_owned()),
         title: Some("chat ready".to_owned()),
         progress_line: None,
         intro_lines: Vec::new(),
@@ -473,7 +473,7 @@ fn build_cli_chat_status_message_spec(summary: &CliChatStartupSummary) -> TuiMes
     sections.push(operator_callout);
 
     TuiMessageSpec {
-        role: "control deck".to_owned(),
+        role: "chat status".to_owned(),
         caption: Some(caption),
         sections,
         footer_lines: vec![STATUS_QUICK_COMMANDS_HINT.to_owned()],
