@@ -6,6 +6,12 @@ pub(crate) const BROWSER_PREVIEW_SKILL_ID: &str = mvp::tools::BROWSER_COMPANION_
 pub(crate) const BROWSER_PREVIEW_ENABLE_LABEL: &str = "enable browser preview";
 pub(crate) const BROWSER_PREVIEW_UNBLOCK_LABEL: &str = "allow agent-browser";
 pub(crate) const BROWSER_PREVIEW_READY_LABEL: &str = "browser companion preview";
+pub(crate) const BROWSER_PREVIEW_OPTIONAL_STEP_LABEL: &str = "Optional browser preview";
+pub(crate) const BROWSER_PREVIEW_UNBLOCK_STEP_LABEL: &str = "Unblock browser preview";
+pub(crate) const BROWSER_PREVIEW_INSTALL_RUNTIME_STEP_LABEL: &str =
+    "Install browser preview runtime";
+pub(crate) const BROWSER_PREVIEW_READY_STEP_LABEL: &str = "Try browser companion preview";
+pub(crate) const BROWSER_PREVIEW_DOCTOR_STEP_LABEL: &str = "Run diagnostics";
 const BROWSER_PREVIEW_INSTALL_COMMAND: &str =
     "npm install -g agent-browser && agent-browser install";
 const BROWSER_PREVIEW_VERIFY_COMMAND: &str = "agent-browser open example.com";
@@ -118,7 +124,7 @@ pub(crate) fn browser_preview_verify_command() -> &'static str {
 
 pub(crate) fn browser_preview_install_step() -> String {
     format!(
-        "Install browser preview runtime: {}",
+        "{BROWSER_PREVIEW_INSTALL_RUNTIME_STEP_LABEL}: {}",
         browser_preview_install_command()
     )
 }
@@ -128,6 +134,38 @@ pub(crate) fn browser_preview_verify_step() -> String {
         "Verify browser preview runtime: {}",
         browser_preview_verify_command()
     )
+}
+
+pub(crate) fn browser_preview_ready_step_from_command(command: &str) -> String {
+    format!("{BROWSER_PREVIEW_READY_STEP_LABEL}: {command}")
+}
+
+pub(crate) fn browser_preview_doctor_step(config_path: &str) -> String {
+    let doctor_command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+    format!("{BROWSER_PREVIEW_DOCTOR_STEP_LABEL}: {doctor_command}")
+}
+
+pub(crate) const fn browser_preview_cli_disabled_step() -> &'static str {
+    "Re-enable `cli.enabled` before running the preview recipes."
+}
+
+pub(crate) const fn browser_preview_doctor_label(
+    phase: Option<crate::next_actions::BrowserPreviewActionPhase>,
+) -> &'static str {
+    match phase {
+        Some(crate::next_actions::BrowserPreviewActionPhase::Enable) => {
+            BROWSER_PREVIEW_OPTIONAL_STEP_LABEL
+        }
+        Some(crate::next_actions::BrowserPreviewActionPhase::Unblock) => {
+            BROWSER_PREVIEW_UNBLOCK_STEP_LABEL
+        }
+        Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime) => {
+            BROWSER_PREVIEW_INSTALL_RUNTIME_STEP_LABEL
+        }
+        Some(crate::next_actions::BrowserPreviewActionPhase::Ready) | None => {
+            BROWSER_PREVIEW_READY_STEP_LABEL
+        }
+    }
 }
 
 pub(crate) fn browser_preview_recipe_commands(
@@ -335,9 +373,14 @@ fn command_candidate_is_available(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        browser_preview_enable_command, browser_preview_ready_command,
+        BROWSER_PREVIEW_DOCTOR_STEP_LABEL, BROWSER_PREVIEW_INSTALL_RUNTIME_STEP_LABEL,
+        BROWSER_PREVIEW_OPTIONAL_STEP_LABEL, BROWSER_PREVIEW_READY_STEP_LABEL,
+        BROWSER_PREVIEW_UNBLOCK_STEP_LABEL, browser_preview_cli_disabled_step,
+        browser_preview_doctor_label, browser_preview_doctor_step, browser_preview_enable_command,
+        browser_preview_ready_command, browser_preview_ready_step_from_command,
         browser_preview_unblock_command,
     };
+    use crate::next_actions::BrowserPreviewActionPhase;
 
     #[test]
     fn browser_preview_commands_shell_escape_config_paths() {
@@ -355,6 +398,41 @@ mod tests {
             browser_preview_ready_command(config_path)
                 .starts_with("loong ask --config '/tmp/loong'\"'\"'s config.toml' --message "),
             "ready command should quote the config path for copy-paste safety"
+        );
+    }
+
+    #[test]
+    fn browser_preview_guidance_stays_canonical() {
+        let config_path = "/tmp/loong.toml";
+        let ready_command = "loong ask --config '/tmp/loong.toml' --message 'preview'";
+
+        assert_eq!(
+            browser_preview_ready_step_from_command(ready_command),
+            format!("{BROWSER_PREVIEW_READY_STEP_LABEL}: {ready_command}")
+        );
+        assert_eq!(
+            browser_preview_doctor_step(config_path),
+            format!("{BROWSER_PREVIEW_DOCTOR_STEP_LABEL}: loong doctor --config '/tmp/loong.toml'")
+        );
+        assert_eq!(
+            browser_preview_doctor_label(Some(BrowserPreviewActionPhase::Enable)),
+            BROWSER_PREVIEW_OPTIONAL_STEP_LABEL
+        );
+        assert_eq!(
+            browser_preview_doctor_label(Some(BrowserPreviewActionPhase::Unblock)),
+            BROWSER_PREVIEW_UNBLOCK_STEP_LABEL
+        );
+        assert_eq!(
+            browser_preview_doctor_label(Some(BrowserPreviewActionPhase::InstallRuntime)),
+            BROWSER_PREVIEW_INSTALL_RUNTIME_STEP_LABEL
+        );
+        assert_eq!(
+            browser_preview_doctor_label(Some(BrowserPreviewActionPhase::Ready)),
+            BROWSER_PREVIEW_READY_STEP_LABEL
+        );
+        assert_eq!(
+            browser_preview_cli_disabled_step(),
+            "Re-enable `cli.enabled` before running the preview recipes."
         );
     }
 }

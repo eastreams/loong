@@ -3028,20 +3028,9 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
                 }
                 crate::next_actions::SetupNextActionKind::Channel => "Open a channel",
                 crate::next_actions::SetupNextActionKind::BrowserPreview => {
-                    match action.browser_preview_phase {
-                        Some(crate::next_actions::BrowserPreviewActionPhase::Enable) => {
-                            "Optional browser preview"
-                        }
-                        Some(crate::next_actions::BrowserPreviewActionPhase::Unblock) => {
-                            "Unblock browser preview"
-                        }
-                        Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime) => {
-                            "Install browser preview runtime"
-                        }
-                        Some(crate::next_actions::BrowserPreviewActionPhase::Ready) | None => {
-                            "Try browser companion preview"
-                        }
-                    }
+                    crate::browser_preview::browser_preview_doctor_label(
+                        action.browser_preview_phase,
+                    )
                 }
                 crate::next_actions::SetupNextActionKind::Doctor => "Run diagnostics",
             };

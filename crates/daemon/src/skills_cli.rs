@@ -1037,27 +1037,28 @@ fn execute_enable_browser_preview_command(
     } else {
         Vec::new()
     };
-    let doctor_command =
-        crate::cli_handoff::format_subcommand_with_config("doctor", &resolved_config_path);
     let mut next_steps = if runtime_available {
         let mut steps = Vec::new();
         if cli_enabled && let Some(first_recipe) = recipes.first() {
-            steps.push(format!(
-                "Try browser companion preview: {}",
-                first_recipe.command
-            ));
+            steps.push(
+                crate::browser_preview::browser_preview_ready_step_from_command(
+                    first_recipe.command.as_str(),
+                ),
+            );
         }
-        steps.push(format!("Run diagnostics: {doctor_command}"));
+        steps.push(crate::browser_preview::browser_preview_doctor_step(
+            &resolved_config_path,
+        ));
         steps
     } else {
         vec![
             crate::browser_preview::browser_preview_install_step(),
             crate::browser_preview::browser_preview_verify_step(),
-            format!("Run diagnostics: {doctor_command}"),
+            crate::browser_preview::browser_preview_doctor_step(&resolved_config_path),
         ]
     };
     if !cli_enabled {
-        next_steps.push("Re-enable `cli.enabled` before running the preview recipes.".to_owned());
+        next_steps.push(crate::browser_preview::browser_preview_cli_disabled_step().to_owned());
     }
 
     if let Some(payload) = outcome.payload.as_object_mut() {
