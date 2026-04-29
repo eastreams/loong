@@ -22,15 +22,19 @@ mod checkpoint_labels;
 mod checkpoint_text;
 mod cli_input;
 mod cli_render;
+<<<<<<< HEAD
 mod commands;
 mod control_plane;
 mod deck;
 mod fast;
 mod history;
+=======
+>>>>>>> 61e41170 (Remove the deprecated fullscreen chat cockpit from prod)
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_session_selector_tests;
 mod live_runtime;
+<<<<<<< HEAD
 mod onboard;
 mod ops;
 mod render;
@@ -41,6 +45,10 @@ mod session;
 mod startup_state;
 mod startup_view;
 mod status_view;
+=======
+mod operator_surfaces;
+mod render_support;
+>>>>>>> 61e41170 (Remove the deprecated fullscreen chat cockpit from prod)
 
 use self::boot::*;
 use self::checkpoint::*;
@@ -467,10 +475,9 @@ pub async fn run_cli_ask(
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
     reject_disabled_cli_channel(&options.config)?;
-    if session::interactive_terminal_surface_supported() {
-        return session::run_concurrent_cli_host_surface(options);
-    }
-
+    // The fullscreen operator-cockpit surface is deprecated for production
+    // chat entrypoints and concurrent hosts alike. Keep the shared shell-first
+    // runtime path as the only live production host until a replacement lands.
     run_concurrent_cli_host_repl(options)
 }
 
