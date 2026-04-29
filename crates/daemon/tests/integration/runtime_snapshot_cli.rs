@@ -771,6 +771,24 @@ fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicate
         payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"][0]["kind"],
         serde_json::json!("inspect_effective_package")
     );
+    assert_eq!(
+        payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"][0]["role"],
+        serde_json::json!("operator")
+    );
+    assert_eq!(
+        payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"][0]["execution_kind"],
+        serde_json::json!("read_only_cli")
+    );
+    assert!(
+        payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| {
+                action["kind"] == serde_json::json!("compare_shadowed_manifests")
+                    && action["command"]
+                        .as_str()
+                        .is_some_and(|command| command.contains("git diff --no-index"))
+            }))
+    );
     assert!(
         payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"][0]["command"]
             .as_str()
@@ -806,6 +824,7 @@ fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicate
     assert!(rendered.contains("precedence_rule=project_local_over_global"));
     assert!(rendered.contains("recommended_action=review_global_duplicate"));
     assert!(rendered.contains("discovery_action_kinds=inspect_effective_package"));
+    assert!(rendered.contains("compare_shadowed_manifests"));
     assert!(rendered.contains("effective_source_path="));
     assert!(rendered.contains("shadowed_source_paths="));
 

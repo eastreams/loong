@@ -1033,11 +1033,25 @@ mod tests {
                                 discovery_actions: vec![
                                     crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
                                         kind: "inspect_effective_package".to_owned(),
+                                        role: "operator".to_owned(),
+                                        execution_kind: "read_only_cli".to_owned(),
+                                        agent_runnable: true,
                                         plugin_id: "shared-extension".to_owned(),
                                         target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                                         target_package_root: ".loong/extensions/search".to_owned(),
                                         summary: "Inspect the effective project-local package for shared-extension".to_owned(),
                                         command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                                    },
+                                    crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
+                                        kind: "compare_shadowed_manifests".to_owned(),
+                                        role: "operator".to_owned(),
+                                        execution_kind: "read_only_cli".to_owned(),
+                                        agent_runnable: true,
+                                        plugin_id: "shared-extension".to_owned(),
+                                        target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                                        target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                                        summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                                        command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
                                     },
                                 ],
                                 recommended_action: Some("review_global_duplicate".to_owned()),
@@ -1145,11 +1159,25 @@ mod tests {
                         discovery_actions: vec![
                             crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
                                 kind: "inspect_effective_package".to_owned(),
+                                role: "operator".to_owned(),
+                                execution_kind: "read_only_cli".to_owned(),
+                                agent_runnable: true,
                                 plugin_id: "shared-extension".to_owned(),
                                 target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                                 target_package_root: ".loong/extensions/search".to_owned(),
                                 summary: "Inspect the effective project-local package for shared-extension".to_owned(),
                                 command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                            },
+                            crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
+                                kind: "compare_shadowed_manifests".to_owned(),
+                                role: "operator".to_owned(),
+                                execution_kind: "read_only_cli".to_owned(),
+                                agent_runnable: true,
+                                plugin_id: "shared-extension".to_owned(),
+                                target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                                target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                                summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                                command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
                             },
                         ],
                         recommended_action: Some("review_global_duplicate".to_owned()),
@@ -1350,11 +1378,25 @@ mod tests {
                         discovery_actions: vec![
                             crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
                                 kind: "inspect_effective_package".to_owned(),
+                                role: "operator".to_owned(),
+                                execution_kind: "read_only_cli".to_owned(),
+                                agent_runnable: true,
                                 plugin_id: "shared-extension".to_owned(),
                                 target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                                 target_package_root: ".loong/extensions/search".to_owned(),
                                 summary: "Inspect the effective project-local package for shared-extension".to_owned(),
                                 command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                            },
+                            crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
+                                kind: "compare_shadowed_manifests".to_owned(),
+                                role: "operator".to_owned(),
+                                execution_kind: "read_only_cli".to_owned(),
+                                agent_runnable: true,
+                                plugin_id: "shared-extension".to_owned(),
+                                target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                                target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                                summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                                command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
                             },
                         ],
                         recommended_action: Some("review_global_duplicate".to_owned()),
@@ -1388,6 +1430,10 @@ mod tests {
         assert_eq!(
             value["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["kind"],
             json!("inspect_effective_package")
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["role"],
+            json!("operator")
         );
         assert_eq!(
             value["runtime_plugin_inventory"]["native_extension_authoring_summary"]["guided_plugins"],

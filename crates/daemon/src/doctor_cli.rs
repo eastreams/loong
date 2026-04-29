@@ -6682,10 +6682,24 @@ mod tests {
             payload["discovery_guidance"]["discovery_actions"][0]["kind"],
             json!("inspect_effective_package")
         );
+        assert_eq!(
+            payload["discovery_guidance"]["discovery_actions"][0]["role"],
+            json!("operator")
+        );
         assert!(
             payload["discovery_guidance"]["discovery_actions"][0]["command"]
                 .as_str()
                 .is_some_and(|command| command.contains("loong plugins doctor --root"))
+        );
+        assert!(
+            payload["discovery_guidance"]["discovery_actions"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().any(|action| {
+                    action["kind"] == json!("compare_shadowed_manifests")
+                        && action["command"]
+                            .as_str()
+                            .is_some_and(|command| command.contains("git diff --no-index"))
+                }))
         );
         assert!(
             payload["discovery_guidance"]["shadowed_conflicts"][0]["effective_source_path"]

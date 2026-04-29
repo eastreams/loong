@@ -8,6 +8,9 @@ pub(crate) const PROJECT_LOCAL_OVER_GLOBAL_PRECEDENCE_RULE: &str = "project_loca
 pub(crate) const REVIEW_GLOBAL_DUPLICATE_ACTION: &str = "review_global_duplicate";
 pub(crate) const INSPECT_EFFECTIVE_PACKAGE_ACTION: &str = "inspect_effective_package";
 pub(crate) const INSPECT_SHADOWED_PACKAGE_ACTION: &str = "inspect_shadowed_package";
+pub(crate) const COMPARE_SHADOWED_MANIFESTS_ACTION: &str = "compare_shadowed_manifests";
+pub(crate) const OPERATOR_ROLE: &str = "operator";
+pub(crate) const READ_ONLY_CLI_EXECUTION_KIND: &str = "read_only_cli";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePluginDiscoveryGuidanceView {
@@ -36,6 +39,9 @@ pub struct RuntimePluginShadowingConflictView {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePluginDiscoveryActionView {
     pub kind: String,
+    pub role: String,
+    pub execution_kind: String,
+    pub agent_runnable: bool,
     pub plugin_id: String,
     pub target_source_path: String,
     pub target_package_root: String,
@@ -155,6 +161,9 @@ fn build_runtime_plugin_discovery_actions_for_conflict(
     let effective_package_root = package_root_from_source_path(&conflict.effective_source_path);
     let mut actions = vec![RuntimePluginDiscoveryActionView {
         kind: INSPECT_EFFECTIVE_PACKAGE_ACTION.to_owned(),
+        role: OPERATOR_ROLE.to_owned(),
+        execution_kind: READ_ONLY_CLI_EXECUTION_KIND.to_owned(),
+        agent_runnable: true,
         plugin_id: conflict.plugin_id.clone(),
         target_source_path: conflict.effective_source_path.clone(),
         target_package_root: effective_package_root.clone(),
@@ -173,6 +182,9 @@ fn build_runtime_plugin_discovery_actions_for_conflict(
         let package_root = package_root_from_source_path(source_path);
         RuntimePluginDiscoveryActionView {
             kind: INSPECT_SHADOWED_PACKAGE_ACTION.to_owned(),
+            role: OPERATOR_ROLE.to_owned(),
+            execution_kind: READ_ONLY_CLI_EXECUTION_KIND.to_owned(),
+            agent_runnable: true,
             plugin_id: conflict.plugin_id.clone(),
             target_source_path: source_path.clone(),
             target_package_root: package_root.clone(),
@@ -181,6 +193,26 @@ fn build_runtime_plugin_discovery_actions_for_conflict(
                 "{} plugins doctor --root {} --profile sdk-release",
                 command_name,
                 crate::cli_handoff::shell_quote_argument(&package_root)
+            ),
+        }
+    }));
+    actions.extend(conflict.shadowed_source_paths.iter().map(|source_path| {
+        RuntimePluginDiscoveryActionView {
+            kind: COMPARE_SHADOWED_MANIFESTS_ACTION.to_owned(),
+            role: OPERATOR_ROLE.to_owned(),
+            execution_kind: READ_ONLY_CLI_EXECUTION_KIND.to_owned(),
+            agent_runnable: true,
+            plugin_id: conflict.plugin_id.clone(),
+            target_source_path: source_path.clone(),
+            target_package_root: package_root_from_source_path(source_path),
+            summary: format!(
+                "Compare effective and shadowed manifests for {}",
+                conflict.plugin_id
+            ),
+            command: format!(
+                "git diff --no-index {} {}",
+                crate::cli_handoff::shell_quote_argument(&conflict.effective_source_path),
+                crate::cli_handoff::shell_quote_argument(source_path),
             ),
         }
     }));
@@ -239,11 +271,21 @@ mod tests {
             guidance.discovery_actions[0].kind,
             "inspect_effective_package"
         );
+        assert_eq!(guidance.discovery_actions[0].role, OPERATOR_ROLE);
+        assert_eq!(
+            guidance.discovery_actions[0].execution_kind,
+            READ_ONLY_CLI_EXECUTION_KIND
+        );
+        assert!(guidance.discovery_actions[0].agent_runnable);
         assert!(
             guidance.discovery_actions[0]
                 .command
                 .contains("loong plugins doctor --root")
         );
+        assert!(guidance.discovery_actions.iter().any(|action| {
+            action.kind == COMPARE_SHADOWED_MANIFESTS_ACTION
+                && action.command.contains("git diff --no-index")
+        }));
         assert!(
             guidance
                 .resolution_hint
@@ -263,6 +305,9 @@ mod tests {
             discovery_actions: vec![
                 RuntimePluginDiscoveryActionView {
                     kind: INSPECT_EFFECTIVE_PACKAGE_ACTION.to_owned(),
+                    role: OPERATOR_ROLE.to_owned(),
+                    execution_kind: READ_ONLY_CLI_EXECUTION_KIND.to_owned(),
+                    agent_runnable: true,
                     plugin_id: "shared-extension".to_owned(),
                     target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                     target_package_root: ".loong/extensions/search".to_owned(),
@@ -272,6 +317,9 @@ mod tests {
                 },
                 RuntimePluginDiscoveryActionView {
                     kind: INSPECT_EFFECTIVE_PACKAGE_ACTION.to_owned(),
+                    role: OPERATOR_ROLE.to_owned(),
+                    execution_kind: READ_ONLY_CLI_EXECUTION_KIND.to_owned(),
+                    agent_runnable: true,
                     plugin_id: "shared-extension".to_owned(),
                     target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                     target_package_root: ".loong/extensions/search".to_owned(),

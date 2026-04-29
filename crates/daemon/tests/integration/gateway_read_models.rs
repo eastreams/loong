@@ -532,11 +532,25 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
                     }],
                     discovery_actions: vec![loong_daemon::RuntimePluginDiscoveryActionView {
                         kind: "inspect_effective_package".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
                         plugin_id: "shared-extension".to_owned(),
                         target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                         target_package_root: ".loong/extensions/search".to_owned(),
                         summary: "Inspect the effective project-local package for shared-extension".to_owned(),
                         command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                    },
+                    loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "compare_shadowed_manifests".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                        summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                        command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
                     }],
                     recommended_action: Some("review_global_duplicate".to_owned()),
                     resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
@@ -565,6 +579,20 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
     assert_eq!(
         encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["kind"],
         serde_json::json!("inspect_effective_package")
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["role"],
+        serde_json::json!("operator")
+    );
+    assert!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| {
+                action["kind"] == serde_json::json!("compare_shadowed_manifests")
+                    && action["command"]
+                        .as_str()
+                        .is_some_and(|command| command.contains("git diff --no-index"))
+            }))
     );
 
     fs::remove_dir_all(&root).ok();
@@ -610,11 +638,25 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
                     }],
                     discovery_actions: vec![loong_daemon::RuntimePluginDiscoveryActionView {
                         kind: "inspect_effective_package".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
                         plugin_id: "shared-extension".to_owned(),
                         target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                         target_package_root: ".loong/extensions/search".to_owned(),
                         summary: "Inspect the effective project-local package for shared-extension".to_owned(),
                         command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                    },
+                    loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "compare_shadowed_manifests".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                        summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                        command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
                     }],
                     recommended_action: Some("review_global_duplicate".to_owned()),
                     resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
@@ -753,6 +795,13 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
             [0]["kind"],
         serde_json::json!("inspect_effective_package")
+    );
+    assert!(
+        encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| {
+                action["kind"] == serde_json::json!("compare_shadowed_manifests")
+            }))
     );
 
     fs::remove_dir_all(&root).ok();
