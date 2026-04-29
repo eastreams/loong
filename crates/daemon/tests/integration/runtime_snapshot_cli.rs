@@ -604,8 +604,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     let expected_compaction_hygiene_line =
         "context_engine compaction_hygiene evidence_status=no_evidence";
     #[cfg(not(feature = "memory-sqlite"))]
-    let expected_compaction_hygiene_line =
-        "context_engine compaction_hygiene evidence_status=idle";
+    let expected_compaction_hygiene_line = "context_engine compaction_hygiene evidence_status=idle";
     assert!(rendered.contains(expected_compaction_hygiene_line));
     assert!(rendered.contains("posture=idle"));
     #[cfg(feature = "memory-sqlite")]
@@ -616,7 +615,8 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("failed_open_rate=0/0 (-)"));
     assert!(rendered.contains("context_engine compaction_pressure demoted_recent_avg=-"));
     #[cfg(feature = "memory-sqlite")]
-    let expected_compaction_trend_line = "context_engine compaction_trend scope=recent_sessions_fallback";
+    let expected_compaction_trend_line =
+        "context_engine compaction_trend scope=recent_sessions_fallback";
     #[cfg(not(feature = "memory-sqlite"))]
     let expected_compaction_trend_line = "context_engine compaction_trend scope=idle";
     assert!(rendered.contains(expected_compaction_trend_line));
@@ -629,8 +629,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     let expected_repairability_line =
         "context_engine compaction_repairability repairability=scope_limited";
     #[cfg(not(feature = "memory-sqlite"))]
-    let expected_repairability_line =
-        "context_engine compaction_repairability repairability=idle";
+    let expected_repairability_line = "context_engine compaction_repairability repairability=idle";
     #[cfg(feature = "memory-sqlite")]
     let expected_recovery_posture_line = "recovery_posture=scope_limited";
     #[cfg(not(feature = "memory-sqlite"))]
