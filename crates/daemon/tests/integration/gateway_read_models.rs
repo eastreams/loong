@@ -523,13 +523,21 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
                     global_root: "~/.loong/agent/extensions/".to_owned(),
                     shadowed_plugin_ids: vec!["shared-extension".to_owned()],
                     shadowed_conflicts: vec![loong_daemon::RuntimePluginShadowingConflictView {
-                            plugin_id: "shared-extension".to_owned(),
-                            effective_source_path:
+                        plugin_id: "shared-extension".to_owned(),
+                        effective_source_path:
                                 ".loong/extensions/search/loong.plugin.json".to_owned(),
-                            shadowed_source_paths: vec![
-                                "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
-                            ],
-                        }],
+                        shadowed_source_paths: vec![
+                            "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        ],
+                    }],
+                    discovery_actions: vec![loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "inspect_effective_package".to_owned(),
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: ".loong/extensions/search".to_owned(),
+                        summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                        command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                    }],
                     recommended_action: Some("review_global_duplicate".to_owned()),
                     resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                 }),
@@ -553,6 +561,10 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
     assert_eq!(
         encoded["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
         serde_json::json!("project_local_over_global")
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["kind"],
+        serde_json::json!("inspect_effective_package")
     );
 
     fs::remove_dir_all(&root).ok();
@@ -589,13 +601,21 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
                     global_root: "~/.loong/agent/extensions/".to_owned(),
                     shadowed_plugin_ids: vec!["shared-extension".to_owned()],
                     shadowed_conflicts: vec![loong_daemon::RuntimePluginShadowingConflictView {
-                            plugin_id: "shared-extension".to_owned(),
-                            effective_source_path:
+                        plugin_id: "shared-extension".to_owned(),
+                        effective_source_path:
                                 ".loong/extensions/search/loong.plugin.json".to_owned(),
-                            shadowed_source_paths: vec![
-                                "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
-                            ],
-                        }],
+                        shadowed_source_paths: vec![
+                            "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        ],
+                    }],
+                    discovery_actions: vec![loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "inspect_effective_package".to_owned(),
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: ".loong/extensions/search".to_owned(),
+                        summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                        command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                    }],
                     recommended_action: Some("review_global_duplicate".to_owned()),
                     resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                 }),
@@ -728,6 +748,11 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     assert_eq!(
         encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["recommended_action"],
         serde_json::json!("review_global_duplicate")
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
+            [0]["kind"],
+        serde_json::json!("inspect_effective_package")
     );
 
     fs::remove_dir_all(&root).ok();

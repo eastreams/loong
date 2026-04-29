@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 pub(crate) const PROJECT_LOCAL_LOONG_EXTENSION_ROOT: &str = ".loong/extensions/";
 pub(crate) const GLOBAL_LOONG_EXTENSION_ROOT: &str = "~/.loong/agent/extensions/";
 pub(crate) const PROJECT_LOCAL_OVER_GLOBAL_PRECEDENCE_RULE: &str = "project_local_over_global";
 pub(crate) const REVIEW_GLOBAL_DUPLICATE_ACTION: &str = "review_global_duplicate";
+pub(crate) const INSPECT_EFFECTIVE_PACKAGE_ACTION: &str = "inspect_effective_package";
+pub(crate) const INSPECT_SHADOWED_PACKAGE_ACTION: &str = "inspect_shadowed_package";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePluginDiscoveryGuidanceView {
@@ -15,6 +18,8 @@ pub struct RuntimePluginDiscoveryGuidanceView {
     pub shadowed_plugin_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shadowed_conflicts: Vec<RuntimePluginShadowingConflictView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discovery_actions: Vec<RuntimePluginDiscoveryActionView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -26,6 +31,16 @@ pub struct RuntimePluginShadowingConflictView {
     pub plugin_id: String,
     pub effective_source_path: String,
     pub shadowed_source_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePluginDiscoveryActionView {
+    pub kind: String,
+    pub plugin_id: String,
+    pub target_source_path: String,
+    pub target_package_root: String,
+    pub summary: String,
+    pub command: String,
 }
 
 pub fn build_runtime_plugin_shadowing_conflicts<T, FId, FPath>(
@@ -79,6 +94,10 @@ pub fn build_runtime_plugin_discovery_guidance(
         .map(|conflict| conflict.plugin_id.clone())
         .collect::<Vec<_>>();
     let has_shadowed_plugins = !shadowed_plugin_ids.is_empty();
+    let discovery_actions = shadowed_conflicts
+        .iter()
+        .flat_map(build_runtime_plugin_discovery_actions_for_conflict)
+        .collect::<Vec<_>>();
     let resolution_hint = has_shadowed_plugins.then(|| {
         let conflict_examples = shadowed_conflicts
             .iter()
@@ -106,9 +125,58 @@ pub fn build_runtime_plugin_discovery_guidance(
         global_root: GLOBAL_LOONG_EXTENSION_ROOT.to_owned(),
         shadowed_plugin_ids,
         shadowed_conflicts,
+        discovery_actions,
         recommended_action: has_shadowed_plugins.then(|| REVIEW_GLOBAL_DUPLICATE_ACTION.to_owned()),
         resolution_hint,
     })
+}
+
+fn build_runtime_plugin_discovery_actions_for_conflict(
+    conflict: &RuntimePluginShadowingConflictView,
+) -> Vec<RuntimePluginDiscoveryActionView> {
+    let command_name = crate::active_cli_command_name();
+    let effective_package_root = package_root_from_source_path(&conflict.effective_source_path);
+    let mut actions = vec![RuntimePluginDiscoveryActionView {
+        kind: INSPECT_EFFECTIVE_PACKAGE_ACTION.to_owned(),
+        plugin_id: conflict.plugin_id.clone(),
+        target_source_path: conflict.effective_source_path.clone(),
+        target_package_root: effective_package_root.clone(),
+        summary: format!(
+            "Inspect the effective project-local package for {}",
+            conflict.plugin_id
+        ),
+        command: format!(
+            "{} plugins doctor --root {} --profile sdk-release",
+            command_name,
+            crate::cli_handoff::shell_quote_argument(&effective_package_root)
+        ),
+    }];
+
+    actions.extend(conflict.shadowed_source_paths.iter().map(|source_path| {
+        let package_root = package_root_from_source_path(source_path);
+        RuntimePluginDiscoveryActionView {
+            kind: INSPECT_SHADOWED_PACKAGE_ACTION.to_owned(),
+            plugin_id: conflict.plugin_id.clone(),
+            target_source_path: source_path.clone(),
+            target_package_root: package_root.clone(),
+            summary: format!("Inspect the shadowed package for {}", conflict.plugin_id),
+            command: format!(
+                "{} plugins doctor --root {} --profile sdk-release",
+                command_name,
+                crate::cli_handoff::shell_quote_argument(&package_root)
+            ),
+        }
+    }));
+
+    actions
+}
+
+fn package_root_from_source_path(source_path: &str) -> String {
+    Path::new(source_path)
+        .parent()
+        .unwrap_or_else(|| Path::new(source_path))
+        .display()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -149,6 +217,16 @@ mod tests {
         );
         assert_eq!(guidance.shadowed_plugin_ids, vec!["shared-extension"]);
         assert_eq!(guidance.shadowed_conflicts.len(), 1);
+        assert!(!guidance.discovery_actions.is_empty());
+        assert_eq!(
+            guidance.discovery_actions[0].kind,
+            "inspect_effective_package"
+        );
+        assert!(
+            guidance.discovery_actions[0]
+                .command
+                .contains("loong plugins doctor --root")
+        );
         assert!(
             guidance
                 .resolution_hint

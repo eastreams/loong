@@ -6661,6 +6661,15 @@ mod tests {
             payload["discovery_guidance"]["shadowed_conflicts"][0]["plugin_id"],
             json!("shared-extension")
         );
+        assert_eq!(
+            payload["discovery_guidance"]["discovery_actions"][0]["kind"],
+            json!("inspect_effective_package")
+        );
+        assert!(
+            payload["discovery_guidance"]["discovery_actions"][0]["command"]
+                .as_str()
+                .is_some_and(|command| command.contains("loong plugins doctor --root"))
+        );
         assert!(
             payload["discovery_guidance"]["shadowed_conflicts"][0]["effective_source_path"]
                 .as_str()

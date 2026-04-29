@@ -768,6 +768,15 @@ fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicate
         serde_json::json!("review_global_duplicate")
     );
     assert_eq!(
+        payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"][0]["kind"],
+        serde_json::json!("inspect_effective_package")
+    );
+    assert!(
+        payload["runtime_plugins"]["discovery_guidance"]["discovery_actions"][0]["command"]
+            .as_str()
+            .is_some_and(|command| command.contains("loong plugins doctor --root"))
+    );
+    assert_eq!(
         payload["runtime_plugins"]["discovery_guidance"]["shadowed_conflicts"][0]["plugin_id"],
         serde_json::json!("shared-extension")
     );
@@ -796,6 +805,7 @@ fn runtime_snapshot_prefers_project_local_loong_extensions_over_global_duplicate
     assert!(rendered.contains("shadowed_plugin_ids=shared-extension"));
     assert!(rendered.contains("precedence_rule=project_local_over_global"));
     assert!(rendered.contains("recommended_action=review_global_duplicate"));
+    assert!(rendered.contains("discovery_action_kinds=inspect_effective_package"));
     assert!(rendered.contains("effective_source_path="));
     assert!(rendered.contains("shadowed_source_paths="));
 

@@ -778,6 +778,19 @@ fn render_status_runtime_plugin_inventory_summary(
         .as_ref()
         .and_then(|guidance| guidance.recommended_action.as_deref())
         .unwrap_or("-");
+    let discovery_action_kinds = inventory
+        .discovery_guidance
+        .as_ref()
+        .map(|guidance| {
+            guidance
+                .discovery_actions
+                .iter()
+                .map(|action| action.kind.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "-".to_owned());
     let authoring_summary = inventory.native_extension_authoring_summary.as_ref();
     let guided_plugins = authoring_summary
         .map(|summary| summary.guided_plugins.to_string())
@@ -793,7 +806,7 @@ fn render_status_runtime_plugin_inventory_summary(
         .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "available={} roots_source={} returned_results={} loaded_plugins={} shadowed_plugins={} shadowed_plugin_ids={} precedence_rule={} recommended_action={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
+        "available={} roots_source={} returned_results={} loaded_plugins={} shadowed_plugins={} shadowed_plugin_ids={} precedence_rule={} recommended_action={} discovery_action_kinds={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
         inventory.available,
         roots_source,
         returned_results,
@@ -802,6 +815,7 @@ fn render_status_runtime_plugin_inventory_summary(
         shadowed_plugin_ids,
         precedence_rule,
         recommended_action,
+        discovery_action_kinds,
         guided_plugins,
         metadata_issues,
         runnable_actions,
@@ -994,6 +1008,16 @@ mod tests {
                                     effective_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                                     shadowed_source_paths: vec!["~/.loong/agent/extensions/search/loong.plugin.json".to_owned()],
                                 }],
+                                discovery_actions: vec![
+                                    crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
+                                        kind: "inspect_effective_package".to_owned(),
+                                        plugin_id: "shared-extension".to_owned(),
+                                        target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                                        target_package_root: ".loong/extensions/search".to_owned(),
+                                        summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                                        command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                                    },
+                                ],
                                 recommended_action: Some("review_global_duplicate".to_owned()),
                                 resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                             },
@@ -1096,6 +1120,16 @@ mod tests {
                             effective_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                             shadowed_source_paths: vec!["~/.loong/agent/extensions/search/loong.plugin.json".to_owned()],
                         }],
+                        discovery_actions: vec![
+                            crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
+                                kind: "inspect_effective_package".to_owned(),
+                                plugin_id: "shared-extension".to_owned(),
+                                target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                                target_package_root: ".loong/extensions/search".to_owned(),
+                                summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                                command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                            },
+                        ],
                         recommended_action: Some("review_global_duplicate".to_owned()),
                         resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                     },
@@ -1141,6 +1175,7 @@ mod tests {
         assert!(rendered.contains("shadowed_plugin_ids=shared-extension"));
         assert!(rendered.contains("precedence_rule=project_local_over_global"));
         assert!(rendered.contains("recommended_action=review_global_duplicate"));
+        assert!(rendered.contains("discovery_action_kinds=inspect_effective_package"));
         assert!(rendered.contains("guided_plugins=1"));
         assert!(rendered.contains("metadata_issues=1"));
         assert!(rendered.contains("runnable_actions=3"));
@@ -1290,6 +1325,16 @@ mod tests {
                             effective_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
                             shadowed_source_paths: vec!["~/.loong/agent/extensions/search/loong.plugin.json".to_owned()],
                         }],
+                        discovery_actions: vec![
+                            crate::runtime_plugin_discovery::RuntimePluginDiscoveryActionView {
+                                kind: "inspect_effective_package".to_owned(),
+                                plugin_id: "shared-extension".to_owned(),
+                                target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                                target_package_root: ".loong/extensions/search".to_owned(),
+                                summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                                command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                            },
+                        ],
                         recommended_action: Some("review_global_duplicate".to_owned()),
                         resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                     },
@@ -1317,6 +1362,10 @@ mod tests {
         assert_eq!(
             value["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
             json!("project_local_over_global")
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["kind"],
+            json!("inspect_effective_package")
         );
         assert_eq!(
             value["runtime_plugin_inventory"]["native_extension_authoring_summary"]["guided_plugins"],

@@ -459,6 +459,13 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         let recommended_action = crate::render_line_safe_optional_text_value(
             discovery_guidance.recommended_action.as_deref(),
         );
+        let discovery_action_kinds = crate::render_line_safe_text_values(
+            discovery_guidance
+                .discovery_actions
+                .iter()
+                .map(|action| action.kind.as_str()),
+            ",",
+        );
         let first_conflict = discovery_guidance.shadowed_conflicts.first();
         let effective_source_path = first_conflict
             .map(|conflict| crate::render_line_safe_text_value(&conflict.effective_source_path))
@@ -472,11 +479,12 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             })
             .unwrap_or_else(|| "-".to_owned());
         lines.push(format!(
-            "  discovery_guidance precedence_rule={} precedence_roots={}>{} recommended_action={} effective_source_path={} shadowed_source_paths={}",
+            "  discovery_guidance precedence_rule={} precedence_roots={}>{} recommended_action={} discovery_action_kinds={} effective_source_path={} shadowed_source_paths={}",
             crate::render_line_safe_text_value(&discovery_guidance.precedence_rule),
             crate::render_line_safe_text_value(&discovery_guidance.project_local_root),
             crate::render_line_safe_text_value(&discovery_guidance.global_root),
             recommended_action,
+            discovery_action_kinds,
             effective_source_path,
             shadowed_source_paths,
         ));

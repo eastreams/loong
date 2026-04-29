@@ -70,7 +70,8 @@ pub use self::operator_inventory_cli::{
     run_list_context_engines_cli, run_list_memory_systems_cli, run_safe_lane_summary_cli,
 };
 pub use self::runtime_plugin_discovery::{
-    RuntimePluginDiscoveryGuidanceView, RuntimePluginShadowingConflictView,
+    RuntimePluginDiscoveryActionView, RuntimePluginDiscoveryGuidanceView,
+    RuntimePluginShadowingConflictView,
 };
 pub use loong_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
