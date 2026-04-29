@@ -73,7 +73,7 @@ const PRIMARY_QUICK_COMMANDS_HINT: &str =
 const STATUS_QUICK_COMMANDS_HINT: &str =
     "Inspect runtime state, then jump back into work with /history · /compact · /help.";
 const TRANSCRIPT_START_HINT: &str =
-    "Type any request to start the transcript, or use the command deck before your first turn.";
+    "Type any request to start the transcript, or use the quick commands before your first turn.";
 const STATUS_OR_COMPACT_HINT: &str =
     "Use /status for runtime state or /compact before the next turn.";
 const CONTINUE_OR_STATUS_HINT: &str =
@@ -436,7 +436,7 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
         title: Some("how this surface works".to_owned()),
         lines: vec![
             "Type your request in the composer to run the next assistant turn.".to_owned(),
-            "Use the control deck for runtime posture, tool activity, and shortcuts.".to_owned(),
+            "Use the status and history surfaces for runtime posture, transcript review, and shortcuts.".to_owned(),
             "Use the command menu and help surfaces before you need lower-level runtime detail."
                 .to_owned(),
         ],
@@ -448,7 +448,7 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Compact,
         subtitle: Some("interactive chat".to_owned()),
-        title: Some("operator cockpit ready".to_owned()),
+        title: Some("chat ready".to_owned()),
         progress_line: None,
         intro_lines: Vec::new(),
         sections,

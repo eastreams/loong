@@ -60,16 +60,6 @@ pub(super) fn interactive_terminal_surface_supported() -> bool {
     terminal_surface_allowed(stdout_is_tty, stdin_is_tty)
 }
 
-pub(super) async fn run_cli_chat_surface(
-    config_path: Option<&str>,
-    session_hint: Option<&str>,
-    options: &CliChatOptions,
-) -> CliResult<()> {
-    let runtime = initialize_cli_turn_runtime(config_path, session_hint, options, "cli-chat")?;
-    let surface = ChatSessionSurface::new(runtime, options.clone())?;
-    surface.run().await
-}
-
 pub(super) fn run_concurrent_cli_host_surface(options: &ConcurrentCliHostOptions) -> CliResult<()> {
     reject_disabled_cli_channel(&options.config)?;
     let chat_options = CliChatOptions::default();
@@ -801,10 +791,6 @@ impl ChatSessionSurface {
             term,
             state: Arc::new(Mutex::new(state)),
         })
-    }
-
-    async fn run(self) -> CliResult<()> {
-        self.run_with_shutdown(None).await
     }
 
     async fn run_with_shutdown(self, shutdown: Option<ConcurrentCliShutdown>) -> CliResult<()> {

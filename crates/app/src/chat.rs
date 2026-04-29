@@ -299,10 +299,9 @@ pub async fn run_cli_chat(
     options: &CliChatOptions,
 ) -> CliResult<()> {
     ensure_cli_channel_enabled_for_entrypoint(config_path)?;
-    if session_surface::interactive_terminal_surface_supported() {
-        return session_surface::run_cli_chat_surface(config_path, session_hint, options).await;
-    }
-
+    // The old fullscreen operator-cockpit chat surface is deprecated.
+    // Keep the canonical `chat` entrypoint on the newer shell-first path
+    // until a replacement fullscreen surface lands.
     run_cli_chat_repl(config_path, session_hint, options).await
 }
 
