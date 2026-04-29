@@ -17,6 +17,19 @@ use crate::{
     },
 };
 
+pub const GOVERNED_NATIVE_RUNTIME_EXTENSION_FAMILY: &str = "governed_native_runtime_extension";
+pub const GOVERNED_SIDECAR_EXTENSION_TRUST_LANE: &str = "governed_sidecar";
+pub const TRUSTED_HOST_EXTENSION_FAMILY: &str = "trusted_host_extension";
+pub const TRUSTED_HOST_EXTENSION_TRUST_LANE: &str = "trusted_host";
+pub const TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS: &[&str] = &[
+    "session_start",
+    "session_shutdown",
+    "turn_start",
+    "turn_end",
+    "message_start",
+    "message_end",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginBridgeKind {
@@ -78,6 +91,7 @@ pub struct PluginNativeExtensionDeclarations {
     pub facets: Vec<String>,
     pub methods: Vec<String>,
     pub events: Vec<String>,
+    pub host_hooks: Vec<String>,
     pub host_actions: Vec<String>,
     pub metadata_issues: Vec<String>,
 }
@@ -1433,12 +1447,43 @@ pub fn plugin_native_extension_declarations_from_metadata(
         "loong_extension_events_json",
         &mut declarations.metadata_issues,
     );
+    declarations.host_hooks = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_extension_host_hooks_json",
+        &mut declarations.metadata_issues,
+    );
     declarations.host_actions = normalized_metadata_string_list_with_issue(
         metadata,
         "loong_extension_host_actions_json",
         &mut declarations.metadata_issues,
     );
+    validate_plugin_native_extension_declarations(&mut declarations);
     declarations
+}
+
+fn validate_plugin_native_extension_declarations(
+    declarations: &mut PluginNativeExtensionDeclarations,
+) {
+    if declarations.host_hooks.is_empty() {
+        return;
+    }
+
+    if declarations.family.as_deref() != Some(TRUSTED_HOST_EXTENSION_FAMILY)
+        || declarations.trust_lane.as_deref() != Some(TRUSTED_HOST_EXTENSION_TRUST_LANE)
+    {
+        declarations.metadata_issues.push(format!(
+            "metadata `loong_extension_host_hooks_json` requires loong_extension_family=`{TRUSTED_HOST_EXTENSION_FAMILY}` and loong_extension_trust_lane=`{TRUSTED_HOST_EXTENSION_TRUST_LANE}`; the current governed sidecar lane cannot execute declared host hooks"
+        ));
+    }
+
+    for hook in &declarations.host_hooks {
+        if !TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.contains(&hook.as_str()) {
+            declarations.metadata_issues.push(format!(
+                "metadata `loong_extension_host_hooks_json` declares unsupported host hook `{hook}`; supported read-only hooks are {}",
+                TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
+            ));
+        }
+    }
 }
 
 fn normalized_optional_metadata_value(

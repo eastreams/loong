@@ -348,6 +348,44 @@ fn install_invalid_process_stdio_runtime_plugin_package(root: &Path, config_path
         .expect("rewrite config fixture with runtime plugin roots");
 }
 
+fn install_host_hook_declared_runtime_plugin_package(root: &Path, config_path: &Path) {
+    write_file(
+        root,
+        "runtime-plugins/host-hook-search/loong.plugin.json",
+        r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "host-hook-search-plugin",
+  "provider_id": "host-hook-search",
+  "connector_name": "host-hook-search-http",
+  "endpoint": "https://example.com/search",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Declares reserved host hooks outside the trusted host lane",
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "web-search",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar",
+    "loong_extension_facets_json": "[\"tooling\",\"events\"]",
+    "loong_extension_methods_json": "[\"extension/tool\",\"extension/event\"]",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_hooks_json": "[\"turn_start\",\"turn_end\"]",
+    "loong_extension_host_actions_json": "[\"notify\"]"
+  }
+}"#,
+    );
+
+    let (path_string, mut reloaded) = mvp::config::load(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("reload config");
+    reloaded.runtime_plugins.enabled = true;
+    reloaded.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+    mvp::config::write(Some(&path_string.display().to_string()), &reloaded, true)
+        .expect("rewrite config fixture with runtime plugin roots");
+}
+
 fn install_auto_discovered_duplicate_process_stdio_runtime_plugin_packages(
     root: &Path,
     home: &Path,
@@ -572,6 +610,7 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         plugin["extension_events"],
         serde_json::json!(["session_start", "tool_result"])
     );
+    assert_eq!(plugin["extension_host_hooks"], serde_json::json!([]));
     assert_eq!(
         plugin["extension_host_actions"],
         serde_json::json!(["append_entry", "notify"])
@@ -929,6 +968,10 @@ async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_trut
         serde_json::json!(["session_start"])
     );
     assert_eq!(
+        runtime_plugin["extension_host_hooks"],
+        serde_json::json!([])
+    );
+    assert_eq!(
         runtime_plugin["extension_host_actions"],
         serde_json::json!(["notify"])
     );
@@ -940,12 +983,95 @@ async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_trut
         inventory_plugin.extension_events,
         vec!["session_start".to_owned()]
     );
+    assert!(inventory_plugin.extension_host_hooks.is_empty());
     assert_eq!(
         inventory_plugin.extension_host_actions,
         vec!["notify".to_owned()]
     );
     assert_eq!(runtime_plugin["extension_methods"], serde_json::json!([]));
     assert!(inventory_plugin.extension_methods.is_empty());
+    assert_eq!(
+        runtime_plugin["extension_metadata_issues"],
+        serde_json::to_value(&inventory_plugin.extension_metadata_issues)
+            .expect("serialize inventory metadata issues")
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn runtime_snapshot_and_inventory_share_reserved_host_hook_declaration_truth() {
+    let root = unique_temp_dir("loong-runtime-snapshot-host-hook-declarations");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONG_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    install_host_hook_declared_runtime_plugin_package(&root, &config_path);
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+    let runtime_plugin = array_object_with_string_field(
+        &payload["runtime_plugins"]["plugins"],
+        "plugin_id",
+        "host-hook-search-plugin",
+    )
+    .expect("runtime snapshot should include host-hook plugin");
+
+    let inventory_execution = loong_daemon::plugins_cli::execute_plugins_command(
+        loong_daemon::plugins_cli::PluginsCommandOptions {
+            json: false,
+            command: loong_daemon::plugins_cli::PluginsCommands::Inventory(
+                loong_daemon::plugins_cli::PluginInventoryCommand {
+                    source: loong_daemon::plugins_cli::PluginScanSourceArgs {
+                        roots: vec![root.join("runtime-plugins").display().to_string()],
+                        query: String::new(),
+                        limit: None,
+                        bridge_support: None,
+                        bridge_profile: None,
+                        bridge_support_delta: None,
+                        bridge_support_sha256: None,
+                        bridge_support_delta_sha256: None,
+                    },
+                    include_ready: true,
+                    include_blocked: true,
+                    include_deferred: true,
+                    include_examples: false,
+                },
+            ),
+        },
+    )
+    .await
+    .expect("inventory should decode host hook declarations");
+
+    let loong_daemon::plugins_cli::PluginsCommandExecution::Inventory(inventory_execution) =
+        inventory_execution
+    else {
+        panic!("expected inventory execution");
+    };
+
+    let inventory_plugin = &inventory_execution.results[0];
+    assert_eq!(
+        runtime_plugin["extension_host_hooks"],
+        serde_json::json!(["turn_start", "turn_end"])
+    );
+    assert_eq!(
+        inventory_plugin.extension_host_hooks,
+        vec!["turn_start".to_owned(), "turn_end".to_owned()]
+    );
+    assert!(
+        inventory_plugin
+            .extension_metadata_issues
+            .iter()
+            .any(|issue| issue.contains("loong_extension_host_hooks_json")),
+        "expected reserved host-hook declaration issue, got {:?}",
+        inventory_plugin.extension_metadata_issues
+    );
     assert_eq!(
         runtime_plugin["extension_metadata_issues"],
         serde_json::to_value(&inventory_plugin.extension_metadata_issues)
@@ -1243,6 +1369,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("extension_facets=tooling,events"));
     assert!(rendered.contains("extension_methods=extension/tool,extension/event"));
     assert!(rendered.contains("extension_events=session_start,tool_result"));
+    assert!(rendered.contains("extension_host_hooks=-"));
     assert!(rendered.contains("extension_host_actions=append_entry,notify"));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));

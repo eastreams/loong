@@ -2509,6 +2509,7 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub extension_facets: Vec<String>,
     pub extension_methods: Vec<String>,
     pub extension_events: Vec<String>,
+    pub extension_host_hooks: Vec<String>,
     pub extension_host_actions: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
     pub authoring_guidance:
@@ -3163,6 +3164,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                     extension_declarations.trust_lane.clone(),
                     extension_declarations.methods.clone(),
                     extension_declarations.events.clone(),
+                    extension_declarations.host_hooks.clone(),
                     extension_declarations.host_actions.clone(),
                     extension_declarations.metadata_issues.clone(),
                 );
@@ -3283,6 +3285,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 extension_facets: extension_declarations.facets,
                 extension_methods: extension_declarations.methods,
                 extension_events: extension_declarations.events,
+                extension_host_hooks: extension_declarations.host_hooks,
                 extension_host_actions: extension_declarations.host_actions,
                 extension_metadata_issues: extension_declarations.metadata_issues,
                 authoring_guidance,

@@ -71,6 +71,7 @@ For the current public authoring lane, Loong should stabilize:
 - `loong plugins invoke-extension` as a bounded smoke surface
 - inventory / doctor / operator surfaces that show extension declarations before execution
 - explicit extension family and trust-lane identity for the current governed native runtime lane
+- reserved host-hook declarations for the future trusted host-extension lane
 
 without implying ungoverned in-process host loading.
 
@@ -107,6 +108,7 @@ should be able to show:
 - declared facets
 - declared host-facing methods
 - declared events
+- declared host hooks
 - declared host actions
 
 without requiring the host to execute extension code first.

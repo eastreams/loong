@@ -115,6 +115,14 @@ For the current public lane, the scaffold also declares:
 - `loong_extension_family=governed_native_runtime_extension`
 - `loong_extension_trust_lane=governed_sidecar`
 
+The scaffold also reserves:
+
+- `loong_extension_host_hooks_json=[]`
+
+That field is for future `trusted_host_extension` packages on the
+`trusted_host` trust lane. The current governed sidecar lane inventories the
+declaration, but does not execute host hooks.
+
 The scaffolded runtime file already handles a small starter surface:
 
 - `extension/event`

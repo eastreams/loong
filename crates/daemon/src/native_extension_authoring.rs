@@ -5,13 +5,16 @@ use crate::{CliResult, PluginInventoryResult, kernel};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
-pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FAMILY: &str = "governed_native_runtime_extension";
-pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE: &str = "governed_sidecar";
+pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FAMILY: &str =
+    kernel::GOVERNED_NATIVE_RUNTIME_EXTENSION_FAMILY;
+pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE: &str =
+    kernel::GOVERNED_SIDECAR_EXTENSION_TRUST_LANE;
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FACETS: &[&str] =
     &["events", "commands", "resources"];
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_METHODS: &[&str] =
     &["extension/event", "extension/command", "extension/resource"];
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_EVENTS: &[&str] = &["session_start"];
+pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS: &[&str] = &[];
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS: &[&str] = &[];
 
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +53,7 @@ pub struct NativeExtensionAuthoringGuidanceView {
     pub extension_trust_lane: Option<String>,
     pub extension_methods: Vec<String>,
     pub extension_events: Vec<String>,
+    pub extension_host_hooks: Vec<String>,
     pub extension_host_actions: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -259,6 +263,7 @@ pub(crate) fn build_native_extension_authoring_guidance(
         plugin.extension_trust_lane.clone(),
         plugin.extension_methods.clone(),
         plugin.extension_events.clone(),
+        plugin.extension_host_hooks.clone(),
         plugin.extension_host_actions.clone(),
         plugin.extension_metadata_issues.clone(),
     )
@@ -274,6 +279,7 @@ pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
     extension_trust_lane: Option<String>,
     extension_methods: Vec<String>,
     extension_events: Vec<String>,
+    extension_host_hooks: Vec<String>,
     extension_host_actions: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> Option<NativeExtensionAuthoringGuidanceView> {
@@ -292,6 +298,7 @@ pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
         extension_trust_lane,
         extension_methods,
         extension_events,
+        extension_host_hooks,
         extension_host_actions,
         extension_metadata_issues,
     ))
@@ -358,6 +365,10 @@ pub(crate) fn build_native_extension_authoring_view_from_profile(
             .iter()
             .map(|value| (*value).to_owned())
             .collect::<Vec<_>>(),
+        PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>(),
         PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
             .iter()
             .map(|value| (*value).to_owned())
@@ -377,6 +388,7 @@ fn build_native_extension_authoring_view(
     extension_trust_lane: Option<String>,
     extension_methods: Vec<String>,
     extension_events: Vec<String>,
+    extension_host_hooks: Vec<String>,
     extension_host_actions: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> NativeExtensionAuthoringGuidanceView {
@@ -410,6 +422,7 @@ fn build_native_extension_authoring_view(
         extension_trust_lane,
         extension_methods,
         extension_events,
+        extension_host_hooks,
         extension_host_actions,
         extension_metadata_issues,
         author_remediation_actions,

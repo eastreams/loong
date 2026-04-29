@@ -103,6 +103,14 @@ It also declares the current public extension family and trust lane:
 - `governed_native_runtime_extension`
 - `governed_sidecar`
 
+The scaffold also reserves:
+
+- `loong_extension_host_hooks_json=[]`
+
+That field is for future `trusted_host_extension` packages on the
+`trusted_host` trust lane. The current governed sidecar lane inventories the
+declaration, but does not execute host hooks.
+
 ### Go
 
 ```bash

@@ -6430,6 +6430,7 @@ mod tests {
             plugin["extension_events"],
             json!(["session_start", "tool_result"])
         );
+        assert_eq!(plugin["extension_host_hooks"], json!([]));
         assert_eq!(
             plugin["extension_host_actions"],
             json!(["append_entry", "notify"])
@@ -6490,6 +6491,7 @@ mod tests {
             json!("governed_native_runtime_extension")
         );
         assert_eq!(plugin["extension_trust_lane"], json!("governed_sidecar"));
+        assert_eq!(plugin["extension_host_hooks"], json!([]));
         assert!(plugin.get("activation_attestation").is_some());
         assert!(plugin.get("runtime_health").is_some());
 

@@ -18,8 +18,9 @@ use crate::native_extension_authoring::{
     NativeExtensionAuthoringGuidanceView, NativeExtensionAuthoringSummaryView,
     PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT, PROCESS_STDIO_NATIVE_EXTENSION_EVENTS,
     PROCESS_STDIO_NATIVE_EXTENSION_FACETS, PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS,
-    PROCESS_STDIO_NATIVE_EXTENSION_METHODS, build_native_extension_authoring_doctor_guidance,
-    build_native_extension_authoring_guidance, build_native_extension_authoring_view_from_profile,
+    PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
+    build_native_extension_authoring_doctor_guidance, build_native_extension_authoring_guidance,
+    build_native_extension_authoring_view_from_profile,
     process_stdio_native_extension_language_profile, process_stdio_scaffold_args,
     render_authoring_actions_command, render_authoring_doctor_command,
     render_authoring_inventory_command, render_rust_extension_cargo_toml,
@@ -563,6 +564,7 @@ pub struct RuntimePluginInventoryResultView {
     pub capabilities: Vec<String>,
     pub extension_family: Option<String>,
     pub extension_trust_lane: Option<String>,
+    pub extension_host_hooks: Vec<String>,
     pub activation_status: Option<String>,
     pub activation_reason: Option<String>,
     pub loaded: bool,
@@ -830,6 +832,7 @@ pub struct NativeExtensionAuthoringProfileExecution {
     pub facets: Vec<String>,
     pub methods: Vec<String>,
     pub events: Vec<String>,
+    pub host_hooks: Vec<String>,
     pub host_actions: Vec<String>,
     pub runtime_files: Vec<String>,
     pub command: String,
@@ -1288,6 +1291,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
                         capabilities: result.capabilities,
                         extension_family: result.extension_family,
                         extension_trust_lane: result.extension_trust_lane,
+                        extension_host_hooks: result.extension_host_hooks,
                         activation_status: result.activation_status,
                         activation_reason: result.activation_reason,
                         loaded: result.loaded,
@@ -1661,6 +1665,11 @@ fn build_plugin_scaffold_manifest(
                 .unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
+            "loong_extension_host_hooks_json".to_owned(),
+            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS)
+                .unwrap_or_else(|_| "[]".to_owned()),
+        );
+        metadata.insert(
             "loong_extension_host_actions_json".to_owned(),
             serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS)
                 .unwrap_or_else(|_| "[]".to_owned()),
@@ -1774,6 +1783,7 @@ fn build_native_extension_authoring_profile(
             .collect(),
         methods: authoring_view.extension_methods.clone(),
         events: authoring_view.extension_events.clone(),
+        host_hooks: authoring_view.extension_host_hooks.clone(),
         host_actions: authoring_view.extension_host_actions.clone(),
         runtime_files: profile
             .scaffold_files
@@ -2193,6 +2203,7 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
         let extension_trust_lane = display_text_or_dash(result.extension_trust_lane.as_deref());
         let extension_methods = format_csv_or_dash(&result.extension_methods);
         let extension_events = format_csv_or_dash(&result.extension_events);
+        let extension_host_hooks = format_csv_or_dash(&result.extension_host_hooks);
         let extension_host_actions = format_csv_or_dash(&result.extension_host_actions);
         let extension_metadata_issues = format_csv_or_dash(&result.extension_metadata_issues);
         lines.push(format!(
@@ -2229,16 +2240,18 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             || result.extension_trust_lane.is_some()
             || !result.extension_methods.is_empty()
             || !result.extension_events.is_empty()
+            || !result.extension_host_hooks.is_empty()
             || !result.extension_host_actions.is_empty()
             || !result.extension_metadata_issues.is_empty()
         {
             lines.push(format!(
-                "  extension_contract={} extension_family={} extension_trust_lane={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={}",
+                "  extension_contract={} extension_family={} extension_trust_lane={} extension_methods={} extension_events={} extension_host_hooks={} extension_host_actions={} extension_metadata_issues={}",
                 extension_contract,
                 extension_family,
                 extension_trust_lane,
                 extension_methods,
                 extension_events,
+                extension_host_hooks,
                 extension_host_actions,
                 extension_metadata_issues
             ));
@@ -2559,6 +2572,7 @@ fn render_plugin_doctor_result_lines(
     let extension_trust_lane = display_text_or_dash(plugin.extension_trust_lane.as_deref());
     let extension_methods = format_csv_or_dash(&plugin.extension_methods);
     let extension_events = format_csv_or_dash(&plugin.extension_events);
+    let extension_host_hooks = format_csv_or_dash(&plugin.extension_host_hooks);
     let extension_host_actions = format_csv_or_dash(&plugin.extension_host_actions);
     let extension_metadata_issues = format_csv_or_dash(&plugin.extension_metadata_issues);
 
@@ -2592,16 +2606,18 @@ fn render_plugin_doctor_result_lines(
         || plugin.extension_trust_lane.is_some()
         || !plugin.extension_methods.is_empty()
         || !plugin.extension_events.is_empty()
+        || !plugin.extension_host_hooks.is_empty()
         || !plugin.extension_host_actions.is_empty()
         || !plugin.extension_metadata_issues.is_empty()
     {
         lines.push(format!(
-            "  extension_contract={} extension_family={} extension_trust_lane={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={}",
+            "  extension_contract={} extension_family={} extension_trust_lane={} extension_methods={} extension_events={} extension_host_hooks={} extension_host_actions={} extension_metadata_issues={}",
             extension_contract,
             extension_family,
             extension_trust_lane,
             extension_methods,
             extension_events,
+            extension_host_hooks,
             extension_host_actions,
             extension_metadata_issues
         ));
@@ -4272,6 +4288,49 @@ mod tests {
         .expect("write invalid package entrypoint");
     }
 
+    fn write_host_hook_declared_native_extension_package(package_root: &str) {
+        fs::create_dir_all(package_root).expect("create host-hook package root");
+        fs::write(
+            format!("{package_root}/loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "0.1.0",
+  "plugin_id": "host-hook-extension",
+  "provider_id": "host-hook-extension",
+  "connector_name": "host-hook-extension",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar",
+    "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
+    "loong_extension_methods_json": "[\"extension/event\",\"extension/command\",\"extension/resource\"]",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_hooks_json": "[\"turn_start\",\"turn_end\"]",
+    "loong_extension_host_actions_json": "[]"
+  },
+  "summary": "Reserved host hook declaration example",
+  "compatibility": {
+    "host_api": "loong-plugin/v1",
+    "host_version_req": ">=0.1.2-alpha.1"
+  }
+}"#,
+        )
+        .expect("write host-hook package manifest");
+        fs::write(
+            format!("{package_root}/index.js"),
+            "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+        )
+        .expect("write host-hook package entrypoint");
+    }
+
     #[tokio::test]
     async fn execute_plugins_inventory_surfaces_manifest_first_openclaw_package_truth() {
         let plugin_root = unique_temp_dir("loong-plugins-cli-inventory-openclaw");
@@ -5416,6 +5475,7 @@ mod tests {
                 "extension/resource".to_owned()
             ]
         );
+        assert!(authoring_profile.host_hooks.is_empty());
 
         let rendered_manifest =
             fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
@@ -5425,6 +5485,13 @@ mod tests {
         assert_eq!(
             manifest.metadata.get("source_language").map(String::as_str),
             Some("python")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_host_hooks_json")
+                .map(String::as_str),
+            Some("[]")
         );
         assert_eq!(
             manifest.metadata.get("adapter_family").map(String::as_str),
@@ -6331,6 +6398,13 @@ mod tests {
                     .collect::<Vec<_>>()
             );
             assert_eq!(
+                inventory_execution.results[0].extension_host_hooks,
+                PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
                 inventory_execution.results[0].extension_host_actions,
                 PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
                     .iter()
@@ -6646,6 +6720,14 @@ mod tests {
                 doc.contains("governed_sidecar"),
                 "doc should mention the current public extension trust lane"
             );
+            assert!(
+                doc.contains("loong_extension_host_hooks_json"),
+                "doc should mention reserved host-hook declarations"
+            );
+            assert!(
+                doc.contains("trusted_host_extension"),
+                "doc should mention the reserved trusted host extension family"
+            );
         }
     }
 
@@ -6741,6 +6823,13 @@ mod tests {
         assert_eq!(
             guidance.extension_events,
             PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            guidance.extension_host_hooks,
+            PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect::<Vec<_>>()
@@ -6910,6 +6999,71 @@ mod tests {
         assert!(
             rendered.contains("Repair native extension declaration metadata"),
             "doctor text should surface native extension metadata repair guidance: {rendered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_doctor_flags_reserved_host_hooks_outside_trusted_host_lane() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-doctor-host-hooks");
+        let package_root = format!("{temp_root}/host-hook-extension");
+        write_host_hook_declared_native_extension_package(&package_root);
+
+        let doctor_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Doctor(PluginDoctorCommand {
+                source: PluginDoctorSourceArgs {
+                    scan: PluginScanSourceArgs {
+                        roots: vec![package_root.clone()],
+                        query: String::new(),
+                        limit: None,
+                        bridge_support: None,
+                        bridge_profile: None,
+                        bridge_support_delta: None,
+                        bridge_support_sha256: None,
+                        bridge_support_delta_sha256: None,
+                    },
+                    profile: PluginPreflightProfileArg::SdkRelease,
+                    policy_path: None,
+                    policy_sha256: None,
+                    policy_signature_public_key_base64: None,
+                    policy_signature_base64: None,
+                    policy_signature_algorithm: "ed25519".to_owned(),
+                },
+                include_passed: true,
+                include_warned: true,
+                include_blocked: true,
+                include_deferred: true,
+            }),
+        })
+        .await
+        .expect("doctor should evaluate host-hook declaration package");
+
+        let PluginsCommandExecution::Doctor(doctor_execution) = doctor_execution else {
+            panic!("expected doctor execution");
+        };
+        let guidance = &doctor_execution.native_extension_authoring_guidance[0];
+        assert_eq!(
+            guidance.extension_host_hooks,
+            vec!["turn_start".to_owned(), "turn_end".to_owned()]
+        );
+        assert!(
+            guidance
+                .extension_metadata_issues
+                .iter()
+                .any(|issue| issue.contains("loong_extension_host_hooks_json")
+                    && issue.contains("trusted_host_extension")
+                    && issue.contains("trusted_host")),
+            "expected reserved host-hook metadata issue, got {:?}",
+            guidance.extension_metadata_issues
+        );
+        assert!(
+            guidance.author_remediation_actions.iter().any(|action| {
+                action.kind == "repair_extension_metadata"
+                    && action.field_path.as_deref()
+                        == Some("metadata.loong_extension_host_hooks_json")
+            }),
+            "doctor guidance should expose a typed repair action for host hooks: {:?}",
+            guidance.author_remediation_actions
         );
     }
 

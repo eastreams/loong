@@ -19,6 +19,7 @@
     "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
     "loong_extension_methods_json": "[\"extension/event\",\"extension/command\",\"extension/resource\"]",
     "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_hooks_json": "[]",
     "loong_extension_host_actions_json": "[]"
   },
   "summary": "Minimal manifest-first Go native extension example",

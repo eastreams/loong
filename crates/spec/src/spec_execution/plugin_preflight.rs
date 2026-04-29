@@ -2176,6 +2176,7 @@ mod tests {
             extension_facets: Vec::new(),
             extension_methods: Vec::new(),
             extension_events: Vec::new(),
+            extension_host_hooks: Vec::new(),
             extension_host_actions: Vec::new(),
             extension_metadata_issues: Vec::new(),
             input_examples: Vec::new(),

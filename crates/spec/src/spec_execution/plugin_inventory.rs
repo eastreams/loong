@@ -303,6 +303,7 @@ pub(super) fn collect_plugin_inventory_results(
                 extension_facets: extension_declarations.facets.clone(),
                 extension_methods: extension_declarations.methods.clone(),
                 extension_events: extension_declarations.events.clone(),
+                extension_host_hooks: extension_declarations.host_hooks.clone(),
                 extension_host_actions: extension_declarations.host_actions.clone(),
                 extension_metadata_issues: extension_declarations.metadata_issues.clone(),
                 input_examples: manifest.input_examples.clone(),
@@ -404,6 +405,7 @@ pub(super) fn collect_plugin_inventory_results(
             extension_facets: entry.extension_facets,
             extension_methods: entry.extension_methods,
             extension_events: entry.extension_events,
+            extension_host_hooks: entry.extension_host_hooks,
             extension_host_actions: entry.extension_host_actions,
             extension_metadata_issues: entry.extension_metadata_issues,
             input_examples: if include_examples {

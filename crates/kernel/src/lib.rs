@@ -70,11 +70,14 @@ pub use plugin::{
     plugin_provenance_summary_for_descriptor, prefer_first_plugin_ids,
 };
 pub use plugin_ir::{
-    BridgeSupportMatrix, PluginActivationCandidate, PluginActivationInventoryEntry,
-    PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginChannelBridgeContract,
-    PluginChannelBridgeReadiness, PluginCompatibilityShimSupport, PluginIR,
-    PluginNativeExtensionDeclarations, PluginRuntimeProfile, PluginRuntimeScaffoldDefaults,
-    PluginSetupReadiness, PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
+    BridgeSupportMatrix, GOVERNED_NATIVE_RUNTIME_EXTENSION_FAMILY,
+    GOVERNED_SIDECAR_EXTENSION_TRUST_LANE, PluginActivationCandidate,
+    PluginActivationInventoryEntry, PluginActivationPlan, PluginActivationStatus, PluginBridgeKind,
+    PluginChannelBridgeContract, PluginChannelBridgeReadiness, PluginCompatibilityShimSupport,
+    PluginIR, PluginNativeExtensionDeclarations, PluginRuntimeProfile,
+    PluginRuntimeScaffoldDefaults, PluginSetupReadiness, PluginSetupReadinessContext,
+    PluginTranslationReport, PluginTranslator, TRUSTED_HOST_EXTENSION_FAMILY,
+    TRUSTED_HOST_EXTENSION_TRUST_LANE, TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS,
     evaluate_plugin_setup_requirements, plugin_native_extension_declarations_from_metadata,
     plugin_runtime_scaffold_defaults,
 };
