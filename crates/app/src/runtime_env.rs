@@ -13,11 +13,9 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
     match resolved_config_path {
         Some(path) => {
             let value = path.display().to_string();
-            set_env_var("LOONG_CONFIG_PATH", value.clone());
             set_env_var("LOONG_CONFIG_PATH", value);
         }
         None => {
-            remove_env_var("LOONG_CONFIG_PATH");
             remove_env_var("LOONG_CONFIG_PATH");
         }
     }
@@ -145,6 +143,25 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
         config.tools.web.max_redirects.to_string(),
     );
     set_env_var(
+        "LOONG_WEB_SEARCH_ENABLED",
+        bool_env(config.tools.web_search.enabled),
+    );
+    set_env_var(
+        "LOONG_WEB_SEARCH_PROVIDER",
+        crate::config::normalize_web_search_provider(
+            config.tools.web_search.default_provider.as_str(),
+        )
+        .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER),
+    );
+    set_env_var(
+        "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
+        config.tools.web_search.timeout_seconds.to_string(),
+    );
+    set_env_var(
+        "LOONG_WEB_SEARCH_MAX_RESULTS",
+        config.tools.web_search.max_results.to_string(),
+    );
+    set_env_var(
         "LOONG_EXTERNAL_SKILLS_ENABLED",
         bool_env(config.external_skills.enabled),
     );
@@ -250,6 +267,10 @@ mod tests {
             "LOONG_WEB_FETCH_TIMEOUT_SECONDS",
             "LOONG_WEB_FETCH_MAX_BYTES",
             "LOONG_WEB_FETCH_MAX_REDIRECTS",
+            "LOONG_WEB_SEARCH_ENABLED",
+            "LOONG_WEB_SEARCH_PROVIDER",
+            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
+            "LOONG_WEB_SEARCH_MAX_RESULTS",
         ] {
             env.remove(key);
         }
@@ -279,6 +300,10 @@ mod tests {
         config.tools.web.timeout_seconds = 9;
         config.tools.web.max_bytes = 262_144;
         config.tools.web.max_redirects = 1;
+        config.tools.web_search.enabled = false;
+        config.tools.web_search.default_provider = "DDG".to_owned();
+        config.tools.web_search.timeout_seconds = 17;
+        config.tools.web_search.max_results = 5;
         config.external_skills.enabled = true;
         config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
         let config_path = PathBuf::from("/tmp/loong-runtime-env.toml");
@@ -413,6 +438,26 @@ mod tests {
                 .ok()
                 .as_deref(),
             Some("1")
+        );
+        assert_eq!(
+            std::env::var("LOONG_WEB_SEARCH_ENABLED").ok().as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            std::env::var("LOONG_WEB_SEARCH_PROVIDER").ok().as_deref(),
+            Some("duckduckgo")
+        );
+        assert_eq!(
+            std::env::var("LOONG_WEB_SEARCH_TIMEOUT_SECONDS")
+                .ok()
+                .as_deref(),
+            Some("17")
+        );
+        assert_eq!(
+            std::env::var("LOONG_WEB_SEARCH_MAX_RESULTS")
+                .ok()
+                .as_deref(),
+            Some("5")
         );
     }
 

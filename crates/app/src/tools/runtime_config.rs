@@ -20,7 +20,10 @@ use crate::conversation::{
 };
 #[cfg(feature = "feishu-integration")]
 use crate::secrets::has_configured_secret_ref;
-use crate::secrets::{SecretLookup, resolve_secret_lookup};
+
+#[path = "runtime_config_web_search.rs"]
+mod web_search_runtime;
+pub use web_search_runtime::WebSearchRuntimePolicy;
 
 fn bool_is_false(value: &bool) -> bool {
     !*value
@@ -588,40 +591,6 @@ impl Default for WebFetchRuntimePolicy {
     }
 }
 
-// Query-style web search policy for `web { query }` / `web.search` only. Keep
-// this separate from normal network egress so missing web-search credentials do
-// not imply that plain fetch/request or browser access is unavailable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WebSearchRuntimePolicy {
-    pub enabled: bool,
-    pub default_provider: String,
-    pub brave_api_key: Option<String>,
-    pub tavily_api_key: Option<String>,
-    pub perplexity_api_key: Option<String>,
-    pub exa_api_key: Option<String>,
-    pub firecrawl_api_key: Option<String>,
-    pub jina_api_key: Option<String>,
-    pub timeout_seconds: u64,
-    pub max_results: usize,
-}
-
-impl Default for WebSearchRuntimePolicy {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            default_provider: crate::config::DEFAULT_WEB_SEARCH_PROVIDER.to_owned(),
-            brave_api_key: None,
-            tavily_api_key: None,
-            perplexity_api_key: None,
-            exa_api_key: None,
-            firecrawl_api_key: None,
-            jina_api_key: None,
-            timeout_seconds: crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
-            max_results: crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS,
-        }
-    }
-}
-
 #[cfg(feature = "feishu-integration")]
 #[derive(Debug, Clone)]
 pub struct FeishuToolRuntimeConfig {
@@ -877,52 +846,7 @@ impl ToolRuntimeConfig {
                 max_bytes: config.tools.web.max_bytes,
                 max_redirects: config.tools.web.max_redirects,
             },
-            web_search: WebSearchRuntimePolicy {
-                enabled: config.tools.web_search.enabled,
-                default_provider: crate::config::normalize_web_search_provider(
-                    config.tools.web_search.default_provider.as_str(),
-                )
-                .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
-                .to_owned(),
-                brave_api_key: resolve_web_search_secret_binding(
-                    config.tools.web_search.brave_api_key.as_deref(),
-                    crate::config::web_search_provider_api_key_env_names(
-                        crate::config::WEB_SEARCH_PROVIDER_BRAVE,
-                    ),
-                ),
-                tavily_api_key: resolve_web_search_secret_binding(
-                    config.tools.web_search.tavily_api_key.as_deref(),
-                    crate::config::web_search_provider_api_key_env_names(
-                        crate::config::WEB_SEARCH_PROVIDER_TAVILY,
-                    ),
-                ),
-                perplexity_api_key: resolve_web_search_secret_binding(
-                    config.tools.web_search.perplexity_api_key.as_deref(),
-                    crate::config::web_search_provider_api_key_env_names(
-                        crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
-                    ),
-                ),
-                exa_api_key: resolve_web_search_secret_binding(
-                    config.tools.web_search.exa_api_key.as_deref(),
-                    crate::config::web_search_provider_api_key_env_names(
-                        crate::config::WEB_SEARCH_PROVIDER_EXA,
-                    ),
-                ),
-                firecrawl_api_key: resolve_web_search_secret_binding(
-                    config.tools.web_search.firecrawl_api_key.as_deref(),
-                    crate::config::web_search_provider_api_key_env_names(
-                        crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
-                    ),
-                ),
-                jina_api_key: resolve_web_search_secret_binding(
-                    config.tools.web_search.jina_api_key.as_deref(),
-                    crate::config::web_search_provider_api_key_env_names(
-                        crate::config::WEB_SEARCH_PROVIDER_JINA,
-                    ),
-                ),
-                timeout_seconds: config.tools.web_search.timeout_seconds,
-                max_results: config.tools.web_search.max_results,
-            },
+            web_search: WebSearchRuntimePolicy::from_loong_config(config),
             autonomy_profile: config.tools.autonomy_profile,
             external_skills: ExternalSkillsRuntimePolicy {
                 enabled: config.external_skills.enabled,
@@ -971,10 +895,7 @@ impl ToolRuntimeConfig {
         });
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-        let config_path = std::env::var("LOONG_CONFIG_PATH")
-            .ok()
-            .or_else(|| std::env::var("LOONG_CONFIG_PATH").ok())
-            .map(PathBuf::from);
+        let config_path = std::env::var("LOONG_CONFIG_PATH").ok().map(PathBuf::from);
         let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
             .iter()
             .map(|value| (*value).to_owned())
@@ -1024,57 +945,6 @@ impl ToolRuntimeConfig {
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_BYTES);
         let web_fetch_max_redirects = parse_env_usize("LOONG_WEB_FETCH_MAX_REDIRECTS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
-        let web_search_enabled = parse_env_bool("LOONG_WEB_SEARCH_ENABLED").unwrap_or(true);
-        let web_search_default_provider = parse_env_string("LOONG_WEB_SEARCH_PROVIDER")
-            .or_else(|| parse_env_string("LOONG_WEB_SEARCH_PROVIDER"))
-            .as_deref()
-            .and_then(crate::config::normalize_web_search_provider)
-            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_PROVIDER)
-            .to_owned();
-        let web_search_brave_api_key = resolve_web_search_secret_binding(
-            None,
-            crate::config::web_search_provider_api_key_env_names(
-                crate::config::WEB_SEARCH_PROVIDER_BRAVE,
-            ),
-        );
-        let web_search_tavily_api_key = resolve_web_search_secret_binding(
-            None,
-            crate::config::web_search_provider_api_key_env_names(
-                crate::config::WEB_SEARCH_PROVIDER_TAVILY,
-            ),
-        );
-        let web_search_perplexity_api_key = resolve_web_search_secret_binding(
-            None,
-            crate::config::web_search_provider_api_key_env_names(
-                crate::config::WEB_SEARCH_PROVIDER_PERPLEXITY,
-            ),
-        );
-        let web_search_exa_api_key = resolve_web_search_secret_binding(
-            None,
-            crate::config::web_search_provider_api_key_env_names(
-                crate::config::WEB_SEARCH_PROVIDER_EXA,
-            ),
-        );
-        let web_search_firecrawl_api_key = resolve_web_search_secret_binding(
-            None,
-            crate::config::web_search_provider_api_key_env_names(
-                crate::config::WEB_SEARCH_PROVIDER_FIRECRAWL,
-            ),
-        );
-        let web_search_jina_api_key = resolve_web_search_secret_binding(
-            None,
-            crate::config::web_search_provider_api_key_env_names(
-                crate::config::WEB_SEARCH_PROVIDER_JINA,
-            ),
-        );
-        let web_search_timeout_seconds = parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS")
-            .or_else(|| parse_env_u64("LOONG_WEB_SEARCH_TIMEOUT_SECONDS"))
-            .map(|seconds| seconds.clamp(1, 60))
-            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS);
-        let web_search_max_results = parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS")
-            .or_else(|| parse_env_usize("LOONG_WEB_SEARCH_MAX_RESULTS"))
-            .map(|count| count.clamp(1, 10))
-            .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
         let autonomy_profile = resolve_autonomy_profile_from_env();
         let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
@@ -1166,18 +1036,7 @@ impl ToolRuntimeConfig {
                 max_bytes: web_fetch_max_bytes,
                 max_redirects: web_fetch_max_redirects,
             },
-            web_search: WebSearchRuntimePolicy {
-                enabled: web_search_enabled,
-                default_provider: web_search_default_provider,
-                brave_api_key: web_search_brave_api_key,
-                tavily_api_key: web_search_tavily_api_key,
-                perplexity_api_key: web_search_perplexity_api_key,
-                exa_api_key: web_search_exa_api_key,
-                firecrawl_api_key: web_search_firecrawl_api_key,
-                jina_api_key: web_search_jina_api_key,
-                timeout_seconds: web_search_timeout_seconds,
-                max_results: web_search_max_results,
-            },
+            web_search: WebSearchRuntimePolicy::from_env(),
             autonomy_profile,
             tool_execution,
             ..Self::default()
@@ -1505,29 +1364,6 @@ impl ToolRuntimeConfig {
     }
 }
 
-fn resolve_web_search_secret_binding(
-    configured_value: Option<&str>,
-    env_names: &[&str],
-) -> Option<String> {
-    if let Some(secret_ref) = configured_value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| SecretRef::Inline(value.to_owned()))
-    {
-        match resolve_secret_lookup(Some(&secret_ref)) {
-            SecretLookup::Value(value) => return Some(value),
-            SecretLookup::Missing => return None,
-            SecretLookup::Absent => {}
-        }
-    }
-
-    env_names
-        .iter()
-        .find_map(|env_name| std::env::var(env_name).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
 fn discover_browser_companion_command() -> Option<String> {
     which::which("loong-browser-companion")
         .ok()
@@ -1845,10 +1681,7 @@ mod tests {
             "LOONG_WEB_FETCH_MAX_REDIRECTS",
             "LOONG_WEB_SEARCH_ENABLED",
             "LOONG_WEB_SEARCH_PROVIDER",
-            "LOONG_WEB_SEARCH_PROVIDER",
             "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
-            "LOONG_WEB_SEARCH_TIMEOUT_SECONDS",
-            "LOONG_WEB_SEARCH_MAX_RESULTS",
             "LOONG_WEB_SEARCH_MAX_RESULTS",
             "LOONG_AUTONOMY_PROFILE",
             "BRAVE_API_KEY",
