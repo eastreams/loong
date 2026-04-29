@@ -1866,7 +1866,7 @@ fn startup_logo_eye_style(character: char) -> Style {
 
 fn render_centered_startup_text_lines(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
     let content_width = width.saturating_sub(4).max(1) as usize;
-    crate::presentation::render_wrapped_display_line(text, content_width)
+    crate::presentation::render_wrapped_plain_display_line(text, content_width)
         .into_iter()
         .map(|line| {
             let centered = center_text_for_width(line.as_str(), width as usize);
@@ -1913,7 +1913,7 @@ impl StartupTipRenderState {
 
 fn render_startup_tip_lines(tip_state: &StartupTipRenderState, width: u16) -> Vec<Line<'static>> {
     let content_width = width.saturating_sub(6).max(1) as usize;
-    crate::presentation::render_wrapped_display_line(tip_state.text.as_str(), content_width)
+    crate::presentation::render_wrapped_plain_display_line(tip_state.text.as_str(), content_width)
         .into_iter()
         .map(|line| {
             let centered = center_text_for_width(line.as_str(), width as usize);
@@ -3889,7 +3889,7 @@ fn render_inspect_tool_preview_block(
     ));
 
     if let Some(metrics) = preview.metrics.as_deref() {
-        for wrapped in crate::presentation::render_wrapped_display_line(
+        for wrapped in crate::presentation::render_wrapped_plain_display_line(
             metrics,
             width.saturating_sub(12).max(1) as usize,
         ) {
@@ -3957,7 +3957,7 @@ fn render_tool_stream_preview_section(
 
     for line in &preview.lines {
         let mut wrapped =
-            crate::presentation::render_wrapped_display_line(line.as_str(), body_width);
+            crate::presentation::render_wrapped_literal_display_line(line.as_str(), body_width);
         if wrapped.is_empty() {
             wrapped.push(String::new());
         }
@@ -4088,7 +4088,7 @@ fn render_read_text_excerpt_lines(excerpt: &[String], width: u16, bg: Color) -> 
     let content_width = width.saturating_sub(5).max(1) as usize;
     for line in excerpt {
         for (index, wrapped) in
-            crate::presentation::render_wrapped_display_line(line.as_str(), content_width)
+            crate::presentation::render_wrapped_literal_display_line(line.as_str(), content_width)
                 .into_iter()
                 .enumerate()
         {
@@ -4110,7 +4110,7 @@ fn render_read_text_excerpt_lines(excerpt: &[String], width: u16, bg: Color) -> 
 
 fn render_read_preview_text_line(text: &str, width: u16) -> Vec<Line<'static>> {
     let content_width = width.saturating_sub(2).max(1) as usize;
-    crate::presentation::render_wrapped_display_line(text, content_width)
+    crate::presentation::render_wrapped_plain_display_line(text, content_width)
         .into_iter()
         .map(|wrapped| {
             pad_preserving_backgrounds(
@@ -4710,7 +4710,7 @@ fn render_tool_sample_detail_lines(line: &str, content_width: usize) -> Option<V
     let sample_width = content_width.saturating_sub(4).max(1);
 
     Some(
-        crate::presentation::render_wrapped_display_line(sample, sample_width)
+        crate::presentation::render_wrapped_literal_display_line(sample, sample_width)
             .into_iter()
             .enumerate()
             .map(|(index, wrapped_line)| {
@@ -6391,7 +6391,7 @@ mod tests {
     fn rendered_system_line_preserves_plain_label_like_text() {
         let mut list = MessageList::new();
         list.add_rendered_lines(vec![
-            "source: imported config at ~/.loong/agents/loong/config.toml".to_owned(),
+            "source: imported config at ~/.loong/config.toml".to_owned(),
         ]);
 
         let rendered = list
@@ -6413,7 +6413,66 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("~/.loong/agents/loong"))
+                .any(|line| line.contains("~/.loong/config.toml"))
+        );
+    }
+
+    #[test]
+    fn tool_stream_preview_preserves_literal_plus_prefix() {
+        let preview = super::ToolStreamPreview {
+            lines: vec!["+ added ~/.loong/config.toml".to_owned()],
+            omitted_count: 0,
+            truncated_from_start: false,
+        };
+
+        let rendered =
+            super::render_tool_stream_preview_section("stdout", &preview, 40, SURFACE_TOOL_BG)
+                .into_iter()
+                .map(|line| {
+                    line.spans
+                        .into_iter()
+                        .map(|span| span.content.to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("+ added ~/.loong/config.toml"))
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("- added ~/.loong/config.toml"))
+        );
+    }
+
+    #[test]
+    fn read_text_excerpt_preserves_literal_plus_prefix() {
+        let rendered = super::render_read_text_excerpt_lines(
+            &["+ added ~/.loong/config.toml".to_owned()],
+            36,
+            SURFACE_TOOL_BG,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("+ added ~/.loong/config.toml"))
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("- added ~/.loong/config.toml"))
         );
     }
 
