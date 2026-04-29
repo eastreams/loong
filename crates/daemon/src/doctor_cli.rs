@@ -9,7 +9,7 @@ use kernel::{probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal
 use loong_app as mvp;
 use loong_contracts::SecretRef;
 use loong_spec::CliResult;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 use crate::provider_credential_policy;
@@ -193,6 +193,8 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     checks.extend(collect_runtime_plugins_doctor_checks_from_state(
         &runtime_plugins_state,
     ));
+    let runtime_plugin_inventory =
+        crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await;
 
     checks.extend(check_feishu_integration(&config, options.fix, &mut fixes));
     let channel_inventory = mvp::channel::channel_inventory(&config);
@@ -212,7 +214,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     }
 
     let summary = summarize_checks(&checks);
-    let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
+    let mut next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
         &checks,
         &config_path,
         &config,
@@ -220,10 +222,13 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         options.fix,
         path_env.as_deref(),
     );
+    next_steps.extend(
+        crate::runtime_plugin_discovery::build_runtime_plugin_discovery_next_steps(
+            runtime_plugin_inventory.discovery_guidance.as_ref(),
+        ),
+    );
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
-        let runtime_plugin_inventory =
-            crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
         let payload = json!({
             "ok": summary.fail == 0,
             "config": config_path.display().to_string(),
@@ -234,7 +239,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             },
             "checks": checks,
             "runtime_plugins": doctor_runtime_plugins_json_payload(&runtime_plugins_state),
-            "runtime_plugin_inventory": runtime_plugin_inventory,
+            "runtime_plugin_inventory": serde_json::to_value(&runtime_plugin_inventory).unwrap_or(Value::Null),
             "fix_requested": options.fix,
             "applied_fixes": fixes,
             "next_steps": next_steps,
@@ -6460,7 +6465,10 @@ mod tests {
         )
         .expect("write runtime plugin manifest");
 
-        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+        let payload = serde_json::to_value(
+            crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await,
+        )
+        .expect("serialize runtime plugin inventory payload");
         let plugin = payload["results"]
             .as_array()
             .and_then(|plugins| {
@@ -6515,7 +6523,10 @@ mod tests {
         )
         .expect("write runtime plugin manifest");
 
-        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+        let payload = serde_json::to_value(
+            crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await,
+        )
+        .expect("serialize runtime plugin inventory payload");
         let summary = &payload["native_extension_authoring_summary"];
         assert_eq!(summary["guided_plugins"], json!(1));
         assert_eq!(summary["plugins_with_metadata_issues"], json!(1));
@@ -6565,7 +6576,10 @@ mod tests {
         )
         .expect("write runtime plugin manifest");
 
-        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+        let payload = serde_json::to_value(
+            crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await,
+        )
+        .expect("serialize runtime plugin inventory payload");
 
         assert_eq!(payload["available"], json!(true));
         assert_eq!(payload["returned_results"], json!(1));
@@ -6643,7 +6657,10 @@ mod tests {
         )
         .expect("write global runtime plugin manifest");
 
-        let payload = crate::plugins_cli::runtime_plugin_inventory_json_payload(&config).await;
+        let payload = serde_json::to_value(
+            crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await,
+        )
+        .expect("serialize runtime plugin inventory payload");
 
         assert_eq!(payload["available"], json!(true));
         assert_eq!(payload["roots_source"], json!("auto_discovered"));
@@ -6696,6 +6713,84 @@ mod tests {
                 .is_some_and(|path| path.ends_with(".loong/extensions/search/loong.plugin.json")),
             "project-local descriptor should win the precedence race: {plugin:#?}"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[tokio::test]
+    async fn doctor_runtime_plugin_inventory_discovery_guidance_yields_review_next_steps() {
+        let root = browser_companion_temp_dir("runtime-plugins-auto-discovery-next-steps");
+        let home = browser_companion_temp_dir("runtime-plugins-auto-discovery-next-steps-home");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", &home);
+        let _cwd = DoctorCliCurrentDirGuard::set(&root);
+        let mut config = runtime_plugins_test_config(&root, true);
+        config.runtime_plugins.roots = vec!["   ".to_owned()];
+
+        let project_root = root.join(".loong/extensions/search");
+        let global_root = home.join(".loong/agent/extensions/search");
+        std::fs::create_dir_all(&project_root).expect("create project runtime root");
+        std::fs::create_dir_all(&global_root).expect("create global runtime root");
+
+        std::fs::write(
+            project_root.join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "project-extension",
+  "connector_name": "project-extension",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Project-local extension",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "python",
+    "command": "python3",
+    "args_json": "[\"index.py\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+        )
+        .expect("write project-local runtime plugin manifest");
+        std::fs::write(
+            global_root.join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "global-extension",
+  "connector_name": "global-extension",
+  "capabilities": ["InvokeConnector"],
+  "summary": "Global extension",
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "python-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "python",
+    "command": "python3",
+    "args_json": "[\"index.py\"]",
+    "process_timeout_ms": "5000"
+  }
+}"#,
+        )
+        .expect("write global runtime plugin manifest");
+
+        let inventory = crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await;
+        let next_steps = crate::runtime_plugin_discovery::build_runtime_plugin_discovery_next_steps(
+            inventory.discovery_guidance.as_ref(),
+        );
+
+        assert!(next_steps.iter().any(|step| {
+            step.contains("Inspect the effective project-local package for shared-extension")
+                && step.contains(".loong/extensions/search")
+        }));
+        assert!(next_steps.iter().any(|step| {
+            step.contains("Inspect the shadowed package for shared-extension")
+                && step.contains(".loong/agent/extensions/search")
+        }));
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&home).ok();

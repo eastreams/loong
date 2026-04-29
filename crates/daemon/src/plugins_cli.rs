@@ -1313,12 +1313,6 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
     }
 }
 
-pub(crate) async fn runtime_plugin_inventory_json_payload(
-    config: &mvp::config::LoongConfig,
-) -> serde_json::Value {
-    serde_json::to_value(runtime_plugin_inventory_read_model(config).await).unwrap_or(Value::Null)
-}
-
 const PLUGINS_INIT_README_FILE_NAME: &str = "README.md";
 
 #[derive(Debug, Serialize)]

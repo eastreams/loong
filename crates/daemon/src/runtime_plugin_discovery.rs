@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub(crate) const PROJECT_LOCAL_LOONG_EXTENSION_ROOT: &str = ".loong/extensions/";
@@ -131,6 +131,23 @@ pub fn build_runtime_plugin_discovery_guidance(
     })
 }
 
+pub fn build_runtime_plugin_discovery_next_steps(
+    guidance: Option<&RuntimePluginDiscoveryGuidanceView>,
+) -> Vec<String> {
+    let Some(guidance) = guidance else {
+        return Vec::new();
+    };
+
+    let mut seen_commands = BTreeSet::new();
+    let mut steps = Vec::new();
+    for action in &guidance.discovery_actions {
+        if seen_commands.insert(action.command.clone()) {
+            steps.push(format!("{}: {}", action.summary, action.command));
+        }
+    }
+    steps
+}
+
 fn build_runtime_plugin_discovery_actions_for_conflict(
     conflict: &RuntimePluginShadowingConflictView,
 ) -> Vec<RuntimePluginDiscoveryActionView> {
@@ -233,6 +250,44 @@ mod tests {
                 .as_deref()
                 .is_some_and(|hint| hint.contains("shadowed:"))
         );
+    }
+
+    #[test]
+    fn build_runtime_plugin_discovery_next_steps_dedupes_repeated_commands() {
+        let guidance = RuntimePluginDiscoveryGuidanceView {
+            precedence_rule: PROJECT_LOCAL_OVER_GLOBAL_PRECEDENCE_RULE.to_owned(),
+            project_local_root: PROJECT_LOCAL_LOONG_EXTENSION_ROOT.to_owned(),
+            global_root: GLOBAL_LOONG_EXTENSION_ROOT.to_owned(),
+            shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            shadowed_conflicts: Vec::new(),
+            discovery_actions: vec![
+                RuntimePluginDiscoveryActionView {
+                    kind: INSPECT_EFFECTIVE_PACKAGE_ACTION.to_owned(),
+                    plugin_id: "shared-extension".to_owned(),
+                    target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                    target_package_root: ".loong/extensions/search".to_owned(),
+                    summary: "Inspect the effective project-local package for shared-extension"
+                        .to_owned(),
+                    command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                },
+                RuntimePluginDiscoveryActionView {
+                    kind: INSPECT_EFFECTIVE_PACKAGE_ACTION.to_owned(),
+                    plugin_id: "shared-extension".to_owned(),
+                    target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                    target_package_root: ".loong/extensions/search".to_owned(),
+                    summary: "Inspect the effective project-local package for shared-extension"
+                        .to_owned(),
+                    command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                },
+            ],
+            recommended_action: Some(REVIEW_GLOBAL_DUPLICATE_ACTION.to_owned()),
+            resolution_hint: None,
+        };
+
+        let steps = build_runtime_plugin_discovery_next_steps(Some(&guidance));
+
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].contains("Inspect the effective project-local package"));
     }
 
     #[test]
