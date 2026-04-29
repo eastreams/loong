@@ -63,6 +63,7 @@ pub(super) fn interactive_terminal_surface_supported() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
+#[cfg(test)]
 fn env_value_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -70,10 +71,17 @@ fn env_value_truthy(value: &str) -> bool {
     )
 }
 
+fn env_value_falsey(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
+    )
+}
+
 fn mouse_capture_enabled() -> bool {
     env::var("LOONG_TUI_MOUSE_CAPTURE")
-        .map(|value| env_value_truthy(value.as_str()))
-        .unwrap_or(false)
+        .map(|value| !env_value_falsey(value.as_str()))
+        .unwrap_or(true)
 }
 
 pub(super) async fn run_cli_chat_surface(
@@ -136,7 +144,11 @@ pub(super) fn run_concurrent_cli_host_surface(
 
 #[cfg(test)]
 mod tests {
-    use super::{DisableAlternateScroll, EnableAlternateScroll, env_value_truthy};
+    use super::{
+        DisableAlternateScroll, EnableAlternateScroll, env_value_falsey, env_value_truthy,
+        mouse_capture_enabled,
+    };
+    use crate::test_support::ScopedEnv;
     use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 
     #[test]
@@ -160,6 +172,24 @@ mod tests {
         assert!(!env_value_truthy(""));
         assert!(!env_value_truthy("0"));
         assert!(!env_value_truthy("false"));
+    }
+
+    #[test]
+    fn mouse_capture_defaults_to_enabled_and_honors_explicit_disable() {
+        let mut env = ScopedEnv::new();
+        env.remove("LOONG_TUI_MOUSE_CAPTURE");
+        assert!(mouse_capture_enabled());
+
+        env.set("LOONG_TUI_MOUSE_CAPTURE", "0");
+        assert!(env_value_falsey("0"));
+        assert!(!mouse_capture_enabled());
+
+        env.set("LOONG_TUI_MOUSE_CAPTURE", "false");
+        assert!(env_value_falsey("false"));
+        assert!(!mouse_capture_enabled());
+
+        env.set("LOONG_TUI_MOUSE_CAPTURE", "1");
+        assert!(mouse_capture_enabled());
     }
 
     #[test]
