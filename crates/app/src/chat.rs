@@ -22,19 +22,15 @@ mod checkpoint_labels;
 mod checkpoint_text;
 mod cli_input;
 mod cli_render;
-<<<<<<< HEAD
 mod commands;
 mod control_plane;
 mod deck;
 mod fast;
 mod history;
-=======
->>>>>>> 61e41170 (Remove the deprecated fullscreen chat cockpit from prod)
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_session_selector_tests;
 mod live_runtime;
-<<<<<<< HEAD
 mod onboard;
 mod ops;
 mod render;
@@ -45,10 +41,6 @@ mod session;
 mod startup_state;
 mod startup_view;
 mod status_view;
-=======
-mod operator_surfaces;
-mod render_support;
->>>>>>> 61e41170 (Remove the deprecated fullscreen chat cockpit from prod)
 
 use self::boot::*;
 use self::checkpoint::*;

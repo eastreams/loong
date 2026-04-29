@@ -31,7 +31,7 @@ fn build_cli_chat_status_message_spec(summary: &CliChatStartupSummary) -> TuiMes
     sections.push(operator_callout);
 
     TuiMessageSpec {
-        role: "control deck".to_owned(),
+        role: "chat status".to_owned(),
         caption: Some(caption),
         sections,
         footer_lines: vec![STATUS_QUICK_COMMANDS_HINT.to_owned()],

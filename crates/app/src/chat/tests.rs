@@ -995,13 +995,13 @@ fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
         "chat startup should render the first answer handoff through the structured action group: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("command deck")),
-        "chat startup should surface a command deck section beside the first answer handoff: {lines:#?}"
+        lines.iter().any(|line| line.contains("quick commands")),
+        "chat startup should surface the quick-commands section beside the first answer handoff: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("note: how this surface works")),
+            .any(|line| line.contains("note: how chat works")),
         "chat startup should keep the usage guidance as a structured callout: {lines:#?}"
     );
     assert!(
@@ -1106,7 +1106,7 @@ fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
         80,
     );
 
-    assert_eq!(lines[0], "╭─ control deck · session=default");
+    assert_eq!(lines[0], "╭─ chat status · session=default");
     assert!(
         lines.iter().any(|line| line.contains("session anchor")),
         "status output should keep session facts grouped under a section: {lines:#?}"
