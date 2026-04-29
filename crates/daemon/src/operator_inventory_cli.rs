@@ -383,7 +383,13 @@ pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) ->
                 "enabled": snapshot.compaction.enabled,
                 "min_messages": snapshot.compaction.min_messages,
                 "trigger_estimated_tokens": snapshot.compaction.trigger_estimated_tokens,
+                "preserve_recent_turns": snapshot.compaction.preserve_recent_turns,
+                "preserve_recent_estimated_tokens": snapshot.compaction.preserve_recent_estimated_tokens,
                 "fail_open": snapshot.compaction.fail_open,
+                "hygiene": {
+                    "strategy": snapshot.compaction.hygiene_strategy(),
+                    "diagnostics_surface": snapshot.compaction.diagnostics_surface(),
+                },
             },
         });
         let pretty = serde_json::to_string_pretty(&payload)
@@ -401,7 +407,7 @@ pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) ->
         format_capability_names(&snapshot.selected_metadata.capability_names())
     );
     println!(
-        "compaction=enabled:{} min_messages:{} trigger_estimated_tokens:{} fail_open:{}",
+        "compaction=enabled:{} min_messages:{} trigger_estimated_tokens:{} preserve_recent_turns:{} preserve_recent_estimated_tokens:{} fail_open:{} hygiene_strategy={} diagnostics_surface={}",
         snapshot.compaction.enabled,
         snapshot
             .compaction
@@ -411,7 +417,14 @@ pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) ->
             .compaction
             .trigger_estimated_tokens
             .map_or_else(|| "(none)".to_owned(), |value| value.to_string()),
-        snapshot.compaction.fail_open
+        snapshot.compaction.preserve_recent_turns,
+        snapshot
+            .compaction
+            .preserve_recent_estimated_tokens
+            .map_or_else(|| "(none)".to_owned(), |value| value.to_string()),
+        snapshot.compaction.fail_open,
+        snapshot.compaction.hygiene_strategy(),
+        snapshot.compaction.diagnostics_surface(),
     );
     println!("available:");
     for metadata in snapshot.available {

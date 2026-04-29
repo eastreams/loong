@@ -218,7 +218,14 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         mvp::config::write(Some(path), &config, true)?;
     }
 
+    let compaction_hygiene_signal =
+        crate::doctor_compaction_hygiene::collect_doctor_compaction_hygiene_signal(
+            config_path.as_path(),
+            &config,
+        );
+    checks.push(compaction_hygiene_signal.check.clone());
     let summary = summarize_checks(&checks);
+
     let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
         &checks,
         &config_path,
@@ -227,22 +234,21 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         options.fix,
         path_env.as_deref(),
     );
+    let next_steps =
+        merge_doctor_next_steps(next_steps, compaction_hygiene_signal.next_steps.clone());
     if options.json {
         let checks = doctor_checks_json_payload(&checks, &channel_inventory.channel_surfaces);
-        let payload = json!({
-            "schema": doctor_cli_json_schema(),
-            "ok": summary.fail == 0,
-            "config": config_path.display().to_string(),
-            "summary": {
-                "ok": summary.pass,
-                "warn": summary.warn,
-                "fail": summary.fail
-            },
-            "checks": checks,
-            "fix_requested": options.fix,
-            "applied_fixes": fixes,
-            "next_steps": next_steps,
-        });
+        let payload = build_doctor_json_payload(
+            &summary,
+            &config_path.display().to_string(),
+            checks,
+            crate::doctor_compaction_hygiene::doctor_compaction_hygiene_json_payload(
+                &compaction_hygiene_signal,
+            ),
+            options.fix,
+            fixes,
+            next_steps,
+        );
         let encoded = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize doctor output failed: {error}"))?;
         println!("{encoded}");
@@ -273,6 +279,32 @@ fn doctor_cli_json_schema() -> DoctorCliJsonSchema {
         surface: "doctor",
         purpose: "runtime_health_diagnostics",
     }
+}
+
+fn build_doctor_json_payload(
+    summary: &DoctorSummary,
+    config_path: &str,
+    checks: Vec<serde_json::Value>,
+    compaction_hygiene: serde_json::Value,
+    fix_requested: bool,
+    applied_fixes: Vec<String>,
+    next_steps: Vec<String>,
+) -> serde_json::Value {
+    json!({
+        "schema": doctor_cli_json_schema(),
+        "ok": summary.fail == 0,
+        "config": config_path,
+        "summary": {
+            "ok": summary.pass,
+            "warn": summary.warn,
+            "fail": summary.fail
+        },
+        "checks": checks,
+        "compaction_hygiene": compaction_hygiene,
+        "fix_requested": fix_requested,
+        "applied_fixes": applied_fixes,
+        "next_steps": next_steps,
+    })
 }
 
 fn check_directory_ready(
@@ -3478,6 +3510,16 @@ fn push_unique_step(steps: &mut Vec<String>, step: String) {
     }
 }
 
+fn merge_doctor_next_steps<I>(mut steps: Vec<String>, supplemental_steps: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    for step in supplemental_steps {
+        push_unique_step(&mut steps, step);
+    }
+    steps
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -6184,6 +6226,57 @@ mod tests {
     }
 
     #[test]
+    fn doctor_json_payload_surfaces_structured_compaction_hygiene_block() {
+        let summary = DoctorSummary {
+            pass: 1,
+            warn: 1,
+            fail: 1,
+        };
+        let payload = build_doctor_json_payload(
+            &summary,
+            "/tmp/loong.toml",
+            vec![json!({
+                "name": "context compaction hygiene",
+                "level": "fail",
+                "detail": "broken continuity"
+            })],
+            json!({
+                "enabled": true,
+                "level": "fail",
+                "detail": "enabled=true continuity=broken",
+                "signal": {
+                    "metrics": {
+                        "continuity_health": "broken",
+                        "continuity_repairability": "retryable",
+                        "recovery_posture": "retry_exhausted"
+                    }
+                },
+                "next_steps": [
+                    "Inspect runtime compaction hygiene evidence: loong runtime snapshot --json --config '/tmp/loong.toml'"
+                ]
+            }),
+            false,
+            Vec::new(),
+            vec!["Re-run diagnostics: loong doctor --config '/tmp/loong.toml'".to_owned()],
+        );
+
+        assert_eq!(payload["schema"]["surface"], "doctor");
+        assert_eq!(payload["compaction_hygiene"]["level"], "fail");
+        assert_eq!(
+            payload["compaction_hygiene"]["signal"]["metrics"]["continuity_health"],
+            "broken"
+        );
+        assert_eq!(
+            payload["compaction_hygiene"]["signal"]["metrics"]["continuity_repairability"],
+            "retryable"
+        );
+        assert_eq!(
+            payload["compaction_hygiene"]["signal"]["metrics"]["recovery_posture"],
+            "retry_exhausted"
+        );
+    }
+
+    #[test]
     fn build_doctor_next_steps_guides_missing_managed_bridge_selection_resolution() {
         let install_root =
             browser_companion_temp_dir("managed-bridge-next-steps-selection-missing");
@@ -6365,6 +6458,30 @@ mod tests {
                 step == "Inspect runtime plugin inventory: loong runtime snapshot --json --config '/tmp/loong.toml'"
             }),
             "doctor next steps should point to the grouped runtime snapshot surface: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn merge_doctor_next_steps_keeps_compaction_hygiene_follow_up_commands_stable() {
+        let next_steps = merge_doctor_next_steps(
+            vec!["Re-run diagnostics: loong doctor --config '/tmp/loong.toml'".to_owned()],
+            vec![
+                "Inspect runtime compaction hygiene evidence: loong runtime snapshot --json --config '/tmp/loong.toml'".to_owned(),
+                "Review recent session checkpoint summaries and continuity signals: loong sessions --config '/tmp/loong.toml'".to_owned(),
+            ],
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Inspect runtime compaction hygiene evidence: loong runtime snapshot --json --config '/tmp/loong.toml'"
+            }),
+            "doctor should keep compaction hygiene follow-up anchored to runtime snapshot: {next_steps:#?}"
+        );
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Review recent session checkpoint summaries and continuity signals: loong sessions --config '/tmp/loong.toml'"
+            }),
+            "doctor should keep compaction hygiene follow-up anchored to session checkpoint summaries: {next_steps:#?}"
         );
     }
 

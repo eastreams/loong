@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
+use crate::runtime_snapshot_compaction_presentation::{
+    build_compaction_hygiene_json, render_runtime_snapshot_compaction_lines,
+};
 use crate::{
     RuntimeSnapshotCliState, RuntimeSnapshotExternalSkillsState,
     RuntimeSnapshotProviderProfileState, RuntimeSnapshotProviderState,
@@ -90,7 +93,7 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         format_capability_names(&snapshot.context_engine.selected_metadata.capability_names())
     ));
     lines.push(format!(
-        "context_engine compaction=enabled:{} min_messages:{} trigger_estimated_tokens:{} fail_open:{}",
+        "context_engine compaction=enabled:{} min_messages:{} trigger_estimated_tokens:{} preserve_recent_turns:{} preserve_recent_estimated_tokens:{} fail_open:{} hygiene_strategy={} diagnostics_surface={}",
         snapshot.context_engine.compaction.enabled,
         snapshot
             .context_engine
@@ -104,7 +107,19 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
             .trigger_estimated_tokens
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_owned()),
-        snapshot.context_engine.compaction.fail_open
+        snapshot.context_engine.compaction.preserve_recent_turns,
+        snapshot
+            .context_engine
+            .compaction
+            .preserve_recent_estimated_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned()),
+        snapshot.context_engine.compaction.fail_open,
+        snapshot.context_engine.compaction.hygiene_strategy(),
+        snapshot.context_engine.compaction.diagnostics_surface(),
+    ));
+    lines.extend(render_runtime_snapshot_compaction_lines(
+        &snapshot.compaction_hygiene,
     ));
     lines.push(format!(
         "memory selected={} source={} api_version={} capabilities={} summary={}",
@@ -571,6 +586,7 @@ fn runtime_snapshot_provider_descriptor_json(
 
 pub(crate) fn runtime_snapshot_context_engine_json(
     snapshot: &mvp::conversation::ContextEngineRuntimeSnapshot,
+    compaction_hygiene: &crate::RuntimeSnapshotCompactionHygieneState,
 ) -> Value {
     json!({
         "selected": context_engine_metadata_json(
@@ -586,8 +602,15 @@ pub(crate) fn runtime_snapshot_context_engine_json(
             "enabled": snapshot.compaction.enabled,
             "min_messages": snapshot.compaction.min_messages,
             "trigger_estimated_tokens": snapshot.compaction.trigger_estimated_tokens,
+            "preserve_recent_turns": snapshot.compaction.preserve_recent_turns,
+            "preserve_recent_estimated_tokens": snapshot.compaction.preserve_recent_estimated_tokens,
             "fail_open": snapshot.compaction.fail_open,
+            "hygiene": {
+                "strategy": snapshot.compaction.hygiene_strategy(),
+                "diagnostics_surface": snapshot.compaction.diagnostics_surface(),
+            },
         },
+        "compaction_hygiene": build_compaction_hygiene_json(compaction_hygiene)
     })
 }
 

@@ -1059,12 +1059,16 @@ fn snapshot_context_engine_compaction_summary(
         &snapshot.context_engine,
         &["compaction", "trigger_estimated_tokens"],
     ));
+    let preserve_recent_estimated_tokens = render_optional_u64(json_u64_path(
+        &snapshot.context_engine,
+        &["compaction", "preserve_recent_estimated_tokens"],
+    ));
     let fail_open = render_optional_bool(json_bool_path(
         &snapshot.context_engine,
         &["compaction", "fail_open"],
     ));
     Some(format!(
-        "enabled:{enabled} min_messages:{min_messages} trigger_estimated_tokens:{trigger_estimated_tokens} fail_open:{fail_open}"
+        "enabled:{enabled} min_messages:{min_messages} trigger_estimated_tokens:{trigger_estimated_tokens} preserve_recent_estimated_tokens:{preserve_recent_estimated_tokens} fail_open:{fail_open}"
     ))
 }
 

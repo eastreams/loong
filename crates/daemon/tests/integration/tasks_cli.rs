@@ -711,6 +711,16 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
                     "after_turn": "completed",
                     "compaction": "failed"
                 },
+                "compaction_diagnostics": {
+                    "summary_turn_count": 4,
+                    "retained_turn_count": 3,
+                    "demoted_recent_turn_count": 1,
+                    "total_turns": 7,
+                    "assistant_turns": 3,
+                    "low_signal_turns": 1,
+                    "tool_result_line_prunes": 1,
+                    "tool_outcome_record_prunes": 0
+                },
                 "failure": {
                     "step": "compaction",
                     "error": "compact failure"
@@ -874,6 +884,14 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     assert!(
         rendered.contains("after_turn=completed compaction=failed"),
         "status render should surface turn-checkpoint progress detail: {rendered}"
+    );
+    assert!(
+        rendered.contains("compaction_diag=summary:4"),
+        "status render should surface compact diagnostics detail: {rendered}"
+    );
+    assert!(
+        rendered.contains("tool_results:1"),
+        "status render should surface compact diagnostics prune counts: {rendered}"
     );
 }
 

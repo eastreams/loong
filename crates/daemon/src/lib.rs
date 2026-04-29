@@ -78,6 +78,7 @@ pub use loong_bench::{
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
 pub use runtime_cli::{RuntimeCommands, run_runtime_cli};
+pub use runtime_snapshot_compaction_hygiene::RuntimeSnapshotCompactionHygieneState;
 pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
 pub use whatsapp_personal_cli::run_whatsapp_personal_command;
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
@@ -137,6 +138,7 @@ mod copilot_onboarding;
 pub mod debug_cli;
 mod delegate_child_cli;
 pub mod doctor_cli;
+mod doctor_compaction_hygiene;
 pub mod doctor_security_cli;
 mod env_compat;
 mod external_skills_policy_probe;
@@ -173,6 +175,10 @@ pub mod runtime_capability_cli;
 pub mod runtime_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+mod runtime_snapshot_compaction_assessment;
+mod runtime_snapshot_compaction_hygiene;
+mod runtime_snapshot_compaction_presentation;
+mod runtime_snapshot_compaction_sequence;
 mod runtime_snapshot_render;
 mod runtime_snapshot_types;
 pub mod runtime_trajectory_cli;
@@ -220,6 +226,7 @@ pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
+use runtime_snapshot_compaction_hygiene::collect_runtime_snapshot_compaction_hygiene_state;
 pub use runtime_snapshot_render::render_runtime_snapshot_text;
 pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_acp_json, runtime_snapshot_context_engine_json,
@@ -1683,11 +1690,13 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
 
 pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 2;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
     pub config: String,
     pub provider: RuntimeSnapshotProviderState,
     pub context_engine: mvp::conversation::ContextEngineRuntimeSnapshot,
+    pub compaction_hygiene: RuntimeSnapshotCompactionHygieneState,
     pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
     pub acp: mvp::acp::AcpRuntimeSnapshot,
     pub enabled_channel_ids: Vec<String>,
@@ -1968,6 +1977,8 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let config_display = resolved_path.display().to_string();
     let provider = collect_runtime_snapshot_provider_state(config);
     let context_engine = mvp::conversation::collect_context_engine_runtime_snapshot(config)?;
+    let compaction_hygiene =
+        collect_runtime_snapshot_compaction_hygiene_state(config, &context_engine);
     let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(config)?;
     let acp = mvp::acp::collect_acp_runtime_snapshot(config)?;
     let enabled_channel_ids = config.enabled_channel_ids();
@@ -2002,6 +2013,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         config: config_display,
         provider,
         context_engine,
+        compaction_hygiene,
         memory_system,
         acp,
         enabled_channel_ids,
