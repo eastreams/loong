@@ -139,12 +139,13 @@ cargo install --path crates/daemon
 ### First Successful Flow
 
 ```bash
-loong onboard                # Interactive setup — configure provider and model
+loong                        # Open the main TUI; if config is missing, first-run setup stays in that shell
 ```
 
 ```bash
 loong ask --message "Summarize this repo in one sentence."  # Single-turn query to verify config
-loong chat                   # Start a multi-turn conversation
+loong onboard                # Reopen the deeper guided setup flow when you want to tune provider or tooling
+loong chat                   # Explicit alias for the interactive conversation surface
 loong doctor --fix           # Check environment and auto-fix common issues
 loong update                 # Replace this install with the latest stable GitHub release
 ```
@@ -155,10 +156,10 @@ loong update                 # Replace this install with the latest stable GitHu
 
 Loong keeps `loong` as the only public binary, but the canonical command story is intentionally grouped:
 
-- product path at root: `onboard`, `ask`, `chat`, `doctor`, `status`, `update`
+- product path at root: `loong`, `ask`, `onboard`, `chat`, `doctor`, `status`, `update`
 - operator shells at root: `sessions`, `skills`, `channels`, `gateway`, `runtime`, `plugins`, `feishu`, `completions`
 
-Running `onboard` is enough for the golden path — it writes a working config to `~/.loong/config.toml` without asking you to hand-edit TOML. The snippets below show what that file looks like on `dev` today, when you want to add another provider or wire up a channel.
+Running `loong` is the main interactive product path. On a fresh install it opens the same TUI shell and keeps first-run setup inline; once config exists it drops straight into the coding-agent surface. Running `onboard` is the explicit deeper reconfiguration lane — it writes a working config to `~/.loong/config.toml` without asking you to hand-edit TOML. The snippets below show what that file looks like on `dev` today, when you want to add another provider or wire up a channel.
 
 #### Providers
 

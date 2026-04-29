@@ -1205,22 +1205,9 @@ pub(super) fn execute_external_skills_remove_tool_with_config(
 
     let install_root = resolve_install_root(config);
     let mut index = load_installed_skill_index(&install_root)?;
-    let Some(position) = index
-        .skills
-        .iter()
-        .position(|entry| entry.skill_id == skill_id)
-    else {
+    let removed = remove_installed_skill_from_index(&install_root, &mut index, skill_id)?;
+    if !removed {
         return Err(format!("external skill `{skill_id}` is not installed"));
-    };
-    let entry = index.skills.remove(position);
-    let install_path = PathBuf::from(entry.install_path);
-    if install_path.exists() {
-        fs::remove_dir_all(&install_path).map_err(|error| {
-            format!(
-                "failed to remove installed skill {}: {error}",
-                install_path.display()
-            )
-        })?;
     }
     persist_installed_skill_index(&install_root, &mut index)?;
 
@@ -2791,6 +2778,140 @@ fn unique_managed_install_transition_path(
     Ok(install_root.join(format!(".{phase}-{normalized_skill_id}-{nanos}")))
 }
 
+fn install_bundled_skill_for_bootstrap(
+    install_root: &Path,
+    index: &mut InstalledSkillIndex,
+    skill_id: &str,
+) -> Result<bool, String> {
+    let bundled = super::bundled_skills::bundled_external_skill(skill_id).ok_or_else(|| {
+        format!("startup bootstrap does not recognize bundled skill `{skill_id}`")
+    })?;
+    let bundled_markdown = super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
+    let bundled_dir =
+        super::bundled_skills::bundled_external_skill_dir(&bundled).map_err(|error| {
+            format!("failed to resolve bundled startup skill `{skill_id}`: {error}")
+        })?;
+    let normalized_skill_id = normalize_skill_id(bundled.skill_id)?;
+    let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
+    let summary = derive_skill_summary(bundled_markdown);
+    let digest = digest_embedded_dir(bundled_dir);
+    let destination_root = managed_skill_install_path(install_root, normalized_skill_id.as_str())?;
+    let existing_entry = index
+        .skills
+        .iter()
+        .find(|entry| entry.skill_id == normalized_skill_id)
+        .cloned();
+    let destination_ready = destination_root.join(DEFAULT_SKILL_FILENAME).is_file();
+    if existing_entry
+        .as_ref()
+        .is_some_and(|entry| entry.sha256 == digest && entry.active)
+        && destination_ready
+    {
+        return Ok(false);
+    }
+
+    let incoming_root = unique_managed_install_transition_path(
+        install_root,
+        normalized_skill_id.as_str(),
+        "incoming",
+    )?;
+    let mut incoming_cleanup = ScopedDirCleanup::new(Some(incoming_root.clone()));
+    fs::create_dir_all(&incoming_root).map_err(|error| {
+        format!(
+            "failed to create bundled startup skill staging directory {}: {error}",
+            incoming_root.display()
+        )
+    })?;
+    copy_embedded_dir_recursive(bundled_dir, &incoming_root)?;
+    incoming_cleanup.disarm();
+
+    let backup_root = if destination_root.exists() {
+        Some(unique_managed_install_transition_path(
+            install_root,
+            normalized_skill_id.as_str(),
+            "backup",
+        )?)
+    } else {
+        None
+    };
+    if let Some(backup_root) = backup_root.as_ref() {
+        fs::rename(&destination_root, backup_root).map_err(|error| {
+            format!(
+                "failed to stage previous startup skill install {} for replacement: {error}",
+                destination_root.display()
+            )
+        })?;
+    }
+
+    if let Err(error) = fs::rename(&incoming_root, &destination_root) {
+        if let Some(backup_root) = backup_root.as_ref() {
+            fs::rename(backup_root, &destination_root).ok();
+        }
+        return Err(format!(
+            "failed to activate bundled startup skill {}: {error}",
+            destination_root.display()
+        ));
+    }
+
+    let installed_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    index
+        .skills
+        .retain(|entry| entry.skill_id != normalized_skill_id);
+    index.skills.push(InstalledSkillEntry {
+        skill_id: normalized_skill_id,
+        display_name,
+        summary,
+        source_kind: "bundled".to_owned(),
+        source_path: bundled.source_path.to_owned(),
+        install_path: destination_root.display().to_string(),
+        skill_md_path: destination_root
+            .join(DEFAULT_SKILL_FILENAME)
+            .display()
+            .to_string(),
+        sha256: digest,
+        installed_at_unix,
+        active: true,
+    });
+    Ok(true)
+}
+
+fn remove_installed_skill_from_index(
+    install_root: &Path,
+    index: &mut InstalledSkillIndex,
+    skill_id: &str,
+) -> Result<bool, String> {
+    let normalized_skill_id = normalize_skill_id(skill_id)?;
+    let Some(position) = index
+        .skills
+        .iter()
+        .position(|entry| entry.skill_id == normalized_skill_id)
+    else {
+        return Ok(false);
+    };
+    let entry = index.skills.remove(position);
+    let install_path = PathBuf::from(entry.install_path);
+    let expected_path = managed_skill_install_path(install_root, normalized_skill_id.as_str())?;
+    if install_path.exists() {
+        fs::remove_dir_all(&install_path).map_err(|error| {
+            format!(
+                "failed to remove installed skill {}: {error}",
+                install_path.display()
+            )
+        })?;
+    } else if expected_path.exists() {
+        fs::remove_dir_all(&expected_path).map_err(|error| {
+            format!(
+                "failed to remove installed skill {}: {error}",
+                expected_path.display()
+            )
+        })?;
+    }
+    Ok(true)
+}
+
 fn split_stem_and_ext(filename: &str) -> (&str, &str) {
     if let Some((stem, ext)) = filename.rsplit_once('.')
         && !stem.is_empty()
@@ -4250,6 +4371,88 @@ fn render_tool_restrictions_suffix(allowed_tools: &[String], blocked_tools: &[St
         fragments.push(format!(" blocked_tools={}", blocked_tools.join(",")));
     }
     fragments.concat()
+}
+
+pub(crate) fn install_bundled_preinstall_targets_for_bootstrap(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    selected_target_ids: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    if selected_target_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _ = require_enabled_runtime_policy(config)?;
+    let install_root = resolve_install_root(config);
+    fs::create_dir_all(&install_root).map_err(|error| {
+        format!(
+            "failed to create external skills install root {}: {error}",
+            install_root.display()
+        )
+    })?;
+
+    let mut index = load_installed_skill_index(&install_root)?;
+    let mut installed = BTreeSet::new();
+    for target_id in selected_target_ids {
+        let target = super::bundled_skills::bundled_preinstall_targets()
+            .iter()
+            .find(|target| target.install_id == target_id.as_str())
+            .ok_or_else(|| {
+                format!("unknown bundled preinstall target `{target_id}` during startup bootstrap")
+            })?;
+        for skill_id in target.skill_ids {
+            if install_bundled_skill_for_bootstrap(&install_root, &mut index, skill_id)? {
+                installed.insert((*skill_id).to_owned());
+            }
+        }
+    }
+
+    persist_installed_skill_index(&install_root, &mut index)?;
+    Ok(installed.into_iter().collect())
+}
+
+pub(crate) fn remove_bundled_preinstall_targets_for_bootstrap(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    selected_target_ids: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    if selected_target_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _ = require_enabled_runtime_policy(config)?;
+    let install_root = resolve_install_root(config);
+    let mut index = load_installed_skill_index(&install_root)?;
+    let mut removed = BTreeSet::new();
+    for target_id in selected_target_ids {
+        let target = super::bundled_skills::bundled_preinstall_targets()
+            .iter()
+            .find(|target| target.install_id == target_id.as_str())
+            .ok_or_else(|| {
+                format!("unknown bundled preinstall target `{target_id}` during startup bootstrap")
+            })?;
+        for skill_id in target.skill_ids {
+            if remove_installed_skill_from_index(&install_root, &mut index, skill_id)? {
+                removed.insert(normalize_skill_id(skill_id)?);
+            }
+        }
+    }
+
+    persist_installed_skill_index(&install_root, &mut index)?;
+    Ok(removed.into_iter().collect())
+}
+
+pub(crate) fn installed_managed_skill_ids_for_bootstrap(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<BTreeSet<String>, String> {
+    let policy = resolve_effective_policy(config)?;
+    if !policy.enabled {
+        return Ok(BTreeSet::new());
+    }
+    let install_root = resolve_install_root(config);
+    let index = load_installed_skill_index(&install_root)?;
+    Ok(index
+        .skills
+        .into_iter()
+        .filter(|entry| entry.active)
+        .map(|entry| entry.skill_id)
+        .collect())
 }
 
 #[cfg(test)]

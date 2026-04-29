@@ -60,15 +60,15 @@ The current product contract is:
 1. Install Loong through the documented bootstrap installer, which prefers
    checksum-verified GitHub Release binaries and keeps an explicit `--source`
    fallback from a local checkout.
-2. Run `loong onboard`.
-3. Set provider credentials.
+2. Run `loong` and let the main TUI own the first-run path too; when config is missing, startup onboarding stays inside that shell.
+3. Reopen `loong onboard` only when the operator wants the deeper guided setup flow explicitly.
 4. Get first value through a concrete one-shot command such as
    `loong ask --message "Summarize this repository and suggest the best next step."`,
-   then use `loong chat` for follow-up interactive work.
+   while `loong chat` remains an explicit alias for the interactive conversation surface.
 5. If anything is broken, use `loong doctor` or `loong doctor --fix`.
 6. Enable gateway or channel surfaces only after the base CLI flow is healthy.
 
-This keeps the first-run journey legible while preserving the existing runtime architecture.
+This keeps the first-run journey legible while making the root command feel like the product instead of a command family index.
 
 For the current MVP, that also means first-run surfaces should feel assistant-first in their copy:
 show the runnable handoff first, then keep config, memory, and runtime facts in secondary detail blocks.

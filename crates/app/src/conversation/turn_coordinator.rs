@@ -277,7 +277,7 @@ use crate::session::repository::{
 #[cfg(feature = "memory-sqlite")]
 use loong_kernel::mailbox::{AgentPath, InterAgentMessage, MailboxContent};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ConversationTurnCoordinator;
 
 const PRODUCTION_CONVERSATION_RUNTIME_REQUIRES_KERNEL_BINDING: &str =

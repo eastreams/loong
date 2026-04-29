@@ -9,7 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     future::Future,
-    io::Write,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
     pin::Pin,
     process,
@@ -328,7 +328,7 @@ pub(crate) fn render_operator_shell_surface_from_body(
 
 fn render_welcome_long_about(command_name: &str) -> String {
     format!(
-        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name}\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nRunning `{command_name}` with no subcommand opens the main TUI when your config is already in the default location. If your config lives elsewhere, set LOONG_CONFIG_PATH first."
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name}\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nRunning `{command_name}` with no subcommand opens the main TUI. If config is missing, first-run setup stays inside that shell; if your config lives elsewhere, set LOONG_CONFIG_PATH first."
     )
 }
 
@@ -493,7 +493,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong\n- loong ask --config <path> --message \"...\"\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nRunning `loong` with no subcommand opens the main TUI when your config is already in the default location. If your config lives elsewhere, set LOONG_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong\n- loong ask --config <path> --message \"...\"\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nRunning `loong` with no subcommand opens the main TUI. If config is missing, first-run setup stays inside that shell; if your config lives elsewhere, set LOONG_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -1088,8 +1088,24 @@ fn default_chat_command() -> Commands {
     }
 }
 
+const fn should_resolve_default_entry_to_chat(
+    config_exists: bool,
+    config_path_is_directory: bool,
+    interactive_terminal: bool,
+) -> bool {
+    config_exists || (!config_path_is_directory && interactive_terminal)
+}
+
 pub fn resolve_default_entry_command() -> Commands {
-    if resolved_default_entry_config_path().is_file() {
+    let config_path = resolved_default_entry_config_path();
+    let config_exists = config_path.is_file();
+    let config_path_is_directory = config_path.is_dir();
+    let interactive_terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if should_resolve_default_entry_to_chat(
+        config_exists,
+        config_path_is_directory,
+        interactive_terminal,
+    ) {
         default_chat_command()
     } else {
         default_onboard_command()

@@ -201,6 +201,26 @@ pub(crate) fn resolve_installable_external_skill_id(root: &Path) -> Result<Strin
     external_skills::resolve_installable_skill_id(root)
 }
 
+pub(crate) fn install_bundled_preinstall_targets_for_bootstrap(
+    config: &runtime_config::ToolRuntimeConfig,
+    selected_target_ids: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    external_skills::install_bundled_preinstall_targets_for_bootstrap(config, selected_target_ids)
+}
+
+pub(crate) fn remove_bundled_preinstall_targets_for_bootstrap(
+    config: &runtime_config::ToolRuntimeConfig,
+    selected_target_ids: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    external_skills::remove_bundled_preinstall_targets_for_bootstrap(config, selected_target_ids)
+}
+
+pub(crate) fn installed_managed_skill_ids_for_bootstrap(
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<BTreeSet<String>, String> {
+    external_skills::installed_managed_skill_ids_for_bootstrap(config)
+}
+
 tokio::task_local! {
     static TRUSTED_INTERNAL_TOOL_PAYLOAD_TASK: bool;
 }

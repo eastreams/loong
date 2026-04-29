@@ -95,6 +95,7 @@ tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
+unicode-width = "0.2"
 jieba-rs = "0.9"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25"
@@ -112,6 +113,10 @@ libc = "0.2"
 tracing.workspace = true
 zip.workspace = true
 include_dir = "0.7"
+crossterm = "0.29.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+pulldown-cmark = "0.13.0"
+similar = "3.1.0"
 
 [dev-dependencies]
 axum.workspace = true

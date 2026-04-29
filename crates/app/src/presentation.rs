@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::env;
 
 use console::Term;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const WIDE_BANNER_MIN_WIDTH: usize = 80;
 const SPLIT_BANNER_MIN_WIDTH: usize = 46;
@@ -146,6 +147,10 @@ impl BuildVersionInfo {
         }
         parts.join(" · ")
     }
+
+    pub fn render_product_version_line(&self) -> String {
+        format!("v{}", self.version)
+    }
 }
 
 pub fn render_brand_banner_lines(width: usize) -> Vec<&'static str> {
@@ -190,16 +195,31 @@ pub fn render_compact_brand_header(
     build: &BuildVersionInfo,
     subtitle: Option<&str>,
 ) -> Vec<BrandLine> {
+    render_compact_brand_header_with_version(width, &build.render_version_line(), subtitle)
+}
+
+pub fn render_compact_product_brand_header(
+    width: usize,
+    build: &BuildVersionInfo,
+    subtitle: Option<&str>,
+) -> Vec<BrandLine> {
+    render_compact_brand_header_with_version(width, &build.render_product_version_line(), subtitle)
+}
+
+fn render_compact_brand_header_with_version(
+    width: usize,
+    version: &str,
+    subtitle: Option<&str>,
+) -> Vec<BrandLine> {
     let brand = "LOONG";
-    let version = build.render_version_line();
-    let width = width.max(brand.len());
+    let width = width.max(display_width(brand));
     let combined = format!("{brand}  {version}");
     let mut lines = if combined.len() <= width {
         vec![BrandLine::new(BrandLineRole::Banner, combined)]
     } else {
         let mut compact_lines = vec![BrandLine::new(BrandLineRole::Banner, brand)];
         compact_lines.extend(
-            render_wrapped_text_line("", &version, width)
+            render_wrapped_text_line("", version, width)
                 .into_iter()
                 .filter(|line| !line.is_empty())
                 .map(|line| BrandLine::new(BrandLineRole::Version, line)),
@@ -244,6 +264,14 @@ pub fn detect_render_width() -> usize {
     let columns = env::var("COLUMNS").ok();
 
     resolve_render_width(terminal_width, columns.as_deref())
+}
+
+pub fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+pub fn char_display_width(ch: char) -> usize {
+    UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
 fn probe_terminal_width() -> Option<usize> {
@@ -395,7 +423,7 @@ fn render_wrapped_labeled_display_line(
     width: usize,
 ) -> Vec<String> {
     let labeled_prefix = format!("{prefix}{label}: ");
-    if labeled_prefix.len() <= width {
+    if display_width(labeled_prefix.as_str()) <= width {
         return render_wrapped_text_line_with_continuation(
             &labeled_prefix,
             continuation_prefix,
@@ -427,8 +455,8 @@ pub fn render_wrapped_segments(
     width: usize,
 ) -> Vec<String> {
     let width = width
-        .max(prefix.trim_end().len())
-        .max(continuation_prefix.len());
+        .max(display_width(prefix.trim_end()))
+        .max(display_width(continuation_prefix));
     let mut lines = Vec::new();
     let mut current_line = prefix.to_owned();
     let mut line_has_content = false;
@@ -441,9 +469,10 @@ pub fn render_wrapped_segments(
         let mut remaining = segment;
         loop {
             let joiner = if line_has_content { separator } else { "" };
-            let available = width.saturating_sub(current_line.len() + joiner.len());
+            let available =
+                width.saturating_sub(display_width(current_line.as_str()) + display_width(joiner));
 
-            if remaining.len() <= available {
+            if display_width(remaining) <= available {
                 current_line.push_str(joiner);
                 current_line.push_str(remaining);
                 line_has_content = true;
@@ -487,12 +516,12 @@ fn take_fitting_prefix(text: &str, max_width: usize) -> usize {
     let mut end = 0;
 
     for (index, character) in text.char_indices() {
-        let char_width = character.len_utf8();
+        let char_width = char_display_width(character);
         if used + char_width > max_width {
             break;
         }
         used += char_width;
-        end = index + char_width;
+        end = index + character.len_utf8();
     }
 
     if end == 0 {

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum TuiHeaderStyle {
     Brand,
     Compact,
+    ProductCompact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +293,11 @@ fn render_header(
             subtitle,
         ),
         TuiHeaderStyle::Compact => crate::presentation::render_compact_brand_header(
+            width,
+            &crate::presentation::BuildVersionInfo::current(),
+            subtitle,
+        ),
+        TuiHeaderStyle::ProductCompact => crate::presentation::render_compact_product_brand_header(
             width,
             &crate::presentation::BuildVersionInfo::current(),
             subtitle,

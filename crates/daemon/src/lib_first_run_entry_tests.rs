@@ -83,6 +83,14 @@ fn resolve_default_entry_command_routes_to_chat_when_default_config_exists() {
 }
 
 #[test]
+fn should_resolve_default_entry_to_chat_prefers_chat_for_interactive_first_run() {
+    assert!(should_resolve_default_entry_to_chat(false, false, true));
+    assert!(should_resolve_default_entry_to_chat(true, false, false));
+    assert!(!should_resolve_default_entry_to_chat(false, true, true));
+    assert!(!should_resolve_default_entry_to_chat(false, false, false));
+}
+
+#[test]
 fn resolve_default_entry_command_ignores_loongclaw_config_path_without_compat_shim() {
     let (mut env, _home, _default_config_path) = isolated_home("loong-default-entry-legacy-env");
     let config_path = unique_temp_dir("loong-default-entry-env").join("custom-config.toml");

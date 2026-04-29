@@ -4,6 +4,7 @@ pub mod agent_runtime;
 pub mod channel;
 pub mod chat;
 pub mod config;
+pub mod constants;
 pub mod context;
 pub mod control_plane;
 pub mod conversation;

@@ -317,6 +317,7 @@ impl TurnExecutionService {
             let cli_runtime = match kernel_ctx {
                 Some(kernel_ctx) => initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
                     resolved_path,
+                    true,
                     config,
                     session_hint,
                     &cli_options,

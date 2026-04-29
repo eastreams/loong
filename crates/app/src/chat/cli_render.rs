@@ -149,7 +149,7 @@ pub(super) fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Optio
     };
 
     Some(TuiScreenSpec {
-        header_style: TuiHeaderStyle::Compact,
+        header_style: TuiHeaderStyle::ProductCompact,
         subtitle: Some(parsed.subtitle()),
         title,
         progress_line: None,
@@ -217,9 +217,7 @@ pub(super) fn render_cli_chat_card_lines(
             if line.is_empty() {
                 lines.push("│".to_owned());
             } else {
-                for wrapped_line in
-                    crate::presentation::render_wrapped_display_line(line.as_str(), inner_width)
-                {
+                for wrapped_line in render_cli_chat_card_body_line(line.as_str(), inner_width) {
                     lines.push(format!("│ {wrapped_line}"));
                 }
             }
@@ -228,6 +226,21 @@ pub(super) fn render_cli_chat_card_lines(
 
     lines.push("╰─".to_owned());
     lines
+}
+
+fn render_cli_chat_card_body_line(line: &str, inner_width: usize) -> Vec<String> {
+    if line.starts_with("    ") {
+        let trimmed = line.trim_start_matches(' ');
+        let indent = &line[..line.len().saturating_sub(trimmed.len())];
+        return crate::presentation::render_wrapped_text_line_with_continuation(
+            indent,
+            indent,
+            trimmed,
+            inner_width,
+        );
+    }
+
+    crate::presentation::render_wrapped_display_line(line, inner_width)
 }
 
 pub(super) fn parse_cli_chat_markdown_sections(text: &str) -> Vec<TuiSectionSpec> {
