@@ -516,7 +516,7 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
             returned_results: Some(1),
             summary: None,
             native_extension_authoring_summary: None,
-            shadowed_plugin_ids: Vec::new(),
+            shadowed_plugin_ids: vec!["shared-extension".to_owned()],
             results: Vec::new(),
         }),
     );
@@ -529,6 +529,10 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
     assert_eq!(
         encoded["runtime_plugin_inventory"]["returned_results"],
         serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["shadowed_plugin_ids"],
+        serde_json::json!(["shared-extension"])
     );
 
     fs::remove_dir_all(&root).ok();
@@ -548,7 +552,20 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         config_path_text,
         &snapshot.channels,
     );
-    let runtime_snapshot = gateway::read_models::build_runtime_snapshot_read_model(&snapshot);
+    let runtime_snapshot = gateway::read_models::build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(loong_daemon::plugins_cli::RuntimePluginInventoryReadModel {
+            available: true,
+            reason: None,
+            error: None,
+            roots_source: Some("auto_discovered".to_owned()),
+            returned_results: Some(1),
+            summary: None,
+            native_extension_authoring_summary: None,
+            shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            results: Vec::new(),
+        }),
+    );
     let owner_status = gateway::state::GatewayOwnerStatus {
         runtime_dir: "/tmp/loong-gateway-runtime".to_owned(),
         phase: "running".to_owned(),
@@ -667,6 +684,10 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     assert_eq!(
         encoded["control_surface"]["base_url"],
         "http://127.0.0.1:7777"
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["shadowed_plugin_ids"],
+        serde_json::json!(["shared-extension"])
     );
 
     fs::remove_dir_all(&root).ok();
