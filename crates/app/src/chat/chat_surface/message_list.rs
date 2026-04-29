@@ -1,6 +1,7 @@
 use super::utils::*;
 use crate::chat::chat_surface::diff_viewer::render_diff_to_lines;
 use crate::chat::chat_surface::markdown;
+use crate::chat::chat_surface::transcript_scroll_state::TranscriptScrollState;
 use crate::conversation::is_compacted_summary_content;
 use crate::tui_surface::TuiSectionSpec;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -211,13 +212,10 @@ pub struct Message {
 
 pub struct MessageList {
     pub messages: Vec<Message>,
-    pub scroll_offset: u16,
     page_step: u16,
     mouse_step: u16,
     last_render_height: u16,
-    last_scroll_start: usize,
-    follow_tail: bool,
-    snap_scroll_on_next_render: bool,
+    scroll_state: TranscriptScrollState,
     render_revision: u64,
     render_cache: Option<RenderCache>,
     viewport_cache: Option<ViewportRenderCache>,
@@ -245,13 +243,10 @@ impl MessageList {
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
-            scroll_offset: 0,
             page_step: 12,
             mouse_step: 3,
             last_render_height: 0,
-            last_scroll_start: 0,
-            follow_tail: true,
-            snap_scroll_on_next_render: true,
+            scroll_state: TranscriptScrollState::new(),
             render_revision: 0,
             render_cache: None,
             viewport_cache: None,
@@ -265,7 +260,7 @@ impl MessageList {
             role: "You".to_string(),
             contents: vec![MessageContent::Markdown(msg)],
         });
-        self.scroll_offset = 0;
+        self.scroll_state.prepare_for_appended_content();
         self.invalidate_render_cache();
     }
 
@@ -275,7 +270,7 @@ impl MessageList {
             role: "Assistant".to_string(),
             contents,
         });
-        self.scroll_offset = 0;
+        self.scroll_state.prepare_for_appended_content();
         self.invalidate_render_cache();
     }
 
@@ -284,16 +279,13 @@ impl MessageList {
             role: "System".to_string(),
             contents: vec![MessageContent::RenderedLines(lines)],
         });
-        self.scroll_offset = 0;
+        self.scroll_state.prepare_for_appended_content();
         self.invalidate_render_cache();
     }
 
     pub fn clear_transcript(&mut self) {
         self.messages.clear();
-        self.scroll_offset = 0;
-        self.last_scroll_start = 0;
-        self.follow_tail = true;
-        self.snap_scroll_on_next_render = true;
+        self.scroll_state.reset();
         self.last_startup_animation_signature = None;
         self.invalidate_render_cache();
     }
@@ -375,7 +367,7 @@ impl MessageList {
                 eye_animation,
             }],
         });
-        self.scroll_offset = 0;
+        self.scroll_state.prepare_for_appended_content();
         self.invalidate_render_cache();
     }
 
@@ -616,9 +608,7 @@ impl MessageList {
         self.render_revision = self.render_revision.saturating_add(1);
         self.render_cache = None;
         self.viewport_cache = None;
-        if self.follow_tail {
-            self.snap_scroll_on_next_render = true;
-        }
+        self.scroll_state.note_cache_invalidated();
     }
 
     pub fn trailing_colored_block(&mut self, width: u16) -> bool {
@@ -651,10 +641,7 @@ impl MessageList {
         let total_lines = rendered_line_count.saturating_add(top_padding);
         if total_lines == 0 {
             self.last_render_height = area.height;
-            self.last_scroll_start = 0;
-            self.scroll_offset = 0;
-            self.follow_tail = true;
-            self.snap_scroll_on_next_render = false;
+            self.scroll_state.reset_for_empty_render();
             f.render_widget(
                 Paragraph::new(Text::from(Vec::<Line<'static>>::new())),
                 area,
@@ -662,11 +649,11 @@ impl MessageList {
             return;
         }
         let max_scroll_start = total_lines.saturating_sub(area.height as usize);
-        let raw_scroll_val = max_scroll_start.saturating_sub(self.scroll_offset as usize);
-        let mut scroll_start = if self.follow_tail {
+        let raw_scroll_val = self.scroll_state.raw_scroll_start(max_scroll_start);
+        let mut scroll_start = if self.scroll_state.follow_tail() {
             raw_scroll_val
-        } else if !self.snap_scroll_on_next_render {
-            self.last_scroll_start.min(max_scroll_start)
+        } else if !self.scroll_state.snap_on_next_render() {
+            self.scroll_state.last_scroll_start().min(max_scroll_start)
         } else {
             let text_lines = self.get_rendered_lines(area.width);
             let centered_lines = if startup_mode {
@@ -677,11 +664,9 @@ impl MessageList {
             adjust_scroll_start_for_message_boundary(&centered_lines, raw_scroll_val)
         };
         scroll_start = scroll_start.min(max_scroll_start);
-        self.last_scroll_start = scroll_start;
         self.last_render_height = area.height;
-        self.follow_tail = scroll_start == max_scroll_start;
-        self.scroll_offset = max_scroll_start.saturating_sub(scroll_start) as u16;
-        self.snap_scroll_on_next_render = false;
+        self.scroll_state
+            .apply_rendered_scroll_start(max_scroll_start, scroll_start);
 
         let visible_lines = self.viewport_lines(area.width, area.height, scroll_start, top_padding);
         let paragraph = Paragraph::new(Text::from(visible_lines));
@@ -734,22 +719,17 @@ impl MessageList {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        self.snap_scroll_on_next_render = true;
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_offset = self.scroll_offset.saturating_add(1)
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1)
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_state.scroll_line_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_state.scroll_line_down(),
             KeyCode::PageUp | KeyCode::Char(' ') if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.scroll_offset = self.scroll_offset.saturating_add(self.page_step)
+                self.scroll_state.scroll_page_up(self.page_step)
             }
             KeyCode::PageDown | KeyCode::Char(' ') => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(self.page_step)
+                self.scroll_state.scroll_page_down(self.page_step)
             }
-            KeyCode::Home => self.scroll_offset = u16::MAX,
-            KeyCode::End => self.scroll_offset = 0,
+            KeyCode::Home => self.scroll_state.jump_home(),
+            KeyCode::End => self.scroll_state.jump_end(),
             KeyCode::Backspace
             | KeyCode::Enter
             | KeyCode::Left
@@ -773,17 +753,15 @@ impl MessageList {
             | KeyCode::Media(_)
             | KeyCode::Modifier(_) => {}
         }
-        self.follow_tail = self.scroll_offset == 0;
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
-        self.snap_scroll_on_next_render = true;
         match mouse.kind {
             crossterm::event::MouseEventKind::ScrollUp => {
-                self.scroll_offset = self.scroll_offset.saturating_add(self.mouse_step)
+                self.scroll_state.scroll_page_up(self.mouse_step)
             }
             crossterm::event::MouseEventKind::ScrollDown => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(self.mouse_step)
+                self.scroll_state.scroll_page_down(self.mouse_step)
             }
             crossterm::event::MouseEventKind::Down(_)
             | crossterm::event::MouseEventKind::Up(_)
@@ -792,11 +770,40 @@ impl MessageList {
             | crossterm::event::MouseEventKind::ScrollLeft
             | crossterm::event::MouseEventKind::ScrollRight => {}
         }
-        self.follow_tail = self.scroll_offset == 0;
     }
 
     pub fn is_following_tail(&self) -> bool {
-        self.follow_tail
+        self.scroll_state.follow_tail()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scroll_offset_for_test(&self) -> u16 {
+        self.scroll_state.scroll_offset()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_scroll_offset_for_test(&mut self, value: u16) {
+        self.scroll_state.set_scroll_offset_for_test(value);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_scroll_start_for_test(&self) -> usize {
+        self.scroll_state.last_scroll_start()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_scroll_start_for_test(&mut self, value: usize) {
+        self.scroll_state.set_last_scroll_start_for_test(value);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snap_scroll_on_next_render_for_test(&self) -> bool {
+        self.scroll_state.snap_on_next_render()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_snap_scroll_on_next_render_for_test(&mut self, value: bool) {
+        self.scroll_state.set_snap_on_next_render_for_test(value);
     }
 
     pub fn refresh_startup_animation(&mut self) -> bool {
@@ -6671,7 +6678,7 @@ cargo test -p loong-app --lib
     #[test]
     fn mouse_scroll_is_symmetric() {
         let mut list = MessageList::new();
-        list.scroll_offset = 10;
+        list.set_scroll_offset_for_test(10);
         list.mouse_step = 3;
 
         list.handle_mouse(MouseEvent {
@@ -6680,7 +6687,7 @@ cargo test -p loong-app --lib
             row: 0,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(list.scroll_offset, 7);
+        assert_eq!(list.scroll_offset_for_test(), 7);
 
         list.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -6688,29 +6695,29 @@ cargo test -p loong-app --lib
             row: 0,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(list.scroll_offset, 10);
+        assert_eq!(list.scroll_offset_for_test(), 10);
     }
 
     #[test]
     fn key_scroll_uses_same_direction_model() {
         let mut list = MessageList::new();
-        list.scroll_offset = 5;
+        list.set_scroll_offset_for_test(5);
         list.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(list.scroll_offset, 4);
+        assert_eq!(list.scroll_offset_for_test(), 4);
         list.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(list.scroll_offset, 5);
+        assert_eq!(list.scroll_offset_for_test(), 5);
     }
 
     #[test]
     fn space_scroll_matches_page_keys() {
         let mut list = MessageList::new();
-        list.scroll_offset = 20;
+        list.set_scroll_offset_for_test(20);
 
         list.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-        assert_eq!(list.scroll_offset, 8);
+        assert_eq!(list.scroll_offset_for_test(), 8);
 
         list.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SHIFT));
-        assert_eq!(list.scroll_offset, 20);
+        assert_eq!(list.scroll_offset_for_test(), 20);
     }
 
     #[test]
@@ -6736,13 +6743,13 @@ cargo test -p loong-app --lib
         for idx in 0..8 {
             list.add_assistant_message(format!("line-{idx}"));
         }
-        list.scroll_offset = 20;
+        list.set_scroll_offset_for_test(20);
 
         terminal.draw(|f| list.render(f, f.area())).expect("draw");
-        let before = list.scroll_offset;
+        let before = list.scroll_offset_for_test();
         list.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
 
-        assert_eq!(list.scroll_offset, before.saturating_sub(6));
+        assert_eq!(list.scroll_offset_for_test(), before.saturating_sub(6));
     }
 
     #[test]
@@ -6753,7 +6760,7 @@ cargo test -p loong-app --lib
         for idx in 0..8 {
             list.add_assistant_message(format!("line-{idx}"));
         }
-        list.scroll_offset = 10;
+        list.set_scroll_offset_for_test(10);
 
         terminal.draw(|f| list.render(f, f.area())).expect("draw");
         list.handle_mouse(MouseEvent {
@@ -6763,7 +6770,7 @@ cargo test -p loong-app --lib
             modifiers: KeyModifiers::NONE,
         });
 
-        assert_eq!(list.scroll_offset, 8);
+        assert_eq!(list.scroll_offset_for_test(), 8);
     }
 
     #[test]
@@ -6774,7 +6781,7 @@ cargo test -p loong-app --lib
         for idx in 0..20 {
             list.add_assistant_message(format!("line-{idx}"));
         }
-        list.scroll_offset = 10;
+        list.set_scroll_offset_for_test(10);
 
         terminal.draw(|f| list.render(f, f.area())).expect("draw");
         let before = terminal.backend().buffer().clone();
@@ -6802,7 +6809,7 @@ cargo test -p loong-app --lib
         for idx in 0..20 {
             list.add_assistant_message(format!("line-{idx}"));
         }
-        list.scroll_offset = 10;
+        list.set_scroll_offset_for_test(10);
 
         terminal.draw(|f| list.render(f, f.area())).expect("draw");
         let before = terminal.backend().buffer().clone();
@@ -6834,7 +6841,7 @@ cargo test -p loong-app --lib
             "[session_local_recall_compacted_window]\nThis compacted checkpoint is session-local recall only.\nCompacted 2 earlier turns\nUser context:\n- ask"
                 .to_owned(),
         );
-        list.scroll_offset = 6;
+        list.set_scroll_offset_for_test(6);
 
         terminal.draw(|f| list.render(f, f.area())).expect("draw");
         let before = terminal.backend().buffer().clone();
@@ -6878,7 +6885,7 @@ cargo test -p loong-app --lib
             .join("\n");
 
         assert!(flattened.contains("new-tail-line"));
-        assert_eq!(list.scroll_offset, 0);
+        assert_eq!(list.scroll_offset_for_test(), 0);
     }
 
     #[test]
@@ -6934,7 +6941,7 @@ cargo test -p loong-app --lib
             .join("\n");
 
         assert!(flattened.contains("line-7"));
-        assert_eq!(list.scroll_offset, 0);
+        assert_eq!(list.scroll_offset_for_test(), 0);
     }
 
     #[test]
@@ -6961,7 +6968,7 @@ cargo test -p loong-app --lib
             .join("\n");
 
         assert!(flattened.contains("line-19"));
-        assert_eq!(list.scroll_offset, 0);
+        assert_eq!(list.scroll_offset_for_test(), 0);
     }
 
     #[test]
@@ -7035,17 +7042,17 @@ cargo test -p loong-app --lib
         list.add_user_message("hello".to_owned());
         list.add_rendered_lines(vec!["system card".to_owned()]);
         let _ = list.get_rendered_lines(80);
-        list.scroll_offset = 6;
-        list.last_scroll_start = 2;
-        list.snap_scroll_on_next_render = false;
+        list.set_scroll_offset_for_test(6);
+        list.set_last_scroll_start_for_test(2);
+        list.set_snap_scroll_on_next_render_for_test(false);
 
         list.clear_transcript();
 
         assert!(list.messages.is_empty());
-        assert_eq!(list.scroll_offset, 0);
-        assert_eq!(list.last_scroll_start, 0);
-        assert!(list.follow_tail);
-        assert!(list.snap_scroll_on_next_render);
+        assert_eq!(list.scroll_offset_for_test(), 0);
+        assert_eq!(list.last_scroll_start_for_test(), 0);
+        assert!(list.is_following_tail());
+        assert!(list.snap_scroll_on_next_render_for_test());
         assert!(list.render_cache.is_none());
     }
 

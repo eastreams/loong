@@ -7422,7 +7422,7 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw after scroll");
         let after = buffer_lines(&terminal).join("\n");
 
-        assert!(app.message_list.scroll_offset > 0);
+        assert!(app.message_list.scroll_offset_for_test() > 0);
         assert_ne!(before, after);
         assert_eq!(app.focus, Focus::Composer);
     }
@@ -7487,7 +7487,7 @@ description: "actual description"
             app.message_list
                 .add_assistant_message(format!("line-{idx}"));
         }
-        app.message_list.scroll_offset = 4;
+        app.message_list.set_scroll_offset_for_test(4);
         app.command_palette.show_commands(":");
         app.focus = Focus::CommandPalette;
 
@@ -7496,7 +7496,7 @@ description: "actual description"
         let palette_col = app.last_palette_area.x.saturating_add(1);
         app.handle_mouse_event(mouse(MouseEventKind::ScrollDown, palette_col, palette_row));
 
-        assert_eq!(app.message_list.scroll_offset, 4);
+        assert_eq!(app.message_list.scroll_offset_for_test(), 4);
         match app
             .command_palette
             .handle_key(crossterm::event::KeyEvent::new(
@@ -8413,7 +8413,7 @@ description: "actual description"
         assert!(restored_lines.contains("new-tail-line after scroll"));
         assert!(restored_lines.contains("streamed preview line"));
         assert!(!restored_lines.contains("PgDn / End"));
-        assert_eq!(app.message_list.scroll_offset, 0);
+        assert_eq!(app.message_list.scroll_offset_for_test(), 0);
     }
 
     #[test]

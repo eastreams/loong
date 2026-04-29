@@ -6,6 +6,7 @@ pub mod i18n;
 pub mod markdown;
 pub mod message_list;
 pub mod scroll_state;
+pub mod transcript_scroll_state;
 pub mod utils;
 
 use crate::CliResult;
