@@ -2097,31 +2097,19 @@ fn provider_credentials_doctor_check(
     has_provider_credentials: bool,
 ) -> DoctorCheck {
     let provider_label = crate::provider_presentation::active_provider_detail_label(config);
-    let support_facts = config.provider.support_facts();
-    let auth_support = support_facts.auth;
-    if has_provider_credentials {
-        return DoctorCheck {
-            name: "provider credentials".to_owned(),
-            level: DoctorCheckLevel::Pass,
-            detail: format!("{provider_label}: provider credentials are available"),
-        };
-    }
+    let status = crate::provider_credentials_guidance::provider_credential_status(
+        &config.provider,
+        has_provider_credentials,
+    );
 
-    if !auth_support.requires_explicit_configuration {
-        return DoctorCheck {
-            name: "provider credentials".to_owned(),
-            level: DoctorCheckLevel::Pass,
-            detail: format!(
-                "{provider_label}: provider credentials are optional for this provider"
-            ),
-        };
-    }
-
-    let detail = auth_support.missing_configuration_message;
     DoctorCheck {
-        name: "provider credentials".to_owned(),
-        level: DoctorCheckLevel::Warn,
-        detail: format!("{provider_label}: {detail}"),
+        name: crate::provider_credentials_guidance::PROVIDER_CREDENTIALS_LABEL.to_owned(),
+        level: if status.is_ready() {
+            DoctorCheckLevel::Pass
+        } else {
+            DoctorCheckLevel::Warn
+        },
+        detail: format!("{provider_label}: {}", status.detail),
     }
 }
 
@@ -6245,6 +6233,24 @@ mod tests {
         assert_eq!(check.name, "provider credentials");
         assert_eq!(check.level, DoctorCheckLevel::Pass);
         assert!(check.detail.contains("optional for this provider"));
+    }
+
+    #[test]
+    fn provider_credentials_doctor_check_reports_x_api_key_env_credentials() {
+        let mut env = ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let mut config = mvp::config::LoongConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Anthropic;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credentials_doctor_check(&config, true);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(check.detail.contains("ANTHROPIC_API_KEY is available"));
     }
 
     #[test]

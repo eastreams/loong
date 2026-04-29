@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 
 use loong_app as mvp;
-use loong_contracts::SecretRef;
 use mvp::tui_surface::render_onboard_screen_spec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,62 +169,19 @@ pub(crate) fn is_explicitly_accepted_non_interactive_warning(
 pub fn provider_credential_check(config: &mvp::config::LoongConfig) -> OnboardCheck {
     let provider = &config.provider;
     let provider_prefix = provider_check_detail_prefix(config);
-    let support_facts = provider.support_facts();
-    let auth_support = support_facts.auth;
-    let inline_oauth = secret_ref_has_inline_literal(provider.oauth_access_token.as_ref());
-
-    if inline_oauth {
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{provider_prefix}: inline oauth access token configured"),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    let inline_api_key = secret_ref_has_inline_literal(provider.api_key.as_ref());
-
-    if inline_api_key {
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{provider_prefix}: inline api key configured"),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    if !auth_support.requires_explicit_configuration {
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!(
-                "{provider_prefix}: provider credentials are optional for this provider"
-            ),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    let has_local_credentials =
-        crate::provider_credential_policy::provider_has_locally_available_credentials(provider);
-    if has_local_credentials {
-        let detail = crate::provider_credential_policy::provider_credential_env_hint(provider)
-            .map(|env_name| format!("{env_name} is available"))
-            .unwrap_or_else(|| "provider credentials are available".to_owned());
-
-        return OnboardCheck {
-            name: "provider credentials",
-            level: OnboardCheckLevel::Pass,
-            detail: format!("{provider_prefix}: {detail}"),
-            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
-        };
-    }
-
-    let detail = auth_support.missing_configuration_message;
+    let status = crate::provider_credentials_guidance::provider_credential_status(
+        provider,
+        crate::provider_credential_policy::provider_has_locally_available_credentials(provider),
+    );
 
     OnboardCheck {
-        name: "provider credentials",
-        level: OnboardCheckLevel::Warn,
-        detail: format!("{provider_prefix}: {detail}"),
+        name: crate::provider_credentials_guidance::PROVIDER_CREDENTIALS_LABEL,
+        level: if status.is_ready() {
+            OnboardCheckLevel::Pass
+        } else {
+            OnboardCheckLevel::Warn
+        },
+        detail: format!("{provider_prefix}: {}", status.detail),
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
 }
@@ -497,12 +453,4 @@ fn provider_route_probe_preflight_check(
         detail: probe.detail.clone(),
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
-}
-
-fn secret_ref_has_inline_literal(secret_ref: Option<&SecretRef>) -> bool {
-    let Some(secret_ref) = secret_ref else {
-        return false;
-    };
-
-    secret_ref.inline_literal_value().is_some()
 }

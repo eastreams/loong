@@ -168,6 +168,7 @@ pub mod personalize_cli;
 mod plugin_bridge_account_summary;
 pub mod plugins_cli;
 mod provider_credential_policy;
+mod provider_credentials_guidance;
 mod provider_model_probe_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
