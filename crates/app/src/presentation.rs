@@ -391,6 +391,21 @@ pub fn render_wrapped_plain_display_line(line: &str, width: usize) -> Vec<String
     render_wrapped_text_line_with_continuation(indent, indent, trimmed, width)
 }
 
+pub fn render_wrapped_literal_display_line(line: &str, width: usize) -> Vec<String> {
+    if line.trim().is_empty() {
+        return vec![String::new()];
+    }
+
+    let indent_width = line
+        .chars()
+        .take_while(|character| character.is_ascii_whitespace())
+        .count();
+    let indent = &line[..indent_width];
+    let trimmed = &line[indent_width..];
+
+    render_wrapped_text_line_with_continuation(indent, indent, trimmed, width)
+}
+
 fn parse_display_list_item<'a>(
     indent: &str,
     trimmed: &'a str,
@@ -768,17 +783,14 @@ mod tests {
 
     #[test]
     fn presentation_wraps_text_lines_for_narrow_width() {
-        let lines = render_wrapped_text_line(
-            "source: ",
-            "Codex config at ~/.codex/agents/loong/config.toml",
-            48,
-        );
+        let lines =
+            render_wrapped_text_line("source: ", "imported config at ~/.loong/config.toml", 38);
 
         assert_eq!(
             lines,
             vec![
-                "source: Codex config at".to_owned(),
-                "  ~/.codex/agents/loong/config.toml".to_owned(),
+                "source: imported config at".to_owned(),
+                "  ~/.loong/config.toml".to_owned(),
             ]
         );
     }
@@ -807,16 +819,14 @@ mod tests {
 
     #[test]
     fn presentation_wraps_display_line_with_label_prefix() {
-        let lines = render_wrapped_display_line(
-            "    source: Codex config at ~/.codex/agents/loong/config.toml",
-            48,
-        );
+        let lines =
+            render_wrapped_display_line("    source: imported config at ~/.loong/config.toml", 38);
 
         assert_eq!(
             lines,
             vec![
-                "    source: Codex config at".to_owned(),
-                "      ~/.codex/agents/loong/config.toml".to_owned(),
+                "    source: imported config at".to_owned(),
+                "      ~/.loong/config.toml".to_owned(),
             ]
         );
     }
@@ -824,17 +834,24 @@ mod tests {
     #[test]
     fn presentation_plain_display_line_does_not_promote_label_value_layout() {
         let lines = render_wrapped_plain_display_line(
-            "    source: Codex config at ~/.codex/agents/loong/config.toml",
-            48,
+            "    source: imported config at ~/.loong/config.toml",
+            38,
         );
 
         assert_eq!(
             lines,
             vec![
-                "    source: Codex config at".to_owned(),
-                "    ~/.codex/agents/loong/config.toml".to_owned(),
+                "    source: imported config at".to_owned(),
+                "    ~/.loong/config.toml".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn presentation_literal_display_line_preserves_plus_prefix() {
+        let lines = render_wrapped_literal_display_line("+ added ~/.loong/config.toml", 48);
+
+        assert_eq!(lines, vec!["+ added ~/.loong/config.toml".to_owned()]);
     }
 
     #[test]
