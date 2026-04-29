@@ -17,14 +17,12 @@ use crate::acp::{
 
 mod cli_input;
 mod cli_render;
-mod control_plane;
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_session_selector_tests;
 mod live_runtime;
 mod operator_surfaces;
 mod render_support;
-mod session_surface;
 
 use self::cli_input::ConcurrentCliInputReader;
 use self::cli_render::*;
@@ -435,10 +433,9 @@ pub async fn run_cli_ask(
 
 pub fn run_concurrent_cli_host(options: &ConcurrentCliHostOptions) -> CliResult<()> {
     reject_disabled_cli_channel(&options.config)?;
-    if session_surface::interactive_terminal_surface_supported() {
-        return session_surface::run_concurrent_cli_host_surface(options);
-    }
-
+    // The fullscreen operator-cockpit surface is deprecated for production
+    // chat entrypoints and concurrent hosts alike. Keep the shared shell-first
+    // runtime path as the only live production host until a replacement lands.
     run_concurrent_cli_host_repl(options)
 }
 
