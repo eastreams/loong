@@ -320,6 +320,9 @@ pub struct PluginInitCommand {
     /// Source language for language-specific bridges such as process_stdio or native_ffi
     #[arg(long)]
     pub source_language: Option<String>,
+    /// Additional declared capability names beyond the scaffold defaults
+    #[arg(long = "capability")]
+    pub capabilities: Vec<String>,
     /// Initial package version written to the manifest
     #[arg(long, default_value = "0.1.0")]
     pub version: String,
@@ -1349,6 +1352,8 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let version = normalize_required_cli_value("--version", &command.version)?;
     let summary = normalize_optional_cli_value(command.summary.as_deref());
     let bridge_kind = command.bridge_kind.as_bridge_kind();
+    let declared_capabilities =
+        resolve_scaffold_declared_capabilities(command.capabilities.as_slice())?;
 
     validate_plugin_scaffold_version(&version)?;
 
@@ -1365,6 +1370,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         &version,
         summary,
         &scaffold_defaults,
+        declared_capabilities,
     );
     let doctor_command = render_authoring_doctor_command(package_root.as_str());
     let inventory_command = render_authoring_inventory_command(package_root.as_str());
@@ -1521,6 +1527,25 @@ fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
     })
 }
 
+fn resolve_scaffold_declared_capabilities(raw: &[String]) -> CliResult<BTreeSet<Capability>> {
+    let mut declared_capabilities = BTreeSet::from([Capability::InvokeConnector]);
+
+    for capability_name in raw {
+        let trimmed = capability_name.trim();
+        if trimmed.is_empty() {
+            return Err("plugins init requires each --capability value to be non-empty".to_owned());
+        }
+        let Some(capability) = Capability::parse(trimmed) else {
+            return Err(format!(
+                "plugins init received unsupported --capability `{trimmed}`"
+            ));
+        };
+        declared_capabilities.insert(capability);
+    }
+
+    Ok(declared_capabilities)
+}
+
 fn validate_plugin_scaffold_version(version: &str) -> CliResult<()> {
     Version::parse(version)
         .map(|_| ())
@@ -1574,10 +1599,8 @@ fn build_plugin_scaffold_manifest(
     version: &str,
     summary: Option<String>,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+    capabilities: BTreeSet<Capability>,
 ) -> PluginManifest {
-    let mut capabilities = BTreeSet::new();
-    capabilities.insert(Capability::InvokeConnector);
-
     let mut metadata = BTreeMap::new();
     metadata.insert(
         "bridge_kind".to_owned(),
@@ -5113,6 +5136,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                capabilities: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: Some("Tavily-backed search package".to_owned()),
             }),
@@ -5233,6 +5257,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: None,
+                capabilities: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: None,
             }),
@@ -5258,6 +5283,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                capabilities: Vec::new(),
                 version: "not-semver".to_owned(),
                 summary: None,
             }),
@@ -5283,6 +5309,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
             }),
@@ -5428,6 +5455,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_plugins_init_persists_additive_declared_capabilities() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-capabilities");
+        let package_root = format!("{temp_root}/weather-python");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-python".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("py".to_owned()),
+                capabilities: vec!["observe_telemetry".to_owned()],
+                version: "0.2.0".to_owned(),
+                summary: Some("Python weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("process stdio scaffold with additive capabilities should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        let inventory_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Inventory(PluginInventoryCommand {
+                source: PluginScanSourceArgs {
+                    roots: vec![execution.package_root.clone()],
+                    query: String::new(),
+                    limit: None,
+                    bridge_support: None,
+                    bridge_profile: None,
+                    bridge_support_delta: None,
+                    bridge_support_sha256: None,
+                    bridge_support_delta_sha256: None,
+                },
+                include_ready: true,
+                include_blocked: true,
+                include_deferred: true,
+                include_examples: false,
+            }),
+        })
+        .await
+        .expect("inventory should read scaffolded plugin capabilities");
+
+        let PluginsCommandExecution::Inventory(inventory_execution) = inventory_execution else {
+            panic!("expected inventory execution");
+        };
+
+        assert_eq!(
+            inventory_execution.results[0].capabilities,
+            vec![
+                "invoke_connector".to_owned(),
+                "observe_telemetry".to_owned()
+            ]
+        );
+        assert_eq!(
+            inventory_execution
+                .summary
+                .capability_distribution
+                .get("invoke_connector"),
+            Some(&1)
+        );
+        assert_eq!(
+            inventory_execution
+                .summary
+                .capability_distribution
+                .get("observe_telemetry"),
+            Some(&1)
+        );
+    }
+
+    #[tokio::test]
     async fn execute_plugins_init_go_process_stdio_scaffold_writes_runnable_entrypoint() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-go");
         let package_root = format!("{temp_root}/weather-go");
@@ -5441,6 +5543,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("go".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Go weather bridge".to_owned()),
             }),
@@ -5489,6 +5592,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("JavaScript weather bridge".to_owned()),
             }),
@@ -5547,6 +5651,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("ts".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("TypeScript weather bridge".to_owned()),
             }),
@@ -5618,6 +5723,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("rs".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Rust weather bridge".to_owned()),
             }),
@@ -5688,6 +5794,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
             }),
@@ -5738,6 +5845,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("JavaScript weather bridge".to_owned()),
             }),
@@ -5785,6 +5893,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("ts".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("TypeScript weather bridge".to_owned()),
             }),
@@ -5832,6 +5941,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("go".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Go weather bridge".to_owned()),
             }),
@@ -5879,6 +5989,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("rs".to_owned()),
+                capabilities: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Rust weather bridge".to_owned()),
             }),
@@ -5933,6 +6044,7 @@ mod tests {
                     connector_name: Some(spec.plugin_id.to_owned()),
                     bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                     source_language: Some(spec.source_language_arg.to_owned()),
+                    capabilities: Vec::new(),
                     version: "0.1.0".to_owned(),
                     summary: Some(spec.expected_summary.to_owned()),
                 }),
@@ -6801,6 +6913,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                capabilities: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: None,
             }),

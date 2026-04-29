@@ -325,6 +325,8 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
         "process_stdio",
         "--source-language",
         "python",
+        "--capability",
+        "observe_telemetry",
         "--summary",
         "Tavily-backed search package",
         "--json",
@@ -345,6 +347,7 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                         loong_daemon::plugins_cli::PluginInitBridgeKindArg::ProcessStdio
                     );
                     assert_eq!(command.source_language.as_deref(), Some("python"));
+                    assert_eq!(command.capabilities, vec!["observe_telemetry".to_owned()]);
                     assert_eq!(
                         command.summary.as_deref(),
                         Some("Tavily-backed search package")
