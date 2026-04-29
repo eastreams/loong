@@ -2252,6 +2252,67 @@ fn responses_turn_body_keeps_tool_schema_with_responses_input_shape() {
     );
 }
 
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        wire_api: crate::config::ProviderWireApi::Responses,
+        ..ProviderConfig::default()
+    });
+
+    let body = build_turn_request_body(
+        &config,
+        &[json!({
+            "role": "user",
+            "content": "search the latest release notes"
+        })],
+        "gpt-5.1-mini",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+
+    let tools = body["tools"].as_array().expect("responses tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search")),
+        "openai responses turn payload should expose native web_search alongside function tools: {tools:#?}"
+    );
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
+    let mut config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        wire_api: crate::config::ProviderWireApi::Responses,
+        ..ProviderConfig::default()
+    });
+    config.tools.web_search.enabled = false;
+
+    let body = build_turn_request_body(
+        &config,
+        &[json!({
+            "role": "user",
+            "content": "search the latest release notes"
+        })],
+        "gpt-5.1-mini",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+
+    let tools = body["tools"].as_array().expect("responses tools array");
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.get("type").and_then(Value::as_str) != Some("web_search")),
+        "native web_search should stay absent when query search is disabled: {tools:#?}"
+    );
+}
+
 #[test]
 fn responses_turn_body_preserves_native_function_call_roundtrip_items() {
     let config = test_config(ProviderConfig {

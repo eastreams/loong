@@ -1045,12 +1045,21 @@ fn build_responses_request_body(
     }
 
     if include_tool_schema && !tool_definitions.is_empty() {
-        body.insert("tools".to_owned(), Value::Array(tool_definitions.to_vec()));
+        let mut tools = tool_definitions.to_vec();
+        if responses_native_web_search_enabled(config) {
+            tools.push(json!({ "type": "web_search" }));
+        }
+        body.insert("tools".to_owned(), Value::Array(tools));
         body.insert("tool_choice".to_owned(), json!("auto"));
         body.insert("parallel_tool_calls".to_owned(), Value::Bool(true));
     }
 
     Value::Object(body)
+}
+
+fn responses_native_web_search_enabled(config: &LoongConfig) -> bool {
+    config.tools.web_search.enabled
+        && matches!(config.provider.kind, crate::config::ProviderKind::Openai)
 }
 
 fn build_responses_input_items(messages: &[Value]) -> (Option<String>, Vec<Value>) {
