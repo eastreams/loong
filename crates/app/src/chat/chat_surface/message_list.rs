@@ -4779,7 +4779,8 @@ fn render_named_activity_line(line: &str, content_width: usize) -> Option<Vec<Li
     let body_width = content_width
         .saturating_sub(crate::presentation::display_width(headline_label) + 3)
         .max(1);
-    let wrapped = crate::presentation::render_wrapped_display_line(&display_body, body_width);
+    let wrapped =
+        crate::presentation::render_wrapped_literal_display_line(&display_body, body_width);
 
     Some(
         wrapped
@@ -4850,7 +4851,8 @@ fn render_status_activity_line(line: &str, content_width: usize) -> Option<Vec<L
     let body_width = content_width
         .saturating_sub(crate::presentation::display_width(headline_label) + 3)
         .max(1);
-    let wrapped = crate::presentation::render_wrapped_display_line(&display_body, body_width);
+    let wrapped =
+        crate::presentation::render_wrapped_literal_display_line(&display_body, body_width);
 
     Some(
         wrapped
@@ -4941,7 +4943,8 @@ fn render_error_block_lines(
         )]));
 
         if !summary.is_empty() {
-            for wrapped in crate::presentation::render_wrapped_display_line(summary, width as usize)
+            for wrapped in
+                crate::presentation::render_wrapped_plain_display_line(summary, width as usize)
             {
                 rendered.push(Line::from(vec![Span::styled(
                     wrapped,
@@ -4956,7 +4959,7 @@ fn render_error_block_lines(
         let displayed_detail_count = detail_segments.len().min(PROVIDER_ERROR_MAX_DETAIL_ITEMS);
         for detail in detail_segments.iter().take(PROVIDER_ERROR_MAX_DETAIL_ITEMS) {
             let wrapped_lines =
-                crate::presentation::render_wrapped_display_line(detail, detail_width);
+                crate::presentation::render_wrapped_literal_display_line(detail, detail_width);
             let wrapped_count = wrapped_lines.len();
             for (line_index, wrapped) in wrapped_lines
                 .into_iter()
@@ -5279,6 +5282,36 @@ mod tests {
     }
 
     #[test]
+    fn tool_activity_preserves_literal_plus_prefix_in_called_lines() {
+        let mut list = MessageList::new();
+        list.add_assistant_message(
+            "### Tool activity\n> Called + added ~/.loong/config.toml".to_owned(),
+        );
+
+        let rendered = list
+            .get_rendered_lines(40)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("• Called + added"))
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("• Called - added"))
+        );
+    }
+
+    #[test]
     fn tool_activity_wraps_arrow_child_lines_cleanly() {
         let mut list = MessageList::new();
         list.add_assistant_message(
@@ -5334,6 +5367,36 @@ mod tests {
                 .any(|line| line.contains("• Closed read_file · ok"))
         );
         assert!(!rendered.iter().any(|line| line.contains("(id=call-1)")));
+    }
+
+    #[test]
+    fn bracket_status_lines_preserve_literal_plus_prefix() {
+        let mut list = MessageList::new();
+        list.add_assistant_message(
+            "### Tool activity\n> [completed] + added ~/.loong/config.toml".to_owned(),
+        );
+
+        let rendered = list
+            .get_rendered_lines(42)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("• Closed + added"))
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains("• Closed - added"))
+        );
     }
 
     #[test]
@@ -6219,6 +6282,62 @@ mod tests {
         assert!(rendered.iter().any(|line| {
             line.contains("[provider error]") && line.contains("gpt-5.4") && line.contains("1/3")
         }));
+    }
+
+    #[test]
+    fn provider_error_summary_preserves_plain_label_like_text() {
+        let rendered = super::render_error_block_lines(
+            "provider error",
+            "source: imported config at ~/.loong/config.toml",
+            &[],
+            24,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line == "[provider error]"));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line == "source: imported config")
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line == "at ~/.loong/config.toml")
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line == "  at ~/.loong/config.toml")
+        );
+    }
+
+    #[test]
+    fn provider_error_detail_preserves_literal_plus_prefix() {
+        let rendered = super::render_error_block_lines(
+            "provider error",
+            "",
+            &["+ added ~/.loong/config.toml".to_owned()],
+            28,
+        )
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("↳ + added")));
+        assert!(!rendered.iter().any(|line| line.contains("↳ - added")));
     }
 
     #[test]
