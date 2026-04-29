@@ -5112,6 +5112,7 @@ mod tests {
         })
         .expect("create checkpoint artifact");
 
+        let rewrite_started_at = unix_ts_now();
         store::replace_session_turns_direct(
             "root-session",
             &[
@@ -5129,6 +5130,7 @@ mod tests {
             &config,
         )
         .expect("replace session turns");
+        let rewrite_finished_at = unix_ts_now();
 
         // (1) The stale head must be dropped -- it pointed at a node that no
         //     longer exists, so leaving it in the table is the corruption.
@@ -5160,6 +5162,23 @@ mod tests {
             Some("session-turn:root-session:5"),
         );
         assert_eq!(payload["content_snapshot"].as_str(), Some("turn-5"));
+        assert!(
+            drop_events[0].ts >= rewrite_started_at && drop_events[0].ts <= rewrite_finished_at,
+            "drop event ts should reflect rewrite time, got {} outside [{rewrite_started_at}, {rewrite_finished_at}]",
+            drop_events[0].ts
+        );
+        let conn = repo.open_connection().expect("open conn");
+        let drop_event_search_text = conn
+            .query_row(
+                "SELECT search_text FROM session_events WHERE id = ?1",
+                params![drop_events[0].id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("load drop event search_text");
+        assert!(
+            !drop_event_search_text.is_empty(),
+            "drop event search_text should be indexed"
+        );
 
         // (3) The artifact row survives — its own payload_json /
         //     summary_text is not node-referential, so we keep it.
@@ -5222,6 +5241,7 @@ mod tests {
         })
         .expect("create artifact");
 
+        let rewrite_started_at = unix_ts_now();
         store::replace_session_turns_direct(
             "root-session",
             &[
@@ -5239,6 +5259,7 @@ mod tests {
             &config,
         )
         .expect("replace session turns");
+        let rewrite_finished_at = unix_ts_now();
 
         let artifacts = repo
             .list_session_artifacts("root-session")
@@ -5282,6 +5303,23 @@ mod tests {
         assert_eq!(
             payload["original_source_end_node_id"].as_str(),
             Some("session-turn:root-session:5")
+        );
+        assert!(
+            null_events[0].ts >= rewrite_started_at && null_events[0].ts <= rewrite_finished_at,
+            "null-ref event ts should reflect rewrite time, got {} outside [{rewrite_started_at}, {rewrite_finished_at}]",
+            null_events[0].ts
+        );
+        let conn = repo.open_connection().expect("open conn");
+        let null_event_search_text = conn
+            .query_row(
+                "SELECT search_text FROM session_events WHERE id = ?1",
+                params![null_events[0].id],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("load null event search_text");
+        assert!(
+            !null_event_search_text.is_empty(),
+            "null-ref event search_text should be indexed"
         );
     }
 
