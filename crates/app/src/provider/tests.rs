@@ -2260,6 +2260,9 @@ fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
         wire_api: crate::config::ProviderWireApi::Responses,
         ..ProviderConfig::default()
     });
+    let runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
 
     let body = build_turn_request_body(
         &config,
@@ -2270,12 +2273,9 @@ fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &super::native_tool_surface::provider_request_tool_definitions(
-            &config,
-            &crate::tools::runtime_tool_view(),
-            &crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None),
-        )
-        .expect("provider request tool definitions"),
+        &provider_tool_surface
+            .request_tool_definitions(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+            .expect("provider request tool definitions"),
     );
 
     let tools = body["tools"].as_array().expect("responses tools array");
@@ -2317,6 +2317,9 @@ fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
         ..ProviderConfig::default()
     });
     config.tools.web_search.enabled = false;
+    let runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
 
     let body = build_turn_request_body(
         &config,
@@ -2327,12 +2330,9 @@ fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
         "gpt-5.1-mini",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &super::native_tool_surface::provider_request_tool_definitions(
-            &config,
-            &crate::tools::runtime_tool_view(),
-            &crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None),
-        )
-        .expect("provider request tool definitions"),
+        &provider_tool_surface
+            .request_tool_definitions(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+            .expect("provider request tool definitions"),
     );
 
     let tools = body["tools"].as_array().expect("responses tools array");
@@ -2352,6 +2352,9 @@ fn responses_non_openai_turn_body_keeps_function_web_query_mode() {
         wire_api: crate::config::ProviderWireApi::Responses,
         ..ProviderConfig::default()
     });
+    let runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
 
     let body = build_turn_request_body(
         &config,
@@ -2362,12 +2365,9 @@ fn responses_non_openai_turn_body_keeps_function_web_query_mode() {
         "deepseek-chat",
         CompletionPayloadMode::default_for(&config.provider),
         true,
-        &super::native_tool_surface::provider_request_tool_definitions(
-            &config,
-            &crate::tools::runtime_tool_view(),
-            &crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None),
-        )
-        .expect("provider request tool definitions"),
+        &provider_tool_surface
+            .request_tool_definitions(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+            .expect("provider request tool definitions"),
     );
 
     let tools = body["tools"].as_array().expect("responses tools array");
@@ -2404,13 +2404,11 @@ fn provider_request_tool_definitions_include_native_web_search_for_openai_respon
     });
     let runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, None);
+    let provider_tool_surface = super::native_tool_surface::provider_tool_surface(&config);
 
-    let tools = super::native_tool_surface::provider_request_tool_definitions(
-        &config,
-        &crate::tools::runtime_tool_view(),
-        &runtime_config,
-    )
-    .expect("provider request tool definitions");
+    let tools = provider_tool_surface
+        .request_tool_definitions(&config, &crate::tools::runtime_tool_view(), &runtime_config)
+        .expect("provider request tool definitions");
 
     assert!(
         tools
@@ -2418,6 +2416,14 @@ fn provider_request_tool_definitions_include_native_web_search_for_openai_respon
             .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search")),
         "provider request tool definitions should include native web_search for openai responses: {tools:#?}"
     );
+    assert!(
+        provider_tool_surface
+            .prompt_section()
+            .is_some_and(|section| section.contains("native `web_search`"))
+    );
+    let capability_snapshot = provider_tool_surface
+        .capability_snapshot(&crate::tools::runtime_tool_view(), &runtime_config);
+    assert!(capability_snapshot.contains("- web: fetch a URL or send an HTTP request."));
 }
 
 #[test]

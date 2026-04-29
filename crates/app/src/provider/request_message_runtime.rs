@@ -263,13 +263,10 @@ fn build_prompt_fragments_from_prompt_sources(
 ) -> Vec<PromptFragment> {
     let system_prompt = config.cli.resolved_system_prompt();
     let system_text = system_prompt.trim().to_owned();
-    let capability_snapshot = super::native_tool_surface::provider_capability_snapshot(
-        config,
-        tool_view,
-        tool_runtime_config,
-    );
-    let native_web_search_section =
-        super::native_tool_surface::native_web_search_prompt_section(config);
+    let provider_tool_surface = super::native_tool_surface::provider_tool_surface(config);
+    let capability_snapshot =
+        provider_tool_surface.capability_snapshot(tool_view, tool_runtime_config);
+    let native_web_search_section = provider_tool_surface.prompt_section();
     let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let execution_discipline_section = render_execution_discipline_section();
     let workspace_guidance_section = workspace_guidance_model

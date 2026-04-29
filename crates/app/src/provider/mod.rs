@@ -255,11 +255,9 @@ pub async fn request_turn_in_view_with_retry_progress(
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let tool_definitions = native_tool_surface::provider_request_tool_definitions(
-        config,
-        tool_view,
-        &tool_runtime_config,
-    )?;
+    let provider_tool_surface = native_tool_surface::provider_tool_surface(config);
+    let tool_definitions =
+        provider_tool_surface.request_tool_definitions(config, tool_view, &tool_runtime_config)?;
     request_across_model_candidates(
         &config.provider,
         binding,
@@ -340,11 +338,9 @@ pub async fn request_turn_streaming_in_view_with_retry_progress(
     let session = prepare_provider_request_session(config).await?;
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let tool_definitions = native_tool_surface::provider_request_tool_definitions(
-        config,
-        tool_view,
-        &tool_runtime_config,
-    )?;
+    let provider_tool_surface = native_tool_surface::provider_tool_surface(config);
+    let tool_definitions =
+        provider_tool_surface.request_tool_definitions(config, tool_view, &tool_runtime_config)?;
     request_across_model_candidates(
         &config.provider,
         binding,
