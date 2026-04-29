@@ -2280,6 +2280,27 @@ fn responses_openai_turn_body_includes_native_web_search_tool_when_enabled() {
             .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search")),
         "openai responses turn payload should expose native web_search alongside function tools: {tools:#?}"
     );
+    let web = tools
+        .iter()
+        .find(|tool| {
+            tool.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some("web")
+        })
+        .expect("web function tool");
+    let web_properties = web["function"]["parameters"]["properties"]
+        .as_object()
+        .expect("web properties");
+    assert!(web_properties.contains_key("url"));
+    assert!(!web_properties.contains_key("query"));
+    assert!(!web_properties.contains_key("provider"));
+    assert!(!web_properties.contains_key("max_results"));
+    assert_eq!(web["function"]["parameters"]["required"], json!(["url"]));
+    assert_eq!(
+        web["function"]["description"],
+        "Fetch a URL or send HTTP requests"
+    );
 }
 
 #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
@@ -2311,6 +2332,51 @@ fn responses_openai_turn_body_omits_native_web_search_tool_when_disabled() {
             .all(|tool| tool.get("type").and_then(Value::as_str) != Some("web_search")),
         "native web_search should stay absent when query search is disabled: {tools:#?}"
     );
+}
+
+#[cfg(any(feature = "tool-file", feature = "tool-shell"))]
+#[test]
+fn responses_non_openai_turn_body_keeps_function_web_query_mode() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Deepseek,
+        wire_api: crate::config::ProviderWireApi::Responses,
+        ..ProviderConfig::default()
+    });
+
+    let body = build_turn_request_body(
+        &config,
+        &[json!({
+            "role": "user",
+            "content": "search the latest release notes"
+        })],
+        "deepseek-chat",
+        CompletionPayloadMode::default_for(&config.provider),
+        true,
+        &crate::tools::provider_tool_definitions(),
+    );
+
+    let tools = body["tools"].as_array().expect("responses tools array");
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.get("type").and_then(Value::as_str) != Some("web_search")),
+        "non-openai responses profiles should not expose native web_search: {tools:#?}"
+    );
+    let web = tools
+        .iter()
+        .find(|tool| {
+            tool.get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some("web")
+        })
+        .expect("web function tool");
+    let web_properties = web["function"]["parameters"]["properties"]
+        .as_object()
+        .expect("web properties");
+    assert!(web_properties.contains_key("query"));
+    assert!(web_properties.contains_key("provider"));
+    assert!(web_properties.contains_key("max_results"));
 }
 
 #[test]

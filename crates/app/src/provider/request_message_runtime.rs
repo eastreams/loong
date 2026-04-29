@@ -265,6 +265,7 @@ fn build_prompt_fragments_from_prompt_sources(
     let system_text = system_prompt.trim().to_owned();
     let capability_snapshot =
         tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
+    let native_web_search_section = render_native_web_search_section_if_needed(config);
     let deferred_tool_text_workflow = render_deferred_tool_text_workflow_section_if_needed(config);
     let execution_discipline_section = render_execution_discipline_section();
     let workspace_guidance_section = workspace_guidance_model
@@ -371,6 +372,19 @@ fn build_prompt_fragments_from_prompt_sources(
     .with_cacheable(true);
 
     prompt_fragments.push(capability_fragment);
+
+    if let Some(section) = native_web_search_section {
+        let native_web_search_fragment = PromptFragment::new(
+            "native-web-search",
+            PromptLane::CapabilitySnapshot,
+            "native-web-search",
+            section,
+            ContextArtifactKind::RuntimeContract,
+        )
+        .with_cacheable(true);
+
+        prompt_fragments.push(native_web_search_fragment);
+    }
 
     if let Some(section) = deferred_tool_text_workflow {
         let deferred_tool_text_fragment = PromptFragment::new(
@@ -576,6 +590,30 @@ fn render_governed_runtime_binding_section(binding: ProviderRuntimeBinding<'_>) 
     format!(
         "## Governed Runtime Binding\n- session_mode: {}\n- kernel_binding: {kernel_binding}",
         binding.session_mode().as_str()
+    )
+}
+
+fn render_native_web_search_section_if_needed(config: &LoongConfig) -> Option<String> {
+    let responses_mode = matches!(
+        config.provider.wire_api,
+        crate::config::ProviderWireApi::Responses
+    );
+    let openai_provider = matches!(config.provider.kind, crate::config::ProviderKind::Openai);
+    if !(responses_mode && openai_provider && config.tools.web_search.enabled) {
+        return None;
+    }
+
+    Some(
+        [
+            "## Native Query Search".to_owned(),
+            "- This OpenAI Responses profile exposes native `web_search` for query-style public web search."
+                .to_owned(),
+            "- Use native `web_search` for search queries."
+                .to_owned(),
+            "- Use `web` for direct URL fetches and low-level HTTP requests."
+                .to_owned(),
+        ]
+        .join("\n"),
     )
 }
 
@@ -1904,6 +1942,34 @@ mod tests {
         assert!(content.contains("Do not ask for confirmation for ordinary allowed work."));
         assert!(content.contains("Continue from tool results and retrieved evidence until no useful bounded action remains."));
         assert!(content.contains("Only stop for a verified completion condition, a concrete blocker, or a real approval boundary."));
+    }
+
+    #[test]
+    fn build_system_message_explains_native_web_search_for_openai_responses() {
+        let mut config = LoongConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Openai;
+        config.provider.wire_api = crate::config::ProviderWireApi::Responses;
+        config.tools.web_search.enabled = true;
+
+        let system = build_system_message(&config, true).expect("system message");
+        let content = system["content"].as_str().expect("system content");
+
+        assert!(content.contains("## Native Query Search"));
+        assert!(content.contains("native `web_search`"));
+        assert!(content.contains("Use `web` for direct URL fetches and low-level HTTP requests."));
+    }
+
+    #[test]
+    fn build_system_message_omits_native_web_search_note_when_query_search_is_disabled() {
+        let mut config = LoongConfig::default();
+        config.provider.kind = crate::config::ProviderKind::Openai;
+        config.provider.wire_api = crate::config::ProviderWireApi::Responses;
+        config.tools.web_search.enabled = false;
+
+        let system = build_system_message(&config, true).expect("system message");
+        let content = system["content"].as_str().expect("system content");
+
+        assert!(!content.contains("## Native Query Search"));
     }
 
     #[test]
