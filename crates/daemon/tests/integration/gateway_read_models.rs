@@ -522,6 +522,14 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
                     project_local_root: ".loong/extensions/".to_owned(),
                     global_root: "~/.loong/agent/extensions/".to_owned(),
                     shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                    shadowed_conflicts: vec![loong_daemon::RuntimePluginShadowingConflictView {
+                            plugin_id: "shared-extension".to_owned(),
+                            effective_source_path:
+                                ".loong/extensions/search/loong.plugin.json".to_owned(),
+                            shadowed_source_paths: vec![
+                                "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                            ],
+                        }],
                     recommended_action: Some("review_global_duplicate".to_owned()),
                     resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                 }),
@@ -580,6 +588,14 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
                     project_local_root: ".loong/extensions/".to_owned(),
                     global_root: "~/.loong/agent/extensions/".to_owned(),
                     shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                    shadowed_conflicts: vec![loong_daemon::RuntimePluginShadowingConflictView {
+                            plugin_id: "shared-extension".to_owned(),
+                            effective_source_path:
+                                ".loong/extensions/search/loong.plugin.json".to_owned(),
+                            shadowed_source_paths: vec![
+                                "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                            ],
+                        }],
                     recommended_action: Some("review_global_duplicate".to_owned()),
                     resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
                 }),

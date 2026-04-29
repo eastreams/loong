@@ -492,6 +492,7 @@ pub struct PluginScanReport {
 pub struct PluginIdPrecedenceSelection<T> {
     pub effective: Vec<T>,
     pub shadowed_plugin_ids: Vec<String>,
+    pub shadowed_by_plugin_id: BTreeMap<String, Vec<T>>,
 }
 
 pub fn prefer_first_plugin_ids<T, F>(
@@ -503,6 +504,7 @@ where
 {
     let mut seen_plugin_ids = BTreeSet::new();
     let mut shadowed_plugin_ids = BTreeSet::new();
+    let mut shadowed_by_plugin_id = BTreeMap::new();
     let mut effective = Vec::new();
 
     for item in items {
@@ -511,12 +513,17 @@ where
             effective.push(item);
         } else if !plugin_id.is_empty() {
             shadowed_plugin_ids.insert(plugin_id);
+            shadowed_by_plugin_id
+                .entry(plugin_id_of(&item).trim().to_owned())
+                .or_insert_with(Vec::new)
+                .push(item);
         }
     }
 
     PluginIdPrecedenceSelection {
         effective,
         shadowed_plugin_ids: shadowed_plugin_ids.into_iter().collect(),
+        shadowed_by_plugin_id,
     }
 }
 
@@ -2802,6 +2809,13 @@ mod tests {
         assert_eq!(
             selection.shadowed_plugin_ids,
             vec!["shared-extension".to_owned()]
+        );
+        assert_eq!(
+            selection
+                .shadowed_by_plugin_id
+                .get("shared-extension")
+                .map(Vec::len),
+            Some(2)
         );
     }
 

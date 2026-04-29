@@ -6657,6 +6657,22 @@ mod tests {
             payload["discovery_guidance"]["recommended_action"],
             json!("review_global_duplicate")
         );
+        assert_eq!(
+            payload["discovery_guidance"]["shadowed_conflicts"][0]["plugin_id"],
+            json!("shared-extension")
+        );
+        assert!(
+            payload["discovery_guidance"]["shadowed_conflicts"][0]["effective_source_path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with(".loong/extensions/search/loong.plugin.json"))
+        );
+        assert!(
+            payload["discovery_guidance"]["shadowed_conflicts"][0]["shadowed_source_paths"][0]
+                .as_str()
+                .is_some_and(
+                    |path| path.ends_with(".loong/agent/extensions/search/loong.plugin.json")
+                )
+        );
         let plugin = payload["results"]
             .as_array()
             .and_then(|plugins| {

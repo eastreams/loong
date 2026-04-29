@@ -1231,22 +1231,33 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
 
     match execute_plugins_command(options).await {
         Ok(PluginsCommandExecution::Inventory(execution)) => {
-            let (effective_results, shadowed_plugin_ids) =
+            let (effective_results, shadowed_plugin_ids, shadowed_by_plugin_id) =
                 if roots_source.as_deref() == Some("auto_discovered") {
                     let selection = kernel::prefer_first_plugin_ids(execution.results, |result| {
                         result.plugin_id.as_str()
                     });
-                    (selection.effective, selection.shadowed_plugin_ids)
+                    (
+                        selection.effective,
+                        selection.shadowed_plugin_ids,
+                        selection.shadowed_by_plugin_id,
+                    )
                 } else {
-                    (execution.results, Vec::new())
+                    (execution.results, Vec::new(), BTreeMap::new())
                 };
             let summary = summarize_plugin_inventory_results(&effective_results);
             let native_extension_authoring_guidance =
                 build_plugins_inventory_native_extension_authoring_guidance(&effective_results);
+            let shadowed_conflicts =
+                crate::runtime_plugin_discovery::build_runtime_plugin_shadowing_conflicts(
+                    &effective_results,
+                    &shadowed_by_plugin_id,
+                    |result| result.plugin_id.as_str(),
+                    |result| result.source_path.as_str(),
+                );
             let discovery_guidance =
                 crate::runtime_plugin_discovery::build_runtime_plugin_discovery_guidance(
                     roots_source.as_deref(),
-                    &shadowed_plugin_ids,
+                    shadowed_conflicts,
                 );
 
             RuntimePluginInventoryReadModel {
