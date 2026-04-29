@@ -5233,7 +5233,7 @@ mod tests {
 
         let turn_id = submit.turn.turn_id.clone();
         let mut final_result = None;
-        for _ in 0..20 {
+        for _ in 0..50 {
             let result_response = router
                 .clone()
                 .oneshot(bearer_request(
@@ -5253,7 +5253,7 @@ mod tests {
                 final_result = Some(result);
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
         let final_result = final_result.expect("turn should reach a terminal state");

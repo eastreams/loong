@@ -502,7 +502,7 @@ mod tests {
         write_file(
             root,
             "runtime-plugins/trusted-host/index.js",
-            "#!/usr/bin/env node\nfunction emitResponse(line) { const trimmed = line.trim(); if (!trimmed) return; const request = JSON.parse(trimmed); const payload = request.payload ?? {}; const response = { method: request.method ?? '', id: request.id ?? null, payload: { handled_hook: payload.payload?.host_hook ?? null, turn_id: payload.payload?.hook_payload?.turn_id ?? null } }; process.stdout.write(`${JSON.stringify(response)}\\n`); } process.stdin.setEncoding('utf8'); let buffered=''; process.stdin.on('data', chunk => { buffered += chunk; let newlineIndex = buffered.indexOf('\\n'); while (newlineIndex !== -1) { const line = buffered.slice(0, newlineIndex); buffered = buffered.slice(newlineIndex + 1); emitResponse(line); newlineIndex = buffered.indexOf('\\n'); } }); process.stdin.on('end', () => { if (buffered.trim()) emitResponse(buffered); }); process.stdin.resume();\n",
+            "#!/usr/bin/env node\nconst fs = require('fs');\nfunction emitResponse(line) { const trimmed = line.trim(); if (!trimmed) return; const request = JSON.parse(trimmed); const payload = request.payload ?? {}; const markerPath = payload.payload?.hook_payload?.metadata?.hook_marker_path ?? null; if (markerPath) { fs.writeFileSync(markerPath, payload.payload?.host_hook ?? 'unknown'); } const response = { method: request.method ?? '', id: request.id ?? null, payload: { handled_hook: payload.payload?.host_hook ?? null, turn_id: payload.payload?.hook_payload?.turn_id ?? null, session_hint: payload.payload?.hook_payload?.session_hint ?? null } }; process.stdout.write(`${JSON.stringify(response)}\\n`); } process.stdin.setEncoding('utf8'); let buffered=''; process.stdin.on('data', chunk => { buffered += chunk; let newlineIndex = buffered.indexOf('\\n'); while (newlineIndex !== -1) { const line = buffered.slice(0, newlineIndex); buffered = buffered.slice(newlineIndex + 1); emitResponse(line); newlineIndex = buffered.indexOf('\\n'); } }); process.stdin.on('end', () => { if (buffered.trim()) emitResponse(buffered); }); process.stdin.resume();\n",
         );
     }
 
@@ -533,5 +533,35 @@ mod tests {
             json!("turn_start")
         );
         assert_eq!(results[0].response_payload["turn_id"], json!("demo-turn"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_turn_start_hook_for_request_writes_marker_for_trusted_extension() {
+        let root = unique_temp_dir("loong-daemon-trusted-host-turn-start");
+        install_trusted_host_runtime_plugin(&root);
+        let config = runtime_plugins_test_config(&root);
+        let marker_path = root.join("turn-start-marker.txt");
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            "hook_marker_path".to_owned(),
+            marker_path.display().to_string(),
+        );
+
+        dispatch_turn_start_hook_for_request(
+            &config,
+            Some("session-123"),
+            &mvp::agent_runtime::AgentTurnRequest {
+                message: "hello".to_owned(),
+                turn_mode: mvp::agent_runtime::AgentTurnMode::Oneshot,
+                metadata,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("dispatch turn_start hook");
+
+        let marker_contents =
+            fs::read_to_string(&marker_path).expect("turn_start hook should write marker");
+        assert_eq!(marker_contents, "turn_start");
     }
 }
