@@ -80,9 +80,69 @@ fn run_status_cli_process(
         .arg("--config")
         .arg(config_path_text)
         .args(args)
+        .current_dir(
+            config_path
+                .parent()
+                .expect("status config fixture should have a parent directory"),
+        )
+        .env("HOME", home_root_text)
         .env("LOONG_HOME", home_root_text)
         .output()
         .expect(context)
+}
+
+fn enable_auto_discovered_runtime_plugins(config_path: &Path) {
+    let config_path_text = config_path
+        .to_str()
+        .expect("config path should be valid utf-8");
+    let (_path, mut config) =
+        mvp::config::load(Some(config_path_text)).expect("reload status config fixture");
+    config.runtime_plugins.enabled = true;
+    config.runtime_plugins.roots = vec!["   ".to_owned()];
+    config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
+    config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
+    mvp::config::write(Some(config_path_text), &config, true)
+        .expect("rewrite status config with runtime plugin auto-discovery enabled");
+}
+
+fn write_runtime_plugin_manifest(
+    root: &Path,
+    relative_dir: &str,
+    provider_id: &str,
+    endpoint_port: u16,
+) {
+    let package_root = root.join(relative_dir);
+    fs::create_dir_all(&package_root).expect("create runtime plugin package root");
+    fs::write(
+        package_root.join("loong.plugin.json"),
+        format!(
+            r#"{{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "shared-extension",
+  "provider_id": "{provider_id}",
+  "connector_name": "{provider_id}",
+  "capabilities": ["InvokeConnector"],
+  "summary": "{provider_id}",
+  "metadata": {{
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "5000",
+    "endpoint_port": "{endpoint_port}"
+  }}
+}}"#
+        ),
+    )
+    .expect("write runtime plugin manifest");
+    fs::write(
+        package_root.join("index.js"),
+        "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+    )
+    .expect("write runtime plugin entrypoint");
 }
 
 #[test]
@@ -214,6 +274,95 @@ fn status_cli_text_surfaces_section_summaries_and_recipes() {
     assert!(stdout.contains("[WARN] tool calling"));
     assert!(stdout.contains("enabled=false · availability=disabled"));
     assert!(stdout.contains("deep dives"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn status_cli_text_surfaces_shadowed_extension_review_commands() {
+    let root = unique_temp_dir("loong-status-cli-shadowed-extensions");
+    let home_root = root.join("home");
+    fs::create_dir_all(&home_root).expect("create home root");
+    let config_path = write_status_config(
+        &root,
+        false,
+        mvp::config::ProviderToolSchemaModeConfig::Disabled,
+    );
+    enable_auto_discovered_runtime_plugins(&config_path);
+    write_runtime_plugin_manifest(&root, ".loong/extensions/search", "project-extension", 9001);
+    write_runtime_plugin_manifest(
+        &home_root,
+        ".loong/agent/extensions/search",
+        "global-extension",
+        9002,
+    );
+
+    let output = run_status_cli_process(&config_path, &home_root, &[], "run status CLI text");
+
+    if !output.status.success() {
+        let stdout = render_output(&output.stdout);
+        let stderr = render_output(&output.stderr);
+        panic!(
+            "status CLI text should succeed for shadowed extension coverage: status={:?}\nstdout={stdout}\nstderr={stderr}",
+            output.status.code()
+        );
+    }
+
+    let stdout = render_output(&output.stdout);
+
+    assert!(stdout.contains("Inspect the effective project-local package for shared-extension"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn status_cli_json_surfaces_shadowed_extension_review_commands() {
+    let root = unique_temp_dir("loong-status-cli-shadowed-extensions-json");
+    let home_root = root.join("home");
+    fs::create_dir_all(&home_root).expect("create home root");
+    let config_path = write_status_config(
+        &root,
+        false,
+        mvp::config::ProviderToolSchemaModeConfig::Disabled,
+    );
+    enable_auto_discovered_runtime_plugins(&config_path);
+    write_runtime_plugin_manifest(&root, ".loong/extensions/search", "project-extension", 9001);
+    write_runtime_plugin_manifest(
+        &home_root,
+        ".loong/agent/extensions/search",
+        "global-extension",
+        9002,
+    );
+
+    let output =
+        run_status_cli_process(&config_path, &home_root, &["--json"], "run status CLI json");
+
+    if !output.status.success() {
+        let stdout = render_output(&output.stdout);
+        let stderr = render_output(&output.stderr);
+        panic!(
+            "status CLI json should succeed for shadowed extension coverage: status={:?}\nstdout={stdout}\nstderr={stderr}",
+            output.status.code()
+        );
+    }
+
+    let stdout = render_output(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("decode status json");
+    let next_actions = payload["next_actions"]
+        .as_array()
+        .expect("status json next_actions should be an array");
+    let review_action = next_actions
+        .iter()
+        .find(|action| {
+            action["label"].as_str()
+                == Some("Inspect the effective project-local package for shared-extension")
+        })
+        .expect("status json should surface the shared discovery review action");
+    assert!(
+        review_action["command"]
+            .as_str()
+            .is_some_and(|command| command.contains(".loong/extensions/search"))
+    );
 
     fs::remove_dir_all(&root).ok();
 }

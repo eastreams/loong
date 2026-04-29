@@ -1,6 +1,7 @@
 use loong_contracts::WorkRuntimeHealthSnapshot;
 use loong_spec::CliResult;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::gateway::read_models::{
@@ -118,7 +119,8 @@ pub async fn collect_status_cli_read_model(
             label: action.label,
             command: action.command,
         })
-        .collect();
+        .chain(build_runtime_plugin_discovery_status_actions(&runtime_plugin_inventory).into_iter())
+        .collect::<Vec<_>>();
     let recipes = build_status_cli_recipes(config_path_text);
     let schema = StatusCliJsonSchema {
         version: STATUS_CLI_JSON_SCHEMA_VERSION,
@@ -308,6 +310,26 @@ fn build_status_cli_recipes(config_path: &str) -> Vec<String> {
         acp_sessions_recipe,
         work_units_recipe,
     ]
+}
+
+fn build_runtime_plugin_discovery_status_actions(
+    inventory: &crate::plugins_cli::RuntimePluginInventoryReadModel,
+) -> Vec<StatusCliAction> {
+    let Some(guidance) = inventory.discovery_guidance.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut seen_commands = BTreeSet::new();
+    let mut actions = Vec::new();
+    for action in &guidance.discovery_actions {
+        if seen_commands.insert(action.command.clone()) {
+            actions.push(StatusCliAction {
+                label: action.summary.clone(),
+                command: action.command.clone(),
+            });
+        }
+    }
+    actions
 }
 
 fn render_status_cli_text(status: &StatusCliReadModel) -> String {
