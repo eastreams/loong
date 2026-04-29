@@ -84,6 +84,8 @@ const CONTINUE_OR_STATUS_HINT: &str =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CliChatStartupSummary {
+    pub(super) workspace_root: Option<String>,
+    pub(super) provider_label: String,
     pub(super) config_path: String,
     pub(super) memory_label: String,
     pub(super) session_id: String,
@@ -254,6 +256,12 @@ pub(super) fn build_cli_chat_startup_summary(
     let compaction = context_engine_runtime.compaction;
     let acp_selection = resolve_acp_backend_selection(&runtime.config);
     Ok(CliChatStartupSummary {
+        workspace_root: runtime.config.tools.runtime_workspace_root.clone(),
+        provider_label: format!(
+            "{} / {}",
+            runtime.config.provider.kind.display_name(),
+            runtime.config.provider.model
+        ),
         config_path: runtime.resolved_path.display().to_string(),
         memory_label: runtime.memory_label.clone(),
         session_id: runtime.session_id.clone(),
@@ -416,6 +424,25 @@ pub(super) fn render_cli_chat_status_lines_with_width(
 }
 
 pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
+    let mut snapshot_lines = Vec::new();
+    if let Some(workspace_root) = summary.workspace_root.as_deref() {
+        snapshot_lines.push(format!("- workspace: {workspace_root}"));
+    }
+    snapshot_lines.push(format!("- provider: {}", summary.provider_label));
+    snapshot_lines.push(format!("- config: {}", summary.config_path));
+    snapshot_lines.push(format!("- memory: {}", summary.memory_label));
+
+    let snapshot_section = TuiSectionSpec::Narrative {
+        title: Some("current setup snapshot".to_owned()),
+        lines: snapshot_lines,
+    };
+    let fast_lane_section = TuiSectionSpec::Callout {
+        tone: TuiCalloutTone::Success,
+        title: Some("fast lane".to_owned()),
+        lines: vec![
+            "ready for a first answer; status and history stay one command away".to_owned(),
+        ],
+    };
     let first_prompt_action = TuiActionSpec {
         label: "first answer".to_owned(),
         command: DEFAULT_FIRST_PROMPT.to_owned(),
@@ -457,9 +484,13 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
                 .to_owned(),
         ],
     };
-    let runtime_sections = build_cli_chat_runtime_sections(summary);
-    let mut sections = vec![start_here_section, command_deck_section, narrative_section];
-    sections.extend(runtime_sections);
+    let sections = vec![
+        snapshot_section,
+        fast_lane_section,
+        start_here_section,
+        command_deck_section,
+        narrative_section,
+    ];
 
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Brand,

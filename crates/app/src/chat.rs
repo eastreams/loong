@@ -3867,6 +3867,8 @@ mod tests {
     fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
         let lines = render_cli_chat_startup_lines_with_width(
             &CliChatStartupSummary {
+                workspace_root: Some("/workspace/project".to_owned()),
+                provider_label: "OpenAI / gpt-5.4".to_owned(),
                 config_path: "/tmp/loong.toml".to_owned(),
                 memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
@@ -3907,30 +3909,34 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("note: how chat works")),
-            "chat startup should keep the usage guidance as a structured callout: {lines:#?}"
-        );
-        assert!(
-            lines.iter().any(|line| line.contains("session anchor")),
-            "chat startup should keep session/config facts in a structured key-value section: {lines:#?}"
-        );
-        assert!(
-            lines.iter().any(|line| line.contains("runtime posture")),
-            "chat startup should still preserve runtime context in a compact secondary section: {lines:#?}"
+                .any(|line| line.contains("current setup snapshot")),
+            "chat startup should now open on a current-setup snapshot instead of a runtime dashboard: {lines:#?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("continuity guardrails")),
-            "chat startup should show compaction maintenance settings in a dedicated section: {lines:#?}"
+                .any(|line| line.contains("- workspace: /workspace/project")),
+            "chat startup should anchor the shell to the current workspace: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("- session: default")),
-            "chat startup should continue to show session identity after the handoff block: {lines:#?}"
+            lines
+                .iter()
+                .any(|line| line.contains("- provider: OpenAI / gpt-5.4")),
+            "chat startup should surface the current provider in the setup snapshot: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("- compaction: true")),
-            "chat startup should show whether automatic compaction is enabled: {lines:#?}"
+            lines.iter().any(|line| line.contains("fast lane")),
+            "chat startup should surface the onboarding-style fast lane callout: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("note: how chat works")),
+            "chat startup should keep the usage guidance as a structured callout: {lines:#?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line == "runtime posture"),
+            "chat startup should leave the dedicated runtime-posture block to /status: {lines:#?}"
         );
     }
 
@@ -3938,6 +3944,8 @@ mod tests {
     fn render_cli_chat_startup_lines_surface_explicit_acp_overrides() {
         let lines = render_cli_chat_startup_lines_with_width(
             &CliChatStartupSummary {
+                workspace_root: Some("/workspace/project".to_owned()),
+                provider_label: "OpenAI / gpt-5.4".to_owned(),
                 config_path: "/tmp/loong.toml".to_owned(),
                 memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "thread-42".to_owned(),
@@ -3986,6 +3994,8 @@ mod tests {
     fn render_cli_chat_startup_output_uses_rich_shell_when_requested() {
         let lines = operator_surfaces::render_cli_chat_startup_output_with_width(
             &CliChatStartupSummary {
+                workspace_root: Some("/workspace/project".to_owned()),
+                provider_label: "OpenAI / gpt-5.4".to_owned(),
                 config_path: "/tmp/loong.toml".to_owned(),
                 memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
@@ -4027,6 +4037,8 @@ mod tests {
     fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
         let lines = render_cli_chat_status_lines_with_width(
             &CliChatStartupSummary {
+                workspace_root: None,
+                provider_label: "OpenAI / gpt-5.4".to_owned(),
                 config_path: "/tmp/loong.toml".to_owned(),
                 memory_label: "/tmp/loong.db".to_owned(),
                 session_id: "default".to_owned(),
@@ -4541,6 +4553,8 @@ mod tests {
     #[test]
     fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
         let summary = CliChatStartupSummary {
+            workspace_root: None,
+            provider_label: "OpenAI / gpt-5.4".to_owned(),
             config_path: "/tmp/loong.toml".to_owned(),
             memory_label: "window_plus_summary".to_owned(),
             session_id: "session-status".to_owned(),
@@ -4565,7 +4579,7 @@ mod tests {
 
         let lines = render_cli_chat_status_lines_with_width(&summary, 80);
 
-        assert_eq!(lines[0], "╭─ control deck · session=session-status");
+        assert_eq!(lines[0], "╭─ chat status · session=session-status");
         assert!(
             lines
                 .iter()
