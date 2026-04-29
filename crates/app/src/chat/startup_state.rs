@@ -8,6 +8,8 @@ use super::CliTurnRuntime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CliChatStartupSummary {
+    pub(super) workspace_root: Option<String>,
+    pub(super) provider_label: String,
     pub(super) config_path: String,
     pub(super) memory_label: String,
     pub(super) session_id: String,
@@ -39,7 +41,28 @@ pub(super) fn build_cli_chat_startup_summary(
     let context_engine_runtime = collect_context_engine_runtime_snapshot(&runtime.config)?;
     let compaction = context_engine_runtime.compaction;
     let acp_selection = resolve_acp_backend_selection(&runtime.config);
+    let workspace_root = runtime.config.tools.runtime_workspace_root.clone();
+    let active_provider_profile_id = runtime.config.active_provider_id();
+    let active_provider_profile = active_provider_profile_id
+        .and_then(|profile_id| runtime.config.providers.get(profile_id));
+    let provider_label = active_provider_profile
+        .map(|profile| {
+            format!(
+                "{} / {}",
+                profile.provider.kind.display_name(),
+                profile.provider.model
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "{} / {}",
+                runtime.config.provider.kind.display_name(),
+                runtime.config.provider.model
+            )
+        });
     Ok(CliChatStartupSummary {
+        workspace_root,
+        provider_label,
         config_path: runtime.resolved_path.display().to_string(),
         memory_label: runtime.memory_label.clone(),
         session_id: runtime.session_id.clone(),

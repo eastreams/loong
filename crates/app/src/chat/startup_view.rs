@@ -15,7 +15,6 @@ use super::DEFAULT_FIRST_PROMPT;
 use super::detect_cli_chat_render_width;
 use super::startup_state::CliChatStartupSummary;
 use super::startup_state::build_cli_chat_startup_summary;
-use super::status_view::build_cli_chat_runtime_sections;
 
 const PRIMARY_QUICK_COMMANDS_HINT: &str =
     "Start with a first answer, then keep moving with /help · /status · /history · /compact.";
@@ -51,6 +50,25 @@ pub(super) fn render_cli_chat_startup_output_with_width(
 }
 
 pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
+    let mut snapshot_lines = Vec::new();
+    if let Some(workspace_root) = summary.workspace_root.as_deref() {
+        snapshot_lines.push(format!("- workspace: {workspace_root}"));
+    }
+    snapshot_lines.push(format!("- provider: {}", summary.provider_label));
+    snapshot_lines.push(format!("- config: {}", summary.config_path));
+    snapshot_lines.push(format!("- memory: {}", summary.memory_label));
+
+    let snapshot_section = TuiSectionSpec::Narrative {
+        title: Some("current setup snapshot".to_owned()),
+        lines: snapshot_lines,
+    };
+    let fast_lane_section = TuiSectionSpec::Callout {
+        tone: TuiCalloutTone::Success,
+        title: Some("fast lane".to_owned()),
+        lines: vec![
+            "ready for a first answer; status and history stay one command away".to_owned(),
+        ],
+    };
     let first_prompt_action = TuiActionSpec {
         label: "first answer".to_owned(),
         command: DEFAULT_FIRST_PROMPT.to_owned(),
@@ -92,9 +110,13 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
                 .to_owned(),
         ],
     };
-    let runtime_sections = build_cli_chat_runtime_sections(summary);
-    let mut sections = vec![start_here_section, command_deck_section, narrative_section];
-    sections.extend(runtime_sections);
+    let sections = vec![
+        snapshot_section,
+        fast_lane_section,
+        start_here_section,
+        command_deck_section,
+        narrative_section,
+    ];
 
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Brand,
