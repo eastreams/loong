@@ -796,9 +796,9 @@ mod tests {
         assert_eq!(state.reliability_trend(), "worsening");
         assert_eq!(state.coverage_trend(), "steady");
         assert_eq!(state.pressure_trend(), "steady");
-        assert_eq!(state.continuity_health(), "fragile");
+        assert_eq!(state.continuity_health(), "broken");
         assert_eq!(state.continuity_repairability(), "retryable");
-        assert_eq!(state.recovery_posture(), "auto_repairing");
+        assert_eq!(state.recovery_posture(), "retry_exhausted");
         assert_eq!(
             state.trend_summary(),
             "scope=primary_lineage reliability=worsening coverage=steady pressure=steady"
@@ -872,6 +872,7 @@ mod tests {
             primary_lineage: RuntimeSnapshotCompactionLineageState {
                 sampled_session_count: 3,
                 compaction_sample_count: 3,
+                checkpoint_failure_streak: 2,
                 checkpoint_repair_action: Some(TurnCheckpointRecoveryAction::InspectManually),
                 checkpoint_repair_manual_reason: Some(
                     RuntimeSnapshotCheckpointRepairManualReason::CheckpointStateRequiresManualInspection,

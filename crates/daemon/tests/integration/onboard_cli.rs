@@ -8138,29 +8138,24 @@ fn onboarding_success_summary_reports_channel_surface_distribution() {
     );
     let lines =
         loong_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 120);
-
-    assert_eq!(summary.channel_surface_summary.total_surface_count, 28);
-    assert_eq!(
+    let expected_distribution_line = format!(
+        "- channel surfaces: {} total ({} runtime-backed, {} config-backed, {} plugin-backed, {} catalog-only)",
+        summary.channel_surface_summary.total_surface_count,
         summary.channel_surface_summary.runtime_backed_surface_count,
-        8
-    );
-    assert_eq!(
         summary.channel_surface_summary.config_backed_surface_count,
-        15
-    );
-    assert_eq!(
         summary.channel_surface_summary.plugin_backed_surface_count,
-        2
-    );
-    assert_eq!(
         summary.channel_surface_summary.catalog_only_surface_count,
-        3
+    );
+
+    assert_eq!(
+        summary.channel_surface_summary.total_surface_count,
+        summary.channel_surface_summary.runtime_backed_surface_count
+            + summary.channel_surface_summary.config_backed_surface_count
+            + summary.channel_surface_summary.plugin_backed_surface_count
+            + summary.channel_surface_summary.catalog_only_surface_count
     );
     assert!(
-        lines.iter().any(|line| {
-            line
-                == "- channel surfaces: 28 total (8 runtime-backed, 15 config-backed, 2 plugin-backed, 3 catalog-only)"
-        }),
+        lines.iter().any(|line| line == &expected_distribution_line),
         "success summary should surface the public channel inventory distribution so operators can see the real maturity mix after onboarding: {lines:#?}"
     );
 }

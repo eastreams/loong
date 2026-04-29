@@ -78,6 +78,7 @@ fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
         json!([
             "append_turn",
             "window",
+            "transcript",
             "clear_session",
             "replace_turns",
             "read_context",
@@ -126,7 +127,7 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
 
     assert!(rendered.contains("config=/tmp/loong.toml"));
     assert!(rendered.contains(
-        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance runtime_fallback_kind=metadata_only stages=derive,retrieve,rank,compact pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection core_operations=append_turn,window,clear_session,replace_turns,read_context,read_stage_envelope"
+        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance runtime_fallback_kind=metadata_only stages=derive,retrieve,rank,compact pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly,operator_inspection core_operations=append_turn,window,transcript,clear_session,replace_turns,read_context,read_stage_envelope"
     ));
     assert!(rendered.contains("policy=backend:sqlite profile:window_plus_summary mode:window_plus_summary ingest_mode:async_background fail_open:false strict_mode_requested:true strict_mode_active:false effective_fail_open:true"));
     assert!(rendered.contains(
