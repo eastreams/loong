@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use crate::CliResult;
 use crate::tui_surface::TuiActionSpec;
 use crate::tui_surface::TuiCalloutTone;
@@ -5,6 +7,7 @@ use crate::tui_surface::TuiHeaderStyle;
 use crate::tui_surface::TuiScreenSpec;
 use crate::tui_surface::TuiSectionSpec;
 use crate::tui_surface::render_tui_screen_spec;
+use crate::tui_surface::render_tui_screen_spec_ratatui;
 
 use super::CliChatOptions;
 use super::CliTurnRuntime;
@@ -19,14 +22,6 @@ const PRIMARY_QUICK_COMMANDS_HINT: &str =
 const TRANSCRIPT_START_HINT: &str =
     "Type any request to start the transcript, or use the quick commands before your first turn.";
 
-pub(super) fn render_cli_chat_startup_lines_with_width(
-    summary: &CliChatStartupSummary,
-    width: usize,
-) -> Vec<String> {
-    let screen_spec = build_cli_chat_startup_screen_spec(summary);
-    render_tui_screen_spec(&screen_spec, width, false)
-}
-
 #[allow(clippy::print_stdout)] // CLI output
 pub(super) fn print_cli_chat_startup(
     runtime: &CliTurnRuntime,
@@ -34,11 +29,25 @@ pub(super) fn print_cli_chat_startup(
 ) -> CliResult<()> {
     let summary = build_cli_chat_startup_summary(runtime, options)?;
     let render_width = detect_cli_chat_render_width();
-    let lines = render_cli_chat_startup_lines_with_width(&summary, render_width);
+    let use_rich_shell = std::io::stdout().is_terminal();
+    let lines = render_cli_chat_startup_output_with_width(&summary, render_width, use_rich_shell);
     for line in lines {
         println!("{line}");
     }
     Ok(())
+}
+
+pub(super) fn render_cli_chat_startup_output_with_width(
+    summary: &CliChatStartupSummary,
+    width: usize,
+    use_rich_shell: bool,
+) -> Vec<String> {
+    let screen_spec = build_cli_chat_startup_screen_spec(summary);
+    if use_rich_shell {
+        return render_tui_screen_spec_ratatui(&screen_spec, width, false);
+    }
+
+    render_tui_screen_spec(&screen_spec, width, false)
 }
 
 pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
@@ -100,4 +109,12 @@ pub(super) fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary
             TRANSCRIPT_START_HINT.to_owned(),
         ],
     }
+}
+
+#[cfg(test)]
+pub(super) fn render_cli_chat_startup_lines_with_width(
+    summary: &CliChatStartupSummary,
+    width: usize,
+) -> Vec<String> {
+    render_cli_chat_startup_output_with_width(summary, width, false)
 }

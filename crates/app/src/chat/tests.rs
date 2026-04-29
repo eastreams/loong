@@ -984,8 +984,10 @@ fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
     );
 
     assert!(
-        lines.first().is_some_and(|line| line.starts_with("LOONG")),
-        "chat startup should now use the shared compact brand header: {lines:#?}"
+        lines
+            .iter()
+            .any(|line| line.contains(concat!("v", env!("CARGO_PKG_VERSION")))),
+        "chat startup should now surface the richer branded header: {lines:#?}"
     );
     assert!(
         lines
@@ -1025,6 +1027,48 @@ fn render_cli_chat_startup_lines_prioritize_first_turn_guidance() {
     assert!(
         lines.iter().any(|line| line.contains("- compaction: true")),
         "chat startup should show whether automatic compaction is enabled: {lines:#?}"
+    );
+}
+
+#[test]
+fn render_cli_chat_startup_output_uses_rich_shell_when_requested() {
+    let lines = startup_view::render_cli_chat_startup_output_with_width(
+        &CliChatStartupSummary {
+            config_path: "/tmp/loong.toml".to_owned(),
+            memory_label: "/tmp/loong.db".to_owned(),
+            session_id: "default".to_owned(),
+            context_engine_id: "threaded".to_owned(),
+            context_engine_source: "config".to_owned(),
+            compaction_enabled: true,
+            compaction_min_messages: Some(6),
+            compaction_trigger_estimated_tokens: Some(120),
+            compaction_preserve_recent_turns: 4,
+            compaction_preserve_recent_estimated_tokens: Some(96),
+            compaction_fail_open: false,
+            acp_enabled: false,
+            dispatch_enabled: false,
+            conversation_routing: "automatic".to_owned(),
+            allowed_channels: vec!["cli".to_owned()],
+            acp_backend_id: "builtin".to_owned(),
+            acp_backend_source: "default".to_owned(),
+            explicit_acp_request: false,
+            event_stream_enabled: false,
+            bootstrap_mcp_servers: Vec::new(),
+            working_directory: None,
+        },
+        80,
+        true,
+    );
+
+    assert!(
+        lines.iter().any(|line| line.contains("chat ready")),
+        "rich startup shell should keep the guided startup title visible: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│") || line.contains("╭") || line.contains("╰")),
+        "rich startup shell should render inside shell blocks instead of plain lines: {lines:#?}"
     );
 }
 
