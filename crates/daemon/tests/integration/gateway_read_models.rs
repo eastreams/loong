@@ -514,7 +514,25 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
             error: None,
             roots_source: Some("configured".to_owned()),
             returned_results: Some(1),
-            summary: None,
+            summary: Some(loong_daemon::plugins_cli::PluginsInventorySummaryView {
+                returned_plugins: 1,
+                ready_plugins: 1,
+                setup_incomplete_plugins: 0,
+                blocked_plugins: 0,
+                deferred_plugins: 0,
+                loaded_plugins: 0,
+                activation_attestation_integrity_distribution: std::collections::BTreeMap::new(),
+                runtime_health_status_distribution: std::collections::BTreeMap::new(),
+                source_kind_distribution: std::collections::BTreeMap::new(),
+                bridge_kind_distribution: std::collections::BTreeMap::new(),
+                capability_distribution: std::collections::BTreeMap::from([
+                    ("invoke_connector".to_owned(), 1),
+                    ("observe_telemetry".to_owned(), 1),
+                ]),
+                source_language_distribution: std::collections::BTreeMap::new(),
+                setup_surface_distribution: std::collections::BTreeMap::new(),
+                activation_status_distribution: std::collections::BTreeMap::new(),
+            }),
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: vec!["shared-extension".to_owned()],
             discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
@@ -584,6 +602,14 @@ fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
         encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["role"],
         serde_json::json!("operator")
     );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["summary"]["capability_distribution"]["observe_telemetry"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["summary"]["capability_distribution"]["invoke_connector"],
+        serde_json::json!(1)
+    );
     assert!(
         encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
             .as_array()
@@ -620,7 +646,25 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
             error: None,
             roots_source: Some("auto_discovered".to_owned()),
             returned_results: Some(1),
-            summary: None,
+            summary: Some(loong_daemon::plugins_cli::PluginsInventorySummaryView {
+                returned_plugins: 1,
+                ready_plugins: 1,
+                setup_incomplete_plugins: 0,
+                blocked_plugins: 0,
+                deferred_plugins: 0,
+                loaded_plugins: 0,
+                activation_attestation_integrity_distribution: std::collections::BTreeMap::new(),
+                runtime_health_status_distribution: std::collections::BTreeMap::new(),
+                source_kind_distribution: std::collections::BTreeMap::new(),
+                bridge_kind_distribution: std::collections::BTreeMap::new(),
+                capability_distribution: std::collections::BTreeMap::from([
+                    ("invoke_connector".to_owned(), 1),
+                    ("observe_telemetry".to_owned(), 1),
+                ]),
+                source_language_distribution: std::collections::BTreeMap::new(),
+                setup_surface_distribution: std::collections::BTreeMap::new(),
+                activation_status_distribution: std::collections::BTreeMap::new(),
+            }),
             native_extension_authoring_summary: None,
             shadowed_plugin_ids: vec!["shared-extension".to_owned()],
             discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
@@ -790,6 +834,14 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     assert_eq!(
         encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["recommended_action"],
         serde_json::json!("review_global_duplicate")
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["capability_distribution"]["observe_telemetry"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["capability_distribution"]["invoke_connector"],
+        serde_json::json!(1)
     );
     assert_eq!(
         encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]

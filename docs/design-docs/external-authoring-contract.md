@@ -44,6 +44,7 @@ These packages should remain manifest-first and lane-aware.
 They should declare:
 
 - identity
+- capability intent
 - setup metadata
 - ownership intent
 - supported runtime lane
@@ -90,6 +91,7 @@ They are still less concrete than managed skills today.
 
 Every public artifact family should follow the same rules:
 
+- explicit capabilities
 - explicit metadata
 - explicit setup surface
 - explicit ownership and intent

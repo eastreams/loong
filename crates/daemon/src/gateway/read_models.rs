@@ -377,6 +377,8 @@ pub struct GatewayRuntimePluginInventorySummaryReadModel {
     pub native_extension_authoring_summary:
         Option<crate::native_extension_authoring::NativeExtensionAuthoringSummaryView>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capability_distribution: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub activation_attestation_integrity_distribution: BTreeMap<String, usize>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub runtime_health_status_distribution: BTreeMap<String, usize>,
@@ -1212,6 +1214,11 @@ fn build_runtime_plugin_inventory_summary_read_model(
         shadowed_plugin_ids: inventory.shadowed_plugin_ids.clone(),
         discovery_guidance: inventory.discovery_guidance.clone(),
         native_extension_authoring_summary: inventory.native_extension_authoring_summary.clone(),
+        capability_distribution: inventory
+            .summary
+            .as_ref()
+            .map(|summary| summary.capability_distribution.clone())
+            .unwrap_or_default(),
         activation_attestation_integrity_distribution,
         runtime_health_status_distribution,
     }

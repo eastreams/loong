@@ -292,6 +292,11 @@ pub(super) fn collect_plugin_inventory_results(
                     }),
                 summary: manifest.summary.clone(),
                 tags: manifest.tags.clone(),
+                capabilities: manifest
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.as_str().to_owned())
+                    .collect(),
                 extension_contract: extension_declarations.contract.clone(),
                 extension_facets: extension_declarations.facets.clone(),
                 extension_methods: extension_declarations.methods.clone(),
@@ -390,6 +395,11 @@ pub(super) fn collect_plugin_inventory_results(
             bootstrap_hint: entry.bootstrap_hint,
             summary: entry.summary,
             tags: entry.tags,
+            capabilities: entry
+                .capabilities
+                .iter()
+                .map(|capability| capability.as_str().to_owned())
+                .collect(),
             extension_contract: entry.extension_contract,
             extension_facets: entry.extension_facets,
             extension_methods: entry.extension_methods,

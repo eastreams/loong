@@ -2488,6 +2488,7 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub package_manifest_path: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
+    pub capabilities: Vec<String>,
     pub bridge_kind: String,
     pub adapter_family: String,
     pub source_language: String,
@@ -3253,6 +3254,11 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 tags: descriptor
                     .map(|descriptor| descriptor.manifest.tags.clone())
                     .unwrap_or_default(),
+                capabilities: entry
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.as_str().to_owned())
+                    .collect(),
                 bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
                 adapter_family: entry.runtime.adapter_family.clone(),
                 source_language: entry.runtime.source_language.clone(),

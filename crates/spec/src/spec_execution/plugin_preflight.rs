@@ -2169,6 +2169,7 @@ mod tests {
             bootstrap_hint: None,
             summary: None,
             tags: Vec::new(),
+            capabilities: vec!["invoke_connector".to_owned()],
             extension_contract: None,
             extension_facets: Vec::new(),
             extension_methods: Vec::new(),

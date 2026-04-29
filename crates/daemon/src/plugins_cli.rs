@@ -527,6 +527,7 @@ pub struct PluginsInventorySummaryView {
     pub runtime_health_status_distribution: BTreeMap<String, usize>,
     pub source_kind_distribution: BTreeMap<String, usize>,
     pub bridge_kind_distribution: BTreeMap<String, usize>,
+    pub capability_distribution: BTreeMap<String, usize>,
     pub source_language_distribution: BTreeMap<String, usize>,
     pub setup_surface_distribution: BTreeMap<String, usize>,
     pub activation_status_distribution: BTreeMap<String, usize>,
@@ -556,6 +557,7 @@ pub struct PluginsInventoryExecution {
 pub struct RuntimePluginInventoryResultView {
     pub plugin_id: String,
     pub source_path: String,
+    pub capabilities: Vec<String>,
     pub activation_status: Option<String>,
     pub activation_reason: Option<String>,
     pub loaded: bool,
@@ -604,6 +606,7 @@ pub struct PluginsDoctorSummaryView {
     pub total_operator_actions: usize,
     pub remediation_counts: BTreeMap<String, usize>,
     pub bridge_kind_distribution: BTreeMap<String, usize>,
+    pub capability_distribution: BTreeMap<String, usize>,
     pub source_language_distribution: BTreeMap<String, usize>,
     pub setup_surface_distribution: BTreeMap<String, usize>,
     pub activation_status_distribution: BTreeMap<String, usize>,
@@ -1277,6 +1280,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
                     .map(|result| RuntimePluginInventoryResultView {
                         plugin_id: result.plugin_id,
                         source_path: result.source_path,
+                        capabilities: result.capabilities,
                         activation_status: result.activation_status,
                         activation_reason: result.activation_reason,
                         loaded: result.loaded,
@@ -2104,9 +2108,10 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
         display_text_or_dash(execution.bridge_support_delta_sha256.as_deref())
     ));
     lines.push(format!(
-        "ecosystem source_kind={} bridge={} language={} setup_surface={} activation_status={}",
+        "ecosystem source_kind={} bridge={} capabilities={} language={} setup_surface={} activation_status={}",
         format_rollup_map(&execution.summary.source_kind_distribution),
         format_rollup_map(&execution.summary.bridge_kind_distribution),
+        format_rollup_map(&execution.summary.capability_distribution),
         format_rollup_map(&execution.summary.source_language_distribution),
         format_rollup_map(&execution.summary.setup_surface_distribution),
         format_rollup_map(&execution.summary.activation_status_distribution)
@@ -2126,6 +2131,7 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             .copied();
         let activation_status = inventory_result_status_label(result);
         let setup_surface = inventory_result_setup_surface_label(result);
+        let capabilities = format_csv_or_dash(&result.capabilities);
         let source_language = result.source_language.as_deref().unwrap_or("-");
         let manifest_path = display_text_or_dash(result.package_manifest_path.as_deref());
         let setup_mode = display_text_or_dash(result.setup_mode.as_deref());
@@ -2153,13 +2159,14 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
         let extension_host_actions = format_csv_or_dash(&result.extension_host_actions);
         let extension_metadata_issues = format_csv_or_dash(&result.extension_metadata_issues);
         lines.push(format!(
-            "- plugin={} provider={} status={} loaded={} deferred={} bridge={} language={} setup_surface={}",
+            "- plugin={} provider={} status={} loaded={} deferred={} bridge={} capabilities={} language={} setup_surface={}",
             result.plugin_id,
             result.provider_id,
             activation_status,
             result.loaded,
             result.deferred,
             result.bridge_kind,
+            capabilities,
             source_language,
             setup_surface
         ));
@@ -2254,8 +2261,9 @@ fn render_plugins_doctor_text(execution: &PluginsDoctorExecution) -> String {
         display_text_or_dash(execution.bridge_support_delta_sha256.as_deref())
     ));
     lines.push(format!(
-        "ecosystem bridge={} language={} setup_surface={} activation_status={}",
+        "ecosystem bridge={} capabilities={} language={} setup_surface={} activation_status={}",
         format_rollup_map(&execution.summary.bridge_kind_distribution),
+        format_rollup_map(&execution.summary.capability_distribution),
         format_rollup_map(&execution.summary.source_language_distribution),
         format_rollup_map(&execution.summary.setup_surface_distribution),
         format_rollup_map(&execution.summary.activation_status_distribution)
@@ -2512,7 +2520,7 @@ fn render_plugin_doctor_result_lines(
     let extension_metadata_issues = format_csv_or_dash(&plugin.extension_metadata_issues);
 
     let mut lines = vec![format!(
-        "- plugin={} provider={} verdict={} activation_status={} loaded={} deferred={} bridge={} language={} setup_surface={}",
+        "- plugin={} provider={} verdict={} activation_status={} loaded={} deferred={} bridge={} capabilities={} language={} setup_surface={}",
         plugin.plugin_id,
         plugin.provider_id,
         result.verdict,
@@ -2520,6 +2528,7 @@ fn render_plugin_doctor_result_lines(
         plugin.loaded,
         plugin.deferred,
         plugin.bridge_kind,
+        format_csv_or_dash(&plugin.capabilities),
         source_language,
         setup_surface
     )];
@@ -3331,6 +3340,7 @@ fn summarize_plugin_inventory_results(
     let mut runtime_health_status_distribution = BTreeMap::new();
     let mut source_kind_distribution = BTreeMap::new();
     let mut bridge_kind_distribution = BTreeMap::new();
+    let mut capability_distribution = BTreeMap::new();
     let mut source_language_distribution = BTreeMap::new();
     let mut setup_surface_distribution = BTreeMap::new();
     let mut activation_status_distribution = BTreeMap::new();
@@ -3356,6 +3366,9 @@ fn summarize_plugin_inventory_results(
 
         increment_rollup_count(&mut source_kind_distribution, result.source_kind.as_str());
         increment_rollup_count(&mut bridge_kind_distribution, result.bridge_kind.as_str());
+        for capability in &result.capabilities {
+            increment_rollup_count(&mut capability_distribution, capability.as_str());
+        }
 
         let source_language = result.source_language.as_deref().unwrap_or("unknown");
         increment_rollup_count(&mut source_language_distribution, source_language);
@@ -3398,6 +3411,7 @@ fn summarize_plugin_inventory_results(
         runtime_health_status_distribution,
         source_kind_distribution,
         bridge_kind_distribution,
+        capability_distribution,
         source_language_distribution,
         setup_surface_distribution,
         activation_status_distribution,
@@ -3514,6 +3528,7 @@ fn summarize_plugin_doctor_results(
     let mut total_recommended_actions: usize = 0;
     let mut total_operator_actions: usize = 0;
     let mut bridge_kind_distribution = BTreeMap::new();
+    let mut capability_distribution = BTreeMap::new();
     let mut source_language_distribution = BTreeMap::new();
     let mut setup_surface_distribution = BTreeMap::new();
     let mut activation_status_distribution = BTreeMap::new();
@@ -3549,6 +3564,9 @@ fn summarize_plugin_doctor_results(
         }
 
         increment_rollup_count(&mut bridge_kind_distribution, plugin.bridge_kind.as_str());
+        for capability in &plugin.capabilities {
+            increment_rollup_count(&mut capability_distribution, capability.as_str());
+        }
 
         let source_language = plugin.source_language.as_deref().unwrap_or("unknown");
         increment_rollup_count(&mut source_language_distribution, source_language);
@@ -3580,6 +3598,7 @@ fn summarize_plugin_doctor_results(
         total_operator_actions,
         remediation_counts: preflight_summary.remediation_counts.clone(),
         bridge_kind_distribution,
+        capability_distribution,
         source_language_distribution,
         setup_surface_distribution,
         activation_status_distribution,
@@ -6097,8 +6116,19 @@ mod tests {
             assert_eq!(inventory_execution.summary.blocked_plugins, 0);
             assert_eq!(inventory_execution.summary.loaded_plugins, 1);
             assert_eq!(
+                inventory_execution
+                    .summary
+                    .capability_distribution
+                    .get("invoke_connector"),
+                Some(&1)
+            );
+            assert_eq!(
                 inventory_execution.results[0].source_language.as_deref(),
                 scaffold_defaults.source_language.as_deref()
+            );
+            assert_eq!(
+                inventory_execution.results[0].capabilities,
+                vec!["invoke_connector".to_owned()]
             );
             assert_eq!(
                 inventory_execution.results[0].bridge_kind,
@@ -6447,6 +6477,10 @@ mod tests {
             assert!(
                 doc.contains("git diff --no-index"),
                 "doc should mention manifest comparison for shadowed extension conflicts"
+            );
+            assert!(
+                doc.contains("capabilit"),
+                "doc should mention explicit extension capability declarations"
             );
         }
     }

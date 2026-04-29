@@ -106,6 +106,10 @@ This writes:
 The scaffolded manifest already declares the native extension contract fields
 that Loong inventories before execution.
 
+It also declares explicit package capabilities. Today the scaffold defaults to
+`InvokeConnector`, and operator surfaces should show that capability intent
+before execution.
+
 The scaffolded runtime file already handles a small starter surface:
 
 - `extension/event`

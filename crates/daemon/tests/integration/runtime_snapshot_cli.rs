@@ -274,7 +274,7 @@ fn install_invalid_runtime_plugin_package(root: &Path, config_path: &Path) {
   "provider_id": "invalid-search",
   "connector_name": "invalid-search-http",
   "endpoint": "https://example.com/search",
-  "capabilities": ["InvokeConnector"],
+  "capabilities": ["InvokeConnector", "ObserveTelemetry"],
   "summary": "Malformed native extension declarations",
   "metadata": {
     "bridge_kind": "http_json",
@@ -892,6 +892,15 @@ async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_trut
     assert_eq!(
         runtime_plugin["extension_contract"],
         serde_json::json!("process_stdio_json_line_v1")
+    );
+    assert_eq!(
+        runtime_plugin["capabilities"],
+        serde_json::json!(["invoke_connector", "observe_telemetry"])
+    );
+    assert_eq!(
+        serde_json::to_value(&inventory_plugin.capabilities)
+            .expect("serialize inventory plugin capabilities"),
+        serde_json::json!(["invoke_connector", "observe_telemetry"])
     );
     assert_eq!(
         runtime_plugin["extension_events"],

@@ -94,6 +94,10 @@ The generated manifest also includes the native extension metadata keys needed f
 - `loong_extension_events_json`
 - `loong_extension_host_actions_json`
 
+The package manifest also carries explicit capability declarations. The current
+native extension scaffold defaults to `InvokeConnector`, and inventory/runtime
+operator surfaces should expose that capability truth before execution.
+
 ### Go
 
 ```bash

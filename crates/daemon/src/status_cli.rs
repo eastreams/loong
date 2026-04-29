@@ -813,6 +813,16 @@ fn render_status_runtime_plugin_inventory_summary(
         })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "-".to_owned());
+    let capability_distribution = if inventory.capability_distribution.is_empty() {
+        "-".to_owned()
+    } else {
+        inventory
+            .capability_distribution
+            .iter()
+            .map(|(capability, count)| format!("{capability}:{count}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     let authoring_summary = inventory.native_extension_authoring_summary.as_ref();
     let guided_plugins = authoring_summary
         .map(|summary| summary.guided_plugins.to_string())
@@ -828,11 +838,12 @@ fn render_status_runtime_plugin_inventory_summary(
         .unwrap_or_else(|| "-".to_owned());
 
     format!(
-        "available={} roots_source={} returned_results={} loaded_plugins={} shadowed_plugins={} shadowed_plugin_ids={} precedence_rule={} recommended_action={} discovery_action_kinds={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
+        "available={} roots_source={} returned_results={} loaded_plugins={} capabilities={} shadowed_plugins={} shadowed_plugin_ids={} precedence_rule={} recommended_action={} discovery_action_kinds={} guided_plugins={} metadata_issues={} runnable_actions={} allow_command_gated_actions={} reason={}",
         inventory.available,
         roots_source,
         returned_results,
         loaded_plugins,
+        capability_distribution,
         shadowed_plugins,
         shadowed_plugin_ids,
         precedence_rule,
@@ -1017,6 +1028,10 @@ mod tests {
                         roots_source: Some("configured".to_owned()),
                         returned_results: Some(1),
                         loaded_plugins: Some(0),
+                        capability_distribution: std::collections::BTreeMap::from([
+                            ("invoke_connector".to_owned(), 1),
+                            ("observe_telemetry".to_owned(), 1),
+                        ]),
                         shadowed_plugin_count: Some(1),
                         shadowed_plugin_ids: vec!["shared-extension".to_owned()],
                         discovery_guidance: Some(
@@ -1125,7 +1140,25 @@ mod tests {
                 error: None,
                 roots_source: Some("configured".to_owned()),
                 returned_results: Some(1),
-                summary: None,
+                summary: Some(crate::plugins_cli::PluginsInventorySummaryView {
+                    returned_plugins: 1,
+                    ready_plugins: 1,
+                    setup_incomplete_plugins: 0,
+                    blocked_plugins: 0,
+                    deferred_plugins: 0,
+                    loaded_plugins: 0,
+                    activation_attestation_integrity_distribution: std::collections::BTreeMap::new(),
+                    runtime_health_status_distribution: std::collections::BTreeMap::new(),
+                    source_kind_distribution: std::collections::BTreeMap::new(),
+                    bridge_kind_distribution: std::collections::BTreeMap::new(),
+                    capability_distribution: std::collections::BTreeMap::from([
+                        ("invoke_connector".to_owned(), 1),
+                        ("observe_telemetry".to_owned(), 1),
+                    ]),
+                    source_language_distribution: std::collections::BTreeMap::new(),
+                    setup_surface_distribution: std::collections::BTreeMap::new(),
+                    activation_status_distribution: std::collections::BTreeMap::new(),
+                }),
                 native_extension_authoring_summary: Some(
                     crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
                         guided_plugins: 1,
@@ -1221,6 +1254,7 @@ mod tests {
         assert!(rendered.contains("runtime plugin inventory"));
         assert!(rendered.contains("roots_source=configured"));
         assert!(rendered.contains("returned_results=1"));
+        assert!(rendered.contains("capabilities=invoke_connector:1,observe_telemetry:1"));
         assert!(rendered.contains("shadowed_plugins=1"));
         assert!(rendered.contains("shadowed_plugin_ids=shared-extension"));
         assert!(rendered.contains("precedence_rule=project_local_over_global"));
@@ -1344,7 +1378,25 @@ mod tests {
                 error: None,
                 roots_source: Some("configured".to_owned()),
                 returned_results: Some(1),
-                summary: None,
+                summary: Some(crate::plugins_cli::PluginsInventorySummaryView {
+                    returned_plugins: 1,
+                    ready_plugins: 1,
+                    setup_incomplete_plugins: 0,
+                    blocked_plugins: 0,
+                    deferred_plugins: 0,
+                    loaded_plugins: 0,
+                    activation_attestation_integrity_distribution: std::collections::BTreeMap::new(),
+                    runtime_health_status_distribution: std::collections::BTreeMap::new(),
+                    source_kind_distribution: std::collections::BTreeMap::new(),
+                    bridge_kind_distribution: std::collections::BTreeMap::new(),
+                    capability_distribution: std::collections::BTreeMap::from([
+                        ("invoke_connector".to_owned(), 1),
+                        ("observe_telemetry".to_owned(), 1),
+                    ]),
+                    source_language_distribution: std::collections::BTreeMap::new(),
+                    setup_surface_distribution: std::collections::BTreeMap::new(),
+                    activation_status_distribution: std::collections::BTreeMap::new(),
+                }),
                 native_extension_authoring_summary: Some(
                     crate::native_extension_authoring::NativeExtensionAuthoringSummaryView {
                         guided_plugins: 1,
@@ -1422,6 +1474,10 @@ mod tests {
         assert_eq!(
             value["runtime_plugin_inventory"]["shadowed_plugin_ids"],
             json!(["shared-extension"])
+        );
+        assert_eq!(
+            value["runtime_plugin_inventory"]["summary"]["capability_distribution"]["observe_telemetry"],
+            json!(1)
         );
         assert_eq!(
             value["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
