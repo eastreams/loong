@@ -561,6 +561,8 @@ pub struct RuntimePluginInventoryResultView {
     pub plugin_id: String,
     pub source_path: String,
     pub capabilities: Vec<String>,
+    pub extension_family: Option<String>,
+    pub extension_trust_lane: Option<String>,
     pub activation_status: Option<String>,
     pub activation_reason: Option<String>,
     pub loaded: bool,
@@ -1284,6 +1286,8 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
                         plugin_id: result.plugin_id,
                         source_path: result.source_path,
                         capabilities: result.capabilities,
+                        extension_family: result.extension_family,
+                        extension_trust_lane: result.extension_trust_lane,
                         activation_status: result.activation_status,
                         activation_reason: result.activation_reason,
                         loaded: result.loaded,
@@ -1632,6 +1636,14 @@ fn build_plugin_scaffold_manifest(
         metadata.insert(
             "loong_extension_contract".to_owned(),
             PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
+        );
+        metadata.insert(
+            "loong_extension_family".to_owned(),
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_FAMILY.to_owned(),
+        );
+        metadata.insert(
+            "loong_extension_trust_lane".to_owned(),
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE.to_owned(),
         );
         metadata.insert(
             "loong_extension_facets_json".to_owned(),
@@ -2177,6 +2189,8 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             .as_ref()
             .map(|attestation| attestation.integrity.as_str());
         let extension_contract = display_text_or_dash(result.extension_contract.as_deref());
+        let extension_family = display_text_or_dash(result.extension_family.as_deref());
+        let extension_trust_lane = display_text_or_dash(result.extension_trust_lane.as_deref());
         let extension_methods = format_csv_or_dash(&result.extension_methods);
         let extension_events = format_csv_or_dash(&result.extension_events);
         let extension_host_actions = format_csv_or_dash(&result.extension_host_actions);
@@ -2211,14 +2225,18 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             display_text_or_dash(result.summary.as_deref())
         ));
         if result.extension_contract.is_some()
+            || result.extension_family.is_some()
+            || result.extension_trust_lane.is_some()
             || !result.extension_methods.is_empty()
             || !result.extension_events.is_empty()
             || !result.extension_host_actions.is_empty()
             || !result.extension_metadata_issues.is_empty()
         {
             lines.push(format!(
-                "  extension_contract={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={}",
+                "  extension_contract={} extension_family={} extension_trust_lane={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={}",
                 extension_contract,
+                extension_family,
+                extension_trust_lane,
                 extension_methods,
                 extension_events,
                 extension_host_actions,
@@ -2537,6 +2555,8 @@ fn render_plugin_doctor_result_lines(
     let recommended_actions =
         format_preflight_result_recommended_actions(&result.recommended_actions);
     let extension_contract = display_text_or_dash(plugin.extension_contract.as_deref());
+    let extension_family = display_text_or_dash(plugin.extension_family.as_deref());
+    let extension_trust_lane = display_text_or_dash(plugin.extension_trust_lane.as_deref());
     let extension_methods = format_csv_or_dash(&plugin.extension_methods);
     let extension_events = format_csv_or_dash(&plugin.extension_events);
     let extension_host_actions = format_csv_or_dash(&plugin.extension_host_actions);
@@ -2568,14 +2588,18 @@ fn render_plugin_doctor_result_lines(
         display_text_or_dash(plugin.summary.as_deref())
     ));
     if plugin.extension_contract.is_some()
+        || plugin.extension_family.is_some()
+        || plugin.extension_trust_lane.is_some()
         || !plugin.extension_methods.is_empty()
         || !plugin.extension_events.is_empty()
         || !plugin.extension_host_actions.is_empty()
         || !plugin.extension_metadata_issues.is_empty()
     {
         lines.push(format!(
-            "  extension_contract={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={}",
+            "  extension_contract={} extension_family={} extension_trust_lane={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={}",
             extension_contract,
+            extension_family,
+            extension_trust_lane,
             extension_methods,
             extension_events,
             extension_host_actions,
@@ -5514,6 +5538,16 @@ mod tests {
             ]
         );
         assert_eq!(
+            inventory_execution.results[0].extension_family.as_deref(),
+            Some("governed_native_runtime_extension")
+        );
+        assert_eq!(
+            inventory_execution.results[0]
+                .extension_trust_lane
+                .as_deref(),
+            Some("governed_sidecar")
+        );
+        assert_eq!(
             inventory_execution
                 .summary
                 .capability_distribution
@@ -6243,6 +6277,16 @@ mod tests {
                 vec!["invoke_connector".to_owned()]
             );
             assert_eq!(
+                inventory_execution.results[0].extension_family.as_deref(),
+                Some("governed_native_runtime_extension")
+            );
+            assert_eq!(
+                inventory_execution.results[0]
+                    .extension_trust_lane
+                    .as_deref(),
+                Some("governed_sidecar")
+            );
+            assert_eq!(
                 inventory_execution.results[0].bridge_kind,
                 "process_stdio".to_owned()
             );
@@ -6593,6 +6637,14 @@ mod tests {
             assert!(
                 doc.contains("capabilit"),
                 "doc should mention explicit extension capability declarations"
+            );
+            assert!(
+                doc.contains("governed_native_runtime_extension"),
+                "doc should mention the current public extension family"
+            );
+            assert!(
+                doc.contains("governed_sidecar"),
+                "doc should mention the current public extension trust lane"
             );
         }
     }

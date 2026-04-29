@@ -73,6 +73,8 @@ pub struct PluginRuntimeScaffoldDefaults {
 #[serde(default)]
 pub struct PluginNativeExtensionDeclarations {
     pub contract: Option<String>,
+    pub family: Option<String>,
+    pub trust_lane: Option<String>,
     pub facets: Vec<String>,
     pub methods: Vec<String>,
     pub events: Vec<String>,
@@ -1412,6 +1414,8 @@ pub fn plugin_native_extension_declarations_from_metadata(
 ) -> PluginNativeExtensionDeclarations {
     let mut declarations = PluginNativeExtensionDeclarations {
         contract: normalized_optional_metadata_value(metadata, "loong_extension_contract"),
+        family: normalized_optional_metadata_value(metadata, "loong_extension_family"),
+        trust_lane: normalized_optional_metadata_value(metadata, "loong_extension_trust_lane"),
         ..Default::default()
     };
     declarations.facets = normalized_metadata_string_list_with_issue(

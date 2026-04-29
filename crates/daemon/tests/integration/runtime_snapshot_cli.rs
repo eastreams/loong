@@ -232,6 +232,8 @@ fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
     "bridge_kind": "http_json",
     "adapter_family": "web-search",
     "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar",
     "loong_extension_facets_json": "[\"tooling\",\"events\"]",
     "loong_extension_methods_json": "[\"extension/tool\",\"extension/event\"]",
     "loong_extension_events_json": "[\"session_start\",\"tool_result\"]",
@@ -280,6 +282,8 @@ fn install_invalid_runtime_plugin_package(root: &Path, config_path: &Path) {
     "bridge_kind": "http_json",
     "adapter_family": "web-search",
     "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar",
     "loong_extension_facets_json": "[\"tooling\",\"events\"]",
     "loong_extension_methods_json": "not-json",
     "loong_extension_events_json": "[\"session_start\"]",
@@ -319,6 +323,8 @@ fn install_invalid_process_stdio_runtime_plugin_package(root: &Path, config_path
     "args_json": "[\"index.js\"]",
     "process_timeout_ms": "15000",
     "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar",
     "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
     "loong_extension_methods_json": "not-json",
     "loong_extension_events_json": "[\"session_start\"]",
@@ -898,9 +904,25 @@ async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_trut
         serde_json::json!(["invoke_connector", "observe_telemetry"])
     );
     assert_eq!(
+        runtime_plugin["extension_family"],
+        serde_json::json!("governed_native_runtime_extension")
+    );
+    assert_eq!(
+        runtime_plugin["extension_trust_lane"],
+        serde_json::json!("governed_sidecar")
+    );
+    assert_eq!(
         serde_json::to_value(&inventory_plugin.capabilities)
             .expect("serialize inventory plugin capabilities"),
         serde_json::json!(["invoke_connector", "observe_telemetry"])
+    );
+    assert_eq!(
+        inventory_plugin.extension_family.as_deref(),
+        Some("governed_native_runtime_extension")
+    );
+    assert_eq!(
+        inventory_plugin.extension_trust_lane.as_deref(),
+        Some("governed_sidecar")
     );
     assert_eq!(
         runtime_plugin["extension_events"],

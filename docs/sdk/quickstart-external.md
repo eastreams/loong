@@ -110,6 +110,11 @@ It also declares explicit package capabilities. Today the scaffold defaults to
 `InvokeConnector`, and operator surfaces should show that capability intent
 before execution.
 
+For the current public lane, the scaffold also declares:
+
+- `loong_extension_family=governed_native_runtime_extension`
+- `loong_extension_trust_lane=governed_sidecar`
+
 The scaffolded runtime file already handles a small starter surface:
 
 - `extension/event`

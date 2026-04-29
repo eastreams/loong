@@ -298,6 +298,8 @@ pub(super) fn collect_plugin_inventory_results(
                     .map(|capability| capability.as_str().to_owned())
                     .collect(),
                 extension_contract: extension_declarations.contract.clone(),
+                extension_family: extension_declarations.family.clone(),
+                extension_trust_lane: extension_declarations.trust_lane.clone(),
                 extension_facets: extension_declarations.facets.clone(),
                 extension_methods: extension_declarations.methods.clone(),
                 extension_events: extension_declarations.events.clone(),
@@ -395,12 +397,10 @@ pub(super) fn collect_plugin_inventory_results(
             bootstrap_hint: entry.bootstrap_hint,
             summary: entry.summary,
             tags: entry.tags,
-            capabilities: entry
-                .capabilities
-                .iter()
-                .map(|capability| capability.as_str().to_owned())
-                .collect(),
+            capabilities: entry.capabilities,
             extension_contract: entry.extension_contract,
+            extension_family: entry.extension_family,
+            extension_trust_lane: entry.extension_trust_lane,
             extension_facets: entry.extension_facets,
             extension_methods: entry.extension_methods,
             extension_events: entry.extension_events,

@@ -2171,6 +2171,8 @@ mod tests {
             tags: Vec::new(),
             capabilities: vec!["invoke_connector".to_owned()],
             extension_contract: None,
+            extension_family: None,
+            extension_trust_lane: None,
             extension_facets: Vec::new(),
             extension_methods: Vec::new(),
             extension_events: Vec::new(),

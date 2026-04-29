@@ -70,6 +70,7 @@ For the current public authoring lane, Loong should stabilize:
 - runnable local `process_stdio` entrypoints for the supported public templates
 - `loong plugins invoke-extension` as a bounded smoke surface
 - inventory / doctor / operator surfaces that show extension declarations before execution
+- explicit extension family and trust-lane identity for the current governed native runtime lane
 
 without implying ungoverned in-process host loading.
 

@@ -6459,7 +6459,9 @@ mod tests {
     "bridge_kind": "process_stdio",
     "adapter_family": "python-stdio-adapter",
     "command": "python3",
-    "entrypoint": "index.py"
+    "entrypoint": "index.py",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar"
   }
 }"#,
         )
@@ -6483,6 +6485,11 @@ mod tests {
         assert!(payload["summary"].is_object());
         assert!(payload["native_extension_authoring_summary"].is_null());
         assert_eq!(plugin["plugin_id"], json!("demo-extension-plugin"));
+        assert_eq!(
+            plugin["extension_family"],
+            json!("governed_native_runtime_extension")
+        );
+        assert_eq!(plugin["extension_trust_lane"], json!("governed_sidecar"));
         assert!(plugin.get("activation_attestation").is_some());
         assert!(plugin.get("runtime_health").is_some());
 

@@ -14,6 +14,8 @@
     "args_json": "[\"--experimental-strip-types\",\"index.ts\"]",
     "process_timeout_ms": "15000",
     "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "governed_native_runtime_extension",
+    "loong_extension_trust_lane": "governed_sidecar",
     "loong_extension_facets_json": "[\"events\",\"commands\",\"resources\"]",
     "loong_extension_methods_json": "[\"extension/event\",\"extension/command\",\"extension/resource\"]",
     "loong_extension_events_json": "[\"session_start\"]",

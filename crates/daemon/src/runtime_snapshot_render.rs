@@ -584,6 +584,10 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
         let extension_contract =
             crate::render_line_safe_optional_text_value(plugin.extension_contract.as_deref());
+        let extension_family =
+            crate::render_line_safe_optional_text_value(plugin.extension_family.as_deref());
+        let extension_trust_lane =
+            crate::render_line_safe_optional_text_value(plugin.extension_trust_lane.as_deref());
         let extension_facets = crate::render_line_safe_text_values(
             plugin.extension_facets.iter().map(String::as_str),
             ",",
@@ -612,7 +616,7 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
 
         lines.push(format!(
-            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} compatibility_shim_support_version={} compatibility_shim_supported_dialects={} compatibility_shim_supported_bridges={} compatibility_shim_supported_adapter_families={} compatibility_shim_supported_source_languages={} compatibility_shim_mismatch_reasons={} source_path={} package_root={} summary={} tags={} capabilities={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
+            "  runtime_plugin {} manifest_api_version={} plugin_version={} dialect={} dialect_version={} compatibility_mode={} compatibility_shim={} compatibility_shim_support_version={} compatibility_shim_supported_dialects={} compatibility_shim_supported_bridges={} compatibility_shim_supported_adapter_families={} compatibility_shim_supported_source_languages={} compatibility_shim_mismatch_reasons={} source_path={} package_root={} summary={} tags={} capabilities={} provider={} connector={} bridge={} adapter_family={} source_language={} entrypoint_hint={} status={} setup_mode={} setup_surface={} reason={} bootstrap_hint={} diagnostic_codes={} missing_env_vars={} missing_config_keys={} extension_contract={} extension_family={} extension_trust_lane={} extension_facets={} extension_methods={} extension_events={} extension_host_actions={} extension_metadata_issues={} slot_claims={} conflicting_slot_claims={}",
             plugin_id,
             manifest_api_version,
             plugin_version,
@@ -646,6 +650,8 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
             missing_required_env_vars,
             missing_required_config_keys,
             extension_contract,
+            extension_family,
+            extension_trust_lane,
             extension_facets,
             extension_methods,
             extension_events,
@@ -1068,6 +1074,14 @@ fn runtime_snapshot_runtime_plugin_json(
     object.insert(
         "extension_contract".to_owned(),
         serde_json::to_value(&plugin.extension_contract).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_family".to_owned(),
+        serde_json::to_value(&plugin.extension_family).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "extension_trust_lane".to_owned(),
+        serde_json::to_value(&plugin.extension_trust_lane).unwrap_or(Value::Null),
     );
     object.insert(
         "extension_facets".to_owned(),

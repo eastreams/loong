@@ -5,6 +5,8 @@ use crate::{CliResult, PluginInventoryResult, kernel};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
+pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FAMILY: &str = "governed_native_runtime_extension";
+pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE: &str = "governed_sidecar";
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_FACETS: &[&str] =
     &["events", "commands", "resources"];
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_METHODS: &[&str] =
@@ -44,6 +46,8 @@ pub struct NativeExtensionAuthoringGuidanceView {
     pub smoke_allow_command: String,
     pub smoke_test_command: String,
     pub extension_contract: Option<String>,
+    pub extension_family: Option<String>,
+    pub extension_trust_lane: Option<String>,
     pub extension_methods: Vec<String>,
     pub extension_events: Vec<String>,
     pub extension_host_actions: Vec<String>,
@@ -251,6 +255,8 @@ pub(crate) fn build_native_extension_authoring_guidance(
         plugin.bridge_kind.as_str(),
         plugin.source_language.as_deref()?,
         plugin.extension_contract.clone(),
+        plugin.extension_family.clone(),
+        plugin.extension_trust_lane.clone(),
         plugin.extension_methods.clone(),
         plugin.extension_events.clone(),
         plugin.extension_host_actions.clone(),
@@ -264,6 +270,8 @@ pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
     bridge_kind: &str,
     source_language: &str,
     extension_contract: Option<String>,
+    extension_family: Option<String>,
+    extension_trust_lane: Option<String>,
     extension_methods: Vec<String>,
     extension_events: Vec<String>,
     extension_host_actions: Vec<String>,
@@ -280,6 +288,8 @@ pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
         source_language,
         bridge_kind.as_str(),
         extension_contract,
+        extension_family,
+        extension_trust_lane,
         extension_methods,
         extension_events,
         extension_host_actions,
@@ -338,18 +348,20 @@ pub(crate) fn build_native_extension_authoring_view_from_profile(
         source_language,
         bridge_kind,
         Some(PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned()),
+        Some(PROCESS_STDIO_NATIVE_EXTENSION_FAMILY.to_owned()),
+        Some(PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE.to_owned()),
         PROCESS_STDIO_NATIVE_EXTENSION_METHODS
             .iter()
             .map(|value| (*value).to_owned())
-            .collect(),
+            .collect::<Vec<_>>(),
         PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
             .iter()
             .map(|value| (*value).to_owned())
-            .collect(),
+            .collect::<Vec<_>>(),
         PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
             .iter()
             .map(|value| (*value).to_owned())
-            .collect(),
+            .collect::<Vec<_>>(),
         Vec::new(),
     )
 }
@@ -361,6 +373,8 @@ fn build_native_extension_authoring_view(
     source_language: &str,
     bridge_kind: &str,
     extension_contract: Option<String>,
+    extension_family: Option<String>,
+    extension_trust_lane: Option<String>,
     extension_methods: Vec<String>,
     extension_events: Vec<String>,
     extension_host_actions: Vec<String>,
@@ -392,6 +406,8 @@ fn build_native_extension_authoring_view(
             profile.smoke_allow_command,
         ),
         extension_contract,
+        extension_family,
+        extension_trust_lane,
         extension_methods,
         extension_events,
         extension_host_actions,
