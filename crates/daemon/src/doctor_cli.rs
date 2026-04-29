@@ -2141,40 +2141,20 @@ fn web_search_provider_doctor_check(config: &mvp::config::LoongConfig) -> Doctor
         };
     }
 
-    let configured_provider = config.tools.web_search.default_provider.as_str();
-    let normalized_provider = mvp::config::normalize_web_search_provider(configured_provider);
-    let provider = normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
-    let provider_label = crate::query_search_guidance::query_search_provider_display_name(provider);
-    let credential_summary =
-        crate::query_search_guidance::summarize_query_search_credential(config, provider);
-    let credential_available =
-        crate::query_search_guidance::query_search_has_available_credential(config, provider);
+    let provider_status = crate::query_search_guidance::query_search_provider_status(config);
 
-    if credential_available {
-        let detail = credential_summary
-            .map(|summary| format!("{provider_label}: {}", summary.value))
-            .unwrap_or_else(|| provider_label.clone());
-
+    if provider_status.credential_available {
         return DoctorCheck {
             name: crate::access_terms::QUERY_SEARCH_PROVIDER_LABEL.to_owned(),
             level: DoctorCheckLevel::Pass,
-            detail,
+            detail: provider_status.ready_detail(),
         };
     }
-
-    let detail = credential_summary
-        .map(|summary| {
-            format!(
-                "{provider_label}: {}. web.search will stay unavailable until the provider credential is supplied",
-                summary.value
-            )
-        })
-        .unwrap_or_else(|| provider_label.clone());
 
     DoctorCheck {
         name: crate::access_terms::QUERY_SEARCH_PROVIDER_LABEL.to_owned(),
         level: DoctorCheckLevel::Warn,
-        detail,
+        detail: provider_status.blocked_detail(false),
     }
 }
 

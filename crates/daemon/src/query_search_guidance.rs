@@ -5,10 +5,58 @@ use loong_contracts::SecretRef;
 
 use crate::onboard_types::OnboardingCredentialSummary;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QuerySearchProviderStatus {
+    pub provider: &'static str,
+    pub provider_label: String,
+    pub credential_summary: Option<OnboardingCredentialSummary>,
+    pub credential_available: bool,
+}
+
 pub(crate) fn query_search_provider_display_name(provider: &str) -> String {
     mvp::config::web_search_provider_descriptor(provider)
         .map(|descriptor| descriptor.display_name.to_owned())
         .unwrap_or_else(|| provider.to_owned())
+}
+
+pub(crate) fn query_search_provider_status(
+    config: &mvp::config::LoongConfig,
+) -> QuerySearchProviderStatus {
+    let configured_provider = config.tools.web_search.default_provider.as_str();
+    let provider = mvp::config::normalize_web_search_provider(configured_provider)
+        .unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+    let provider_label = query_search_provider_display_name(provider);
+    let credential_summary = summarize_query_search_credential(config, provider);
+    let credential_available = query_search_has_available_credential(config, provider);
+
+    QuerySearchProviderStatus {
+        provider,
+        provider_label,
+        credential_summary,
+        credential_available,
+    }
+}
+
+impl QuerySearchProviderStatus {
+    pub(crate) fn ready_detail(&self) -> String {
+        self.credential_summary
+            .as_ref()
+            .map(|summary| format!("{}: {}", self.provider_label, summary.value))
+            .unwrap_or_else(|| self.provider_label.clone())
+    }
+
+    pub(crate) fn blocked_detail(&self, mention_network_separation: bool) -> String {
+        let tail = if mention_network_separation {
+            "web.search will stay unavailable until the provider credential is supplied, but ordinary network access remains separately governed"
+        } else {
+            "web.search will stay unavailable until the provider credential is supplied"
+        };
+
+        self.credential_summary
+            .as_ref()
+            .map(|summary| format!("{}: {}. {tail}", self.provider_label, summary.value))
+            .unwrap_or_else(|| self.provider_label.clone())
+    }
 }
 
 pub(crate) fn configured_query_search_credential_source_value(
@@ -166,9 +214,7 @@ pub(crate) fn query_search_repair_steps(
     config: &mvp::config::LoongConfig,
     rerun_onboard_command: &str,
 ) -> Vec<String> {
-    let configured_provider = config.tools.web_search.default_provider.as_str();
-    let provider = mvp::config::normalize_web_search_provider(configured_provider)
-        .unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
+    let provider = query_search_provider_status(config).provider;
     let default_env_name = mvp::config::web_search_provider_descriptor(provider)
         .and_then(|descriptor| descriptor.default_api_key_env);
 
@@ -225,6 +271,29 @@ mod tests {
             crate::access_terms::QUERY_SEARCH_CREDENTIAL_LABEL
         );
         assert_eq!(summary.value, "not required");
+    }
+
+    #[test]
+    fn query_search_provider_status_renders_blocked_detail_variants() {
+        let mut env = ScopedEnv::new();
+        env.remove("FIRECRAWL_API_KEY");
+
+        let mut config = mvp::config::LoongConfig::default();
+        config.tools.web_search.default_provider =
+            mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
+        config.tools.web_search.firecrawl_api_key = Some("${FIRECRAWL_API_KEY}".to_owned());
+
+        let status = query_search_provider_status(&config);
+
+        assert_eq!(status.provider, mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL);
+        assert_eq!(
+            status.blocked_detail(false),
+            "Firecrawl Search: FIRECRAWL_API_KEY (missing in env). web.search will stay unavailable until the provider credential is supplied"
+        );
+        assert_eq!(
+            status.blocked_detail(true),
+            "Firecrawl Search: FIRECRAWL_API_KEY (missing in env). web.search will stay unavailable until the provider credential is supplied, but ordinary network access remains separately governed"
+        );
     }
 
     #[test]

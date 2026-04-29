@@ -242,41 +242,20 @@ pub fn provider_credential_check(config: &mvp::config::LoongConfig) -> OnboardCh
 }
 
 fn web_search_provider_check(config: &mvp::config::LoongConfig) -> OnboardCheck {
-    let normalized_provider = mvp::config::normalize_web_search_provider(
-        config.tools.web_search.default_provider.as_str(),
-    );
-    let provider = normalized_provider.unwrap_or(mvp::config::DEFAULT_WEB_SEARCH_PROVIDER);
-    let provider_label = crate::query_search_guidance::query_search_provider_display_name(provider);
-    let credential_summary =
-        crate::query_search_guidance::summarize_query_search_credential(config, provider);
-    let has_available_credential =
-        crate::query_search_guidance::query_search_has_available_credential(config, provider);
-    if has_available_credential {
-        let detail = credential_summary
-            .map(|summary| format!("{provider_label}: {}", summary.value))
-            .unwrap_or_else(|| provider_label.clone());
-
+    let provider_status = crate::query_search_guidance::query_search_provider_status(config);
+    if provider_status.credential_available {
         return OnboardCheck {
-            name: "web search provider",
+            name: crate::access_terms::QUERY_SEARCH_PROVIDER_LABEL,
             level: OnboardCheckLevel::Pass,
-            detail,
+            detail: provider_status.ready_detail(),
             non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         };
     }
 
-    let detail = credential_summary
-        .map(|summary| {
-            format!(
-                "{provider_label}: {}. web.search will stay unavailable until the provider credential is supplied, but ordinary network access remains separately governed",
-                summary.value
-            )
-        })
-        .unwrap_or_else(|| provider_label.clone());
-
     OnboardCheck {
-        name: "web search provider",
+        name: crate::access_terms::QUERY_SEARCH_PROVIDER_LABEL,
         level: OnboardCheckLevel::Warn,
-        detail,
+        detail: provider_status.blocked_detail(true),
         non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
     }
 }
