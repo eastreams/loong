@@ -743,7 +743,7 @@ mod tests {
                 OnboardingAction {
                     kind: OnboardingActionKind::Chat,
                     label: "chat".to_owned(),
-                    command: "loong chat --config '/tmp/loong.toml'".to_owned(),
+                    command: "LOONG_CONFIG_PATH='/tmp/loong.toml' loong".to_owned(),
                 },
                 OnboardingAction {
                     kind: OnboardingActionKind::Personalize,

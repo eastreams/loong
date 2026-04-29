@@ -771,7 +771,7 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- chat: loong chat --config '/tmp/loong-config.toml'"),
+            .any(|line| line == "- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
         "apply summary should surface interactive chat immediately after the primary ask step: {lines:#?}"
     );
     assert!(
@@ -802,7 +802,7 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
         "apply summary should shell-quote single quotes in the primary ask command and keep the suggested message shell-safe: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
+        rendered.contains("LOONG_CONFIG_PATH='/tmp/loong'\"'\"'s config.toml' loong"),
         "apply summary should shell-quote single quotes in the secondary chat command: {lines:#?}"
     );
     assert!(

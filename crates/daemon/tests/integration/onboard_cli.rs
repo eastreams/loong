@@ -7928,7 +7928,7 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
         "narrow renderer should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loong chat --config '/tmp/loong-config.toml'")
+        rendered.contains("- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong")
             && rendered.contains(
                 "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
             ),
@@ -8052,7 +8052,7 @@ fn onboarding_success_summary_shell_quotes_config_paths_with_single_quotes() {
         "success summary should shell-quote single quotes in the primary ask handoff: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loong chat --config '/tmp/loong'\"'\"'s config.toml'"),
+        rendered.contains("LOONG_CONFIG_PATH='/tmp/loong'\"'\"'s config.toml' loong"),
         "success summary should shell-quote single quotes in the secondary chat handoff: {lines:#?}"
     );
 }
@@ -8450,7 +8450,7 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
         "wide success summary should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loong chat --config '/tmp/loong-config.toml'"),
+        rendered.contains("- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
         "wide success summary should still surface interactive chat as a secondary follow-up: {lines:#?}"
     );
     assert!(
@@ -8492,7 +8492,7 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
     assert!(
         lines
             .iter()
-            .all(|line| line != "- chat: loong chat --config '/tmp/loong-config.toml'"),
+            .all(|line| line != "- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
         "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
     );
 }

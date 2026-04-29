@@ -1070,7 +1070,7 @@ mod tests {
         assert!(rendered.contains("also available"), "{rendered}");
         assert!(rendered.contains("continue setup"), "{rendered}");
         assert!(
-            rendered.contains("- chat: loong chat --config '/tmp/config.toml'"),
+            rendered.contains("- chat: LOONG_CONFIG_PATH='/tmp/config.toml' loong"),
             "{rendered}"
         );
         assert!(

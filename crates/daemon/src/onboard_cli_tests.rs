@@ -2681,11 +2681,11 @@ fn prompt_onboard_shortcut_choice_uses_select_widget() {
 #[test]
 fn resolve_write_plan_uses_select_widget_for_existing_config() {
     let temp_dir = std::env::temp_dir().join(format!(
-        "loongclaw-onboard-write-plan-{}",
+        "loong-onboard-write-plan-{}",
         OffsetDateTime::now_utc().unix_timestamp_nanos()
     ));
     fs::create_dir_all(&temp_dir).expect("create temp dir");
-    let output_path = temp_dir.join("loongclaw.toml");
+    let output_path = temp_dir.join("loong.toml");
     fs::write(&output_path, "provider = 'openai'\n").expect("seed existing config");
     let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
     let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
@@ -3086,11 +3086,8 @@ fn interactive_starting_point_screen_omits_static_options_when_selection_widget_
 #[test]
 fn interactive_existing_config_write_screen_omits_static_options_when_selection_widget_handles_choices()
  {
-    let lines = render_existing_config_write_header_lines_with_style(
-        "/tmp/loongclaw-config.toml",
-        80,
-        false,
-    );
+    let lines =
+        render_existing_config_write_header_lines_with_style("/tmp/loong-config.toml", 80, false);
 
     assert!(
         lines.iter().any(|line| line == "existing config found"),
@@ -3531,16 +3528,13 @@ fn resolve_backup_path_at_uses_formatted_timestamp() {
         Err(error) => panic!("backup path should resolve: {error}"),
     };
 
-    assert_eq!(
-        path,
-        PathBuf::from("/tmp/loongclaw.toml.bak-20260314-012345")
-    );
+    assert_eq!(path, PathBuf::from("/tmp/loong.toml.bak-20260314-012345"));
 }
 
 #[test]
 fn rollback_removes_partial_first_write_config() {
     let output_path = std::env::temp_dir().join(format!(
-        "loongclaw-first-write-rollback-{}.toml",
+        "loong-first-write-rollback-{}.toml",
         std::process::id()
     ));
     fs::write(&output_path, "partial = true\n").expect("write partial config");

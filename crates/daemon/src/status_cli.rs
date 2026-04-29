@@ -1361,7 +1361,7 @@ mod tests {
                 StatusCliAction {
                     kind: crate::next_actions::SetupNextActionKind::Chat,
                     label: "chat".to_owned(),
-                    command: "loong chat --config '/tmp/config.toml'".to_owned(),
+                    command: "LOONG_CONFIG_PATH='/tmp/config.toml' loong".to_owned(),
                 },
                 StatusCliAction {
                     kind: crate::next_actions::SetupNextActionKind::Personalize,
@@ -1385,7 +1385,7 @@ mod tests {
         assert!(rendered.contains("continue setup"), "{rendered}");
         assert!(rendered.contains("- chat:"), "{rendered}");
         assert!(
-            rendered.contains("loong chat --config '/tmp/config.toml'"),
+            rendered.contains("LOONG_CONFIG_PATH='/tmp/config.toml' loong"),
             "{rendered}"
         );
         assert!(

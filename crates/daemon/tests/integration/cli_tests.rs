@@ -442,8 +442,8 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should mention ask with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loong chat --config <path>") || help.contains("loong chat --config <path>"),
-        "welcome help should mention chat with an explicit config placeholder: {help}"
+        help.contains("\n- loong\n") || help.contains("\r\n- loong\r\n"),
+        "welcome help should mention the root TUI entrypoint directly: {help}"
     );
     assert!(
         help.contains("loong doctor --config <path>")

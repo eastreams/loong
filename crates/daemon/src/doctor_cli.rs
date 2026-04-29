@@ -7022,9 +7022,9 @@ mod tests {
             "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
         );
         assert!(
-            next_steps
-                .iter()
-                .any(|step| { step == "Continue in chat: loong chat --config '/tmp/loong.toml'" }),
+            next_steps.iter().any(|step| {
+                step == "Continue in chat: LOONG_CONFIG_PATH='/tmp/loong.toml' loong"
+            }),
             "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
         );
         assert!(
@@ -7066,7 +7066,10 @@ mod tests {
     fn doctor_followup_narrative_lines_skip_primary_action_duplicates() {
         let next_steps = vec![
             DoctorNextStep::action("Get a first answer", "loong ask --config '/tmp/loong.toml'"),
-            DoctorNextStep::action("Continue in chat", "loong chat --config '/tmp/loong.toml'"),
+            DoctorNextStep::action(
+                "Continue in chat",
+                "LOONG_CONFIG_PATH='/tmp/loong.toml' loong",
+            ),
             DoctorNextStep::action(
                 "Teach Loong your working style",
                 "loong personalize --config '/tmp/loong.toml'",

@@ -81,7 +81,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             channel_action_id: None,
             browser_preview_phase: None,
             label: "chat".to_owned(),
-            command: crate::cli_handoff::format_subcommand_with_config("chat", config_path),
+            command: crate::cli_handoff::format_root_entry_with_config(config_path),
         });
         if should_suggest_personalization(config) {
             actions.push(SetupNextAction {
@@ -784,6 +784,44 @@ mod tests {
             actions[2].command,
             "loong personalize --config '/tmp/loong.toml'"
         );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_uses_root_entry_for_chat_followup() {
+        let config = mvp::config::LoongConfig::default();
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loong.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
+        assert_eq!(
+            actions[1].command,
+            "LOONG_CONFIG_PATH='/tmp/loong.toml' loong"
+        );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_uses_plain_root_entry_for_default_config_path() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        let home = unique_temp_dir("loong-next-actions-default-home");
+        fs::create_dir_all(home.join(".loong")).expect("create default home");
+        env.set("HOME", &home);
+        env.remove("LOONG_HOME");
+        env.remove("LOONG_CONFIG_PATH");
+
+        let config = mvp::config::LoongConfig::default();
+        let default_config_path = crate::resolved_default_entry_config_path();
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            default_config_path.to_str().expect("utf8 config path"),
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
+        assert_eq!(actions[1].command, "loong");
     }
 
     #[test]

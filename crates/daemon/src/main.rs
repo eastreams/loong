@@ -173,6 +173,7 @@ fn main() {
     loong_daemon::make_env_compatible();
     check_legacy_home_migration();
     let cli = parse_cli();
+    let invoked_as_default_entry = cli.command.is_none();
     let command_source = if cli.command.is_some() {
         "explicit"
     } else {
@@ -187,8 +188,8 @@ fn main() {
         command = %redacted_command,
         "resolved CLI command"
     );
-    let result =
-        build_daemon_runtime(&command).and_then(|runtime| runtime.block_on(run_command(command)));
+    let result = build_daemon_runtime(&command)
+        .and_then(|runtime| runtime.block_on(run_command(command, invoked_as_default_entry)));
     if let Err(error) = result {
         let error_code = error_code(error.as_str());
         tracing::error!(
@@ -206,7 +207,7 @@ fn main() {
     }
 }
 
-async fn run_command(command: Commands) -> CliResult<()> {
+async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliResult<()> {
     match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
@@ -362,7 +363,15 @@ async fn run_command(command: Commands) -> CliResult<()> {
                 system_prompt,
                 skip_model_probe,
             })
-            .await
+            .await?;
+
+            if invoked_as_default_entry
+                && let Some(follow_up_command) = resolve_default_entry_post_onboard_command()
+            {
+                return Box::pin(run_command(follow_up_command, false)).await;
+            }
+
+            Ok(())
         }
         Commands::Personalize { config } => personalize_cli::run_personalize_cli(config.as_deref()),
         Commands::Import {

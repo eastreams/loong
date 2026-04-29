@@ -317,7 +317,7 @@ pub(crate) fn render_operator_shell_surface_from_body(
 
 fn render_welcome_long_about(command_name: &str) -> String {
     format!(
-        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONG_CONFIG_PATH first."
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name}\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nRunning `{command_name}` with no subcommand opens the main TUI when your config is already in the default location. If your config lives elsewhere, set LOONG_CONFIG_PATH first."
     )
 }
 
@@ -482,7 +482,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONG_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong\n- loong ask --config <path> --message \"...\"\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nRunning `loong` with no subcommand opens the main TUI when your config is already in the default location. If your config lives elsewhere, set LOONG_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -1038,7 +1038,7 @@ fn default_entry_config_path_override() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-fn resolved_default_entry_config_path() -> PathBuf {
+pub(crate) fn resolved_default_entry_config_path() -> PathBuf {
     default_entry_config_path_override().unwrap_or_else(mvp::config::default_config_path)
 }
 
@@ -1060,12 +1060,29 @@ fn default_onboard_command() -> Commands {
     }
 }
 
+fn default_chat_command() -> Commands {
+    Commands::Chat {
+        config: None,
+        session: None,
+        acp: false,
+        acp_event_stream: false,
+        acp_bootstrap_mcp_server: Vec::new(),
+        acp_cwd: None,
+    }
+}
+
 pub fn resolve_default_entry_command() -> Commands {
     if resolved_default_entry_config_path().is_file() {
-        Commands::Welcome
+        default_chat_command()
     } else {
         default_onboard_command()
     }
+}
+
+pub fn resolve_default_entry_post_onboard_command() -> Option<Commands> {
+    resolved_default_entry_config_path()
+        .is_file()
+        .then(default_chat_command)
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {
