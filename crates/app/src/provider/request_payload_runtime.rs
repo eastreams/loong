@@ -1047,6 +1047,7 @@ fn build_responses_request_body(
     if include_tool_schema && !tool_definitions.is_empty() {
         body.insert("tools".to_owned(), Value::Array(tool_definitions.to_vec()));
         body.insert("tool_choice".to_owned(), json!("auto"));
+        body.insert("parallel_tool_calls".to_owned(), Value::Bool(true));
     }
 
     Value::Object(body)

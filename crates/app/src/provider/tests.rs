@@ -2243,6 +2243,7 @@ fn responses_turn_body_keeps_tool_schema_with_responses_input_shape() {
     assert_eq!(body["input"][0]["content"][0]["text"], "read README");
     assert!(body.get("messages").is_none());
     assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(body["parallel_tool_calls"], true);
     assert!(
         body.get("tools")
             .and_then(Value::as_array)
@@ -3140,6 +3141,7 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
             request.starts_with("POST /v1/responses ")
                 && request.contains("\"input\"")
                 && request.contains("\"tools\"")
+                && request.contains("\"parallel_tool_calls\":true")
         }),
         "turn flow should first attempt Responses with tool schema: {requests:#?}"
     );
