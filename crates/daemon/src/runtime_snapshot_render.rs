@@ -295,17 +295,21 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
     ));
     let tool_access = &snapshot.tool_access;
     lines.push(format!(
-        "tool_runtime web_search enabled={} default_provider={} credential_ready={} separation_note=\"{}\"",
+        "tool_runtime web_search enabled={} default_provider={} source={} provider_label={} credential_ready={} separation_note=\"{}\"",
         snapshot.tool_runtime.web_search.enabled,
         snapshot.tool_runtime.web_search.default_provider,
+        tool_access.query_search_source,
+        tool_access.query_search_provider_label,
         tool_access.query_search_credential_ready,
         tool_access.separation_note
     ));
     lines.push(format!(
-        "tool_runtime access ordinary_network_enabled={} query_search_enabled={} query_search_default_provider={} query_search_credential_ready={} browser_page_enabled={} managed_browser_enabled={} managed_browser_ready={} consent_mode={} approval_mode={} separation_note=\"{}\"",
+        "tool_runtime access ordinary_network_enabled={} query_search_enabled={} query_search_default_provider={} query_search_source={} query_search_provider_label={} query_search_credential_ready={} browser_page_enabled={} managed_browser_enabled={} managed_browser_ready={} consent_mode={} approval_mode={} separation_note=\"{}\"",
         tool_access.ordinary_network_access_enabled,
         tool_access.query_search_enabled,
         tool_access.query_search_default_provider,
+        tool_access.query_search_source,
+        tool_access.query_search_provider_label,
         tool_access.query_search_credential_ready,
         tool_access.browser_page_access_enabled,
         tool_access.managed_browser_session_enabled,
@@ -673,6 +677,8 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
         "web_search": {
             "enabled": runtime.web_search.enabled,
             "default_provider": runtime.web_search.default_provider,
+            "source": tool_access.query_search_source,
+            "provider_label": tool_access.query_search_provider_label,
             "credential_ready": tool_access.query_search_credential_ready,
             "separation_note": tool_access.separation_note,
         },
@@ -686,6 +692,8 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
             "ordinary_network_access_enabled": tool_access.ordinary_network_access_enabled,
             "query_search_enabled": tool_access.query_search_enabled,
             "query_search_default_provider": tool_access.query_search_default_provider,
+            "query_search_source": tool_access.query_search_source,
+            "query_search_provider_label": tool_access.query_search_provider_label,
             "query_search_credential_ready": tool_access.query_search_credential_ready,
             "browser_page_access_enabled": tool_access.browser_page_access_enabled,
             "managed_browser_session_enabled": tool_access.managed_browser_session_enabled,

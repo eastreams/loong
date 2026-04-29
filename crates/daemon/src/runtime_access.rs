@@ -1,12 +1,16 @@
 use crate::mvp;
 
 pub(crate) const RUNTIME_TOOL_ACCESS_SEPARATION_NOTE: &str = "web-search provider settings affect only query search mode; ordinary network access and browser lanes stay separately governed";
+pub(crate) const QUERY_SEARCH_SOURCE_EXTERNAL_PROVIDER: &str = "external_provider";
+pub(crate) const QUERY_SEARCH_SOURCE_PROVIDER_NATIVE: &str = "provider_native";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeToolAccessSummary {
     pub ordinary_network_access_enabled: bool,
     pub query_search_enabled: bool,
     pub query_search_default_provider: String,
+    pub query_search_source: &'static str,
+    pub query_search_provider_label: String,
     pub query_search_credential_ready: bool,
     pub browser_page_access_enabled: bool,
     pub managed_browser_session_enabled: bool,
@@ -23,7 +27,18 @@ pub(crate) fn runtime_tool_access_summary(
     let ordinary_network_access_enabled = runtime.web_fetch.enabled;
     let query_search_enabled = runtime.web_search.enabled;
     let query_search_default_provider = runtime.web_search.default_provider.clone();
-    let query_search_credential_ready = mvp::provider::native_query_search_active(config)
+    let native_query_search_label = mvp::provider::native_query_search_label(config);
+    let query_search_source = if native_query_search_label.is_some() {
+        QUERY_SEARCH_SOURCE_PROVIDER_NATIVE
+    } else {
+        QUERY_SEARCH_SOURCE_EXTERNAL_PROVIDER
+    };
+    let query_search_provider_label = native_query_search_label.unwrap_or_else(|| {
+        mvp::config::web_search_provider_descriptor(query_search_default_provider.as_str())
+            .map(|descriptor| descriptor.display_name.to_owned())
+            .unwrap_or_else(|| query_search_default_provider.clone())
+    });
+    let query_search_credential_ready = query_search_source == QUERY_SEARCH_SOURCE_PROVIDER_NATIVE
         || web_search_provider_credential_ready(&runtime.web_search);
     let browser_page_access_enabled = runtime.browser.enabled;
     let managed_browser_session_enabled = runtime.browser_companion.enabled;
@@ -36,6 +51,8 @@ pub(crate) fn runtime_tool_access_summary(
         ordinary_network_access_enabled,
         query_search_enabled,
         query_search_default_provider,
+        query_search_source,
+        query_search_provider_label,
         query_search_credential_ready,
         browser_page_access_enabled,
         managed_browser_session_enabled,

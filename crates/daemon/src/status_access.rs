@@ -16,9 +16,10 @@ pub(crate) fn build_status_access_presentation(
     StatusAccessPresentation {
         ordinary_network_detail: format!("enabled={}", access.ordinary_network_access_enabled),
         query_search_detail: format!(
-            "enabled={} · provider={} · credential_ready={}",
+            "enabled={} · source={} · provider={} · credential_ready={}",
             access.query_search_enabled,
-            access.query_search_default_provider,
+            access.query_search_source,
+            access.query_search_provider_label,
             access.query_search_credential_ready,
         ),
         browser_page_detail: format!("enabled={}", access.browser_page_access_enabled),
@@ -59,6 +60,8 @@ mod tests {
             ordinary_network_access_enabled: true,
             query_search_enabled: true,
             query_search_default_provider: "duckduckgo".to_owned(),
+            query_search_source: "external_provider".to_owned(),
+            query_search_provider_label: "DuckDuckGo".to_owned(),
             query_search_credential_ready: false,
             browser_page_access_enabled: true,
             managed_browser_session_enabled: true,
@@ -77,7 +80,7 @@ mod tests {
         assert_eq!(presentation.ordinary_network_detail, "enabled=true");
         assert_eq!(
             presentation.query_search_detail,
-            "enabled=true · provider=duckduckgo · credential_ready=false"
+            "enabled=true · source=external_provider · provider=DuckDuckGo · credential_ready=false"
         );
         assert_eq!(presentation.browser_page_detail, "enabled=true");
         assert_eq!(

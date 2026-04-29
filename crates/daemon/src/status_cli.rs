@@ -1073,6 +1073,8 @@ mod tests {
             ordinary_network_access_enabled: true,
             query_search_enabled: false,
             query_search_default_provider: "duckduckgo".to_owned(),
+            query_search_source: "external_provider".to_owned(),
+            query_search_provider_label: "DuckDuckGo".to_owned(),
             query_search_credential_ready: false,
             browser_page_access_enabled: true,
             managed_browser_session_enabled: false,
@@ -1094,6 +1096,8 @@ mod tests {
             ordinary_network_access_enabled: true,
             query_search_enabled: true,
             query_search_default_provider: "brave".to_owned(),
+            query_search_source: "external_provider".to_owned(),
+            query_search_provider_label: "Brave Search".to_owned(),
             query_search_credential_ready: false,
             browser_page_access_enabled: true,
             managed_browser_session_enabled: false,
@@ -1191,6 +1195,8 @@ mod tests {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_source: "external_provider".to_owned(),
+                    query_search_provider_label: "DuckDuckGo".to_owned(),
                     query_search_credential_ready: true,
                     browser_page_access_enabled: true,
                     managed_browser_session_enabled: false,
@@ -1279,7 +1285,8 @@ mod tests {
         assert!(rendered.contains("ordinary network"));
         assert!(rendered.contains("enabled=true"));
         assert!(rendered.contains("query search"));
-        assert!(rendered.contains("provider=duckduckgo"));
+        assert!(rendered.contains("source=external_provider"));
+        assert!(rendered.contains("provider=DuckDuckGo"));
         assert!(rendered.contains("credential_ready=true"));
         assert!(rendered.contains("browser page"));
         assert!(rendered.contains("managed browser"));
@@ -1407,6 +1414,8 @@ mod tests {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_source: "external_provider".to_owned(),
+                    query_search_provider_label: "DuckDuckGo".to_owned(),
                     query_search_credential_ready: true,
                     browser_page_access_enabled: true,
                     managed_browser_session_enabled: false,
@@ -1560,6 +1569,8 @@ mod tests {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_source: "external_provider".to_owned(),
+                    query_search_provider_label: "DuckDuckGo".to_owned(),
                     query_search_credential_ready: true,
                     browser_page_access_enabled: true,
                     managed_browser_session_enabled: false,
@@ -1701,6 +1712,8 @@ mod tests {
                     ordinary_network_access_enabled: true,
                     query_search_enabled: false,
                     query_search_default_provider: "duckduckgo".to_owned(),
+                    query_search_source: "external_provider".to_owned(),
+                    query_search_provider_label: "DuckDuckGo".to_owned(),
                     query_search_credential_ready: true,
                     browser_page_access_enabled: true,
                     managed_browser_session_enabled: false,

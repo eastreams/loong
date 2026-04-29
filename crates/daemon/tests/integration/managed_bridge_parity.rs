@@ -73,6 +73,8 @@ fn runtime_snapshot_fixture(
                 ordinary_network_access_enabled: false,
                 query_search_enabled: false,
                 query_search_default_provider: "duckduckgo".to_owned(),
+                query_search_source: "external_provider".to_owned(),
+                query_search_provider_label: "DuckDuckGo".to_owned(),
                 query_search_credential_ready: true,
                 browser_page_access_enabled: false,
                 managed_browser_session_enabled: false,

@@ -626,6 +626,8 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("acp_mcp docs status=pending"));
     assert!(rendered.contains("tool_runtime access ordinary_network_enabled="));
     assert!(rendered.contains("query_search_default_provider=duckduckgo"));
+    assert!(rendered.contains("query_search_source=external_provider"));
+    assert!(rendered.contains("query_search_provider_label=DuckDuckGo"));
     assert!(rendered.contains("query_search_credential_ready=true"));
     assert!(rendered.contains("browser_page_enabled=true"));
     assert!(rendered.contains("managed_browser_enabled=true"));

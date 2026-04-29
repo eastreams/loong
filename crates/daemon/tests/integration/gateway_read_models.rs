@@ -491,6 +491,8 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
     assert!(encoded["tools"]["access"]["ordinary_network_access_enabled"].is_boolean());
     assert!(encoded["tools"]["access"]["query_search_enabled"].is_boolean());
     assert!(encoded["tools"]["access"]["query_search_default_provider"].is_string());
+    assert!(encoded["tools"]["access"]["query_search_source"].is_string());
+    assert!(encoded["tools"]["access"]["query_search_provider_label"].is_string());
     assert!(encoded["tools"]["access"]["query_search_credential_ready"].is_boolean());
     assert!(encoded["tools"]["access"]["browser_page_access_enabled"].is_boolean());
     assert!(encoded["tools"]["access"]["managed_browser_session_enabled"].is_boolean());
