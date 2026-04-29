@@ -63,6 +63,13 @@ pub(super) fn interactive_terminal_surface_supported() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AltScreenMode {
+    Auto,
+    Always,
+    Never,
+}
+
 #[cfg(test)]
 fn env_value_truthy(value: &str) -> bool {
     matches!(
@@ -84,6 +91,30 @@ fn mouse_capture_enabled() -> bool {
         .unwrap_or(true)
 }
 
+fn alt_screen_mode() -> AltScreenMode {
+    match env::var("LOONG_TUI_ALT_SCREEN")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("always") => AltScreenMode::Always,
+        Some("never") => AltScreenMode::Never,
+        _ => AltScreenMode::Auto,
+    }
+}
+
+fn running_in_zellij() -> bool {
+    env::var_os("ZELLIJ").is_some() || env::var_os("ZELLIJ_SESSION_NAME").is_some()
+}
+
+fn alternate_screen_enabled() -> bool {
+    match alt_screen_mode() {
+        AltScreenMode::Always => true,
+        AltScreenMode::Never => false,
+        AltScreenMode::Auto => !running_in_zellij(),
+    }
+}
+
 pub(super) async fn run_cli_chat_surface(
     config_path: Option<&str>,
     session_hint: Option<&str>,
@@ -94,12 +125,15 @@ pub(super) async fn run_cli_chat_surface(
 
     terminal::enable_raw_mode().map_err(|e| format!("failed to enable raw mode: {}", e))?;
     let mut stdout = io::stdout();
-    crossterm::execute!(
-        stdout,
-        crossterm::terminal::EnterAlternateScreen,
-        EnableAlternateScroll,
-    )
-    .map_err(|e| format!("failed to enter alternate screen: {}", e))?;
+    let use_alt_screen = alternate_screen_enabled();
+    if use_alt_screen {
+        crossterm::execute!(
+            stdout,
+            crossterm::terminal::EnterAlternateScreen,
+            EnableAlternateScroll,
+        )
+        .map_err(|e| format!("failed to enter alternate screen: {}", e))?;
+    }
     let capture_mouse = mouse_capture_enabled();
     if capture_mouse {
         crossterm::execute!(stdout, EnableMouseCapture)
@@ -122,12 +156,14 @@ pub(super) async fn run_cli_chat_surface(
         crossterm::execute!(terminal.backend_mut(), DisableMouseCapture)
             .map_err(|e| format!("failed to disable mouse capture: {}", e))?;
     }
-    crossterm::execute!(
-        terminal.backend_mut(),
-        DisableAlternateScroll,
-        crossterm::terminal::LeaveAlternateScreen
-    )
-    .map_err(|e| format!("failed to leave alternate screen: {}", e))?;
+    if use_alt_screen {
+        crossterm::execute!(
+            terminal.backend_mut(),
+            DisableAlternateScroll,
+            crossterm::terminal::LeaveAlternateScreen
+        )
+        .map_err(|e| format!("failed to leave alternate screen: {}", e))?;
+    }
     terminal
         .show_cursor()
         .map_err(|e| format!("failed to show cursor: {}", e))?;
@@ -145,8 +181,8 @@ pub(super) fn run_concurrent_cli_host_surface(
 #[cfg(test)]
 mod tests {
     use super::{
-        DisableAlternateScroll, EnableAlternateScroll, env_value_falsey, env_value_truthy,
-        mouse_capture_enabled,
+        AltScreenMode, DisableAlternateScroll, EnableAlternateScroll, alt_screen_mode,
+        alternate_screen_enabled, env_value_falsey, env_value_truthy, mouse_capture_enabled,
     };
     use crate::test_support::ScopedEnv;
     use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -190,6 +226,27 @@ mod tests {
 
         env.set("LOONG_TUI_MOUSE_CAPTURE", "1");
         assert!(mouse_capture_enabled());
+    }
+
+    #[test]
+    fn alt_screen_defaults_to_auto_and_disables_inside_zellij() {
+        let mut env = ScopedEnv::new();
+        env.remove("LOONG_TUI_ALT_SCREEN");
+        env.remove("ZELLIJ");
+        env.remove("ZELLIJ_SESSION_NAME");
+        assert_eq!(alt_screen_mode(), AltScreenMode::Auto);
+        assert!(alternate_screen_enabled());
+
+        env.set("ZELLIJ", "1");
+        assert!(!alternate_screen_enabled());
+
+        env.set("LOONG_TUI_ALT_SCREEN", "always");
+        assert_eq!(alt_screen_mode(), AltScreenMode::Always);
+        assert!(alternate_screen_enabled());
+
+        env.set("LOONG_TUI_ALT_SCREEN", "never");
+        assert_eq!(alt_screen_mode(), AltScreenMode::Never);
+        assert!(!alternate_screen_enabled());
     }
 
     #[test]
