@@ -5,6 +5,7 @@ pub mod diff_viewer;
 pub mod i18n;
 pub mod markdown;
 pub mod message_list;
+pub mod scroll_state;
 pub mod utils;
 
 use crate::CliResult;
