@@ -6436,6 +6436,18 @@ mod tests {
                 doc.contains("`.loong/extensions/` wins"),
                 "doc should state that project-local Loong extensions win precedence"
             );
+            assert!(
+                doc.contains("loong status"),
+                "doc should mention status as an operator conflict review surface"
+            );
+            assert!(
+                doc.contains("doctor --json"),
+                "doc should mention doctor json as an operator conflict review surface"
+            );
+            assert!(
+                doc.contains("git diff --no-index"),
+                "doc should mention manifest comparison for shadowed extension conflicts"
+            );
         }
     }
 

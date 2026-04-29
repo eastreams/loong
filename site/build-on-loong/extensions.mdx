@@ -44,6 +44,14 @@ If the same `plugin_id` exists in both places, `.loong/extensions/` wins and
 the global package is treated as a shadowed duplicate in inventory and runtime
 operator surfaces.
 
+When that conflict exists, Loong's operator surfaces are expected to surface:
+
+- the winning project-local package path
+- the shadowed global package path
+- review commands on `loong status`
+- the same discovery actions in `loong doctor --json`
+- a manifest comparison flow via `git diff --no-index`
+
 ## Scaffold a package
 
 Start with `plugins init`.

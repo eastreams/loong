@@ -207,6 +207,19 @@ directory contract.
 If the same `plugin_id` exists in both places, `.loong/extensions/` wins and
 the global package becomes a shadowed duplicate on operator surfaces.
 
+When that happens, Loong's operator surfaces should give you enough truth to
+review the conflict without executing extension code first. The practical loop
+is:
+
+1. run `loong status` or `loong doctor --json`
+2. inspect the winning project-local package path
+3. inspect the shadowed global package path
+4. compare the manifests with `git diff --no-index`
+
+The shared discovery guidance now promotes those review commands directly on
+`status`, and `doctor --json` carries the same conflict actions in the runtime
+plugin inventory payload.
+
 ## Supported runnable templates
 
 | Language | `--source-language` | Scaffolded runtime files | Smoke `--allow-command` | Checked-in example |
