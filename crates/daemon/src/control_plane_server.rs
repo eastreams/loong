@@ -2416,7 +2416,7 @@ async fn turn_submit(
         let execution_result = mvp::agent_runtime::AgentRuntime::new()
             .run_turn_with_loaded_config_and_acp_manager(
                 resolved_path,
-                config,
+                config.clone(),
                 Some(session_id.as_str()),
                 &turn_request,
                 Some(&event_forwarder),
@@ -2426,6 +2426,22 @@ async fn turn_submit(
 
         match execution_result {
             Ok(result) => {
+                if let Err(error) = crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                    &config,
+                    Some(session_id.as_str()),
+                    &turn_request,
+                    &result,
+                )
+                .await
+                {
+                    let completion =
+                        turn_registry.complete_failure(spawned_turn_id.as_str(), error.as_str());
+                    if let Ok(record) = completion {
+                        let payload = map_turn_event_payload(&record);
+                        let _ = manager.record_acp_turn_event(payload, true);
+                    }
+                    return;
+                }
                 let completion = turn_registry.complete_success(
                     spawned_turn_id.as_str(),
                     result.output_text.as_str(),
@@ -2445,7 +2461,21 @@ async fn turn_submit(
                     error = %crate::observability::summarize_error(error.as_str()),
                     "control-plane turn execution failed"
                 );
-                let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                let rendered_error = if let Err(turn_end_error) =
+                    crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                        &config,
+                        Some(session_id.as_str()),
+                        &turn_request,
+                        error.as_str(),
+                    )
+                    .await
+                {
+                    format!("{error}; trusted host turn_end hook failed: {turn_end_error}")
+                } else {
+                    error
+                };
+                let completion =
+                    turn_registry.complete_failure(spawned_turn_id.as_str(), &rendered_error);
                 if let Ok(record) = completion {
                     let payload = map_turn_event_payload(&record);
                     let _ = manager.record_acp_turn_event(payload, true);

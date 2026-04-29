@@ -169,6 +169,19 @@ pub(crate) async fn handle_turn(
 
     match result {
         Ok(turn_result) => {
+            if let Err(error) = crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                config,
+                Some(turn_request.session_id.as_str()),
+                &agent_turn_request,
+                &turn_result,
+            )
+            .await
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": error})),
+                );
+            }
             let response = GatewayTurnResponse::from_agent_turn_result(&turn_result);
             match serde_json::to_value(response) {
                 Ok(value) => (StatusCode::OK, Json(value)),
@@ -178,10 +191,25 @@ pub(crate) async fn handle_turn(
                 ),
             }
         }
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": error})),
-        ),
+        Err(error) => {
+            let rendered_error = if let Err(turn_end_error) =
+                crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                    config,
+                    Some(turn_request.session_id.as_str()),
+                    &agent_turn_request,
+                    error.as_str(),
+                )
+                .await
+            {
+                format!("{error}; trusted host turn_end hook failed: {turn_end_error}")
+            } else {
+                error
+            };
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": rendered_error})),
+            )
+        }
     }
 }
 

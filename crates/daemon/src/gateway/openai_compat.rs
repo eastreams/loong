@@ -484,7 +484,7 @@ async fn run_gateway_turn_for_seed(
         &turn_request,
     )
     .await?;
-    crate::mvp::agent_runtime::AgentRuntime::new()
+    let turn_result = crate::mvp::agent_runtime::AgentRuntime::new()
         .run_turn_with_loaded_config_and_observer_and_error_mode(
             resolved_path,
             seed.run_config.clone(),
@@ -494,7 +494,35 @@ async fn run_gateway_turn_for_seed(
             observer,
             crate::mvp::conversation::ProviderErrorMode::Propagate,
         )
-        .await
+        .await;
+    match turn_result {
+        Ok(turn_result) => {
+            crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                &seed.run_config,
+                Some(seed.session_id.as_str()),
+                &turn_request,
+                &turn_result,
+            )
+            .await?;
+            Ok(turn_result)
+        }
+        Err(error) => {
+            if let Err(turn_end_error) =
+                crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                    &seed.run_config,
+                    Some(seed.session_id.as_str()),
+                    &turn_request,
+                    error.as_str(),
+                )
+                .await
+            {
+                return Err(format!(
+                    "{error}; trusted host turn_end hook failed: {turn_end_error}"
+                ));
+            }
+            Err(error)
+        }
+    }
 }
 
 async fn complete_chat_completion(
