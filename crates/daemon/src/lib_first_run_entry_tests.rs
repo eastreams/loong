@@ -35,7 +35,7 @@ fn isolated_home(prefix: &str) -> (ScopedEnv, PathBuf, PathBuf) {
 
 #[test]
 fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
-    let (_env, _home, _config_path) = isolated_home("loongclaw-default-entry-missing");
+    let (_env, _home, _config_path) = isolated_home("loong-default-entry-missing");
 
     assert!(
         matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
@@ -45,7 +45,7 @@ fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
 
 #[test]
 fn resolve_default_entry_command_ignores_legacy_home_when_config_is_missing() {
-    let (_env, home, _config_path) = isolated_home("loongclaw-default-entry-legacy-home");
+    let (_env, home, _config_path) = isolated_home("loong-default-entry-legacy-home");
     let legacy_home = home.join(".loongclaw");
     fs::create_dir_all(&legacy_home).expect("create legacy home");
 
@@ -56,8 +56,8 @@ fn resolve_default_entry_command_ignores_legacy_home_when_config_is_missing() {
 }
 
 #[test]
-fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() {
-    let (_env, _home, config_path) = isolated_home("loongclaw-default-entry-present");
+fn resolve_default_entry_command_routes_to_chat_when_default_config_exists() {
+    let (_env, _home, config_path) = isolated_home("loong-default-entry-present");
 
     mvp::config::write(
         Some(config_path.to_str().expect("utf8 config path")),
@@ -67,15 +67,25 @@ fn resolve_default_entry_command_routes_to_welcome_when_default_config_exists() 
     .expect("write default config");
 
     assert!(
-        matches!(resolve_default_entry_command(), Commands::Welcome),
-        "present config should route to welcome"
+        matches!(
+            resolve_default_entry_command(),
+            Commands::Chat {
+                config: None,
+                session: None,
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server,
+                acp_cwd: None,
+            } if acp_bootstrap_mcp_server.is_empty()
+        ),
+        "present config should route to chat"
     );
 }
 
 #[test]
 fn resolve_default_entry_command_ignores_loongclaw_config_path_without_compat_shim() {
     let (mut env, _home, _default_config_path) = isolated_home("loong-default-entry-legacy-env");
-    let config_path = unique_temp_dir("loongclaw-default-entry-env").join("custom-config.toml");
+    let config_path = unique_temp_dir("loong-default-entry-env").join("custom-config.toml");
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).expect("create config parent");
     }
@@ -109,8 +119,18 @@ fn resolve_default_entry_command_honors_loong_config_path_override() {
     env.set("LOONG_CONFIG_PATH", &config_path);
 
     assert!(
-        matches!(resolve_default_entry_command(), Commands::Welcome),
-        "new env override config should route to welcome"
+        matches!(
+            resolve_default_entry_command(),
+            Commands::Chat {
+                config: None,
+                session: None,
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server,
+                acp_cwd: None,
+            } if acp_bootstrap_mcp_server.is_empty()
+        ),
+        "new env override config should route to chat"
     );
 }
 
@@ -124,6 +144,43 @@ fn resolve_default_entry_command_routes_to_onboard_when_config_path_is_a_directo
     assert!(
         matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
         "directory config path should still route to onboard"
+    );
+}
+
+#[test]
+fn resolve_default_entry_post_onboard_command_returns_chat_once_config_exists() {
+    let (_env, _home, config_path) = isolated_home("loong-default-entry-post-onboard-present");
+
+    mvp::config::write(
+        Some(config_path.to_str().expect("utf8 config path")),
+        &mvp::config::LoongConfig::default(),
+        true,
+    )
+    .expect("write default config");
+
+    assert!(
+        matches!(
+            resolve_default_entry_post_onboard_command(),
+            Some(Commands::Chat {
+                config: None,
+                session: None,
+                acp: false,
+                acp_event_stream: false,
+                acp_bootstrap_mcp_server,
+                acp_cwd: None,
+            }) if acp_bootstrap_mcp_server.is_empty()
+        ),
+        "a written default config should hand off into chat after onboarding"
+    );
+}
+
+#[test]
+fn resolve_default_entry_post_onboard_command_stays_none_when_config_is_still_missing() {
+    let (_env, _home, _config_path) = isolated_home("loong-default-entry-post-onboard-missing");
+
+    assert!(
+        resolve_default_entry_post_onboard_command().is_none(),
+        "missing config should not try to continue into chat after onboarding exits"
     );
 }
 
@@ -203,7 +260,7 @@ fn resolve_welcome_config_path_honors_loong_config_path_override() {
 #[test]
 fn render_welcome_banner_includes_version_and_next_commands() {
     let config = mvp::config::LoongConfig::default();
-    let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
+    let rendered = render_welcome_banner(Path::new("/tmp/loong's config.toml"), &config);
 
     assert!(
         rendered.contains(env!("CARGO_PKG_VERSION")),
@@ -218,12 +275,12 @@ fn render_welcome_banner_includes_version_and_next_commands() {
         "welcome banner should lead with a start-here handoff: {rendered}"
     );
     assert!(
-        rendered.contains("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+        rendered.contains("loong ask --config '/tmp/loong'\"'\"'s config.toml'"),
         "welcome banner should include a quoted ask command: {rendered}"
     );
     assert!(
-        rendered.contains("loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
-        "welcome banner should include a quoted chat command: {rendered}"
+        rendered.contains("LOONG_CONFIG_PATH='/tmp/loong'\"'\"'s config.toml' loong"),
+        "welcome banner should include the root launch command for non-default config paths: {rendered}"
     );
     assert!(
         rendered.contains("loong personalize"),
@@ -235,7 +292,7 @@ fn render_welcome_banner_includes_version_and_next_commands() {
 fn render_welcome_banner_separates_continue_setup_actions() {
     let config = mvp::config::LoongConfig::default();
 
-    let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
+    let rendered = render_welcome_banner(Path::new("/tmp/loong's config.toml"), &config);
 
     assert!(
         rendered.contains("continue setup"),
