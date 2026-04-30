@@ -1,7 +1,7 @@
 use crate::chat::chat_surface::i18n::{I18nService, Language, SurfaceCopy};
 use crate::chat::chat_surface::scroll_state::ScrollState;
 use crate::chat::chat_surface::utils::*;
-use crate::config::ProviderKind;
+use crate::config::{ProviderKind, ReasoningEffort};
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
@@ -16,6 +16,11 @@ pub enum CommandAction {
     RunCommand(&'static str),
     OpenSettings(SettingsSurfaceFocus),
     ApplySettings(SettingsCommandAction),
+    OpenModelReasoning(String),
+    ApplyModelSelection {
+        model: String,
+        reasoning_effort: Option<ReasoningEffort>,
+    },
     InsertText(String),
     Noop,
     Close,
@@ -34,6 +39,12 @@ pub enum SettingsCommandAction {
     SetWebProvider(String),
     InstallSkillPack(String),
     RemoveSkillPack(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSurfaceFocus {
+    Models,
+    Reasoning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +233,12 @@ pub struct CommandPalette {
     settings: Vec<SettingsEntry>,
     settings_status: Option<String>,
     settings_focus: SettingsSurfaceFocus,
+    model_entries: Vec<SettingsEntry>,
+    model_status: Option<String>,
+    model_focus: ModelSurfaceFocus,
+    reasoning_entries: Vec<SettingsEntry>,
+    reasoning_status: Option<String>,
+    reasoning_model_label: Option<String>,
     skills: Vec<SkillEntry>,
     mode: PaletteMode,
     scroll_state: ScrollState,
@@ -232,6 +249,8 @@ pub struct CommandPalette {
 enum PaletteMode {
     Commands,
     Settings,
+    Models,
+    Reasoning,
     Skills,
 }
 
@@ -255,6 +274,12 @@ impl CommandPalette {
             settings: Vec::new(),
             settings_status: None,
             settings_focus: SettingsSurfaceFocus::Overview,
+            model_entries: Vec::new(),
+            model_status: None,
+            model_focus: ModelSurfaceFocus::Models,
+            reasoning_entries: Vec::new(),
+            reasoning_status: None,
+            reasoning_model_label: None,
             skills,
             mode: PaletteMode::Commands,
             scroll_state: ScrollState::new(),
@@ -293,6 +318,48 @@ impl CommandPalette {
         self.scroll_state.scroll_top = 0;
     }
 
+    pub fn show_model_selector(
+        &mut self,
+        entries: Vec<SettingsEntry>,
+        status: Option<String>,
+        selected_label: Option<&str>,
+        query: &str,
+    ) {
+        self.mode = PaletteMode::Models;
+        self.query = query.trim().to_owned();
+        self.model_focus = ModelSurfaceFocus::Models;
+        self.model_entries = entries;
+        self.model_status = status;
+        self.reasoning_entries.clear();
+        self.reasoning_status = None;
+        self.reasoning_model_label = None;
+        self.scroll_state.selected_idx = Some(selection_index_for_entries(
+            self.model_entries.as_slice(),
+            selected_label,
+        ));
+        self.scroll_state.scroll_top = 0;
+    }
+
+    pub fn show_reasoning_selector(
+        &mut self,
+        model_label: &str,
+        entries: Vec<SettingsEntry>,
+        status: Option<String>,
+        selected_label: Option<&str>,
+    ) {
+        self.mode = PaletteMode::Reasoning;
+        self.query.clear();
+        self.model_focus = ModelSurfaceFocus::Reasoning;
+        self.reasoning_entries = entries;
+        self.reasoning_status = status;
+        self.reasoning_model_label = Some(model_label.to_owned());
+        self.scroll_state.selected_idx = Some(selection_index_for_entries(
+            self.reasoning_entries.as_slice(),
+            selected_label,
+        ));
+        self.scroll_state.scroll_top = 0;
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn show_skills(&mut self, query: &str) {
         self.mode = PaletteMode::Skills;
@@ -305,9 +372,20 @@ impl CommandPalette {
         !self.skills.is_empty()
     }
 
+    pub fn is_commands_mode(&self) -> bool {
+        self.mode == PaletteMode::Commands
+    }
+
+    pub fn query_text(&self) -> &str {
+        self.query.as_str()
+    }
+
     pub fn desired_height(&self) -> usize {
         let footer_rows = match self.mode {
-            PaletteMode::Commands | PaletteMode::Settings => Self::FOOTER_ROWS,
+            PaletteMode::Commands
+            | PaletteMode::Settings
+            | PaletteMode::Models
+            | PaletteMode::Reasoning => Self::FOOTER_ROWS,
             PaletteMode::Skills => Self::SKILL_HINT_ROWS,
         };
         Self::visible_rows_for_total(self.filtered_item_count()) + footer_rows
@@ -324,6 +402,10 @@ impl CommandPalette {
         }
         if self.mode == PaletteMode::Settings {
             self.render_settings_mode(f, area, filtered, visible_rows);
+            return;
+        }
+        if matches!(self.mode, PaletteMode::Models | PaletteMode::Reasoning) {
+            self.render_model_mode(f, area, filtered, visible_rows);
             return;
         }
         if filtered.is_empty() {
@@ -441,6 +523,7 @@ impl CommandPalette {
                 .as_deref()
                 .map(|status| truncate(status, area.width.saturating_sub(2) as usize))
                 .unwrap_or_else(|| "Enter apply · Esc close · type to filter".to_owned()),
+            PaletteMode::Models | PaletteMode::Reasoning => String::new(),
             PaletteMode::Skills => String::new(),
         };
         let count_line = ListItem::new(Line::from(vec![Span::styled(
@@ -767,6 +850,154 @@ impl CommandPalette {
         f.render_widget(Paragraph::new(self.settings_footer_line()), footer_area);
     }
 
+    fn render_model_mode(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        filtered: Vec<PaletteItem>,
+        visible_rows: usize,
+    ) {
+        let header_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        let list_area = Rect {
+            x: area.x,
+            y: area.y.saturating_add(1),
+            width: area.width,
+            height: area.height.saturating_sub(2).max(1),
+        };
+        let footer_area = Rect {
+            x: area.x,
+            y: area.y.saturating_add(area.height.saturating_sub(1)),
+            width: area.width,
+            height: 1,
+        };
+
+        let title = match self.mode {
+            PaletteMode::Models => "model · select".to_owned(),
+            PaletteMode::Reasoning => self
+                .reasoning_model_label
+                .as_deref()
+                .map(|label| format!("model · reasoning · {label}"))
+                .unwrap_or_else(|| "model · reasoning".to_owned()),
+            PaletteMode::Commands | PaletteMode::Settings | PaletteMode::Skills => String::new(),
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                truncate(title.as_str(), list_area.width as usize),
+                Style::default()
+                    .fg(SURFACE_CYAN)
+                    .add_modifier(Modifier::BOLD),
+            )])),
+            header_area,
+        );
+
+        if filtered.is_empty() {
+            let empty_text = match self.mode {
+                PaletteMode::Models => "  no models available",
+                PaletteMode::Reasoning => "  no reasoning options available",
+                PaletteMode::Commands | PaletteMode::Settings | PaletteMode::Skills => {
+                    "  no results"
+                }
+            };
+            let items = vec![ListItem::new(Line::from(vec![Span::styled(
+                empty_text,
+                Style::default().fg(SURFACE_DIM_GRAY),
+            )]))];
+            let list = List::new(items).highlight_style(Style::default());
+            let mut visible_state = ListState::default();
+            f.render_stateful_widget(list, list_area, &mut visible_state);
+            f.render_widget(Paragraph::new(self.model_footer_line()), footer_area);
+            return;
+        }
+
+        let selected = self.selected_index_for(&filtered);
+        let start = self
+            .scroll_state
+            .scroll_top
+            .min(filtered.len().saturating_sub(1));
+        let end = (start + visible_rows.min(list_area.height as usize)).min(filtered.len());
+        let visible = filtered.get(start..end).unwrap_or(&[]);
+
+        let label_width = filtered
+            .iter()
+            .map(|entry| crate::presentation::display_width(entry.label.as_str()))
+            .max()
+            .unwrap_or(0)
+            .clamp(10, 24);
+        let items: Vec<ListItem> = visible
+            .iter()
+            .enumerate()
+            .map(|(visible_index, entry)| {
+                let index = start + visible_index;
+                let is_selected = index == selected;
+                let prefix = if is_selected { "→ " } else { "  " };
+                let status_tag = entry.status_tag.clone().unwrap_or_default();
+                let status_width = if status_tag.is_empty() {
+                    0
+                } else {
+                    crate::presentation::display_width(status_tag.as_str()) + 1
+                };
+                let gap = " ".repeat(
+                    label_width.saturating_sub(crate::presentation::display_width(&entry.label))
+                        + 2,
+                );
+                let max_desc = list_area.width.saturating_sub(
+                    (crate::presentation::display_width(prefix) + label_width + 2 + status_width)
+                        as u16,
+                ) as usize;
+                let desc = truncate(entry.description.as_str(), max_desc);
+                let mut spans = vec![
+                    Span::styled(
+                        prefix,
+                        Style::default().fg(if is_selected {
+                            SURFACE_CYAN
+                        } else {
+                            SURFACE_DIM_GRAY
+                        }),
+                    ),
+                    Span::styled(
+                        entry.label.clone(),
+                        Style::default()
+                            .fg(if is_selected {
+                                SURFACE_CYAN
+                            } else {
+                                ratatui::style::Color::White
+                            })
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                    ),
+                ];
+                if !status_tag.is_empty() {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        status_tag,
+                        Style::default().fg(if is_selected {
+                            SURFACE_ACCENT
+                        } else {
+                            SURFACE_COTTON_CANDY
+                        }),
+                    ));
+                }
+                spans.push(Span::raw(gap));
+                spans.push(Span::styled(desc, Style::default().fg(SURFACE_GRAY)));
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+
+        let list = List::new(items).highlight_style(Style::default());
+        let mut visible_state = ListState::default();
+        visible_state.select(Some(selected.saturating_sub(start)));
+        f.render_stateful_widget(list, list_area, &mut visible_state);
+        f.render_widget(Paragraph::new(self.model_footer_line()), footer_area);
+    }
+
     fn settings_footer_line(&self) -> Line<'static> {
         let text = self
             .settings_status
@@ -786,6 +1017,26 @@ impl CommandPalette {
         )])
     }
 
+    fn model_footer_line(&self) -> Line<'static> {
+        let text = match self.mode {
+            PaletteMode::Models => self
+                .model_status
+                .as_deref()
+                .map(str::to_owned)
+                .unwrap_or_else(|| "Enter choose model · Esc close · type to filter".to_owned()),
+            PaletteMode::Reasoning => self
+                .reasoning_status
+                .as_deref()
+                .map(str::to_owned)
+                .unwrap_or_else(|| "Enter apply · Esc back · type to filter".to_owned()),
+            PaletteMode::Commands | PaletteMode::Settings | PaletteMode::Skills => String::new(),
+        };
+        Line::from(vec![Span::styled(
+            text,
+            Style::default().fg(SURFACE_DIM_GRAY),
+        )])
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<CommandAction> {
         match key.code {
             KeyCode::Esc => {
@@ -793,6 +1044,17 @@ impl CommandPalette {
                     && self.settings_focus != SettingsSurfaceFocus::Overview
                 {
                     Some(CommandAction::OpenSettings(SettingsSurfaceFocus::Overview))
+                } else if self.mode == PaletteMode::Reasoning {
+                    self.mode = PaletteMode::Models;
+                    self.model_focus = ModelSurfaceFocus::Models;
+                    self.query.clear();
+                    let selected_label = self.reasoning_model_label.clone();
+                    self.scroll_state.selected_idx = Some(selection_index_for_entries(
+                        self.model_entries.as_slice(),
+                        selected_label.as_deref(),
+                    ));
+                    self.scroll_state.scroll_top = 0;
+                    None
                 } else {
                     Some(CommandAction::Close)
                 }
@@ -908,13 +1170,18 @@ impl CommandPalette {
                     return None;
                 }
                 let visible_rows = match self.mode {
-                    PaletteMode::Settings => Self::visible_rows_for_total(filtered.len())
-                        .min(area.height.saturating_sub(2) as usize),
+                    PaletteMode::Settings | PaletteMode::Models | PaletteMode::Reasoning => {
+                        Self::visible_rows_for_total(filtered.len())
+                            .min(area.height.saturating_sub(2) as usize)
+                    }
                     PaletteMode::Commands | PaletteMode::Skills => {
                         Self::visible_rows_for_total(filtered.len())
                     }
                 };
-                let base_y = if self.mode == PaletteMode::Settings {
+                let base_y = if matches!(
+                    self.mode,
+                    PaletteMode::Settings | PaletteMode::Models | PaletteMode::Reasoning
+                ) {
                     area.y.saturating_add(1)
                 } else {
                     area.y
@@ -965,6 +1232,8 @@ impl CommandPalette {
         match self.mode {
             PaletteMode::Commands => self.filtered_commands(),
             PaletteMode::Settings => self.filtered_settings(),
+            PaletteMode::Models => self.filtered_models(),
+            PaletteMode::Reasoning => self.filtered_reasoning(),
             PaletteMode::Skills => self.filtered_skills(),
         }
     }
@@ -995,8 +1264,20 @@ impl CommandPalette {
     }
 
     fn filtered_settings(&self) -> Vec<PaletteItem> {
+        self.filtered_selection_entries(self.settings.as_slice())
+    }
+
+    fn filtered_models(&self) -> Vec<PaletteItem> {
+        self.filtered_selection_entries(self.model_entries.as_slice())
+    }
+
+    fn filtered_reasoning(&self) -> Vec<PaletteItem> {
+        self.filtered_selection_entries(self.reasoning_entries.as_slice())
+    }
+
+    fn filtered_selection_entries(&self, entries: &[SettingsEntry]) -> Vec<PaletteItem> {
         let query = self.query.trim().to_ascii_lowercase();
-        self.settings
+        entries
             .iter()
             .filter(|entry| {
                 if query.is_empty() {
@@ -1200,6 +1481,17 @@ fn selectable_indices(filtered: &[PaletteItem]) -> Vec<usize> {
         .enumerate()
         .filter_map(|(idx, entry)| entry.selectable.then_some(idx))
         .collect()
+}
+
+fn selection_index_for_entries(entries: &[SettingsEntry], selected_label: Option<&str>) -> usize {
+    selected_label
+        .and_then(|label| {
+            entries
+                .iter()
+                .position(|entry| entry.selectable && entry.label == label)
+        })
+        .or_else(|| entries.iter().position(|entry| entry.selectable))
+        .unwrap_or(0)
 }
 
 fn skill_popup_hint_line() -> Line<'static> {
@@ -1811,6 +2103,46 @@ mod tests {
             action,
             Some(CommandAction::OpenSettings(SettingsSurfaceFocus::Overview))
         );
+    }
+
+    #[test]
+    fn reasoning_escape_returns_to_model_selector_parent_view() {
+        let mut palette = CommandPalette::new(Language::En, Vec::new());
+        palette.show_model_selector(
+            vec![SettingsEntry {
+                label: "gpt-5".to_owned(),
+                category_tag: "[Model]".to_owned(),
+                status_tag: Some("current".to_owned()),
+                description: "OpenAI model · choose reasoning next".to_owned(),
+                action: CommandAction::OpenModelReasoning("gpt-5".to_owned()),
+                selectable: true,
+            }],
+            None,
+            Some("gpt-5"),
+            "",
+        );
+        palette.show_reasoning_selector(
+            "gpt-5",
+            vec![SettingsEntry {
+                label: "default".to_owned(),
+                category_tag: "[Reasoning]".to_owned(),
+                status_tag: Some("current".to_owned()),
+                description: "use the provider or model default reasoning behavior".to_owned(),
+                action: CommandAction::ApplyModelSelection {
+                    model: "gpt-5".to_owned(),
+                    reasoning_effort: None,
+                },
+                selectable: true,
+            }],
+            None,
+            Some("default"),
+        );
+
+        assert_eq!(palette.handle_key(key(KeyCode::Esc)), None);
+        match palette.handle_key(key(KeyCode::Enter)) {
+            Some(CommandAction::OpenModelReasoning(model)) if model == "gpt-5" => {}
+            other => panic!("expected escape to restore model selector, got {other:?}"),
+        }
     }
 
     #[test]

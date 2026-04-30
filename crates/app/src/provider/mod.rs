@@ -10,6 +10,7 @@ use tokio::time::sleep;
 use crate::CliResult;
 
 use super::config::LoongConfig;
+use super::config::{ProviderConfig, ReasoningEffort};
 #[cfg(test)]
 use super::config::{ProviderKind, ProviderProfileHealthModeConfig};
 
@@ -104,6 +105,39 @@ pub fn provider_http_client_runtime_metrics_snapshot() -> ProviderHttpClientRunt
 
 pub fn provider_failover_metrics_snapshot() -> ProviderFailoverMetricsSnapshot {
     failover_telemetry_runtime::provider_failover_metrics_snapshot()
+}
+
+const DEFAULT_REASONING_EFFORTS: &[ReasoningEffort] = &[
+    ReasoningEffort::None,
+    ReasoningEffort::Minimal,
+    ReasoningEffort::Low,
+    ReasoningEffort::Medium,
+    ReasoningEffort::High,
+    ReasoningEffort::Xhigh,
+];
+
+pub fn supported_reasoning_efforts_for_model(
+    provider: &ProviderConfig,
+    model: &str,
+) -> Vec<ReasoningEffort> {
+    let runtime_contract = provider_runtime_contract(provider);
+    let capability_profile = capability_profile_runtime::ProviderCapabilityProfile::from_provider(
+        provider,
+        runtime_contract,
+    );
+    let capability = capability_profile.resolve_for_model(model);
+    let supports_reasoning = runtime_contract.default_reasoning_field
+        != contracts::ReasoningField::Omit
+        || capability.reasoning_extra_body_mode != contracts::ProviderReasoningExtraBodyMode::Omit;
+    if !supports_reasoning {
+        return Vec::new();
+    }
+
+    provider
+        .kind
+        .allowed_reasoning_efforts()
+        .unwrap_or(DEFAULT_REASONING_EFFORTS)
+        .to_vec()
 }
 
 pub fn is_auth_style_failure_message(message: &str) -> bool {

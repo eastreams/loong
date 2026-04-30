@@ -28,7 +28,7 @@ use crate::chat::CliTurnRuntime;
 use crate::chat::control_plane::ChatControlPlaneStore;
 use crate::config::{
     InitiativeLevel, LoongConfig, MemoryProfile, PersonalizationConfig, PersonalizationPromptState,
-    ProviderConfig, ProviderKind, ResponseDensity, normalize_web_search_provider,
+    ProviderConfig, ProviderKind, ReasoningEffort, ResponseDensity, normalize_web_search_provider,
     web_search_provider_api_key_env_names, web_search_provider_descriptor,
 };
 use crate::tools::bundled_preinstall_targets;
@@ -1014,7 +1014,10 @@ impl App {
                 self.focus = Focus::Composer;
                 Some(command.to_owned())
             }
-            CommandAction::OpenSettings(_) | CommandAction::ApplySettings(_) => None,
+            CommandAction::OpenSettings(_)
+            | CommandAction::ApplySettings(_)
+            | CommandAction::OpenModelReasoning(_)
+            | CommandAction::ApplyModelSelection { .. } => None,
             CommandAction::Noop => None,
             CommandAction::InsertText(text) => {
                 if let Some(range) = current_skill_token_range(&self.composer) {
@@ -1321,9 +1324,12 @@ pub async fn run_app<B: Backend>(
                                 if matches!(key.code, KeyCode::Char('/') | KeyCode::Char(':'))
                                     && app.composer.is_empty()
                                 {
-                                    app.command_palette.show_commands(":");
-                                    app.inline_skill_popup_active = false;
-                                    app.focus = Focus::CommandPalette;
+                                    let prefix = if key.code == KeyCode::Char(':') {
+                                        ':'
+                                    } else {
+                                        '/'
+                                    };
+                                    open_slash_command_palette(&mut app, prefix, "");
                                 } else if app.handle_inline_skill_popup_key(key) {
                                 } else if should_route_composer_key_to_transcript(&app, key) {
                                     app.message_list.handle_key(key);
@@ -1348,8 +1354,12 @@ pub async fn run_app<B: Backend>(
                                 if matches!(key.code, KeyCode::Char('/') | KeyCode::Char(':'))
                                     && app.composer.is_empty()
                                 {
-                                    app.command_palette.show_commands(":");
-                                    app.focus = Focus::CommandPalette;
+                                    let prefix = if key.code == KeyCode::Char(':') {
+                                        ':'
+                                    } else {
+                                        '/'
+                                    };
+                                    open_slash_command_palette(&mut app, prefix, "");
                                 } else if should_focus_composer_for_transcript_key(key) {
                                     pending_submission =
                                         route_transcript_key_to_composer(&mut app, key);
@@ -1361,6 +1371,16 @@ pub async fn run_app<B: Backend>(
                                 }
                             }
                             Focus::CommandPalette => {
+                                if app.command_palette.is_commands_mode()
+                                    && key.code == KeyCode::Backspace
+                                    && app.command_palette.query_text().is_empty()
+                                {
+                                    clear_slash_palette_composer(&mut app);
+                                    app.inline_skill_popup_active = false;
+                                    app.focus = Focus::Composer;
+                                    dirty = true;
+                                    continue;
+                                }
                                 if let Some(action) = app.command_palette.handle_key(key)
                                     && let Some(command) = dispatch_palette_action(
                                         &mut app,
@@ -1370,6 +1390,8 @@ pub async fn run_app<B: Backend>(
                                     )?
                                 {
                                     pending_command = Some(command);
+                                } else if app.command_palette.is_commands_mode() {
+                                    sync_slash_palette_composer(&mut app);
                                 }
                             }
                         }
@@ -1377,11 +1399,22 @@ pub async fn run_app<B: Backend>(
                             if msg == "/exit" {
                                 break;
                             }
-                            if msg.starts_with('/') || msg.starts_with(':') {
-                                let command = if msg.starts_with(':') {
-                                    format!("/{}", msg.trim_start_matches(':'))
+                            let trimmed_msg = msg.trim();
+                            if matches!(trimmed_msg, "/" | ":") {
+                                let prefix = if trimmed_msg.starts_with(':') {
+                                    ':'
                                 } else {
-                                    msg
+                                    '/'
+                                };
+                                open_slash_command_palette(&mut app, prefix, "");
+                                dirty = true;
+                                continue;
+                            }
+                            if trimmed_msg.starts_with('/') || trimmed_msg.starts_with(':') {
+                                let command = if trimmed_msg.starts_with(':') {
+                                    format!("/{}", trimmed_msg.trim_start_matches(':'))
+                                } else {
+                                    trimmed_msg.to_owned()
                                 };
                                 pending_command = Some(command);
                             } else {
@@ -1438,9 +1471,12 @@ pub async fn run_app<B: Backend>(
                             } else if matches!(key.code, KeyCode::Char('/') | KeyCode::Char(':'))
                                 && app.composer.is_empty()
                             {
-                                app.command_palette.show_commands(":");
-                                app.inline_skill_popup_active = false;
-                                app.focus = Focus::CommandPalette;
+                                let prefix = if key.code == KeyCode::Char(':') {
+                                    ':'
+                                } else {
+                                    '/'
+                                };
+                                open_slash_command_palette(&mut app, prefix, "");
                             } else if app.handle_inline_skill_popup_key(key) {
                             } else if should_route_composer_key_to_transcript(&app, key) {
                                 app.message_list.handle_key(key);
@@ -1454,6 +1490,16 @@ pub async fn run_app<B: Backend>(
                             }
                         }
                         Focus::CommandPalette => {
+                            if app.command_palette.is_commands_mode()
+                                && key.code == KeyCode::Backspace
+                                && app.command_palette.query_text().is_empty()
+                            {
+                                clear_slash_palette_composer(&mut app);
+                                app.inline_skill_popup_active = false;
+                                app.focus = Focus::Composer;
+                                dirty = true;
+                                continue;
+                            }
                             if let Some(action) = app.command_palette.handle_key(key)
                                 && let Some(command) = dispatch_palette_action(
                                     &mut app,
@@ -1463,6 +1509,8 @@ pub async fn run_app<B: Backend>(
                                 )?
                             {
                                 command_to_run = Some(command);
+                            } else if app.command_palette.is_commands_mode() {
+                                sync_slash_palette_composer(&mut app);
                             }
                         }
                         Focus::MessageList => {
@@ -1484,18 +1532,31 @@ pub async fn run_app<B: Backend>(
                             break;
                         }
 
-                        if msg.starts_with('/') || msg.starts_with(':') {
-                            app.command_palette.show_commands(&msg);
-                            app.focus = Focus::CommandPalette;
+                        let trimmed_msg = msg.trim();
+                        if matches!(trimmed_msg, "/" | ":") {
+                            let prefix = if trimmed_msg.starts_with(':') {
+                                ':'
+                            } else {
+                                '/'
+                            };
+                            open_slash_command_palette(&mut app, prefix, "");
                             continue;
                         }
 
-                        if submitted_message_is_follow_up(&app, &msg) {
+                        if trimmed_msg.starts_with('/') || trimmed_msg.starts_with(':') {
+                            command_to_run = Some(if trimmed_msg.starts_with(':') {
+                                format!("/{}", trimmed_msg.trim_start_matches(':'))
+                            } else {
+                                trimmed_msg.to_owned()
+                            });
+                        } else if submitted_message_is_follow_up(&app, &msg) {
                             start_turn(terminal, &mut app, &runtime, msg, false).await?;
                         } else {
                             submit_user_turn(terminal, &mut app, &runtime, msg).await?;
                         }
-                    } else if let Some(command) = command_to_run {
+                    }
+
+                    if let Some(command) = command_to_run {
                         if command == "/exit" {
                             break;
                         }
@@ -2330,6 +2391,271 @@ fn paste_into_composer(app: &mut App, text: &str) {
     app.sync_inline_skill_popup();
 }
 
+fn open_slash_command_palette(app: &mut App, prefix: char, query: &str) {
+    let normalized_prefix = if prefix == ':' { ':' } else { '/' };
+    app.command_palette.show_commands(query);
+    app.composer
+        .set_input(format!("{normalized_prefix}{}", query.trim()));
+    app.inline_skill_popup_active = false;
+    app.focus = Focus::CommandPalette;
+}
+
+fn sync_slash_palette_composer(app: &mut App) {
+    if !app.command_palette.is_commands_mode() {
+        return;
+    }
+    let prefix = app
+        .composer
+        .text()
+        .chars()
+        .next()
+        .filter(|ch| matches!(ch, '/' | ':'))
+        .unwrap_or('/');
+    app.composer
+        .set_input(format!("{prefix}{}", app.command_palette.query_text()));
+}
+
+fn clear_slash_palette_composer(app: &mut App) {
+    if app.command_palette.is_commands_mode()
+        && app
+            .composer
+            .text()
+            .chars()
+            .next()
+            .is_some_and(|ch| matches!(ch, '/' | ':'))
+    {
+        app.composer.clear();
+        app.composer_follow_up_intent = false;
+    }
+}
+
+fn push_unique_model_candidate(out: &mut Vec<String>, model: &str) {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || out.iter().any(|existing| existing == trimmed) {
+        return;
+    }
+    out.push(trimmed.to_owned());
+}
+
+fn local_model_candidates(provider: &ProviderConfig) -> Vec<String> {
+    let mut models = Vec::new();
+    push_unique_model_candidate(&mut models, provider.model.as_str());
+    for preferred in &provider.preferred_models {
+        push_unique_model_candidate(&mut models, preferred.as_str());
+    }
+    if let Some(default_model) = provider.kind.default_model() {
+        push_unique_model_candidate(&mut models, default_model);
+    }
+    if let Some(recommended_model) = provider.kind.recommended_onboarding_model() {
+        push_unique_model_candidate(&mut models, recommended_model);
+    }
+    models
+}
+
+fn merged_model_candidates(provider: &ProviderConfig, available: &[String]) -> Vec<String> {
+    let mut models = local_model_candidates(provider);
+    for model in available {
+        push_unique_model_candidate(&mut models, model.as_str());
+    }
+    models
+}
+
+fn current_reasoning_label(runtime: &CliTurnRuntime) -> String {
+    runtime
+        .config
+        .provider
+        .reasoning_effort
+        .map(|effort| effort.as_str().to_owned())
+        .unwrap_or_else(|| "default".to_owned())
+}
+
+fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> String {
+    match reasoning_effort {
+        None => "use the provider or model default reasoning behavior".to_owned(),
+        Some(ReasoningEffort::None) => {
+            "disable explicit reasoning effort for this model".to_owned()
+        }
+        Some(ReasoningEffort::Minimal) => "keep reasoning as light as possible".to_owned(),
+        Some(ReasoningEffort::Low) => "favor quick turns with light reasoning".to_owned(),
+        Some(ReasoningEffort::Medium) => "balance speed and deeper reasoning".to_owned(),
+        Some(ReasoningEffort::High) => "prefer deeper reasoning for harder turns".to_owned(),
+        Some(ReasoningEffort::Xhigh) => {
+            "maximize reasoning depth when the provider supports it".to_owned()
+        }
+    }
+}
+
+fn build_model_palette_entries(runtime: &CliTurnRuntime, models: &[String]) -> Vec<SettingsEntry> {
+    let provider = &runtime.config.provider;
+    let current_model = provider.model.trim();
+    let default_model = provider.kind.default_model();
+    let configured_auto_models = provider.configured_auto_model_candidates();
+
+    models
+        .iter()
+        .map(|model| {
+            let trimmed = model.trim();
+            let is_current = trimmed == current_model;
+            let status_tag = if is_current {
+                Some("current".to_owned())
+            } else if Some(trimmed) == default_model {
+                Some("default".to_owned())
+            } else if configured_auto_models
+                .iter()
+                .any(|candidate| candidate == trimmed)
+            {
+                Some("preferred".to_owned())
+            } else {
+                None
+            };
+            let reasoning_efforts =
+                crate::provider::supported_reasoning_efforts_for_model(provider, trimmed);
+            let description = if reasoning_efforts.is_empty() {
+                format!("{} model · apply immediately", provider.kind.display_name())
+            } else {
+                format!(
+                    "{} model · choose reasoning next",
+                    provider.kind.display_name()
+                )
+            };
+            let action = if reasoning_efforts.is_empty() {
+                CommandAction::ApplyModelSelection {
+                    model: trimmed.to_owned(),
+                    reasoning_effort: None,
+                }
+            } else {
+                CommandAction::OpenModelReasoning(trimmed.to_owned())
+            };
+            SettingsEntry {
+                label: trimmed.to_owned(),
+                category_tag: "[Model]".to_owned(),
+                status_tag,
+                description,
+                action,
+                selectable: true,
+            }
+        })
+        .collect()
+}
+
+fn build_reasoning_palette_entries(
+    runtime: &CliTurnRuntime,
+    model: &str,
+) -> (Vec<SettingsEntry>, String) {
+    let supported =
+        crate::provider::supported_reasoning_efforts_for_model(&runtime.config.provider, model);
+    let selected_label = runtime
+        .config
+        .provider
+        .reasoning_effort
+        .map(|effort| effort.as_str().to_owned())
+        .unwrap_or_else(|| "default".to_owned());
+
+    let mut entries = vec![SettingsEntry {
+        label: "default".to_owned(),
+        category_tag: "[Reasoning]".to_owned(),
+        status_tag: (runtime.config.provider.model == model
+            && runtime.config.provider.reasoning_effort.is_none())
+        .then(|| "current".to_owned()),
+        description: reasoning_option_description(None),
+        action: CommandAction::ApplyModelSelection {
+            model: model.to_owned(),
+            reasoning_effort: None,
+        },
+        selectable: true,
+    }];
+
+    for effort in supported {
+        entries.push(SettingsEntry {
+            label: effort.as_str().to_owned(),
+            category_tag: "[Reasoning]".to_owned(),
+            status_tag: (runtime.config.provider.model == model
+                && runtime.config.provider.reasoning_effort == Some(effort))
+            .then(|| "current".to_owned()),
+            description: reasoning_option_description(Some(effort)),
+            action: CommandAction::ApplyModelSelection {
+                model: model.to_owned(),
+                reasoning_effort: Some(effort),
+            },
+            selectable: true,
+        });
+    }
+
+    (entries, selected_label)
+}
+
+async fn open_model_palette(app: &mut App, runtime: &CliTurnRuntime, query: &str) -> CliResult<()> {
+    let (available_models, status) =
+        match crate::provider::fetch_available_models(&runtime.config).await {
+            Ok(models) => {
+                let count = models.len();
+                (
+                    models,
+                    Some(format!(
+                        "{count} models available for {}",
+                        runtime.config.provider.kind.display_name()
+                    )),
+                )
+            }
+            Err(error) => (
+                local_model_candidates(&runtime.config.provider),
+                Some(format!(
+                    "model catalog unavailable; showing local candidates ({error})"
+                )),
+            ),
+        };
+    let merged = merged_model_candidates(&runtime.config.provider, &available_models);
+    let entries = build_model_palette_entries(runtime, merged.as_slice());
+    app.command_palette.show_model_selector(
+        entries,
+        status,
+        Some(runtime.config.provider.model.as_str()),
+        query,
+    );
+    app.inline_skill_popup_active = false;
+    app.focus = Focus::CommandPalette;
+    app.composer.clear();
+    Ok(())
+}
+
+fn open_reasoning_palette(app: &mut App, runtime: &CliTurnRuntime, model: &str) {
+    let (entries, selected_label) = build_reasoning_palette_entries(runtime, model);
+    app.command_palette.show_reasoning_selector(
+        model,
+        entries,
+        Some(format!(
+            "Current reasoning: {} · Enter apply · Esc back",
+            current_reasoning_label(runtime)
+        )),
+        Some(selected_label.as_str()),
+    );
+    app.inline_skill_popup_active = false;
+    app.focus = Focus::CommandPalette;
+}
+
+fn apply_model_selection(
+    app: &mut App,
+    runtime: &mut CliTurnRuntime,
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+) -> CliResult<()> {
+    let _ = persist_runtime_settings(runtime, app, |config| {
+        config.provider.model = model.clone();
+        config.provider.reasoning_effort = reasoning_effort;
+        Ok(format!(
+            "model switched to {} · reasoning {}",
+            model,
+            reasoning_effort
+                .map(|effort| effort.as_str().to_owned())
+                .unwrap_or_else(|| "default".to_owned())
+        ))
+    })?;
+    app.inline_skill_popup_active = false;
+    app.focus = Focus::Composer;
+    app.composer.clear();
+    Ok(())
+}
+
 async fn run_surface_command<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -2434,6 +2760,7 @@ async fn run_surface_command<B: Backend>(
             app.focus = Focus::Composer;
             Ok(())
         }
+        "/model" => open_model_palette(app, runtime, args).await,
         "/settings" if args.trim().is_empty() => {
             open_settings_palette(
                 app,
@@ -2630,17 +2957,27 @@ fn dispatch_palette_action(
     width: usize,
     action: CommandAction,
 ) -> CliResult<Option<String>> {
+    let should_clear_slash_buffer = app.command_palette.is_commands_mode();
     match action {
         CommandAction::RunCommand(command) => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
             app.inline_skill_popup_active = false;
             app.focus = Focus::Composer;
             Ok(Some(command.to_owned()))
         }
         CommandAction::OpenSettings(focus) => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
             open_settings_palette(app, runtime, focus, width, None, None);
             Ok(None)
         }
         CommandAction::ApplySettings(action) => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
             let (focus, summary, selected_label) = apply_settings_command(app, runtime, action)?;
             open_settings_palette(
                 app,
@@ -2650,6 +2987,23 @@ fn dispatch_palette_action(
                 Some(summary),
                 Some(selected_label.as_str()),
             );
+            Ok(None)
+        }
+        CommandAction::OpenModelReasoning(model) => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
+            open_reasoning_palette(app, runtime, model.as_str());
+            Ok(None)
+        }
+        CommandAction::ApplyModelSelection {
+            model,
+            reasoning_effort,
+        } => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
+            apply_model_selection(app, runtime, model, reasoning_effort)?;
             Ok(None)
         }
         CommandAction::Noop => Ok(None),
@@ -2666,6 +3020,9 @@ fn dispatch_palette_action(
             Ok(None)
         }
         CommandAction::Close => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
             app.inline_skill_popup_active = false;
             app.focus = Focus::Composer;
             Ok(None)
@@ -6406,7 +6763,7 @@ mod tests {
     use crate::chat::{
         CliChatOptions, CliSessionRequirement, initialize_cli_turn_runtime_with_loaded_config,
     };
-    use crate::config::{LoongConfig, ProviderConfig, ProviderKind};
+    use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -7510,6 +7867,120 @@ description: "actual description"
                 panic!("expected palette mouse scroll to land on /permissions, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn slash_palette_open_and_sync_mirror_query_into_composer() {
+        let mut app = blank_app();
+
+        super::open_slash_command_palette(&mut app, '/', "");
+        assert_eq!(app.focus, Focus::CommandPalette);
+        assert_eq!(app.composer.text(), "/");
+
+        let _ = app
+            .command_palette
+            .handle_key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('m'),
+                KeyModifiers::NONE,
+            ));
+        let _ = app
+            .command_palette
+            .handle_key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('o'),
+                KeyModifiers::NONE,
+            ));
+        super::sync_slash_palette_composer(&mut app);
+
+        assert_eq!(app.composer.text(), "/mo");
+    }
+
+    #[test]
+    fn clearing_slash_palette_buffer_resets_composer() {
+        let mut app = blank_app();
+        super::open_slash_command_palette(&mut app, '/', "model");
+
+        super::clear_slash_palette_composer(&mut app);
+
+        assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn model_palette_entries_open_reasoning_for_reasoning_capable_models() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "loong-model-palette-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let config_path = temp_root.join("config.toml");
+        crate::config::write(
+            Some(config_path.to_string_lossy().as_ref()),
+            &LoongConfig::default(),
+            true,
+        )
+        .expect("seed config");
+        let runtime = test_runtime_with_path(config_path);
+        let current_model = runtime.config.provider.model.clone();
+
+        let entries =
+            super::build_model_palette_entries(&runtime, std::slice::from_ref(&current_model));
+
+        let entry = entries
+            .iter()
+            .find(|entry| entry.label == current_model)
+            .expect("current model entry");
+        assert_eq!(entry.status_tag.as_deref(), Some("current"));
+        assert!(matches!(
+            entry.action,
+            CommandAction::OpenModelReasoning(ref model) if model == &current_model
+        ));
+    }
+
+    #[test]
+    fn reasoning_palette_entries_include_default_and_current_effort() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "loong-reasoning-palette-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let config_path = temp_root.join("config.toml");
+        crate::config::write(
+            Some(config_path.to_string_lossy().as_ref()),
+            &LoongConfig::default(),
+            true,
+        )
+        .expect("seed config");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.config.provider.reasoning_effort = Some(ReasoningEffort::High);
+        let current_model = runtime.config.provider.model.clone();
+
+        let (entries, selected_label) =
+            super::build_reasoning_palette_entries(&runtime, current_model.as_str());
+
+        assert_eq!(
+            entries.first().map(|entry| entry.label.as_str()),
+            Some("default")
+        );
+        assert_eq!(selected_label, "high");
+        let high_entry = entries
+            .iter()
+            .find(|entry| entry.label == "high")
+            .expect("high entry");
+        assert_eq!(high_entry.status_tag.as_deref(), Some("current"));
+        assert!(matches!(
+            high_entry.action,
+            CommandAction::ApplyModelSelection {
+                ref model,
+                reasoning_effort: Some(ReasoningEffort::High)
+            } if model == &current_model
+        ));
     }
 
     #[test]
