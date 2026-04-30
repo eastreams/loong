@@ -2130,6 +2130,7 @@ mod tests {
                         ReasoningEffort::Medium,
                         ReasoningEffort::High,
                     ],
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 }),
                 selectable: true,
             }],
