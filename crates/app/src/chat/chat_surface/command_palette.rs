@@ -2,6 +2,7 @@ use crate::chat::chat_surface::i18n::{I18nService, Language, SurfaceCopy};
 use crate::chat::chat_surface::scroll_state::ScrollState;
 use crate::chat::chat_surface::utils::*;
 use crate::config::{ProviderKind, ReasoningEffort};
+use crate::provider::ProviderModelCatalogEntry;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
@@ -16,7 +17,7 @@ pub enum CommandAction {
     RunCommand(&'static str),
     OpenSettings(SettingsSurfaceFocus),
     ApplySettings(SettingsCommandAction),
-    OpenModelReasoning(String),
+    OpenModelReasoning(ProviderModelCatalogEntry),
     ApplyModelSelection {
         model: String,
         reasoning_effort: Option<ReasoningEffort>,
@@ -1935,6 +1936,8 @@ fn area_contains(area: Rect, column: u16, row: u16) -> bool {
 mod tests {
     use super::{CommandAction, CommandPalette, SettingsEntry, SettingsSurfaceFocus, SkillEntry};
     use crate::chat::chat_surface::i18n::Language;
+    use crate::config::ReasoningEffort;
+    use crate::provider::ProviderModelCatalogEntry;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -2114,7 +2117,17 @@ mod tests {
                 category_tag: "[Model]".to_owned(),
                 status_tag: Some("current".to_owned()),
                 description: "OpenAI model · choose reasoning next".to_owned(),
-                action: CommandAction::OpenModelReasoning("gpt-5".to_owned()),
+                action: CommandAction::OpenModelReasoning(ProviderModelCatalogEntry {
+                    model: "gpt-5".to_owned(),
+                    display_name: Some("GPT-5".to_owned()),
+                    description: Some("Frontier model".to_owned()),
+                    default_reasoning_effort: Some(ReasoningEffort::Medium),
+                    supported_reasoning_efforts: vec![
+                        ReasoningEffort::Low,
+                        ReasoningEffort::Medium,
+                        ReasoningEffort::High,
+                    ],
+                }),
                 selectable: true,
             }],
             None,
@@ -2140,7 +2153,7 @@ mod tests {
 
         assert_eq!(palette.handle_key(key(KeyCode::Esc)), None);
         match palette.handle_key(key(KeyCode::Enter)) {
-            Some(CommandAction::OpenModelReasoning(model)) if model == "gpt-5" => {}
+            Some(CommandAction::OpenModelReasoning(entry)) if entry.model == "gpt-5" => {}
             other => panic!("expected escape to restore model selector, got {other:?}"),
         }
     }

@@ -2281,6 +2281,8 @@ fn markdown_fence_marker(line: &str) -> Option<char> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ModelCandidate {
     id: String,
+    display_name: Option<String>,
+    description: Option<String>,
     created: Option<i64>,
     created_text: Option<String>,
     deprecated: bool,
@@ -2343,6 +2345,8 @@ pub(super) fn extract_model_catalog_entries(body: &Value) -> Vec<ProviderModelCa
         }
         entries.push(ProviderModelCatalogEntry {
             model: candidate.id,
+            display_name: candidate.display_name,
+            description: candidate.description,
             default_reasoning_effort: candidate.default_reasoning_effort,
             supported_reasoning_efforts: candidate.supported_reasoning_efforts,
         });
@@ -2363,6 +2367,8 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
         if let Some(id) = model_id_from_value(item) {
             out.push(ModelCandidate {
                 id,
+                display_name: model_display_name_from_value(item),
+                description: model_description_from_value(item),
                 created: model_created_from_value(item),
                 created_text: model_created_text_from_value(item),
                 deprecated: model_is_deprecated(item),
@@ -2372,6 +2378,28 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
         }
     }
     out
+}
+
+fn model_display_name_from_value(value: &Value) -> Option<String> {
+    for key in ["display_name", "displayName", "modelName", "name"] {
+        if let Some(text) = value.get(key).and_then(Value::as_str)
+            && let Some(normalized) = normalize_text(text)
+        {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn model_description_from_value(value: &Value) -> Option<String> {
+    for key in ["description", "modelDescription"] {
+        if let Some(text) = value.get(key).and_then(Value::as_str)
+            && let Some(normalized) = normalize_text(text)
+        {
+            return Some(normalized);
+        }
+    }
+    None
 }
 
 fn parse_reasoning_effort_token(raw: &str) -> Option<ReasoningEffort> {
