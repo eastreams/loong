@@ -2465,6 +2465,7 @@ fn merged_model_catalog_entries(
                     deprecated: false,
                     default_reasoning_effort: None,
                     supported_reasoning_efforts: Vec::new(),
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 });
             }
         }
@@ -2572,15 +2573,26 @@ fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> St
     }
 }
 
+fn reasoning_option_description_for_entry(
+    entry: &crate::provider::ProviderModelCatalogEntry,
+    reasoning_effort: ReasoningEffort,
+) -> String {
+    crate::provider::reasoning_effort_description_for_entry(entry, reasoning_effort)
+        .map(str::to_owned)
+        .unwrap_or_else(|| reasoning_option_description(Some(reasoning_effort)))
+}
+
 fn default_reasoning_option_description(
     runtime: &CliTurnRuntime,
     entry: &crate::provider::ProviderModelCatalogEntry,
 ) -> String {
     crate::provider::effective_default_reasoning_effort_for_entry(&runtime.config.provider, entry)
         .map(|effort| {
+            let detail = reasoning_option_description_for_entry(entry, effort);
             format!(
-                "use the model default reasoning behavior ({})",
-                effort.as_str()
+                "use the model default reasoning behavior ({} · {})",
+                effort.as_str(),
+                detail
             )
         })
         .unwrap_or_else(|| "use the provider or model default reasoning behavior".to_owned())
@@ -2606,7 +2618,7 @@ fn build_model_palette_entries(
                     .iter()
                     .any(|candidate| candidate == left_model),
             ),
-            usize::from(Some(left_model) != default_model),
+            usize::from(Some(left_model) != default_model && !left.is_default),
             usize::from(left.hidden),
             usize::from(left.deprecated),
         );
@@ -2715,7 +2727,7 @@ fn build_reasoning_palette_entries(
             status_tag: (runtime.config.provider.model == entry.model
                 && runtime.config.provider.reasoning_effort == Some(effort))
             .then(|| "current".to_owned()),
-            description: reasoning_option_description(Some(effort)),
+            description: reasoning_option_description_for_entry(entry, effort),
             action: CommandAction::ApplyModelSelection {
                 model: entry.model.clone(),
                 reasoning_effort: Some(effort),
@@ -8202,6 +8214,7 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: None,
                 supported_reasoning_efforts: Vec::new(),
+                supported_reasoning_effort_descriptions: Vec::new(),
             }],
         );
 
@@ -8249,6 +8262,7 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: None,
                 supported_reasoning_efforts: Vec::new(),
+                supported_reasoning_effort_descriptions: Vec::new(),
             },
         );
 
@@ -8308,6 +8322,7 @@ description: "actual description"
                     ReasoningEffort::High,
                     ReasoningEffort::Xhigh,
                 ],
+                supported_reasoning_effort_descriptions: Vec::new(),
             },
         );
 
@@ -8348,12 +8363,58 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::High),
                 supported_reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                supported_reasoning_effort_descriptions: Vec::new(),
             },
         );
 
         assert_eq!(selected_label, "default");
         let default_entry = entries.first().expect("default entry");
         assert!(default_entry.description.contains("high"));
+    }
+
+    #[test]
+    fn reasoning_palette_uses_catalog_reasoning_option_descriptions_when_present() {
+        let runtime = test_runtime_with_path(PathBuf::from(
+            "/tmp/loong-reasoning-option-description.toml",
+        ));
+
+        let (entries, _) = super::build_reasoning_palette_entries(
+            &runtime,
+            &crate::provider::ProviderModelCatalogEntry {
+                model: "gpt-5.5".to_owned(),
+                display_name: Some("GPT-5.5".to_owned()),
+                description: Some("Frontier model".to_owned()),
+                is_default: true,
+                hidden: false,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::Medium),
+                supported_reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                supported_reasoning_effort_descriptions: vec![
+                    (
+                        ReasoningEffort::Low,
+                        "Fast responses with lighter reasoning".to_owned(),
+                    ),
+                    (
+                        ReasoningEffort::High,
+                        "Greater reasoning depth for complex problems".to_owned(),
+                    ),
+                ],
+            },
+        );
+
+        let low = entries
+            .iter()
+            .find(|entry| entry.label == "low")
+            .expect("low entry");
+        assert_eq!(low.description, "Fast responses with lighter reasoning");
+        let high = entries
+            .iter()
+            .find(|entry| entry.label == "high")
+            .expect("high entry");
+        assert_eq!(
+            high.description,
+            "Greater reasoning depth for complex problems"
+        );
     }
 
     #[test]
@@ -8465,6 +8526,7 @@ description: "actual description"
                     ReasoningEffort::High,
                     ReasoningEffort::Xhigh,
                 ],
+                supported_reasoning_effort_descriptions: Vec::new(),
             },
             crate::provider::ProviderModelCatalogEntry {
                 model: "command-r".to_owned(),
@@ -8475,6 +8537,7 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::High),
                 supported_reasoning_efforts: vec![ReasoningEffort::High],
+                supported_reasoning_effort_descriptions: Vec::new(),
             },
             crate::provider::ProviderModelCatalogEntry {
                 model: "hidden-model".to_owned(),
@@ -8485,6 +8548,7 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Low),
                 supported_reasoning_efforts: vec![ReasoningEffort::Low],
+                supported_reasoning_effort_descriptions: Vec::new(),
             },
         ];
 
@@ -8532,6 +8596,7 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::High),
                 supported_reasoning_efforts: vec![ReasoningEffort::High],
+                supported_reasoning_effort_descriptions: Vec::new(),
             }],
         );
 
@@ -8565,6 +8630,7 @@ description: "actual description"
                     ReasoningEffort::High,
                     ReasoningEffort::Xhigh,
                 ],
+                supported_reasoning_effort_descriptions: Vec::new(),
             }],
         );
 
@@ -8606,6 +8672,7 @@ description: "actual description"
                     deprecated: false,
                     default_reasoning_effort: None,
                     supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 },
                 crate::provider::ProviderModelCatalogEntry {
                     model: "alpha-model".to_owned(),
@@ -8616,6 +8683,7 @@ description: "actual description"
                     deprecated: false,
                     default_reasoning_effort: None,
                     supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 },
                 crate::provider::ProviderModelCatalogEntry {
                     model: "current-model".to_owned(),
@@ -8626,6 +8694,7 @@ description: "actual description"
                     deprecated: false,
                     default_reasoning_effort: None,
                     supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 },
             ],
         );
@@ -8652,6 +8721,7 @@ description: "actual description"
                     deprecated: false,
                     default_reasoning_effort: Some(ReasoningEffort::Medium),
                     supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 },
                 crate::provider::ProviderModelCatalogEntry {
                     model: "deprecated-remote".to_owned(),
@@ -8662,6 +8732,7 @@ description: "actual description"
                     deprecated: true,
                     default_reasoning_effort: Some(ReasoningEffort::Low),
                     supported_reasoning_efforts: vec![ReasoningEffort::Low],
+                    supported_reasoning_effort_descriptions: Vec::new(),
                 },
             ],
             false,
@@ -8694,6 +8765,7 @@ description: "actual description"
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Medium),
                 supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                supported_reasoning_effort_descriptions: Vec::new(),
             }],
             false,
         );
