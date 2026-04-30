@@ -156,7 +156,6 @@ const CLI_CHAT_STATUS_COMMAND: &str = "/status";
 const CLI_CHAT_HISTORY_COMMAND: &str = "/history";
 const CLI_CHAT_MISSION_COMMAND: &str = "/mission";
 const CLI_CHAT_REVIEW_COMMAND: &str = "/review";
-const CLI_CHAT_WORKERS_COMMAND: &str = "/workers";
 const CLI_CHAT_SESSIONS_COMMAND: &str = "/sessions";
 const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND: &str = "/turn_checkpoint_repair";
 const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS: &str = "/turn-checkpoint-repair";
@@ -1251,4 +1250,5 @@ fn render_turn_checkpoint_startup_health_lines_with_width(
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod tests;

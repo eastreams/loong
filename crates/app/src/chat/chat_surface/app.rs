@@ -1410,12 +1410,7 @@ pub async fn run_app<B: Backend>(
                                 dirty = true;
                                 continue;
                             }
-                            if trimmed_msg.starts_with('/') || trimmed_msg.starts_with(':') {
-                                let command = if trimmed_msg.starts_with(':') {
-                                    format!("/{}", trimmed_msg.trim_start_matches(':'))
-                                } else {
-                                    trimmed_msg.to_owned()
-                                };
+                            if let Some(command) = recognized_surface_command(trimmed_msg) {
                                 pending_command = Some(command);
                             } else {
                                 queue_pending_steer(&mut app, msg);
@@ -1543,12 +1538,8 @@ pub async fn run_app<B: Backend>(
                             continue;
                         }
 
-                        if trimmed_msg.starts_with('/') || trimmed_msg.starts_with(':') {
-                            command_to_run = Some(if trimmed_msg.starts_with(':') {
-                                format!("/{}", trimmed_msg.trim_start_matches(':'))
-                            } else {
-                                trimmed_msg.to_owned()
-                            });
+                        if let Some(command) = recognized_surface_command(trimmed_msg) {
+                            command_to_run = Some(command);
                         } else if submitted_message_is_follow_up(&app, &msg) {
                             start_turn(terminal, &mut app, &runtime, msg, false).await?;
                         } else {
@@ -2793,6 +2784,59 @@ fn split_surface_command(input: &str) -> (&str, &str) {
     } else {
         (trimmed, "")
     }
+}
+
+fn is_known_surface_command(command: &str) -> bool {
+    match command {
+        super::super::CLI_CHAT_HELP_COMMAND
+        | super::super::CLI_CHAT_STATUS_COMMAND
+        | super::super::CLI_CHAT_HISTORY_COMMAND
+        | super::super::CLI_CHAT_COMPACT_COMMAND
+        | "/model"
+        | "/settings"
+        | "/permissions"
+        | "/experimental"
+        | "/themes"
+        | "/cwd"
+        | "/language"
+        | "/mcp"
+        | "/skills"
+        | "/usage"
+        | "/sessions"
+        | "/subagents"
+        | "/missions"
+        | "/mission"
+        | "/clear"
+        | "/new"
+        | "/copy"
+        | "/diff"
+        | "/export"
+        | "/share"
+        | "/import"
+        | "/simplify"
+        | "/plan"
+        | "/title"
+        | "/rename"
+        | "/feedback"
+        | "/exit" => true,
+        _ => slash_command_specs()
+            .iter()
+            .any(|spec| spec.command == command),
+    }
+}
+
+fn recognized_surface_command(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if !(trimmed.starts_with('/') || trimmed.starts_with(':')) {
+        return None;
+    }
+    let normalized = if trimmed.starts_with(':') {
+        format!("/{}", trimmed.trim_start_matches(':'))
+    } else {
+        trimmed.to_owned()
+    };
+    let (command, _) = split_surface_command(normalized.as_str());
+    is_known_surface_command(command).then_some(normalized)
 }
 
 fn parse_settings_command_action(args: &str) -> Result<CommandAction, String> {
@@ -5235,7 +5279,9 @@ fn render_sessions_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Ve
         role: "sessions".to_owned(),
         caption: Some(format!("scope={}", runtime.session_id)),
         sections,
-        footer_lines: vec!["Use /workers for delegate lanes and /review for approvals.".to_owned()],
+        footer_lines: vec![
+            "Use /subagents for delegate lanes and /review for approvals.".to_owned(),
+        ],
     };
     Ok(super::super::render_cli_chat_message_spec_with_width(
         &message_spec,
@@ -5473,7 +5519,7 @@ fn render_mission_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec
         caption: Some("control plane".to_owned()),
         sections,
         footer_lines: vec![
-            "Use /sessions, /workers, and /review to drill into each lane.".to_owned(),
+            "Use /sessions, /subagents, and /review to drill into each lane.".to_owned(),
         ],
     };
     Ok(super::super::render_cli_chat_message_spec_with_width(
@@ -7371,6 +7417,38 @@ mod tests {
             ("/copy", "explicit text")
         );
         assert_eq!(super::split_surface_command("  /diff  "), ("/diff", ""));
+    }
+
+    #[test]
+    fn recognized_surface_command_only_accepts_known_builtins() {
+        assert_eq!(
+            super::recognized_surface_command("/model gpt-5"),
+            Some("/model gpt-5".to_owned())
+        );
+        assert_eq!(
+            super::recognized_surface_command(":settings provider"),
+            Some("/settings provider".to_owned())
+        );
+        assert_eq!(super::recognized_surface_command("/workers"), None);
+        assert_eq!(
+            super::recognized_surface_command("/fast_lane_summary"),
+            None
+        );
+        assert_eq!(
+            super::recognized_surface_command("/safe_lane_summary"),
+            None
+        );
+        assert_eq!(
+            super::recognized_surface_command("/turn_checkpoint_summary"),
+            None
+        );
+        assert_eq!(
+            super::recognized_surface_command("/turn_checkpoint_repair"),
+            None
+        );
+        assert_eq!(super::recognized_surface_command("/unknown note"), None);
+        assert_eq!(super::recognized_surface_command(":unknown note"), None);
+        assert_eq!(super::recognized_surface_command("plain text"), None);
     }
 
     #[test]
