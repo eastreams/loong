@@ -2446,6 +2446,7 @@ fn local_model_candidates(provider: &ProviderConfig) -> Vec<String> {
 fn merged_model_catalog_entries(
     provider: &ProviderConfig,
     catalog: &[crate::provider::ProviderModelCatalogEntry],
+    include_hidden_and_deprecated: bool,
 ) -> Vec<crate::provider::ProviderModelCatalogEntry> {
     let mut merged = Vec::new();
     let mut seen = HashSet::new();
@@ -2459,6 +2460,7 @@ fn merged_model_catalog_entries(
                     model,
                     display_name: None,
                     description: None,
+                    is_default: false,
                     hidden: false,
                     deprecated: false,
                     default_reasoning_effort: None,
@@ -2469,7 +2471,7 @@ fn merged_model_catalog_entries(
     }
 
     for entry in catalog {
-        if entry.hidden || entry.deprecated {
+        if !include_hidden_and_deprecated && (entry.hidden || entry.deprecated) {
             continue;
         }
         if seen.insert(entry.model.clone()) {
@@ -2520,6 +2522,9 @@ fn model_entry_description(
         && !description.is_empty()
     {
         parts.push(description.to_owned());
+    }
+    if entry.is_default {
+        parts.push("catalog default".to_owned());
     }
     if entry.hidden {
         parts.push("hidden from default picker".to_owned());
@@ -2612,7 +2617,7 @@ fn build_model_palette_entries(
                     .iter()
                     .any(|candidate| candidate == right_model),
             ),
-            usize::from(Some(right_model) != default_model),
+            usize::from(Some(right_model) != default_model && !right.is_default),
             usize::from(right.hidden),
             usize::from(right.deprecated),
         );
@@ -2629,6 +2634,8 @@ fn build_model_palette_entries(
             let is_current = trimmed == current_model;
             let status_tag = if is_current {
                 Some("current".to_owned())
+            } else if entry.is_default {
+                Some("default".to_owned())
             } else if entry.deprecated {
                 Some("deprecated".to_owned())
             } else if entry.hidden {
@@ -2737,14 +2744,15 @@ async fn open_model_palette(
             )
         }
         Err(error) => (
-            merged_model_catalog_entries(&runtime.config.provider, &[]),
+            merged_model_catalog_entries(&runtime.config.provider, &[], false),
             Some(format!(
                 "model catalog unavailable; showing local candidates ({error})"
             )),
         ),
     };
-    let merged = merged_model_catalog_entries(&runtime.config.provider, catalog.as_slice());
-    if let Some(entry) = find_exact_model_catalog_entry(merged.as_slice(), query) {
+    let exact_catalog =
+        merged_model_catalog_entries(&runtime.config.provider, catalog.as_slice(), true);
+    if let Some(entry) = find_exact_model_catalog_entry(exact_catalog.as_slice(), query) {
         let reasoning_efforts = crate::provider::effective_supported_reasoning_efforts_for_entry(
             &runtime.config.provider,
             entry,
@@ -2765,6 +2773,7 @@ async fn open_model_palette(
         open_reasoning_palette(app, runtime, entry);
         return Ok(());
     }
+    let merged = merged_model_catalog_entries(&runtime.config.provider, catalog.as_slice(), false);
     let entries = build_model_palette_entries(runtime, merged.as_slice());
     app.command_palette.show_model_selector(
         entries,
@@ -8182,6 +8191,7 @@ description: "actual description"
                 model: current_model.clone(),
                 display_name: None,
                 description: None,
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: None,
@@ -8228,6 +8238,7 @@ description: "actual description"
                 model: current_model.clone(),
                 display_name: None,
                 description: None,
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: None,
@@ -8281,6 +8292,7 @@ description: "actual description"
                 model: "gpt-5.4".to_owned(),
                 display_name: Some("GPT-5.4".to_owned()),
                 description: Some("Strong model for everyday coding.".to_owned()),
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Xhigh),
@@ -8325,6 +8337,7 @@ description: "actual description"
                 model: "custom-model".to_owned(),
                 display_name: Some("Custom Model".to_owned()),
                 description: Some("Custom provider test model".to_owned()),
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::High),
@@ -8436,6 +8449,7 @@ description: "actual description"
                 model: "gpt-5.4".to_owned(),
                 display_name: Some("GPT-5.4".to_owned()),
                 description: Some("Strong model for everyday coding.".to_owned()),
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Xhigh),
@@ -8450,10 +8464,21 @@ description: "actual description"
                 model: "command-r".to_owned(),
                 display_name: Some("Command R".to_owned()),
                 description: Some("Cohere model".to_owned()),
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::High),
                 supported_reasoning_efforts: vec![ReasoningEffort::High],
+            },
+            crate::provider::ProviderModelCatalogEntry {
+                model: "hidden-model".to_owned(),
+                display_name: Some("Hidden Model".to_owned()),
+                description: Some("Not shown by default".to_owned()),
+                is_default: false,
+                hidden: true,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::Low),
+                supported_reasoning_efforts: vec![ReasoningEffort::Low],
             },
         ];
 
@@ -8466,6 +8491,11 @@ description: "actual description"
             super::find_exact_model_catalog_entry(catalog.as_slice(), "Command R")
                 .map(|entry| entry.model.as_str()),
             Some("command-r")
+        );
+        assert_eq!(
+            super::find_exact_model_catalog_entry(catalog.as_slice(), "hidden-model")
+                .map(|entry| entry.model.as_str()),
+            Some("hidden-model")
         );
     }
 
@@ -8491,6 +8521,7 @@ description: "actual description"
                 model: "command-r".to_owned(),
                 display_name: Some("Command R".to_owned()),
                 description: Some("Cohere model".to_owned()),
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::High),
@@ -8518,6 +8549,7 @@ description: "actual description"
                 model: "gpt-5.4".to_owned(),
                 display_name: Some("GPT-5.4 Frontier".to_owned()),
                 description: Some("Strong model for everyday coding.".to_owned()),
+                is_default: false,
                 hidden: false,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Xhigh),
@@ -8563,6 +8595,7 @@ description: "actual description"
                     model: "zeta-model".to_owned(),
                     display_name: Some("Zeta Model".to_owned()),
                     description: None,
+                    is_default: false,
                     hidden: false,
                     deprecated: false,
                     default_reasoning_effort: None,
@@ -8572,6 +8605,7 @@ description: "actual description"
                     model: "alpha-model".to_owned(),
                     display_name: Some("Alpha Model".to_owned()),
                     description: None,
+                    is_default: false,
                     hidden: false,
                     deprecated: false,
                     default_reasoning_effort: None,
@@ -8581,6 +8615,7 @@ description: "actual description"
                     model: "current-model".to_owned(),
                     display_name: Some("Current Model".to_owned()),
                     description: None,
+                    is_default: false,
                     hidden: false,
                     deprecated: false,
                     default_reasoning_effort: None,
@@ -8606,6 +8641,7 @@ description: "actual description"
                     model: "hidden-remote".to_owned(),
                     display_name: Some("Hidden Remote".to_owned()),
                     description: Some("hidden".to_owned()),
+                    is_default: false,
                     hidden: true,
                     deprecated: false,
                     default_reasoning_effort: Some(ReasoningEffort::Medium),
@@ -8615,12 +8651,14 @@ description: "actual description"
                     model: "deprecated-remote".to_owned(),
                     display_name: Some("Deprecated Remote".to_owned()),
                     description: Some("deprecated".to_owned()),
+                    is_default: false,
                     hidden: false,
                     deprecated: true,
                     default_reasoning_effort: Some(ReasoningEffort::Low),
                     supported_reasoning_efforts: vec![ReasoningEffort::Low],
                 },
             ],
+            false,
         );
 
         assert!(!merged.iter().any(|entry| entry.model == "hidden-remote"));
@@ -8645,11 +8683,13 @@ description: "actual description"
                 model: "hidden-current".to_owned(),
                 display_name: Some("Hidden Current".to_owned()),
                 description: Some("still current".to_owned()),
+                is_default: false,
                 hidden: true,
                 deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Medium),
                 supported_reasoning_efforts: vec![ReasoningEffort::Medium],
             }],
+            false,
         );
 
         let current = merged

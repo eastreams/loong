@@ -2285,6 +2285,7 @@ struct ModelCandidate {
     description: Option<String>,
     created: Option<i64>,
     created_text: Option<String>,
+    is_default: bool,
     hidden: bool,
     deprecated: bool,
     default_reasoning_effort: Option<ReasoningEffort>,
@@ -2348,6 +2349,7 @@ pub(super) fn extract_model_catalog_entries(body: &Value) -> Vec<ProviderModelCa
             model: candidate.id,
             display_name: candidate.display_name,
             description: candidate.description,
+            is_default: candidate.is_default,
             hidden: candidate.hidden,
             deprecated: candidate.deprecated,
             default_reasoning_effort: candidate.default_reasoning_effort,
@@ -2374,6 +2376,7 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
                 description: model_description_from_value(item),
                 created: model_created_from_value(item),
                 created_text: model_created_text_from_value(item),
+                is_default: model_is_default(item),
                 hidden: model_is_hidden(item),
                 deprecated: model_is_deprecated(item),
                 default_reasoning_effort: model_default_reasoning_effort_from_value(item),
@@ -2382,6 +2385,15 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
         }
     }
     out
+}
+
+fn model_is_default(value: &Value) -> bool {
+    value
+        .get("is_default")
+        .or_else(|| value.get("isDefault"))
+        .or_else(|| value.get("default"))
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 fn model_display_name_from_value(value: &Value) -> Option<String> {
@@ -4242,13 +4254,32 @@ mod tests {
             .iter()
             .find(|entry| entry.model == "hidden-model")
             .expect("hidden entry");
+        assert!(!hidden.is_default);
         assert!(hidden.hidden);
         assert!(!hidden.deprecated);
         let deprecated = entries
             .iter()
             .find(|entry| entry.model == "deprecated-model")
             .expect("deprecated entry");
+        assert!(!deprecated.is_default);
         assert!(!deprecated.hidden);
         assert!(deprecated.deprecated);
+    }
+
+    #[test]
+    fn extract_model_catalog_entries_surfaces_catalog_default_flag() {
+        let body = json!({
+            "data": [
+                {
+                    "id": "default-model",
+                    "is_default": true,
+                    "supported_reasoning_levels": [{"effort": "medium"}]
+                }
+            ]
+        });
+
+        let entries = extract_model_catalog_entries(&body);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_default);
     }
 }

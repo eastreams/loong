@@ -2121,6 +2121,7 @@ mod tests {
                     model: "gpt-5".to_owned(),
                     display_name: Some("GPT-5".to_owned()),
                     description: Some("Frontier model".to_owned()),
+                    is_default: false,
                     hidden: false,
                     deprecated: false,
                     default_reasoning_effort: Some(ReasoningEffort::Medium),
