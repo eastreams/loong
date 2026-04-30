@@ -2443,12 +2443,34 @@ fn local_model_candidates(provider: &ProviderConfig) -> Vec<String> {
     models
 }
 
-fn merged_model_candidates(provider: &ProviderConfig, available: &[String]) -> Vec<String> {
-    let mut models = local_model_candidates(provider);
-    for model in available {
-        push_unique_model_candidate(&mut models, model.as_str());
+fn merged_model_catalog_entries(
+    provider: &ProviderConfig,
+    catalog: &[crate::provider::ProviderModelCatalogEntry],
+) -> Vec<crate::provider::ProviderModelCatalogEntry> {
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+
+    for model in local_model_candidates(provider) {
+        if seen.insert(model.clone()) {
+            if let Some(entry) = catalog.iter().find(|entry| entry.model == model) {
+                merged.push(entry.clone());
+            } else {
+                merged.push(crate::provider::ProviderModelCatalogEntry {
+                    model,
+                    default_reasoning_effort: None,
+                    supported_reasoning_efforts: Vec::new(),
+                });
+            }
+        }
     }
-    models
+
+    for entry in catalog {
+        if seen.insert(entry.model.clone()) {
+            merged.push(entry.clone());
+        }
+    }
+
+    merged
 }
 
 fn current_reasoning_label(runtime: &CliTurnRuntime) -> String {
@@ -2487,16 +2509,19 @@ fn default_reasoning_option_description(runtime: &CliTurnRuntime, model: &str) -
         .unwrap_or_else(|| "use the provider or model default reasoning behavior".to_owned())
 }
 
-fn build_model_palette_entries(runtime: &CliTurnRuntime, models: &[String]) -> Vec<SettingsEntry> {
+fn build_model_palette_entries(
+    runtime: &CliTurnRuntime,
+    catalog: &[crate::provider::ProviderModelCatalogEntry],
+) -> Vec<SettingsEntry> {
     let provider = &runtime.config.provider;
     let current_model = provider.model.trim();
     let default_model = provider.kind.default_model();
     let configured_auto_models = provider.configured_auto_model_candidates();
 
-    models
+    catalog
         .iter()
-        .map(|model| {
-            let trimmed = model.trim();
+        .map(|entry| {
+            let trimmed = entry.model.trim();
             let is_current = trimmed == current_model;
             let status_tag = if is_current {
                 Some("current".to_owned())
@@ -2511,7 +2536,7 @@ fn build_model_palette_entries(runtime: &CliTurnRuntime, models: &[String]) -> V
                 None
             };
             let reasoning_efforts =
-                crate::provider::supported_reasoning_efforts_for_model(provider, trimmed);
+                crate::provider::effective_supported_reasoning_efforts_for_entry(provider, entry);
             let description = if reasoning_efforts.is_empty() {
                 format!("{} model · apply immediately", provider.kind.display_name())
             } else {
@@ -2587,26 +2612,25 @@ fn build_reasoning_palette_entries(
 }
 
 async fn open_model_palette(app: &mut App, runtime: &CliTurnRuntime, query: &str) -> CliResult<()> {
-    let (available_models, status) =
-        match crate::provider::fetch_available_models(&runtime.config).await {
-            Ok(models) => {
-                let count = models.len();
-                (
-                    models,
-                    Some(format!(
-                        "{count} models available for {}",
-                        runtime.config.provider.kind.display_name()
-                    )),
-                )
-            }
-            Err(error) => (
-                local_model_candidates(&runtime.config.provider),
+    let (catalog, status) = match crate::provider::fetch_model_catalog(&runtime.config).await {
+        Ok(catalog) => {
+            let count = catalog.len();
+            (
+                catalog,
                 Some(format!(
-                    "model catalog unavailable; showing local candidates ({error})"
+                    "{count} models available for {}",
+                    runtime.config.provider.kind.display_name()
                 )),
-            ),
-        };
-    let merged = merged_model_candidates(&runtime.config.provider, &available_models);
+            )
+        }
+        Err(error) => (
+            merged_model_catalog_entries(&runtime.config.provider, &[]),
+            Some(format!(
+                "model catalog unavailable; showing local candidates ({error})"
+            )),
+        ),
+    };
+    let merged = merged_model_catalog_entries(&runtime.config.provider, catalog.as_slice());
     let entries = build_model_palette_entries(runtime, merged.as_slice());
     app.command_palette.show_model_selector(
         entries,
@@ -8014,8 +8038,14 @@ description: "actual description"
         let runtime = test_runtime_with_path(config_path);
         let current_model = runtime.config.provider.model.clone();
 
-        let entries =
-            super::build_model_palette_entries(&runtime, std::slice::from_ref(&current_model));
+        let entries = super::build_model_palette_entries(
+            &runtime,
+            &[crate::provider::ProviderModelCatalogEntry {
+                model: current_model.clone(),
+                default_reasoning_effort: None,
+                supported_reasoning_efforts: Vec::new(),
+            }],
+        );
 
         let entry = entries
             .iter()

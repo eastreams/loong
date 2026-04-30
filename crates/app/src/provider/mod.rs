@@ -74,6 +74,13 @@ pub struct ProviderToolSchemaReadiness {
     pub effective_tool_schema_mode: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCatalogEntry {
+    pub model: String,
+    pub default_reasoning_effort: Option<ReasoningEffort>,
+    pub supported_reasoning_efforts: Vec<ReasoningEffort>,
+}
+
 pub fn provider_tool_schema_readiness(config: &LoongConfig) -> ProviderToolSchemaReadiness {
     let provider = &config.provider;
     let runtime_contract = provider_runtime_contract(provider);
@@ -163,6 +170,25 @@ pub fn default_reasoning_effort_for_model(
         .or_else(|| supported.first().copied())
 }
 
+pub fn effective_supported_reasoning_efforts_for_entry(
+    provider: &ProviderConfig,
+    entry: &ProviderModelCatalogEntry,
+) -> Vec<ReasoningEffort> {
+    if !entry.supported_reasoning_efforts.is_empty() {
+        return entry.supported_reasoning_efforts.clone();
+    }
+    supported_reasoning_efforts_for_model(provider, entry.model.as_str())
+}
+
+pub fn effective_default_reasoning_effort_for_entry(
+    provider: &ProviderConfig,
+    entry: &ProviderModelCatalogEntry,
+) -> Option<ReasoningEffort> {
+    entry
+        .default_reasoning_effort
+        .or_else(|| default_reasoning_effort_for_model(provider, entry.model.as_str()))
+}
+
 pub fn supported_reasoning_efforts_for_model(
     provider: &ProviderConfig,
     model: &str,
@@ -203,7 +229,9 @@ pub fn is_auth_style_failure_message(message: &str) -> bool {
 
 #[cfg(test)]
 use auth_profile_runtime::{ProviderAuthProfile, resolve_provider_auth_profiles};
-use catalog_query_runtime::fetch_available_models_with_profiles;
+use catalog_query_runtime::{
+    fetch_available_models_with_profiles, fetch_model_catalog_with_profiles,
+};
 #[cfg(test)]
 use catalog_runtime::{
     ModelCatalogCache, clear_model_catalog_singleflight_slot,
@@ -527,6 +555,12 @@ pub async fn request_turn_streaming_in_view(
 
 pub async fn fetch_available_models(config: &LoongConfig) -> CliResult<Vec<String>> {
     fetch_available_models_with_profiles(config).await
+}
+
+pub async fn fetch_model_catalog(
+    config: &LoongConfig,
+) -> CliResult<Vec<ProviderModelCatalogEntry>> {
+    fetch_model_catalog_with_profiles(config).await
 }
 
 pub async fn provider_auth_ready(config: &LoongConfig) -> bool {
