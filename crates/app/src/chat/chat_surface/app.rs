@@ -2560,8 +2560,11 @@ fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> St
     }
 }
 
-fn default_reasoning_option_description(runtime: &CliTurnRuntime, model: &str) -> String {
-    crate::provider::default_reasoning_effort_for_model(&runtime.config.provider, model)
+fn default_reasoning_option_description(
+    runtime: &CliTurnRuntime,
+    entry: &crate::provider::ProviderModelCatalogEntry,
+) -> String {
+    crate::provider::effective_default_reasoning_effort_for_entry(&runtime.config.provider, entry)
         .map(|effort| {
             format!(
                 "use the model default reasoning behavior ({})",
@@ -2651,7 +2654,7 @@ fn build_reasoning_palette_entries(
         status_tag: (runtime.config.provider.model == entry.model
             && runtime.config.provider.reasoning_effort.is_none())
         .then(|| "current".to_owned()),
-        description: default_reasoning_option_description(runtime, entry.model.as_str()),
+        description: default_reasoning_option_description(runtime, entry),
         action: CommandAction::ApplyModelSelection {
             model: entry.model.clone(),
             reasoning_effort: None,
@@ -8255,6 +8258,44 @@ description: "actual description"
         let default_entry = entries.first().expect("default entry");
         assert_eq!(default_entry.label, "default");
         assert!(default_entry.description.contains("xhigh"));
+    }
+
+    #[test]
+    fn reasoning_palette_default_row_prefers_catalog_default_effort_over_fallback() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "loong-reasoning-catalog-default-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let config_path = temp_root.join("config.toml");
+        crate::config::write(
+            Some(config_path.to_string_lossy().as_ref()),
+            &LoongConfig::default(),
+            true,
+        )
+        .expect("seed config");
+        let runtime = test_runtime_with_path(config_path);
+
+        let (entries, selected_label) = super::build_reasoning_palette_entries(
+            &runtime,
+            &crate::provider::ProviderModelCatalogEntry {
+                model: "custom-model".to_owned(),
+                display_name: Some("Custom Model".to_owned()),
+                description: Some("Custom provider test model".to_owned()),
+                hidden: false,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::High),
+                supported_reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+            },
+        );
+
+        assert_eq!(selected_label, "default");
+        let default_entry = entries.first().expect("default entry");
+        assert!(default_entry.description.contains("high"));
     }
 
     #[test]
