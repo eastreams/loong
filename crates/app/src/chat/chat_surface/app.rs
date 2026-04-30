@@ -2476,6 +2476,17 @@ fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> St
     }
 }
 
+fn default_reasoning_option_description(runtime: &CliTurnRuntime, model: &str) -> String {
+    crate::provider::default_reasoning_effort_for_model(&runtime.config.provider, model)
+        .map(|effort| {
+            format!(
+                "use the model default reasoning behavior ({})",
+                effort.as_str()
+            )
+        })
+        .unwrap_or_else(|| "use the provider or model default reasoning behavior".to_owned())
+}
+
 fn build_model_palette_entries(runtime: &CliTurnRuntime, models: &[String]) -> Vec<SettingsEntry> {
     let provider = &runtime.config.provider;
     let current_model = provider.model.trim();
@@ -2548,7 +2559,7 @@ fn build_reasoning_palette_entries(
         status_tag: (runtime.config.provider.model == model
             && runtime.config.provider.reasoning_effort.is_none())
         .then(|| "current".to_owned()),
-        description: reasoning_option_description(None),
+        description: default_reasoning_option_description(runtime, model),
         action: CommandAction::ApplyModelSelection {
             model: model.to_owned(),
             reasoning_effort: None,
@@ -8059,6 +8070,120 @@ description: "actual description"
                 reasoning_effort: Some(ReasoningEffort::High)
             } if model == &current_model
         ));
+    }
+
+    #[test]
+    fn reasoning_palette_default_row_surfaces_known_model_default_effort() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "loong-reasoning-default-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let config_path = temp_root.join("config.toml");
+        crate::config::write(
+            Some(config_path.to_string_lossy().as_ref()),
+            &LoongConfig::default(),
+            true,
+        )
+        .expect("seed config");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.config.provider.model = "gpt-5.4".to_owned();
+
+        let (entries, selected_label) = super::build_reasoning_palette_entries(&runtime, "gpt-5.4");
+
+        assert_eq!(selected_label, "default");
+        let default_entry = entries.first().expect("default entry");
+        assert_eq!(default_entry.label, "default");
+        assert!(default_entry.description.contains("xhigh"));
+    }
+
+    #[test]
+    fn apply_model_selection_updates_runtime_and_footer_model() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "loong-model-apply-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let config_path = temp_root.join("config.toml");
+        crate::config::write(
+            Some(config_path.to_string_lossy().as_ref()),
+            &LoongConfig::default(),
+            true,
+        )
+        .expect("seed config");
+        let mut runtime = test_runtime_with_path(config_path);
+        let mut app = blank_app();
+
+        super::apply_model_selection(
+            &mut app,
+            &mut runtime,
+            "gpt-5.4".to_owned(),
+            Some(ReasoningEffort::Xhigh),
+        )
+        .expect("apply model selection");
+
+        assert_eq!(runtime.config.provider.model, "gpt-5.4");
+        assert_eq!(
+            runtime.config.provider.reasoning_effort,
+            Some(ReasoningEffort::Xhigh)
+        );
+        assert_eq!(app.model, "gpt-5.4");
+        assert_eq!(app.focus, Focus::Composer);
+    }
+
+    #[test]
+    fn model_command_opens_selector_surface_instead_of_static_card() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "loong-model-command-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+        let config_path = temp_root.join("config.toml");
+        crate::config::write(
+            Some(config_path.to_string_lossy().as_ref()),
+            &LoongConfig::default(),
+            true,
+        )
+        .expect("seed config");
+        let mut runtime = test_runtime_with_path(config_path);
+        let mut app = blank_app();
+        let backend = TestBackend::new(72, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(super::run_surface_command(
+                &mut terminal,
+                &mut app,
+                &mut runtime,
+                &CliChatOptions::default(),
+                "/model",
+            ))
+            .expect("run model command");
+
+        assert_eq!(app.focus, Focus::CommandPalette);
+        match app
+            .command_palette
+            .handle_key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )) {
+            Some(CommandAction::OpenModelReasoning(model))
+                if model == runtime.config.provider.model => {}
+            other => panic!("expected /model to open model selector flow, got {other:?}"),
+        }
     }
 
     #[test]

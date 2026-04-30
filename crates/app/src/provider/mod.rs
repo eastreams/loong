@@ -116,6 +116,53 @@ const DEFAULT_REASONING_EFFORTS: &[ReasoningEffort] = &[
     ReasoningEffort::Xhigh,
 ];
 
+fn normalized_reasoning_model_id(model: &str) -> String {
+    model.trim().to_ascii_lowercase()
+}
+
+fn model_supports_xhigh_reasoning(model: &str) -> bool {
+    let model = normalized_reasoning_model_id(model);
+    model.contains("gpt-5.2")
+        || model.contains("gpt-5.3")
+        || model.contains("gpt-5.4")
+        || model.contains("gpt-5.5")
+        || model.contains("opus-4-6")
+        || model.contains("opus-4.6")
+        || model.contains("opus-4-7")
+        || model.contains("opus-4.7")
+}
+
+fn model_supports_minimal_reasoning(model: &str) -> bool {
+    let model = normalized_reasoning_model_id(model);
+    !(model.contains("gpt-5.3-codex") || model.contains("gpt-5.4") || model.contains("gpt-5.5"))
+}
+
+pub fn default_reasoning_effort_for_model(
+    provider: &ProviderConfig,
+    model: &str,
+) -> Option<ReasoningEffort> {
+    let supported = supported_reasoning_efforts_for_model(provider, model);
+    let model = normalized_reasoning_model_id(model);
+    if supported.is_empty() {
+        return None;
+    }
+
+    if model.contains("gpt-5.4") && supported.contains(&ReasoningEffort::Xhigh) {
+        return Some(ReasoningEffort::Xhigh);
+    }
+    if (model.contains("gpt-5.2") || model.contains("gpt-5.3") || model.contains("gpt-5.5"))
+        && supported.contains(&ReasoningEffort::Medium)
+    {
+        return Some(ReasoningEffort::Medium);
+    }
+
+    supported
+        .iter()
+        .copied()
+        .find(|effort| *effort != ReasoningEffort::None)
+        .or_else(|| supported.first().copied())
+}
+
 pub fn supported_reasoning_efforts_for_model(
     provider: &ProviderConfig,
     model: &str,
@@ -133,11 +180,18 @@ pub fn supported_reasoning_efforts_for_model(
         return Vec::new();
     }
 
-    provider
+    let mut supported = provider
         .kind
         .allowed_reasoning_efforts()
         .unwrap_or(DEFAULT_REASONING_EFFORTS)
-        .to_vec()
+        .to_vec();
+    if !model_supports_xhigh_reasoning(model) {
+        supported.retain(|effort| *effort != ReasoningEffort::Xhigh);
+    }
+    if !model_supports_minimal_reasoning(model) {
+        supported.retain(|effort| *effort != ReasoningEffort::Minimal);
+    }
+    supported
 }
 
 pub fn is_auth_style_failure_message(message: &str) -> bool {

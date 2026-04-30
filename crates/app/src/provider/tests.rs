@@ -124,6 +124,57 @@ fn provider_tool_schema_readiness_honors_disabled_mode_and_model_hints() {
     assert_eq!(hinted_readiness.effective_tool_schema_mode, "disabled");
 }
 
+#[test]
+fn supported_reasoning_efforts_clamp_known_openai_model_families() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openai,
+        ..ProviderConfig::default()
+    };
+
+    let gpt_55 = supported_reasoning_efforts_for_model(&provider, "gpt-5.5");
+    assert!(gpt_55.contains(&ReasoningEffort::Xhigh));
+    assert!(!gpt_55.contains(&ReasoningEffort::Minimal));
+
+    let gpt_54 = supported_reasoning_efforts_for_model(&provider, "gpt-5.4");
+    assert!(gpt_54.contains(&ReasoningEffort::Xhigh));
+    assert!(!gpt_54.contains(&ReasoningEffort::Minimal));
+
+    let generic = supported_reasoning_efforts_for_model(&provider, "gpt-4.1");
+    assert!(!generic.contains(&ReasoningEffort::Xhigh));
+    assert!(generic.contains(&ReasoningEffort::Minimal));
+}
+
+#[test]
+fn supported_reasoning_efforts_enable_xhigh_for_known_opus_models() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openrouter,
+        ..ProviderConfig::default()
+    };
+
+    let opus = supported_reasoning_efforts_for_model(&provider, "anthropic/claude-opus-4.6");
+    assert!(opus.contains(&ReasoningEffort::Xhigh));
+
+    let sonnet = supported_reasoning_efforts_for_model(&provider, "anthropic/claude-sonnet-4.5");
+    assert!(!sonnet.contains(&ReasoningEffort::Xhigh));
+}
+
+#[test]
+fn default_reasoning_effort_prefers_known_model_defaults() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openai,
+        ..ProviderConfig::default()
+    };
+
+    assert_eq!(
+        default_reasoning_effort_for_model(&provider, "gpt-5.4"),
+        Some(ReasoningEffort::Xhigh)
+    );
+    assert_eq!(
+        default_reasoning_effort_for_model(&provider, "gpt-5.5"),
+        Some(ReasoningEffort::Medium)
+    );
+}
+
 fn next_temp_path(prefix: &str, extension: &str) -> PathBuf {
     static NEXT_TEMP_PATH_SEED: AtomicUsize = AtomicUsize::new(1);
     let seed = NEXT_TEMP_PATH_SEED.fetch_add(1, Ordering::Relaxed);
