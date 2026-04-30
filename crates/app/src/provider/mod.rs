@@ -79,6 +79,8 @@ pub struct ProviderModelCatalogEntry {
     pub model: String,
     pub display_name: Option<String>,
     pub description: Option<String>,
+    pub hidden: bool,
+    pub deprecated: bool,
     pub default_reasoning_effort: Option<ReasoningEffort>,
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,
 }

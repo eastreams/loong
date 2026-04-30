@@ -2285,6 +2285,7 @@ struct ModelCandidate {
     description: Option<String>,
     created: Option<i64>,
     created_text: Option<String>,
+    hidden: bool,
     deprecated: bool,
     default_reasoning_effort: Option<ReasoningEffort>,
     supported_reasoning_efforts: Vec<ReasoningEffort>,
@@ -2347,6 +2348,8 @@ pub(super) fn extract_model_catalog_entries(body: &Value) -> Vec<ProviderModelCa
             model: candidate.id,
             display_name: candidate.display_name,
             description: candidate.description,
+            hidden: candidate.hidden,
+            deprecated: candidate.deprecated,
             default_reasoning_effort: candidate.default_reasoning_effort,
             supported_reasoning_efforts: candidate.supported_reasoning_efforts,
         });
@@ -2371,6 +2374,7 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
                 description: model_description_from_value(item),
                 created: model_created_from_value(item),
                 created_text: model_created_text_from_value(item),
+                hidden: model_is_hidden(item),
                 deprecated: model_is_deprecated(item),
                 default_reasoning_effort: model_default_reasoning_effort_from_value(item),
                 supported_reasoning_efforts: model_supported_reasoning_efforts_from_value(item),
@@ -2588,6 +2592,38 @@ fn model_is_archived(value: &Value) -> bool {
         .and_then(Value::as_bool)
         .or_else(|| value.get("is_archived").and_then(Value::as_bool))
         == Some(true)
+}
+
+fn model_is_hidden(value: &Value) -> bool {
+    if value
+        .get("hidden")
+        .and_then(Value::as_bool)
+        .is_some_and(|hidden| hidden)
+    {
+        return true;
+    }
+    if value
+        .get("show_in_picker")
+        .and_then(Value::as_bool)
+        .is_some_and(|show| !show)
+    {
+        return true;
+    }
+    if value
+        .get("showInPicker")
+        .and_then(Value::as_bool)
+        .is_some_and(|show| !show)
+    {
+        return true;
+    }
+    if let Some(visibility) = value
+        .get("visibility")
+        .and_then(Value::as_str)
+        .map(|visibility| visibility.trim().to_ascii_lowercase())
+    {
+        return matches!(visibility.as_str(), "hide" | "hidden" | "none");
+    }
+    false
 }
 
 fn model_has_explicit_non_text_output_capability(value: &Value) -> bool {
@@ -4181,5 +4217,38 @@ mod tests {
             entries[0].supported_reasoning_efforts,
             vec![ReasoningEffort::Low, ReasoningEffort::High]
         );
+    }
+
+    #[test]
+    fn extract_model_catalog_entries_surfaces_hidden_and_deprecated_flags() {
+        let body = json!({
+            "data": [
+                {
+                    "id": "hidden-model",
+                    "hidden": true,
+                    "default_reasoning_level": "medium"
+                },
+                {
+                    "id": "deprecated-model",
+                    "deprecated": true,
+                    "supported_reasoning_levels": [{"effort": "low"}]
+                }
+            ]
+        });
+
+        let entries = extract_model_catalog_entries(&body);
+        assert_eq!(entries.len(), 2);
+        let hidden = entries
+            .iter()
+            .find(|entry| entry.model == "hidden-model")
+            .expect("hidden entry");
+        assert!(hidden.hidden);
+        assert!(!hidden.deprecated);
+        let deprecated = entries
+            .iter()
+            .find(|entry| entry.model == "deprecated-model")
+            .expect("deprecated entry");
+        assert!(!deprecated.hidden);
+        assert!(deprecated.deprecated);
     }
 }

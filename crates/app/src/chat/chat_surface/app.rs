@@ -2459,6 +2459,8 @@ fn merged_model_catalog_entries(
                     model,
                     display_name: None,
                     description: None,
+                    hidden: false,
+                    deprecated: false,
                     default_reasoning_effort: None,
                     supported_reasoning_efforts: Vec::new(),
                 });
@@ -2467,12 +2469,33 @@ fn merged_model_catalog_entries(
     }
 
     for entry in catalog {
+        if entry.hidden || entry.deprecated {
+            continue;
+        }
         if seen.insert(entry.model.clone()) {
             merged.push(entry.clone());
         }
     }
 
     merged
+}
+
+fn find_exact_model_catalog_entry<'a>(
+    catalog: &'a [crate::provider::ProviderModelCatalogEntry],
+    query: &str,
+) -> Option<&'a crate::provider::ProviderModelCatalogEntry> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+
+    catalog.iter().find(|entry| {
+        entry.model.eq_ignore_ascii_case(query)
+            || entry
+                .display_name
+                .as_deref()
+                .is_some_and(|display_name| display_name.eq_ignore_ascii_case(query))
+    })
 }
 
 fn model_entry_description(
@@ -2490,6 +2513,12 @@ fn model_entry_description(
         && !description.is_empty()
     {
         parts.push(description.to_owned());
+    }
+    if entry.hidden {
+        parts.push("hidden from default picker".to_owned());
+    }
+    if entry.deprecated {
+        parts.push("deprecated".to_owned());
     }
     if let Some(default_effort) =
         crate::provider::effective_default_reasoning_effort_for_entry(provider, entry)
@@ -2558,6 +2587,10 @@ fn build_model_palette_entries(
             let is_current = trimmed == current_model;
             let status_tag = if is_current {
                 Some("current".to_owned())
+            } else if entry.deprecated {
+                Some("deprecated".to_owned())
+            } else if entry.hidden {
+                Some("hidden".to_owned())
             } else if Some(trimmed) == default_model {
                 Some("default".to_owned())
             } else if configured_auto_models
@@ -2645,7 +2678,11 @@ fn build_reasoning_palette_entries(
     (entries, selected_label)
 }
 
-async fn open_model_palette(app: &mut App, runtime: &CliTurnRuntime, query: &str) -> CliResult<()> {
+async fn open_model_palette(
+    app: &mut App,
+    runtime: &mut CliTurnRuntime,
+    query: &str,
+) -> CliResult<()> {
     let (catalog, status) = match crate::provider::fetch_model_catalog(&runtime.config).await {
         Ok(catalog) => {
             let count = catalog.len();
@@ -2665,6 +2702,27 @@ async fn open_model_palette(app: &mut App, runtime: &CliTurnRuntime, query: &str
         ),
     };
     let merged = merged_model_catalog_entries(&runtime.config.provider, catalog.as_slice());
+    if let Some(entry) = find_exact_model_catalog_entry(merged.as_slice(), query) {
+        let reasoning_efforts = crate::provider::effective_supported_reasoning_efforts_for_entry(
+            &runtime.config.provider,
+            entry,
+        );
+        if reasoning_efforts.is_empty() {
+            apply_model_selection(app, runtime, entry.model.clone(), None)?;
+            return Ok(());
+        }
+        if reasoning_efforts.len() == 1 {
+            apply_model_selection(
+                app,
+                runtime,
+                entry.model.clone(),
+                reasoning_efforts.first().copied(),
+            )?;
+            return Ok(());
+        }
+        open_reasoning_palette(app, runtime, entry);
+        return Ok(());
+    }
     let entries = build_model_palette_entries(runtime, merged.as_slice());
     app.command_palette.show_model_selector(
         entries,
@@ -8088,6 +8146,8 @@ description: "actual description"
                 model: current_model.clone(),
                 display_name: None,
                 description: None,
+                hidden: false,
+                deprecated: false,
                 default_reasoning_effort: None,
                 supported_reasoning_efforts: Vec::new(),
             }],
@@ -8132,6 +8192,8 @@ description: "actual description"
                 model: current_model.clone(),
                 display_name: None,
                 description: None,
+                hidden: false,
+                deprecated: false,
                 default_reasoning_effort: None,
                 supported_reasoning_efforts: Vec::new(),
             },
@@ -8183,6 +8245,8 @@ description: "actual description"
                 model: "gpt-5.4".to_owned(),
                 display_name: Some("GPT-5.4".to_owned()),
                 description: Some("Strong model for everyday coding.".to_owned()),
+                hidden: false,
+                deprecated: false,
                 default_reasoning_effort: Some(ReasoningEffort::Xhigh),
                 supported_reasoning_efforts: vec![
                     ReasoningEffort::Low,
@@ -8256,6 +8320,13 @@ description: "actual description"
         )
         .expect("seed config");
         let mut runtime = test_runtime_with_path(config_path);
+        runtime
+            .config
+            .provider
+            .preferred_models
+            .push("gpt-5.4".to_owned());
+        runtime.config.provider.models_endpoint = Some("http://127.0.0.1:9/models".to_owned());
+        runtime.config.provider.models_endpoint_explicit = true;
         let mut app = blank_app();
         let backend = TestBackend::new(72, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -8282,6 +8353,149 @@ description: "actual description"
                 if entry.model == runtime.config.provider.model => {}
             other => panic!("expected /model to open model selector flow, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn exact_model_catalog_match_finds_model_and_display_name() {
+        let catalog = vec![
+            crate::provider::ProviderModelCatalogEntry {
+                model: "gpt-5.4".to_owned(),
+                display_name: Some("GPT-5.4".to_owned()),
+                description: Some("Strong model for everyday coding.".to_owned()),
+                hidden: false,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::Xhigh),
+                supported_reasoning_efforts: vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Xhigh,
+                ],
+            },
+            crate::provider::ProviderModelCatalogEntry {
+                model: "command-r".to_owned(),
+                display_name: Some("Command R".to_owned()),
+                description: Some("Cohere model".to_owned()),
+                hidden: false,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::High),
+                supported_reasoning_efforts: vec![ReasoningEffort::High],
+            },
+        ];
+
+        assert_eq!(
+            super::find_exact_model_catalog_entry(catalog.as_slice(), "gpt-5.4")
+                .map(|entry| entry.model.as_str()),
+            Some("gpt-5.4")
+        );
+        assert_eq!(
+            super::find_exact_model_catalog_entry(catalog.as_slice(), "Command R")
+                .map(|entry| entry.model.as_str()),
+            Some("command-r")
+        );
+    }
+
+    #[test]
+    fn model_palette_entries_use_direct_apply_for_single_reasoning_option() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Cohere,
+            model: "command-r".to_owned(),
+            ..ProviderConfig::fresh_for_kind(ProviderKind::Cohere)
+        };
+        let runtime = test_runtime_with_path(PathBuf::from("/tmp/loong-model-single-effort.toml"));
+        let runtime = crate::chat::CliTurnRuntime {
+            config: LoongConfig {
+                provider,
+                ..runtime.config
+            },
+            ..runtime
+        };
+
+        let entries = super::build_model_palette_entries(
+            &runtime,
+            &[crate::provider::ProviderModelCatalogEntry {
+                model: "command-r".to_owned(),
+                display_name: Some("Command R".to_owned()),
+                description: Some("Cohere model".to_owned()),
+                hidden: false,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::High),
+                supported_reasoning_efforts: vec![ReasoningEffort::High],
+            }],
+        );
+
+        let entry = entries.first().expect("single model entry");
+        assert!(matches!(
+            entry.action,
+            CommandAction::ApplyModelSelection {
+                ref model,
+                reasoning_effort: Some(ReasoningEffort::High)
+            } if model == "command-r"
+        ));
+    }
+
+    #[test]
+    fn merged_model_catalog_entries_hide_remote_hidden_and_deprecated_models_by_default() {
+        let provider = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+
+        let merged = super::merged_model_catalog_entries(
+            &provider,
+            &[
+                crate::provider::ProviderModelCatalogEntry {
+                    model: "hidden-remote".to_owned(),
+                    display_name: Some("Hidden Remote".to_owned()),
+                    description: Some("hidden".to_owned()),
+                    hidden: true,
+                    deprecated: false,
+                    default_reasoning_effort: Some(ReasoningEffort::Medium),
+                    supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                },
+                crate::provider::ProviderModelCatalogEntry {
+                    model: "deprecated-remote".to_owned(),
+                    display_name: Some("Deprecated Remote".to_owned()),
+                    description: Some("deprecated".to_owned()),
+                    hidden: false,
+                    deprecated: true,
+                    default_reasoning_effort: Some(ReasoningEffort::Low),
+                    supported_reasoning_efforts: vec![ReasoningEffort::Low],
+                },
+            ],
+        );
+
+        assert!(!merged.iter().any(|entry| entry.model == "hidden-remote"));
+        assert!(
+            !merged
+                .iter()
+                .any(|entry| entry.model == "deprecated-remote")
+        );
+    }
+
+    #[test]
+    fn merged_model_catalog_entries_keep_current_local_candidate_even_if_hidden() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Openai,
+            model: "hidden-current".to_owned(),
+            ..ProviderConfig::fresh_for_kind(ProviderKind::Openai)
+        };
+
+        let merged = super::merged_model_catalog_entries(
+            &provider,
+            &[crate::provider::ProviderModelCatalogEntry {
+                model: "hidden-current".to_owned(),
+                display_name: Some("Hidden Current".to_owned()),
+                description: Some("still current".to_owned()),
+                hidden: true,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::Medium),
+                supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+            }],
+        );
+
+        let current = merged
+            .iter()
+            .find(|entry| entry.model == "hidden-current")
+            .expect("current hidden entry");
+        assert!(current.hidden);
     }
 
     #[test]
