@@ -5,6 +5,7 @@ use tokio::time::sleep;
 use crate::{CliResult, config::ProviderConfig};
 
 use super::{
+    ProviderModelCatalogEntry,
     auth_profile_runtime::ProviderAuthProfile,
     http_client_runtime::build_http_client,
     policy::ProviderRequestPolicy,
@@ -74,9 +75,9 @@ fn plan_catalog_status_outcome(
     }
 }
 
-pub(super) async fn fetch_available_models_with_policy(
+pub(super) async fn fetch_model_catalog_with_policy(
     runtime: ModelCatalogRequestRuntime<'_>,
-) -> CliResult<Vec<String>> {
+) -> CliResult<Vec<ProviderModelCatalogEntry>> {
     let endpoint = runtime.provider.models_endpoint();
     let client = build_http_client(runtime.request_policy)?;
 
@@ -123,13 +124,13 @@ pub(super) async fn fetch_available_models_with_policy(
                     })?;
 
                 if status.is_success() {
-                    let models = shape::extract_model_ids(&response_body);
-                    if models.is_empty() {
+                    let catalog = shape::extract_model_catalog_entries(&response_body);
+                    if catalog.is_empty() {
                         return Err(format!(
                             "provider model-list returned no models from endpoint `{endpoint}`"
                         ));
                     }
-                    return Ok(models);
+                    return Ok(catalog);
                 }
 
                 let status_code = status.as_u16();
@@ -192,6 +193,13 @@ pub(super) async fn fetch_available_models_with_policy(
             }
         }
     }
+}
+
+pub(super) async fn fetch_available_models_with_policy(
+    runtime: ModelCatalogRequestRuntime<'_>,
+) -> CliResult<Vec<String>> {
+    let catalog = fetch_model_catalog_with_policy(runtime).await?;
+    Ok(catalog.into_iter().map(|entry| entry.model).collect())
 }
 
 #[cfg(test)]

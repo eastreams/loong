@@ -5,6 +5,8 @@ use std::{
 
 use serde_json::{Value, json};
 
+use super::ProviderModelCatalogEntry;
+use crate::config::ReasoningEffort;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
 use crate::tools;
 
@@ -2282,8 +2284,11 @@ struct ModelCandidate {
     created: Option<i64>,
     created_text: Option<String>,
     deprecated: bool,
+    default_reasoning_effort: Option<ReasoningEffort>,
+    supported_reasoning_efforts: Vec<ReasoningEffort>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn extract_model_ids(body: &Value) -> Vec<String> {
     let mut candidates = collect_model_candidates(body);
     if candidates.is_empty() {
@@ -2312,6 +2317,39 @@ pub(super) fn extract_model_ids(body: &Value) -> Vec<String> {
     ids
 }
 
+pub(super) fn extract_model_catalog_entries(body: &Value) -> Vec<ProviderModelCatalogEntry> {
+    let mut candidates = collect_model_candidates(body);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    candidates.sort_by(|left, right| {
+        left.deprecated
+            .cmp(&right.deprecated)
+            .then_with(|| {
+                right
+                    .created
+                    .cmp(&left.created)
+                    .then_with(|| right.created_text.cmp(&left.created_text))
+            })
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut seen = BTreeSet::new();
+    let mut entries = Vec::new();
+    for candidate in candidates {
+        if !seen.insert(candidate.id.clone()) {
+            continue;
+        }
+        entries.push(ProviderModelCatalogEntry {
+            model: candidate.id,
+            default_reasoning_effort: candidate.default_reasoning_effort,
+            supported_reasoning_efforts: candidate.supported_reasoning_efforts,
+        });
+    }
+    entries
+}
+
 fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
     let mut out = Vec::new();
     let Some(items) = model_items(body) else {
@@ -2328,10 +2366,86 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
                 created: model_created_from_value(item),
                 created_text: model_created_text_from_value(item),
                 deprecated: model_is_deprecated(item),
+                default_reasoning_effort: model_default_reasoning_effort_from_value(item),
+                supported_reasoning_efforts: model_supported_reasoning_efforts_from_value(item),
             });
         }
     }
     out
+}
+
+fn parse_reasoning_effort_token(raw: &str) -> Option<ReasoningEffort> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" => Some(ReasoningEffort::None),
+        "minimal" => Some(ReasoningEffort::Minimal),
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "xhigh" | "x-high" | "max" => Some(ReasoningEffort::Xhigh),
+        _ => None,
+    }
+}
+
+fn reasoning_effort_from_value(value: &Value) -> Option<ReasoningEffort> {
+    value
+        .as_str()
+        .and_then(parse_reasoning_effort_token)
+        .or_else(|| {
+            value
+                .get("effort")
+                .and_then(Value::as_str)
+                .and_then(parse_reasoning_effort_token)
+        })
+        .or_else(|| {
+            value
+                .get("reasoning_effort")
+                .and_then(Value::as_str)
+                .and_then(parse_reasoning_effort_token)
+        })
+        .or_else(|| {
+            value
+                .get("reasoningEffort")
+                .and_then(Value::as_str)
+                .and_then(parse_reasoning_effort_token)
+        })
+}
+
+fn model_default_reasoning_effort_from_value(value: &Value) -> Option<ReasoningEffort> {
+    for key in [
+        "default_reasoning_effort",
+        "defaultReasoningEffort",
+        "default_reasoning_level",
+        "defaultReasoningLevel",
+    ] {
+        if let Some(effort) = value.get(key).and_then(reasoning_effort_from_value) {
+            return Some(effort);
+        }
+    }
+    None
+}
+
+fn model_supported_reasoning_efforts_from_value(value: &Value) -> Vec<ReasoningEffort> {
+    for key in [
+        "supported_reasoning_efforts",
+        "supportedReasoningEfforts",
+        "supported_reasoning_levels",
+        "supportedReasoningLevels",
+    ] {
+        if let Some(items) = value.get(key).and_then(Value::as_array) {
+            let mut supported = Vec::new();
+            for item in items {
+                if let Some(effort) = reasoning_effort_from_value(item)
+                    && !supported.contains(&effort)
+                {
+                    supported.push(effort);
+                }
+            }
+            if !supported.is_empty() {
+                return supported;
+            }
+        }
+    }
+    Vec::new()
 }
 
 fn model_items(body: &Value) -> Option<&[Value]> {
@@ -3978,5 +4092,66 @@ mod tests {
         });
         let ids = extract_model_ids(&body);
         assert_eq!(ids, vec!["model-a", "model-b"]);
+    }
+
+    #[test]
+    fn extract_model_catalog_entries_surfaces_reasoning_metadata_when_present() {
+        let body = json!({
+            "data": [
+                {
+                    "id": "gpt-5.4",
+                    "default_reasoning_level": "xhigh",
+                    "supported_reasoning_levels": [
+                        {"effort": "low"},
+                        {"effort": "medium"},
+                        {"effort": "xhigh"}
+                    ]
+                }
+            ]
+        });
+
+        let entries = extract_model_catalog_entries(&body);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].model, "gpt-5.4");
+        assert_eq!(
+            entries[0].default_reasoning_effort,
+            Some(ReasoningEffort::Xhigh)
+        );
+        assert_eq!(
+            entries[0].supported_reasoning_efforts,
+            vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::Xhigh
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_model_catalog_entries_supports_reasoning_effort_alias_keys() {
+        let body = json!({
+            "models": [
+                {
+                    "model": "gpt-5.5",
+                    "defaultReasoningEffort": "medium",
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low"},
+                        {"reasoningEffort": "high"}
+                    ]
+                }
+            ]
+        });
+
+        let entries = extract_model_catalog_entries(&body);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].model, "gpt-5.5");
+        assert_eq!(
+            entries[0].default_reasoning_effort,
+            Some(ReasoningEffort::Medium)
+        );
+        assert_eq!(
+            entries[0].supported_reasoning_efforts,
+            vec![ReasoningEffort::Low, ReasoningEffort::High]
+        );
     }
 }
