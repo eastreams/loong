@@ -2457,6 +2457,8 @@ fn merged_model_catalog_entries(
             } else {
                 merged.push(crate::provider::ProviderModelCatalogEntry {
                     model,
+                    display_name: None,
+                    description: None,
                     default_reasoning_effort: None,
                     supported_reasoning_efforts: Vec::new(),
                 });
@@ -2471,6 +2473,37 @@ fn merged_model_catalog_entries(
     }
 
     merged
+}
+
+fn model_entry_description(
+    provider: &ProviderConfig,
+    entry: &crate::provider::ProviderModelCatalogEntry,
+    reasoning_efforts: &[ReasoningEffort],
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(display_name) = entry.display_name.as_deref()
+        && !display_name.eq_ignore_ascii_case(entry.model.as_str())
+    {
+        parts.push(display_name.to_owned());
+    }
+    if let Some(description) = entry.description.as_deref()
+        && !description.is_empty()
+    {
+        parts.push(description.to_owned());
+    }
+    if let Some(default_effort) =
+        crate::provider::effective_default_reasoning_effort_for_entry(provider, entry)
+    {
+        parts.push(format!("default {}", default_effort.as_str()));
+    }
+
+    match reasoning_efforts {
+        [] => parts.push("apply immediately".to_owned()),
+        [only_effort] => parts.push(format!("apply {} immediately", only_effort.as_str())),
+        _ => parts.push("choose reasoning next".to_owned()),
+    }
+
+    parts.join(" · ")
 }
 
 fn current_reasoning_label(runtime: &CliTurnRuntime) -> String {
@@ -2537,21 +2570,20 @@ fn build_model_palette_entries(
             };
             let reasoning_efforts =
                 crate::provider::effective_supported_reasoning_efforts_for_entry(provider, entry);
-            let description = if reasoning_efforts.is_empty() {
-                format!("{} model · apply immediately", provider.kind.display_name())
-            } else {
-                format!(
-                    "{} model · choose reasoning next",
-                    provider.kind.display_name()
-                )
-            };
+            let description =
+                model_entry_description(provider, entry, reasoning_efforts.as_slice());
             let action = if reasoning_efforts.is_empty() {
                 CommandAction::ApplyModelSelection {
                     model: trimmed.to_owned(),
                     reasoning_effort: None,
                 }
+            } else if reasoning_efforts.len() == 1 {
+                CommandAction::ApplyModelSelection {
+                    model: trimmed.to_owned(),
+                    reasoning_effort: reasoning_efforts.first().copied(),
+                }
             } else {
-                CommandAction::OpenModelReasoning(trimmed.to_owned())
+                CommandAction::OpenModelReasoning(entry.clone())
             };
             SettingsEntry {
                 label: trimmed.to_owned(),
@@ -2567,10 +2599,12 @@ fn build_model_palette_entries(
 
 fn build_reasoning_palette_entries(
     runtime: &CliTurnRuntime,
-    model: &str,
+    entry: &crate::provider::ProviderModelCatalogEntry,
 ) -> (Vec<SettingsEntry>, String) {
-    let supported =
-        crate::provider::supported_reasoning_efforts_for_model(&runtime.config.provider, model);
+    let supported = crate::provider::effective_supported_reasoning_efforts_for_entry(
+        &runtime.config.provider,
+        entry,
+    );
     let selected_label = runtime
         .config
         .provider
@@ -2581,12 +2615,12 @@ fn build_reasoning_palette_entries(
     let mut entries = vec![SettingsEntry {
         label: "default".to_owned(),
         category_tag: "[Reasoning]".to_owned(),
-        status_tag: (runtime.config.provider.model == model
+        status_tag: (runtime.config.provider.model == entry.model
             && runtime.config.provider.reasoning_effort.is_none())
         .then(|| "current".to_owned()),
-        description: default_reasoning_option_description(runtime, model),
+        description: default_reasoning_option_description(runtime, entry.model.as_str()),
         action: CommandAction::ApplyModelSelection {
-            model: model.to_owned(),
+            model: entry.model.clone(),
             reasoning_effort: None,
         },
         selectable: true,
@@ -2596,12 +2630,12 @@ fn build_reasoning_palette_entries(
         entries.push(SettingsEntry {
             label: effort.as_str().to_owned(),
             category_tag: "[Reasoning]".to_owned(),
-            status_tag: (runtime.config.provider.model == model
+            status_tag: (runtime.config.provider.model == entry.model
                 && runtime.config.provider.reasoning_effort == Some(effort))
             .then(|| "current".to_owned()),
             description: reasoning_option_description(Some(effort)),
             action: CommandAction::ApplyModelSelection {
-                model: model.to_owned(),
+                model: entry.model.clone(),
                 reasoning_effort: Some(effort),
             },
             selectable: true,
@@ -2644,10 +2678,14 @@ async fn open_model_palette(app: &mut App, runtime: &CliTurnRuntime, query: &str
     Ok(())
 }
 
-fn open_reasoning_palette(app: &mut App, runtime: &CliTurnRuntime, model: &str) {
-    let (entries, selected_label) = build_reasoning_palette_entries(runtime, model);
+fn open_reasoning_palette(
+    app: &mut App,
+    runtime: &CliTurnRuntime,
+    entry: &crate::provider::ProviderModelCatalogEntry,
+) {
+    let (entries, selected_label) = build_reasoning_palette_entries(runtime, entry);
     app.command_palette.show_reasoning_selector(
-        model,
+        entry.model.as_str(),
         entries,
         Some(format!(
             "Current reasoning: {} · Enter apply · Esc back",
@@ -3068,11 +3106,11 @@ fn dispatch_palette_action(
             );
             Ok(None)
         }
-        CommandAction::OpenModelReasoning(model) => {
+        CommandAction::OpenModelReasoning(entry) => {
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
-            open_reasoning_palette(app, runtime, model.as_str());
+            open_reasoning_palette(app, runtime, &entry);
             Ok(None)
         }
         CommandAction::ApplyModelSelection {
@@ -8042,6 +8080,8 @@ description: "actual description"
             &runtime,
             &[crate::provider::ProviderModelCatalogEntry {
                 model: current_model.clone(),
+                display_name: None,
+                description: None,
                 default_reasoning_effort: None,
                 supported_reasoning_efforts: Vec::new(),
             }],
@@ -8054,7 +8094,7 @@ description: "actual description"
         assert_eq!(entry.status_tag.as_deref(), Some("current"));
         assert!(matches!(
             entry.action,
-            CommandAction::OpenModelReasoning(ref model) if model == &current_model
+            CommandAction::OpenModelReasoning(ref entry) if entry.model == current_model
         ));
     }
 
@@ -8080,8 +8120,16 @@ description: "actual description"
         runtime.config.provider.reasoning_effort = Some(ReasoningEffort::High);
         let current_model = runtime.config.provider.model.clone();
 
-        let (entries, selected_label) =
-            super::build_reasoning_palette_entries(&runtime, current_model.as_str());
+        let (entries, selected_label) = super::build_reasoning_palette_entries(
+            &runtime,
+            &crate::provider::ProviderModelCatalogEntry {
+                model: current_model.clone(),
+                display_name: None,
+                description: None,
+                default_reasoning_effort: None,
+                supported_reasoning_efforts: Vec::new(),
+            },
+        );
 
         assert_eq!(
             entries.first().map(|entry| entry.label.as_str()),
@@ -8123,7 +8171,21 @@ description: "actual description"
         let mut runtime = test_runtime_with_path(config_path);
         runtime.config.provider.model = "gpt-5.4".to_owned();
 
-        let (entries, selected_label) = super::build_reasoning_palette_entries(&runtime, "gpt-5.4");
+        let (entries, selected_label) = super::build_reasoning_palette_entries(
+            &runtime,
+            &crate::provider::ProviderModelCatalogEntry {
+                model: "gpt-5.4".to_owned(),
+                display_name: Some("GPT-5.4".to_owned()),
+                description: Some("Strong model for everyday coding.".to_owned()),
+                default_reasoning_effort: Some(ReasoningEffort::Xhigh),
+                supported_reasoning_efforts: vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Xhigh,
+                ],
+            },
+        );
 
         assert_eq!(selected_label, "default");
         let default_entry = entries.first().expect("default entry");
@@ -8210,8 +8272,8 @@ description: "actual description"
                 KeyCode::Enter,
                 KeyModifiers::NONE,
             )) {
-            Some(CommandAction::OpenModelReasoning(model))
-                if model == runtime.config.provider.model => {}
+            Some(CommandAction::OpenModelReasoning(entry))
+                if entry.model == runtime.config.provider.model => {}
             other => panic!("expected /model to open model selector flow, got {other:?}"),
         }
     }
