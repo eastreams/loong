@@ -2498,6 +2498,13 @@ fn find_exact_model_catalog_entry<'a>(
     })
 }
 
+fn model_entry_label(entry: &crate::provider::ProviderModelCatalogEntry) -> String {
+    entry
+        .display_name
+        .clone()
+        .unwrap_or_else(|| entry.model.clone())
+}
+
 fn model_entry_description(
     provider: &ProviderConfig,
     entry: &crate::provider::ProviderModelCatalogEntry,
@@ -2507,7 +2514,7 @@ fn model_entry_description(
     if let Some(display_name) = entry.display_name.as_deref()
         && !display_name.eq_ignore_ascii_case(entry.model.as_str())
     {
-        parts.push(display_name.to_owned());
+        parts.push(entry.model.clone());
     }
     if let Some(description) = entry.description.as_deref()
         && !description.is_empty()
@@ -2583,8 +2590,40 @@ fn build_model_palette_entries(
     let default_model = provider.kind.default_model();
     let configured_auto_models = provider.configured_auto_model_candidates();
 
-    catalog
-        .iter()
+    let mut ordered = catalog.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        let left_model = left.model.trim();
+        let right_model = right.model.trim();
+        let left_rank = (
+            usize::from(left_model != current_model),
+            usize::from(
+                !configured_auto_models
+                    .iter()
+                    .any(|candidate| candidate == left_model),
+            ),
+            usize::from(Some(left_model) != default_model),
+            usize::from(left.hidden),
+            usize::from(left.deprecated),
+        );
+        let right_rank = (
+            usize::from(right_model != current_model),
+            usize::from(
+                !configured_auto_models
+                    .iter()
+                    .any(|candidate| candidate == right_model),
+            ),
+            usize::from(Some(right_model) != default_model),
+            usize::from(right.hidden),
+            usize::from(right.deprecated),
+        );
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| model_entry_label(left).cmp(&model_entry_label(right)))
+            .then_with(|| left.model.cmp(&right.model))
+    });
+
+    ordered
+        .into_iter()
         .map(|entry| {
             let trimmed = entry.model.trim();
             let is_current = trimmed == current_model;
@@ -2622,7 +2661,7 @@ fn build_model_palette_entries(
                 CommandAction::OpenModelReasoning(entry.clone())
             };
             SettingsEntry {
-                label: trimmed.to_owned(),
+                label: model_entry_label(entry),
                 category_tag: "[Model]".to_owned(),
                 status_tag,
                 description,
@@ -8467,6 +8506,93 @@ description: "actual description"
                 reasoning_effort: Some(ReasoningEffort::High)
             } if model == "command-r"
         ));
+    }
+
+    #[test]
+    fn model_palette_prefers_display_name_label_and_keeps_raw_id_in_description() {
+        let runtime = test_runtime_with_path(PathBuf::from("/tmp/loong-model-display-name.toml"));
+
+        let entries = super::build_model_palette_entries(
+            &runtime,
+            &[crate::provider::ProviderModelCatalogEntry {
+                model: "gpt-5.4".to_owned(),
+                display_name: Some("GPT-5.4 Frontier".to_owned()),
+                description: Some("Strong model for everyday coding.".to_owned()),
+                hidden: false,
+                deprecated: false,
+                default_reasoning_effort: Some(ReasoningEffort::Xhigh),
+                supported_reasoning_efforts: vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::Medium,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Xhigh,
+                ],
+            }],
+        );
+
+        let entry = entries.first().expect("display-name entry");
+        assert_eq!(entry.label, "GPT-5.4 Frontier");
+        assert!(entry.description.contains("gpt-5.4"));
+        assert!(
+            entry
+                .description
+                .contains("Strong model for everyday coding.")
+        );
+    }
+
+    #[test]
+    fn model_palette_sorts_current_before_other_entries() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Openai,
+            model: "current-model".to_owned(),
+            ..ProviderConfig::fresh_for_kind(ProviderKind::Openai)
+        };
+        let runtime = test_runtime_with_path(PathBuf::from("/tmp/loong-model-sort.toml"));
+        let runtime = crate::chat::CliTurnRuntime {
+            config: LoongConfig {
+                provider,
+                ..runtime.config
+            },
+            ..runtime
+        };
+
+        let entries = super::build_model_palette_entries(
+            &runtime,
+            &[
+                crate::provider::ProviderModelCatalogEntry {
+                    model: "zeta-model".to_owned(),
+                    display_name: Some("Zeta Model".to_owned()),
+                    description: None,
+                    hidden: false,
+                    deprecated: false,
+                    default_reasoning_effort: None,
+                    supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                },
+                crate::provider::ProviderModelCatalogEntry {
+                    model: "alpha-model".to_owned(),
+                    display_name: Some("Alpha Model".to_owned()),
+                    description: None,
+                    hidden: false,
+                    deprecated: false,
+                    default_reasoning_effort: None,
+                    supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                },
+                crate::provider::ProviderModelCatalogEntry {
+                    model: "current-model".to_owned(),
+                    display_name: Some("Current Model".to_owned()),
+                    description: None,
+                    hidden: false,
+                    deprecated: false,
+                    default_reasoning_effort: None,
+                    supported_reasoning_efforts: vec![ReasoningEffort::Medium],
+                },
+            ],
+        );
+
+        assert_eq!(entries[0].status_tag.as_deref(), Some("current"));
+        assert_eq!(entries[0].label, "Current Model");
+        assert_eq!(entries[1].label, "Alpha Model");
+        assert_eq!(entries[2].label, "Zeta Model");
     }
 
     #[test]
