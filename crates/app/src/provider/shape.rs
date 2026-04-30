@@ -2290,6 +2290,7 @@ struct ModelCandidate {
     deprecated: bool,
     default_reasoning_effort: Option<ReasoningEffort>,
     supported_reasoning_efforts: Vec<ReasoningEffort>,
+    supported_reasoning_effort_descriptions: Vec<(ReasoningEffort, String)>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -2354,6 +2355,8 @@ pub(super) fn extract_model_catalog_entries(body: &Value) -> Vec<ProviderModelCa
             deprecated: candidate.deprecated,
             default_reasoning_effort: candidate.default_reasoning_effort,
             supported_reasoning_efforts: candidate.supported_reasoning_efforts,
+            supported_reasoning_effort_descriptions: candidate
+                .supported_reasoning_effort_descriptions,
         });
     }
     entries
@@ -2381,6 +2384,8 @@ fn collect_model_candidates(body: &Value) -> Vec<ModelCandidate> {
                 deprecated: model_is_deprecated(item),
                 default_reasoning_effort: model_default_reasoning_effort_from_value(item),
                 supported_reasoning_efforts: model_supported_reasoning_efforts_from_value(item),
+                supported_reasoning_effort_descriptions:
+                    model_supported_reasoning_effort_descriptions_from_value(item),
             });
         }
     }
@@ -2486,6 +2491,44 @@ fn model_supported_reasoning_efforts_from_value(value: &Value) -> Vec<ReasoningE
             }
             if !supported.is_empty() {
                 return supported;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn model_supported_reasoning_effort_descriptions_from_value(
+    value: &Value,
+) -> Vec<(ReasoningEffort, String)> {
+    for key in [
+        "supported_reasoning_efforts",
+        "supportedReasoningEfforts",
+        "supported_reasoning_levels",
+        "supportedReasoningLevels",
+    ] {
+        if let Some(items) = value.get(key).and_then(Value::as_array) {
+            let mut descriptions = Vec::new();
+            for item in items {
+                let Some(effort) = reasoning_effort_from_value(item) else {
+                    continue;
+                };
+                let Some(description) = item
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .and_then(normalize_text)
+                else {
+                    continue;
+                };
+                if descriptions
+                    .iter()
+                    .any(|(candidate, _)| *candidate == effort)
+                {
+                    continue;
+                }
+                descriptions.push((effort, description));
+            }
+            if !descriptions.is_empty() {
+                return descriptions;
             }
         }
     }
@@ -4178,9 +4221,9 @@ mod tests {
                     "id": "gpt-5.4",
                     "default_reasoning_level": "xhigh",
                     "supported_reasoning_levels": [
-                        {"effort": "low"},
-                        {"effort": "medium"},
-                        {"effort": "xhigh"}
+                        {"effort": "low", "description": "Fast responses with lighter reasoning"},
+                        {"effort": "medium", "description": "Balances speed and reasoning depth"},
+                        {"effort": "xhigh", "description": "Extra high reasoning depth"}
                     ]
                 }
             ]
@@ -4199,6 +4242,23 @@ mod tests {
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,
                 ReasoningEffort::Xhigh
+            ]
+        );
+        assert_eq!(
+            entries[0].supported_reasoning_effort_descriptions,
+            vec![
+                (
+                    ReasoningEffort::Low,
+                    "Fast responses with lighter reasoning".to_owned()
+                ),
+                (
+                    ReasoningEffort::Medium,
+                    "Balances speed and reasoning depth".to_owned()
+                ),
+                (
+                    ReasoningEffort::Xhigh,
+                    "Extra high reasoning depth".to_owned()
+                ),
             ]
         );
     }

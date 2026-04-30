@@ -84,6 +84,7 @@ pub struct ProviderModelCatalogEntry {
     pub deprecated: bool,
     pub default_reasoning_effort: Option<ReasoningEffort>,
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,
+    pub supported_reasoning_effort_descriptions: Vec<(ReasoningEffort, String)>,
 }
 
 pub fn provider_tool_schema_readiness(config: &LoongConfig) -> ProviderToolSchemaReadiness {
@@ -183,6 +184,17 @@ pub fn effective_supported_reasoning_efforts_for_entry(
         return entry.supported_reasoning_efforts.clone();
     }
     supported_reasoning_efforts_for_model(provider, entry.model.as_str())
+}
+
+pub fn reasoning_effort_description_for_entry(
+    entry: &ProviderModelCatalogEntry,
+    effort: ReasoningEffort,
+) -> Option<&str> {
+    entry
+        .supported_reasoning_effort_descriptions
+        .iter()
+        .find(|(candidate, _)| *candidate == effort)
+        .map(|(_, description)| description.as_str())
 }
 
 pub fn effective_default_reasoning_effort_for_entry(
