@@ -269,7 +269,7 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
     let stdout = render_output(&output.stdout);
     let payload: Value = serde_json::from_str(&stdout).expect("decode status json");
 
-    assert_eq!(payload["schema"]["version"], 2);
+    assert_eq!(payload["schema"]["version"], 3);
     assert_eq!(payload["schema"]["surface"], "status");
     assert_eq!(payload["schema"]["purpose"], "operator_runtime_summary");
     assert_eq!(payload["gateway"]["owner"]["phase"], "stopped");
