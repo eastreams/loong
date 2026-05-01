@@ -158,9 +158,8 @@ impl GatewayLocalClient {
     }
 
     pub async fn acp_sessions(&self, request: &GatewayAcpSessionsRequest) -> CliResult<Value> {
-        let path = "/api/gateway/acp/sessions";
-        self.request_json_with_query(Method::GET, path, request)
-            .await
+        let payload = self.acp_sessions_read_model(request).await?;
+        gateway_json_value_from_payload(&payload)
     }
 
     pub async fn acp_sessions_read_model(
@@ -173,9 +172,8 @@ impl GatewayLocalClient {
     }
 
     pub async fn acp_status(&self, request: &GatewayAcpStatusRequest<'_>) -> CliResult<Value> {
-        let path = "/api/gateway/acp/status";
-        self.request_json_with_query(Method::GET, path, request)
-            .await
+        let payload = self.acp_status_read_model(request).await?;
+        gateway_json_value_from_payload(&payload)
     }
 
     pub async fn acp_status_read_model(
@@ -188,9 +186,8 @@ impl GatewayLocalClient {
     }
 
     pub async fn acp_close(&self, request: &GatewayAcpCloseRequest<'_>) -> CliResult<Value> {
-        let path = "/api/gateway/acp/close";
-        self.request_json_with_body(Method::POST, path, request)
-            .await
+        let payload = self.acp_close_read_model(request).await?;
+        gateway_json_value_from_payload(&payload)
     }
 
     pub async fn acp_close_read_model(
@@ -203,8 +200,8 @@ impl GatewayLocalClient {
     }
 
     pub async fn acp_observability(&self) -> CliResult<Value> {
-        let path = "/v1/acp/observability";
-        self.request_json(Method::GET, path).await
+        let payload = self.acp_observability_read_model().await?;
+        gateway_json_value_from_payload(&payload)
     }
 
     pub async fn acp_observability_read_model(
@@ -222,16 +219,16 @@ impl GatewayLocalClient {
         account_id: Option<&str>,
         thread_id: Option<&str>,
     ) -> CliResult<Value> {
-        let path = "/v1/acp/status";
-        let query = build_gateway_acp_address_query(
-            session_id,
-            channel_id,
-            conversation_id,
-            account_id,
-            thread_id,
-        );
-        self.request_json_with_query(Method::GET, path, &query)
-            .await
+        let payload = self
+            .acp_status_for_address_read_model(
+                session_id,
+                channel_id,
+                conversation_id,
+                account_id,
+                thread_id,
+            )
+            .await?;
+        gateway_json_value_from_payload(&payload)
     }
 
     pub async fn acp_status_for_address_read_model(
@@ -262,16 +259,16 @@ impl GatewayLocalClient {
         account_id: Option<&str>,
         thread_id: Option<&str>,
     ) -> CliResult<Value> {
-        let path = "/v1/acp/dispatch";
-        let query = build_gateway_acp_address_query(
-            session_id,
-            channel_id,
-            conversation_id,
-            account_id,
-            thread_id,
-        );
-        self.request_json_with_query(Method::GET, path, &query)
-            .await
+        let payload = self
+            .acp_dispatch_read_model(
+                session_id,
+                channel_id,
+                conversation_id,
+                account_id,
+                thread_id,
+            )
+            .await?;
+        gateway_json_value_from_payload(&payload)
     }
 
     pub async fn acp_dispatch_read_model(
@@ -489,6 +486,14 @@ async fn parse_json_response(response: Response) -> CliResult<Value> {
         .json::<Value>()
         .await
         .map_err(|error| format!("decode gateway JSON response failed: {error}"))
+}
+
+fn gateway_json_value_from_payload<T>(payload: &T) -> CliResult<Value>
+where
+    T: Serialize,
+{
+    serde_json::to_value(payload)
+        .map_err(|error| format!("serialize gateway payload failed: {error}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
