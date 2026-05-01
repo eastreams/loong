@@ -21,8 +21,8 @@ use loong_daemon::{
     CliResult,
     gateway::{
         client::{
-            GatewayAcpCloseRequest, GatewayAcpSessionsRequest, GatewayAcpStatusRequest,
-            GatewayLocalClient,
+            GatewayAcpAddressRequest, GatewayAcpCloseRequest, GatewayAcpSessionsRequest,
+            GatewayAcpStatusRequest, GatewayLocalClient,
         },
         service::run_gateway_run_with_hooks_for_test,
         state::{load_gateway_owner_status, request_gateway_stop},
@@ -539,8 +539,15 @@ async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
         1
     );
 
+    let address_request = GatewayAcpAddressRequest {
+        session_id: "gateway-session",
+        channel_id: None,
+        conversation_id: None,
+        account_id: None,
+        thread_id: None,
+    };
     let address_status = client
-        .acp_status_for_address_read_model("gateway-session", None, None, None, None)
+        .acp_status_for_address_read_model_request(&address_request)
         .await
         .expect("read gateway ACP status for structured address as typed payload");
     assert_eq!(
@@ -551,11 +558,11 @@ async fn gateway_acp_operator_endpoints_surface_shared_session_truth() {
     assert_eq!(address_status.status.state, "ready");
 
     let dispatch = client
-        .acp_dispatch("gateway-session", None, None, None, None)
+        .acp_dispatch_request(&address_request)
         .await
         .expect("read gateway ACP dispatch");
     let dispatch_read_model = client
-        .acp_dispatch_read_model("gateway-session", None, None, None, None)
+        .acp_dispatch_read_model_request(&address_request)
         .await
         .expect("read gateway ACP dispatch as typed payload");
     assert_eq!(dispatch["address"]["session_id"], "gateway-session");
