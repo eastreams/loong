@@ -292,7 +292,7 @@ fn runtime_snapshot_artifact_json_includes_lineage_and_restore_spec() {
 
     let (_artifact_path, _snapshot, payload) = write_snapshot_artifact(&root, &config_path);
 
-    assert_eq!(payload["schema"]["version"], 2);
+    assert_eq!(payload["schema"]["version"], 3);
     assert_eq!(payload["lineage"]["label"], "baseline");
     assert_eq!(payload["lineage"]["experiment_id"], "exp-runtime-restore");
     assert_eq!(payload["lineage"]["parent_snapshot_id"], "snapshot-parent");
