@@ -3168,7 +3168,7 @@ fn build_doctor_next_step_items_with_channel_surfaces_and_path_env(
         push_unique_step(
             &mut steps,
             format!(
-                "Review [runtime_plugins].roots, [runtime_plugins].supported_bridges, [runtime_plugins].supported_adapter_families, and package manifests, then re-run diagnostics: {rerun_command}"
+                "Review runtime plugin roots and support policy in config, then re-run diagnostics: {rerun_command}"
             ),
         );
     }
@@ -3715,6 +3715,24 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).expect("create browser companion temp dir");
         temp_dir
+    }
+
+    struct DoctorCliCurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl DoctorCliCurrentDirGuard {
+        fn set(target: &Path) -> Self {
+            let previous = std::env::current_dir().expect("read current dir");
+            std::env::set_current_dir(target).expect("set current dir");
+            Self { previous }
+        }
+    }
+
+    impl Drop for DoctorCliCurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).expect("restore current dir");
+        }
     }
 
     fn runtime_plugins_test_config(root: &Path, enabled: bool) -> mvp::config::LoongConfig {
@@ -7367,6 +7385,10 @@ mod tests {
     #[test]
     fn collect_runtime_plugins_doctor_checks_warns_when_no_runtime_roots_are_scanned() {
         let root = browser_companion_temp_dir("runtime-plugins-zero-roots");
+        let home = browser_companion_temp_dir("runtime-plugins-zero-roots-home");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.as_path());
+        let _cwd = DoctorCliCurrentDirGuard::set(root.as_path());
         let mut config = runtime_plugins_test_config(&root, true);
         config.runtime_plugins.roots = vec!["   ".to_owned()];
 

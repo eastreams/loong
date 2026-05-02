@@ -96,6 +96,12 @@ diff against directly:
 
 - `examples/plugins-process/native-extension-trusted-host-javascript/`
 
+When runtime plugins are enabled but `runtime_plugins.roots` is left empty,
+Loong now auto-discovers the standard local roots first:
+
+- `./.loong/extensions`
+- `~/.loong/agent/extensions`
+
 ## Validation
 
 Use [SDK Validator Contract](../design-docs/sdk-validator-contract.md) when you

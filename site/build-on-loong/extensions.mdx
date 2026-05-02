@@ -123,6 +123,12 @@ Current live routes already project:
 Those routes are still bounded probe surfaces. They do not imply a general
 in-process TUI executor contract yet.
 
+If `[runtime_plugins].enabled = true` and explicit roots are omitted, the
+current branch also auto-discovers the standard local roots first:
+
+- `./.loong/extensions`
+- `~/.loong/agent/extensions`
+
 ## What Is Real Today
 
 You can rely on:
