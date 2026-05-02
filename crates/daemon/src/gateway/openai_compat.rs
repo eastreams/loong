@@ -508,12 +508,19 @@ async fn run_gateway_turn_for_seed(
     seed: &OpenAiCompatGatewayTurnSeed,
     observer: Option<crate::mvp::conversation::ConversationTurnObserverHandle>,
 ) -> Result<crate::mvp::agent_runtime::AgentTurnResult, String> {
+    let turn_request = build_openai_compat_turn_request(seed.input.clone());
+    crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
+        &seed.run_config,
+        Some(seed.session_id.as_str()),
+        &turn_request,
+    )
+    .await?;
     crate::mvp::agent_runtime::AgentRuntime::new()
         .run_turn_with_loaded_config_and_observer_and_error_mode(
             resolved_path,
             seed.run_config.clone(),
             Some(seed.session_id.as_str()),
-            &build_openai_compat_turn_request(seed.input.clone()),
+            &turn_request,
             None,
             observer,
             crate::mvp::conversation::ProviderErrorMode::Propagate,

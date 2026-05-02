@@ -108,6 +108,13 @@ impl HarnessAdapter for EmbeddedAgentHarness {
         let turn_service =
             loong_app::agent_runtime::load_turn_execution_service(payload.config_path.as_deref())
                 .map_err(HarnessError::Execution)?;
+        crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
+            turn_service.config(),
+            payload.session_hint.as_deref(),
+            &turn_request,
+        )
+        .await
+        .map_err(HarnessError::Execution)?;
         let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
         let turn_result = turn_service
             .execute(payload.session_hint.as_deref(), &turn_request, turn_options)
@@ -289,6 +296,12 @@ pub(crate) async fn run_turn_cli(
         ..Default::default()
     };
     let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
+    crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
+        turn_service.config(),
+        session_hint,
+        &turn_request,
+    )
+    .await?;
     let result = turn_service
         .execute(session_hint, &turn_request, turn_options)
         .await?;
@@ -299,6 +312,8 @@ pub(crate) async fn run_turn_cli(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     #[tokio::test]
     async fn execute_daemon_task_with_supervisor_reports_completed_state() {
@@ -447,5 +462,115 @@ mod tests {
             error.contains("invalid_turn_payload"),
             "expected unified runtime harness failure, got: {error}"
         );
+    }
+
+    fn write_file(root: &Path, relative_path: &str, contents: &str) {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directories");
+        }
+        fs::write(path, contents).expect("write file");
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).expect("create unique temp dir");
+        path
+    }
+
+    fn install_blocked_trusted_host_runtime_plugin(root: &Path) {
+        write_file(
+            root,
+            "runtime-plugins/trusted-host/loong.plugin.json",
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "trusted-host-extension",
+  "provider_id": "trusted-host-extension",
+  "connector_name": "trusted-host-extension",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "blocked-node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "trusted_host_extension",
+    "loong_extension_trust_lane": "trusted_host",
+    "loong_extension_methods_json": "[\"extension/event\"]",
+    "loong_extension_host_hooks_json": "[\"turn_start\"]"
+  }
+}"#,
+        );
+        write_file(
+            root,
+            "runtime-plugins/trusted-host/index.js",
+            "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_runtime_kernel_fails_closed_when_trusted_turn_start_hook_is_not_allowlisted() {
+        let root = unique_temp_dir("loong-daemon-trusted-host-harness");
+        install_blocked_trusted_host_runtime_plugin(&root);
+        let config_path = root.join("loong.toml");
+        let mut config = loong_app::config::LoongConfig::default();
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
+        config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
+        loong_app::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+            .expect("write config");
+
+        let kernel = build_daemon_runtime_kernel();
+        let token = kernel
+            .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
+            .expect("issue token");
+        let payload = serde_json::to_value(DaemonTurnTaskPayload {
+            config_path: Some(config_path.display().to_string()),
+            message: Some("hello".to_owned()),
+            ..DaemonTurnTaskPayload::default()
+        })
+        .expect("serialize turn payload");
+
+        let execution = execute_daemon_task_with_supervisor(
+            &kernel,
+            DEFAULT_PACK_ID,
+            &token,
+            TaskIntent {
+                task_id: "task-trusted-host-hook-01".to_owned(),
+                objective: "hello".to_owned(),
+                required_capabilities: BTreeSet::from([
+                    Capability::InvokeTool,
+                    Capability::MemoryRead,
+                    Capability::MemoryWrite,
+                ]),
+                payload,
+            },
+        )
+        .await
+        .expect("execute daemon task");
+
+        let error = execution
+            .error
+            .as_deref()
+            .expect("trusted host hook failure should fault the harness");
+
+        assert!(execution.outcome.is_none());
+        assert!(
+            error.contains("trusted host extension trusted-host-extension"),
+            "expected trusted host hook failure, got: {error}"
+        );
+        assert!(error.contains("runtime_plugins.allowed_process_commands"));
     }
 }

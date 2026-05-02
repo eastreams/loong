@@ -200,6 +200,7 @@ pub mod tasks_cli;
 mod tlon_cli;
 mod tool_calling_readiness;
 pub mod trajectory_cli;
+mod trusted_host_runtime;
 mod turn_cli;
 pub mod update_cli;
 pub mod weixin_cli;

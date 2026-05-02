@@ -130,6 +130,33 @@ pub(crate) async fn handle_turn(
         .map(ToOwned::to_owned);
 
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
+    let trusted_host_turn_request = crate::mvp::agent_runtime::AgentTurnRequest {
+        message: turn_request.input.clone(),
+        turn_mode: crate::mvp::agent_runtime::AgentTurnMode::Acp,
+        channel_id: turn_request.channel_id.clone(),
+        account_id: turn_request.account_id.clone(),
+        conversation_id: turn_request.conversation_id.clone(),
+        participant_id: turn_request.participant_id.clone(),
+        thread_id: turn_request.thread_id.clone(),
+        metadata: turn_request.metadata.clone(),
+        acp: true,
+        acp_event_stream: event_sink.is_some(),
+        acp_bootstrap_mcp_servers: Vec::new(),
+        acp_cwd: working_directory.clone(),
+        live_surface_enabled: false,
+    };
+    if let Err(error) = crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
+        config,
+        Some(turn_request.session_id.as_str()),
+        &trusted_host_turn_request,
+    )
+    .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error})),
+        );
+    }
     let execution = crate::mvp::turn_gateway::TurnGatewayExecution {
         resolved_path: PathBuf::from(app_state.config_path.clone()),
         config: config.clone(),

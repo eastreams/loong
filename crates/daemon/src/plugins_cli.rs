@@ -3,8 +3,6 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
-use loong_bridge_runtime::{BridgeExecutionPolicy, execute_process_stdio_bridge_call};
-use loong_contracts::ConnectorCommand;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1325,11 +1323,12 @@ async fn execute_plugins_invoke_extension(
         "plugins invoke-extension",
         "native extensions",
     )?;
-    let bridge_policy = build_process_stdio_bridge_policy_from_allow_commands(
-        command.allow_commands,
-        "plugins invoke-extension requires at least one --allow-command for process_stdio smoke probes",
-    )?;
-    let outcome = invoke_process_stdio_extension_operation(
+    let bridge_policy =
+        crate::trusted_host_runtime::build_process_stdio_bridge_policy_from_allow_commands(
+            command.allow_commands,
+            "plugins invoke-extension requires at least one --allow-command for process_stdio smoke probes",
+        )?;
+    let outcome = crate::trusted_host_runtime::invoke_process_stdio_extension_operation(
         &plugin,
         method.as_str(),
         payload.clone(),
@@ -1408,13 +1407,17 @@ async fn execute_plugins_invoke_host_hook(
             crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
         ));
     }
-    let bridge_policy = build_process_stdio_bridge_policy_from_allow_commands(
-        command.allow_commands,
-        "plugins invoke-host-hook requires at least one --allow-command for process_stdio host-hook probes",
-    )?;
-    let hook_payload = build_read_only_trusted_host_hook_payload(hook.as_str(), payload.clone());
+    let bridge_policy =
+        crate::trusted_host_runtime::build_process_stdio_bridge_policy_from_allow_commands(
+            command.allow_commands,
+            "plugins invoke-host-hook requires at least one --allow-command for process_stdio host-hook probes",
+        )?;
+    let hook_payload = crate::trusted_host_runtime::build_read_only_trusted_host_hook_payload(
+        hook.as_str(),
+        payload.clone(),
+    );
     let dispatched_method = "extension/event".to_owned();
-    let outcome = invoke_process_stdio_extension_operation(
+    let outcome = crate::trusted_host_runtime::invoke_process_stdio_extension_operation(
         &plugin,
         dispatched_method.as_str(),
         hook_payload,
@@ -1496,13 +1499,17 @@ async fn execute_plugins_invoke_tui_surface(
             crate::kernel::TRUSTED_HOST_TUI_EXTENSION_SURFACES.join(", ")
         ));
     }
-    let bridge_policy = build_process_stdio_bridge_policy_from_allow_commands(
-        command.allow_commands,
-        "plugins invoke-tui-surface requires at least one --allow-command for process_stdio TUI-surface probes",
-    )?;
+    let bridge_policy =
+        crate::trusted_host_runtime::build_process_stdio_bridge_policy_from_allow_commands(
+            command.allow_commands,
+            "plugins invoke-tui-surface requires at least one --allow-command for process_stdio TUI-surface probes",
+        )?;
     let surface_payload =
-        build_read_only_trusted_host_tui_surface_payload(tui_surface.as_str(), payload.clone());
-    let outcome = invoke_process_stdio_extension_operation(
+        crate::trusted_host_runtime::build_read_only_trusted_host_tui_surface_payload(
+            tui_surface.as_str(),
+            payload.clone(),
+        );
+    let outcome = crate::trusted_host_runtime::invoke_process_stdio_extension_operation(
         &plugin,
         "extension/event",
         surface_payload,
@@ -1536,117 +1543,6 @@ fn normalize_required_cli_value(field_name: &str, raw: &str) -> CliResult<String
     }
 
     Ok(trimmed.to_owned())
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-struct ProcessStdioExtensionInvocationOutcome {
-    response_payload: Value,
-    runtime_evidence: Value,
-}
-
-fn build_process_stdio_bridge_policy_from_allow_commands(
-    allow_commands: Vec<String>,
-    empty_error_message: &str,
-) -> CliResult<BridgeExecutionPolicy> {
-    if allow_commands.is_empty() {
-        return Err(empty_error_message.to_owned());
-    }
-
-    Ok(BridgeExecutionPolicy {
-        execute_process_stdio: true,
-        execute_http_json: false,
-        allowed_process_commands: allow_commands
-            .into_iter()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .collect::<BTreeSet<_>>(),
-    })
-}
-
-fn build_read_only_trusted_host_hook_payload(hook: &str, payload: Value) -> Value {
-    serde_json::json!({
-        "event": hook,
-        "host_hook": hook,
-        "hook_kind": "read_only",
-        "hook_payload": payload,
-    })
-}
-
-fn build_read_only_trusted_host_tui_surface_payload(surface: &str, payload: Value) -> Value {
-    serde_json::json!({
-        "event": "tui_surface",
-        "host_tui_surface": surface,
-        "surface_kind": "read_only",
-        "surface_payload": payload,
-    })
-}
-
-fn extension_provider_config(plugin: &crate::kernel::PluginIR) -> crate::kernel::ProviderConfig {
-    let mut metadata = plugin.metadata.clone();
-    metadata.insert(
-        "plugin_package_root".to_owned(),
-        plugin.package_root.clone(),
-    );
-    metadata.insert("plugin_id".to_owned(), plugin.plugin_id.clone());
-    metadata.insert("plugin_source_path".to_owned(), plugin.source_path.clone());
-    metadata.insert(
-        "bridge_kind".to_owned(),
-        plugin.runtime.bridge_kind.as_str().to_owned(),
-    );
-    metadata.insert(
-        "adapter_family".to_owned(),
-        plugin.runtime.adapter_family.clone(),
-    );
-    metadata.insert(
-        "entrypoint_hint".to_owned(),
-        plugin.runtime.entrypoint_hint.clone(),
-    );
-    metadata.insert(
-        "source_language".to_owned(),
-        plugin.runtime.source_language.clone(),
-    );
-
-    crate::kernel::ProviderConfig {
-        provider_id: plugin.provider_id.clone(),
-        connector_name: plugin.connector_name.clone(),
-        version: plugin
-            .plugin_version
-            .clone()
-            .unwrap_or_else(|| "0.0.0".to_owned()),
-        metadata,
-    }
-}
-
-async fn invoke_process_stdio_extension_operation(
-    plugin: &crate::kernel::PluginIR,
-    operation: &str,
-    payload: Value,
-    bridge_policy: &BridgeExecutionPolicy,
-) -> CliResult<ProcessStdioExtensionInvocationOutcome> {
-    let provider = extension_provider_config(plugin);
-    let channel = crate::kernel::ChannelConfig {
-        channel_id: "native_extension".to_owned(),
-        provider_id: provider.provider_id.clone(),
-        endpoint: "local://native-extension".to_owned(),
-        enabled: true,
-        metadata: BTreeMap::new(),
-    };
-    let connector_command = ConnectorCommand {
-        connector_name: provider.connector_name.clone(),
-        operation: operation.to_owned(),
-        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
-        payload,
-    };
-
-    let outcome =
-        execute_process_stdio_bridge_call(&provider, &channel, &connector_command, bridge_policy)
-            .await
-            .map_err(|failure| failure.reason)?;
-
-    Ok(ProcessStdioExtensionInvocationOutcome {
-        response_payload: outcome.response_payload,
-        runtime_evidence: outcome.runtime_evidence,
-    })
 }
 
 fn scan_single_plugin_from_root(

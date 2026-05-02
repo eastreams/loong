@@ -91,6 +91,21 @@ pub(super) async fn turn_submit(
             crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
                 .with_acp_manager(acp_manager)
                 .without_runtime_environment_init();
+        let trusted_hook_result =
+            crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
+                turn_service.config(),
+                Some(session_id.as_str()),
+                &turn_request,
+            )
+            .await;
+        if let Err(error) = trusted_hook_result {
+            let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+            if let Ok(record) = completion {
+                let payload = map_turn_event_payload(&record);
+                let _ = manager.record_acp_turn_event(payload, true);
+            }
+            return;
+        }
         let turn_options = crate::mvp::agent_runtime::TurnExecutionOptions {
             event_sink: Some(&event_forwarder),
             ..Default::default()
