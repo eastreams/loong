@@ -35,12 +35,14 @@ use super::api_health::handle_health;
 use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
 use super::openai_compat::{handle_chat_completions, handle_models};
+use super::openai_responses::{handle_delete_response, handle_get_response, handle_responses};
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
     GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
     build_acp_session_list_read_model, build_acp_status_read_model,
     build_operator_summary_read_model, build_runtime_snapshot_read_model,
 };
+use super::response_store::{GatewayResponseStore, gateway_response_store_path};
 use super::state::{
     GatewayControlSurfaceBinding, GatewayStopRequestOutcome, gateway_control_token_path,
     load_gateway_owner_status, request_gateway_stop,
@@ -74,6 +76,7 @@ pub(crate) struct GatewayControlAppState {
     pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
     pub(crate) event_bus: Option<GatewayEventBus>,
     pub(crate) acp_manager: Option<Arc<AcpSessionManager>>,
+    pub(crate) response_store: Option<GatewayResponseStore>,
     pub(crate) config: Option<LoongConfig>,
 }
 
@@ -159,6 +162,7 @@ impl GatewayControlAppState {
             runtime_snapshot: Arc::new(runtime_snapshot),
             event_bus: None,
             acp_manager: None,
+            response_store: None,
             config: None,
         }
     }
@@ -283,6 +287,11 @@ pub async fn start_gateway_control_surface(
     } else {
         None
     };
+    let response_store = GatewayResponseStore::new(gateway_response_store_path(runtime_dir))
+        .map_err(|error| {
+            let cleanup_result = remove_gateway_control_token_file(token_path.as_path());
+            merge_gateway_control_errors(error, cleanup_result.err())
+        })?;
 
     let app_state = GatewayControlAppState {
         runtime_dir: runtime_dir.to_path_buf(),
@@ -292,6 +301,7 @@ pub async fn start_gateway_control_surface(
         runtime_snapshot: Arc::new(runtime_snapshot),
         event_bus,
         acp_manager,
+        response_store: Some(response_store),
         config: Some(loaded_config.config.clone()),
     };
     let app_state = Arc::new(app_state);
@@ -357,6 +367,11 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/turn", post(handle_turn))
         .route("/v1/models", get(handle_models))
         .route("/v1/chat/completions", post(handle_chat_completions))
+        .route("/v1/responses", post(handle_responses))
+        .route(
+            "/v1/responses/{response_id}",
+            get(handle_get_response).delete(handle_delete_response),
+        )
         .route("/health", get(handle_health))
         .with_state(app_state)
 }

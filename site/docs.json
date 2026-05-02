@@ -39,6 +39,7 @@
           "use-loong/byteplus-coding-telegram-playbook",
           "use-loong/local-outbound-playbook",
           "use-loong/gateway-rollout-playbook",
+          "use-loong/gateway-webui",
           "use-loong/providers-and-models",
           {
             "group": "Provider Guides",

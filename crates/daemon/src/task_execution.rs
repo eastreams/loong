@@ -106,6 +106,7 @@ impl HarnessAdapter for EmbeddedAgentHarness {
                         payload.turn_mode,
                         loong_app::agent_runtime::AgentTurnMode::Interactive
                     ),
+                    ..Default::default()
                 },
             )
             .await

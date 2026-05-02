@@ -1,0 +1,174 @@
+---
+title: Gateway For WebUI
+description: Expose Loong through OpenAI-compatible gateway endpoints so your own WebUI or a third-party frontend can talk to the runtime directly.
+---
+
+# Gateway For WebUI
+
+Use this page when the operator flow is already healthy and the next step is
+letting a browser frontend, desktop app, or custom service call Loong over HTTP
+instead of the local CLI.
+
+This surface is for **trusted operator clients** on the local gateway control
+plane. It is not a multi-tenant auth story. If a client can present the gateway
+bearer token, it is acting with operator authority for that gateway instance.
+
+## What Loong Exposes Today
+
+| Need | Endpoint |
+| --- | --- |
+| list advertised models for frontend selectors | `GET /v1/models` |
+| drop-in OpenAI Chat Completions compatibility | `POST /v1/chat/completions` |
+| OpenAI Responses-style session continuity | `POST /v1/responses` |
+| fetch one stored response object | `GET /v1/responses/{response_id}` |
+| delete one stored response object | `DELETE /v1/responses/{response_id}` |
+| Loong-native one-turn execution with explicit session targeting | `POST /v1/turn` |
+| gateway event stream for native operator surfaces | `GET /v1/events` |
+
+## Start The Gateway
+
+Bring the gateway up first:
+
+```bash
+loong gateway run --session webui-gateway
+```
+
+In another shell, inspect the live binding:
+
+```bash
+loong gateway status --json
+```
+
+The JSON output includes:
+
+- `bind_address`
+- `port`
+- `token_path`
+
+Export the token for local experiments:
+
+```bash
+export LOONG_GATEWAY_TOKEN="$(cat /path/from/token_path)"
+export LOONG_GATEWAY_BASE_URL="http://127.0.0.1:PORT"
+```
+
+## Drop-In Chat Completions
+
+This is the quickest way to connect an existing OpenAI-compatible frontend.
+
+```bash
+curl "$LOONG_GATEWAY_BASE_URL/v1/models" \
+  -H "Authorization: Bearer $LOONG_GATEWAY_TOKEN"
+```
+
+```bash
+curl "$LOONG_GATEWAY_BASE_URL/v1/chat/completions" \
+  -H "Authorization: Bearer $LOONG_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5",
+    "messages": [
+      {"role": "user", "content": "Hello from my WebUI"}
+    ],
+    "stream": true
+  }'
+```
+
+Notes that matter:
+
+- `stream=true` now degrades to one-chunk SSE when the configured provider can
+  complete a turn but does not expose native token streaming.
+- the current compatibility surface is message-based and stateless from the
+  client point of view: the caller sends the conversation history it wants Loong
+  to see
+- request-level `tool_choice="none"` is accepted for compatibility
+- caller-supplied `tools` are limited to Loong's structured gateway tool layer;
+  direct runtime tools remain governed by Loong's own runtime surface
+
+## Responses API For Stateful Frontends
+
+Use `/v1/responses` when you want the gateway to keep continuity through
+`previous_response_id` instead of resending the full message list every time.
+
+First turn:
+
+```bash
+curl "$LOONG_GATEWAY_BASE_URL/v1/responses" \
+  -H "Authorization: Bearer $LOONG_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5",
+    "input": "Plan a safe production rollout"
+  }'
+```
+
+Follow-up turn:
+
+```bash
+curl "$LOONG_GATEWAY_BASE_URL/v1/responses" \
+  -H "Authorization: Bearer $LOONG_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5",
+    "previous_response_id": "resp-openai-gateway-gpt-5-1",
+    "input": "Now turn that into a checklist"
+  }'
+```
+
+Streaming example:
+
+```bash
+curl "$LOONG_GATEWAY_BASE_URL/v1/responses" \
+  -H "Authorization: Bearer $LOONG_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5",
+    "input": "Summarize the current gateway status",
+    "stream": true
+  }'
+```
+
+Streaming responses emit SSE events in Loong's Responses-compatible shape:
+
+- `response.output_text.delta`
+- `response.completed`
+
+Current limits:
+
+- caller-supplied `tools` are limited to Loong's structured gateway tool layer;
+  direct runtime tools remain governed by Loong's own runtime surface
+
+## When To Use `/v1/turn` Instead
+
+Use `/v1/turn` when you are building a Loong-native control surface and need
+explicit session or channel addressing instead of OpenAI-compatible frontend
+semantics.
+
+That surface lets the caller provide:
+
+- `session_id`
+- `channel_id`
+- `account_id`
+- `conversation_id`
+- `thread_id`
+- `working_directory`
+
+It is the better seam for operator dashboards, session browsers, or internal
+tools that want direct ACP-aware control.
+
+## Recommended Frontend Choices
+
+| Frontend shape | Better endpoint |
+| --- | --- |
+| existing OpenAI-compatible chat UI | `/v1/chat/completions` |
+| your own frontend that wants gateway-managed continuity | `/v1/responses` |
+| Loong-native operator console | `/v1/turn` plus `/v1/events` |
+
+## Continue Reading
+
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) for
+  the owner contract around the same runtime.
+- Continue to [Gateway Rollout](/use-loong/gateway-rollout-playbook) for the
+  runtime ownership sequence before you expose a frontend.
+- Continue to [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries)
+  if the runtime also needs governed browser or web access.

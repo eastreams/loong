@@ -146,6 +146,7 @@ pub(crate) async fn handle_turn(
                 acp_bootstrap_mcp_servers: Vec::new(),
                 acp_cwd: working_directory,
                 live_surface_enabled: false,
+                ..Default::default()
             },
             event_sink
                 .as_ref()

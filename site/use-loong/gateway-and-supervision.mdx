@@ -25,6 +25,7 @@ trust config shape, start with
 | keep several gateway-supervised runtime-backed channels attached to one foreground shell | `loong multi-channel-serve --session <name>` | compatibility wrapper for operators who want one visible CLI-first session |
 | claim the persisted owner slot and manage it from another process | `loong gateway run` | explicit owner contract with `status` and `stop` |
 | claim gateway ownership and also attach a named CLI host | `loong gateway run --session <name>` | same owner contract, plus an attached concurrent CLI session |
+| expose the gateway to a trusted browser frontend or custom WebUI | `loong gateway run` + [Gateway For WebUI](/use-loong/gateway-webui) | keeps the owner contract and the frontend contract explicit |
 
 ## Current Public Ownership Model
 
@@ -152,6 +153,9 @@ If the runtime still does not start cleanly:
 
 - Continue to [Gateway Rollout](/use-loong/gateway-rollout-playbook) when
   you want the owner contract turned into a rollout sequence.
+- Continue to [Gateway For WebUI](/use-loong/gateway-webui) when you want
+  a browser frontend, desktop client, or custom service to call the live
+  gateway over HTTP.
 - Continue to [Common Setups](/use-loong/common-setups) when you want
   provider, channel, and gateway choices combined into one setup path.
 - Continue to [Configuration Patterns](/use-loong/configuration-patterns)

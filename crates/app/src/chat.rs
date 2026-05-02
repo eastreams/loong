@@ -961,6 +961,7 @@ async fn process_cli_chat_input(
                     .as_ref()
                     .map(|path| path.display().to_string()),
                 live_surface_enabled: true,
+                ..Default::default()
             },
             event_sink,
         )
@@ -1051,6 +1052,35 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
+    run_cli_turn_with_runtime_override_and_address_and_ingress_and_error_mode_outcome(
+        runtime,
+        address,
+        input,
+        event_sink,
+        live_surface_enabled,
+        metadata,
+        ingress,
+        provenance,
+        provider_error_mode,
+        None,
+        observer_override,
+    )
+    .await
+}
+
+pub(crate) async fn run_cli_turn_with_runtime_override_and_address_and_ingress_and_error_mode_outcome(
+    runtime: &CliTurnRuntime,
+    address: &ConversationSessionAddress,
+    input: &str,
+    event_sink: Option<&dyn AcpTurnEventSink>,
+    live_surface_enabled: bool,
+    metadata: Option<&BTreeMap<String, String>>,
+    ingress: Option<&ConversationIngressContext>,
+    provenance: AcpTurnProvenance<'_>,
+    provider_error_mode: ProviderErrorMode,
+    runtime_override: Option<&dyn crate::conversation::ConversationRuntime>,
+    observer_override: Option<ConversationTurnObserverHandle>,
+) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
     let acp_options = if runtime.explicit_acp_request {
         AcpConversationTurnOptions::explicit()
@@ -1086,6 +1116,17 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
             .await
             .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
     } else {
+        let default_runtime;
+        let effective_runtime = match runtime_override {
+            Some(runtime_override) => runtime_override,
+            None => {
+                default_runtime =
+                    crate::conversation::DefaultConversationRuntime::from_config_or_env(
+                        &turn_config,
+                    )?;
+                &default_runtime
+            }
+        };
         runtime
             .turn_coordinator
             .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
@@ -1093,7 +1134,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 address,
                 input,
                 provider_error_mode,
-                &crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+                effective_runtime,
                 &acp_options,
                 runtime.conversation_binding(),
                 None,

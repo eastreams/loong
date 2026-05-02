@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -47,6 +48,22 @@ pub struct AgentTurnRequest {
     pub acp_bootstrap_mcp_servers: Vec<String>,
     pub acp_cwd: Option<String>,
     pub live_surface_enabled: bool,
+    pub requested_tool_ids: Option<Vec<String>>,
+    pub disable_tools: bool,
+}
+
+impl AgentTurnRequest {
+    #[must_use]
+    pub fn with_requested_tool_ids(mut self, requested_tool_ids: Option<Vec<String>>) -> Self {
+        self.requested_tool_ids = requested_tool_ids;
+        self
+    }
+
+    #[must_use]
+    pub fn with_disable_tools(mut self, disable_tools: bool) -> Self {
+        self.disable_tools = disable_tools;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,8 +301,17 @@ impl AgentRuntime {
         }
 
         let (effective_ingress, effective_provenance) = effective_turn_context(ingress, provenance);
+        let requested_tool_view = requested_tool_view_for_turn(request);
+        let tool_view_runtime = if let Some(requested_tool_view) = requested_tool_view.clone() {
+            Some(build_tool_view_override_runtime(
+                runtime,
+                requested_tool_view,
+            )?)
+        } else {
+            None
+        };
         let turn_outcome =
-            crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
+            crate::chat::run_cli_turn_with_runtime_override_and_address_and_ingress_and_error_mode_outcome(
                 runtime,
                 &turn_address,
                 message,
@@ -295,6 +321,9 @@ impl AgentRuntime {
                 effective_ingress,
                 effective_provenance,
                 provider_error_mode,
+                tool_view_runtime
+                    .as_ref()
+                    .map(|runtime| runtime as &dyn crate::conversation::ConversationRuntime),
                 observer,
             )
             .await?;
@@ -515,6 +544,234 @@ impl AgentRuntime {
         _target_session_id: &str,
     ) -> CliResult<Value> {
         Err("agent runtime cancel unavailable: memory-sqlite feature disabled".to_owned())
+    }
+}
+
+fn requested_tool_view_for_turn(request: &AgentTurnRequest) -> Option<crate::tools::ToolView> {
+    if request.disable_tools {
+        return Some(crate::tools::ToolView::from_tool_names(std::iter::empty::<
+            &str,
+        >()));
+    }
+    request
+        .requested_tool_ids
+        .as_ref()
+        .map(|tool_ids| crate::tools::ToolView::from_tool_names(tool_ids.iter()))
+}
+
+fn build_tool_view_override_runtime(
+    runtime: &crate::chat::CliTurnRuntime,
+    requested_tool_view: crate::tools::ToolView,
+) -> CliResult<ToolViewOverrideConversationRuntime> {
+    let turn_config = load_runtime_turn_config(runtime)?;
+    let inner: crate::conversation::DefaultConversationRuntime<
+        Box<dyn crate::conversation::ConversationContextEngine>,
+    > = crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+    Ok(ToolViewOverrideConversationRuntime {
+        inner,
+        requested_tool_view,
+    })
+}
+
+struct ToolViewOverrideConversationRuntime {
+    inner: crate::conversation::DefaultConversationRuntime<
+        Box<dyn crate::conversation::ConversationContextEngine>,
+    >,
+    requested_tool_view: crate::tools::ToolView,
+}
+
+#[async_trait]
+impl crate::conversation::ConversationRuntime for ToolViewOverrideConversationRuntime {
+    fn tool_view(
+        &self,
+        _config: &crate::config::LoongConfig,
+        _session_id: &str,
+        _binding: crate::conversation::ConversationRuntimeBinding<'_>,
+    ) -> CliResult<crate::tools::ToolView> {
+        Ok(self.requested_tool_view.clone())
+    }
+
+    fn async_delegate_spawner(
+        &self,
+        config: &crate::config::LoongConfig,
+    ) -> Option<Arc<dyn crate::conversation::AsyncDelegateSpawner>> {
+        self.inner.async_delegate_spawner(config)
+    }
+
+    fn background_task_spawner(
+        &self,
+        config: &crate::config::LoongConfig,
+    ) -> Option<Arc<dyn crate::conversation::AsyncDelegateSpawner>> {
+        self.inner.background_task_spawner(config)
+    }
+
+    async fn bootstrap(
+        &self,
+        config: &crate::config::LoongConfig,
+        session_id: &str,
+        kernel_ctx: &crate::KernelContext,
+    ) -> CliResult<crate::conversation::ContextEngineBootstrapResult> {
+        self.inner.bootstrap(config, session_id, kernel_ctx).await
+    }
+
+    async fn ingest(
+        &self,
+        session_id: &str,
+        message: &Value,
+        kernel_ctx: &crate::KernelContext,
+    ) -> CliResult<crate::conversation::ContextEngineIngestResult> {
+        self.inner.ingest(session_id, message, kernel_ctx).await
+    }
+
+    async fn build_context(
+        &self,
+        config: &crate::config::LoongConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        binding: crate::conversation::ConversationRuntimeBinding<'_>,
+    ) -> CliResult<crate::conversation::AssembledConversationContext> {
+        let session_context = crate::conversation::ConversationRuntime::session_context(
+            self, config, session_id, binding,
+        )?;
+        self.inner
+            .build_context_for_tool_view(
+                config,
+                &session_context,
+                include_system_prompt,
+                &session_context.tool_view,
+                binding,
+            )
+            .await
+    }
+
+    async fn build_messages(
+        &self,
+        config: &crate::config::LoongConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        tool_view: &crate::tools::ToolView,
+        binding: crate::conversation::ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Vec<Value>> {
+        let session_context = crate::conversation::ConversationRuntime::session_context(
+            self, config, session_id, binding,
+        )?;
+        self.inner
+            .build_context_for_tool_view(
+                config,
+                &session_context,
+                include_system_prompt,
+                tool_view,
+                binding,
+            )
+            .await
+            .map(|assembled| assembled.messages)
+    }
+
+    async fn request_completion(
+        &self,
+        config: &crate::config::LoongConfig,
+        messages: &[Value],
+        binding: crate::conversation::ConversationRuntimeBinding<'_>,
+    ) -> CliResult<String> {
+        self.inner
+            .request_completion(config, messages, binding)
+            .await
+    }
+
+    async fn request_turn(
+        &self,
+        config: &crate::config::LoongConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: crate::conversation::ConversationRuntimeBinding<'_>,
+    ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+        self.inner
+            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
+    }
+
+    async fn request_turn_streaming(
+        &self,
+        config: &crate::config::LoongConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: crate::conversation::ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<crate::conversation::turn_engine::ProviderTurn> {
+        self.inner
+            .request_turn_streaming(
+                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            )
+            .await
+    }
+
+    async fn persist_turn(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        binding: crate::conversation::ConversationRuntimeBinding<'_>,
+    ) -> CliResult<()> {
+        self.inner
+            .persist_turn(session_id, role, content, binding)
+            .await
+    }
+
+    async fn after_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        assistant_reply: &str,
+        messages: &[Value],
+        kernel_ctx: &crate::KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .after_turn(
+                session_id,
+                user_input,
+                assistant_reply,
+                messages,
+                kernel_ctx,
+            )
+            .await
+    }
+
+    async fn compact_context(
+        &self,
+        config: &crate::config::LoongConfig,
+        session_id: &str,
+        messages: &[Value],
+        kernel_ctx: &crate::KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .compact_context(config, session_id, messages, kernel_ctx)
+            .await
+    }
+
+    async fn prepare_subagent_spawn(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        kernel_ctx: &crate::KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .prepare_subagent_spawn(parent_session_id, subagent_session_id, kernel_ctx)
+            .await
+    }
+
+    async fn on_subagent_ended(
+        &self,
+        parent_session_id: &str,
+        subagent_session_id: &str,
+        kernel_ctx: &crate::KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
+            .await
     }
 }
 

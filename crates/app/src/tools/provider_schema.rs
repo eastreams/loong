@@ -41,9 +41,13 @@ fn provider_tool_definitions_for_view_with_config(view: &ToolView) -> Vec<Value>
             continue;
         }
 
-        if descriptor.is_direct()
-            && !tool_surface::direct_tool_visible_in_view(descriptor.name, view)
-        {
+        let visible_in_view = if descriptor.is_direct() {
+            tool_surface::direct_tool_visible_in_view(descriptor.name, view)
+        } else {
+            view.contains(descriptor.name)
+        };
+
+        if !visible_in_view {
             continue;
         }
 

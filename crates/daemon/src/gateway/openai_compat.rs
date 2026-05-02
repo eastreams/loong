@@ -20,6 +20,10 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::control::{GatewayControlAppState, authorize_request_from_state};
+use super::openai_tooling::{
+    GatewayToolSettings, apply_gateway_tool_settings, clear_gateway_session_tool_policy,
+    resolve_gateway_tool_settings,
+};
 use crate::mvp::config::{LoongConfig, ProviderProfileConfig};
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +78,8 @@ struct OpenAiCompatGatewayTurnSeed {
     model: String,
     run_config: LoongConfig,
     input: String,
+    requested_tool_ids: Option<Vec<String>>,
+    disable_tools: bool,
 }
 
 struct OpenAiCompatStreamObserver {
@@ -172,22 +178,19 @@ pub(crate) async fn handle_chat_completions(
         );
     };
 
-    if request.tools.is_some() || request.tool_choice.is_some() {
-        let unsupported_param = if request.tools.is_some() {
-            "tools"
-        } else {
-            "tool_choice"
-        };
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({
-                "error": {
-                    "message": "tools and tool_choice are not supported on this OpenAI-compatible gateway surface yet",
-                    "param": unsupported_param
-                }
-            }),
-        );
-    }
+    let tool_settings = match resolve_gateway_tool_settings(
+        config,
+        request.tools.as_ref(),
+        request.tool_choice.as_ref(),
+    ) {
+        Ok(tool_settings) => tool_settings,
+        Err(error) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error": {"message": error.message, "param": error.param}}),
+            );
+        }
+    };
 
     if request.messages.is_empty() {
         return json_response(
@@ -223,10 +226,10 @@ pub(crate) async fn handle_chat_completions(
         );
     }
     if request.stream {
-        return stream_chat_completion(app_state.as_ref(), config, &request).await;
+        return stream_chat_completion(app_state.as_ref(), config, &request, tool_settings).await;
     }
 
-    complete_chat_completion(app_state.as_ref(), config, &request)
+    complete_chat_completion(app_state.as_ref(), config, &request, tool_settings)
         .await
         .map_or_else(
             |error| {
@@ -427,6 +430,7 @@ fn chat_message_to_window_turn(
 fn build_gateway_turn_seed(
     config: &LoongConfig,
     request: &ChatCompletionRequest,
+    tool_settings: GatewayToolSettings,
 ) -> Result<OpenAiCompatGatewayTurnSeed, String> {
     let Some((last_message, history)) = request.messages.split_last() else {
         return Err("messages must not be empty".to_owned());
@@ -446,6 +450,11 @@ fn build_gateway_turn_seed(
     let mut run_config = config.clone();
     run_config.provider = binding.provider;
     run_config.active_provider = Some(binding.profile_id);
+    if tool_settings.disable_tools {
+        clear_gateway_session_tool_policy(&run_config, request_id.as_str())?;
+    } else if tool_settings.requested_tool_ids.is_some() {
+        apply_gateway_tool_settings(&run_config, request_id.as_str(), &tool_settings)?;
+    }
     let memory_config = crate::mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
         &run_config.memory,
     );
@@ -461,13 +470,21 @@ fn build_gateway_turn_seed(
         model: request.model.clone(),
         run_config,
         input,
+        requested_tool_ids: tool_settings.requested_tool_ids,
+        disable_tools: tool_settings.disable_tools,
     })
 }
 
-fn build_openai_compat_turn_request(input: String) -> crate::mvp::agent_runtime::AgentTurnRequest {
+fn build_openai_compat_turn_request(
+    input: String,
+    requested_tool_ids: Option<Vec<String>>,
+    disable_tools: bool,
+) -> crate::mvp::agent_runtime::AgentTurnRequest {
     crate::mvp::agent_runtime::AgentTurnRequest {
         message: input,
         turn_mode: crate::mvp::agent_runtime::AgentTurnMode::Oneshot,
+        requested_tool_ids,
+        disable_tools,
         ..Default::default()
     }
 }
@@ -482,7 +499,11 @@ async fn run_gateway_turn_for_seed(
             resolved_path,
             seed.run_config.clone(),
             Some(seed.session_id.as_str()),
-            &build_openai_compat_turn_request(seed.input.clone()),
+            &build_openai_compat_turn_request(
+                seed.input.clone(),
+                seed.requested_tool_ids.clone(),
+                seed.disable_tools,
+            ),
             None,
             observer,
             crate::mvp::conversation::ProviderErrorMode::Propagate,
@@ -494,8 +515,9 @@ async fn complete_chat_completion(
     app_state: &GatewayControlAppState,
     config: &LoongConfig,
     request: &ChatCompletionRequest,
+    tool_settings: GatewayToolSettings,
 ) -> Result<Value, String> {
-    let seed = build_gateway_turn_seed(config, request)?;
+    let seed = build_gateway_turn_seed(config, request, tool_settings)?;
     let result = run_gateway_turn_for_seed(
         std::path::PathBuf::from(app_state.config_path.clone()),
         &seed,
@@ -523,8 +545,9 @@ async fn stream_chat_completion(
     app_state: &GatewayControlAppState,
     config: &LoongConfig,
     request: &ChatCompletionRequest,
+    tool_settings: GatewayToolSettings,
 ) -> Response {
-    let seed = match build_gateway_turn_seed(config, request) {
+    let seed = match build_gateway_turn_seed(config, request, tool_settings) {
         Ok(seed) => seed,
         Err(error) => {
             return json_response(
@@ -533,12 +556,6 @@ async fn stream_chat_completion(
             );
         }
     };
-    if !crate::mvp::provider::supports_turn_streaming_events(&seed.run_config) {
-        return json_response(
-            StatusCode::NOT_IMPLEMENTED,
-            json!({"error": {"message": format!("model `{}` does not support live streaming events", request.model), "param": "model"}}),
-        );
-    }
     let (sender, receiver) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let observer = Arc::new(OpenAiCompatStreamObserver::new(
         sender.clone(),
@@ -550,9 +567,16 @@ async fn stream_chat_completion(
     let request_id = seed.request_id.clone();
     let model = seed.model.clone();
     let resolved_path = std::path::PathBuf::from(app_state.config_path.clone());
+    let streaming_supported =
+        crate::mvp::provider::supports_turn_streaming_events(&seed.run_config);
 
     tokio::spawn(async move {
-        let result = run_gateway_turn_for_seed(resolved_path, &seed, Some(observer_handle)).await;
+        let result = run_gateway_turn_for_seed(
+            resolved_path,
+            &seed,
+            streaming_supported.then_some(observer_handle),
+        )
+        .await;
         match result {
             Ok(result) => {
                 if !observer.emitted_text() && !result.output_text.is_empty() {
@@ -768,6 +792,30 @@ mod tests {
         }
     }
 
+    fn openai_compat_responses_provider_config(base_url: String) -> LoongConfig {
+        LoongConfig {
+            providers: BTreeMap::from([(
+                "openai-main".to_owned(),
+                ProviderProfileConfig {
+                    default_for_kind: true,
+                    provider: ProviderConfig {
+                        kind: ProviderKind::Openai,
+                        model: "gpt-5".to_owned(),
+                        base_url,
+                        api_key: Some(loong_contracts::SecretRef::Inline("test-key".to_owned())),
+                        api_key_env: None,
+                        oauth_access_token: None,
+                        oauth_access_token_env: None,
+                        wire_api: ProviderWireApi::Responses,
+                        ..ProviderConfig::default()
+                    },
+                },
+            )]),
+            active_provider: Some("openai-main".to_owned()),
+            ..LoongConfig::default()
+        }
+    }
+
     fn next_openai_compat_test_sqlite_path(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "loong-openai-compat-{label}-{}",
@@ -776,24 +824,6 @@ mod tests {
                 .expect("clock")
                 .as_nanos()
         ))
-    }
-
-    fn openai_compat_unsupported_stream_config() -> LoongConfig {
-        LoongConfig {
-            providers: BTreeMap::from([(
-                "bedrock-main".to_owned(),
-                ProviderProfileConfig {
-                    default_for_kind: true,
-                    provider: ProviderConfig {
-                        kind: ProviderKind::Bedrock,
-                        model: "anthropic.claude-3-7-sonnet-20250219-v1:0".to_owned(),
-                        ..ProviderConfig::default()
-                    },
-                },
-            )]),
-            active_provider: Some("bedrock-main".to_owned()),
-            ..LoongConfig::default()
-        }
     }
 
     fn openai_compat_duplicate_model_config(base_url: String) -> LoongConfig {
@@ -1149,7 +1179,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gateway_openai_chat_completion_rejects_tools_fields() {
+    async fn gateway_openai_chat_completion_accepts_tools_fields_as_runtime_subset() {
         let app = build_openai_compat_test_router_no_backend(
             openai_compat_test_config(),
             "tok".to_owned(),
@@ -1173,10 +1203,15 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(payload["error"]["param"], "tools");
     }
 
     #[tokio::test]
-    async fn gateway_openai_chat_completion_rejects_tool_choice_field() {
+    async fn gateway_openai_chat_completion_rejects_direct_tool_selection_requests() {
         let app = build_openai_compat_test_router_no_backend(
             openai_compat_test_config(),
             "tok".to_owned(),
@@ -1184,7 +1219,14 @@ mod tests {
         let body = serde_json::json!({
             "model": "gpt-5",
             "messages": [{"role": "user", "content": "hello"}],
-            "tool_choice": "auto"
+            "tools": [{
+                "type": "function",
+                "function": {"name": "read"}
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "read"}
+            }
         });
         let response = app
             .oneshot(
@@ -1204,7 +1246,50 @@ mod tests {
             .await
             .expect("body");
         let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        assert_eq!(payload["error"]["param"], "tool_choice");
+        assert_eq!(payload["error"]["param"], "tools");
+    }
+
+    #[test]
+    fn gateway_openai_chat_completion_tool_choice_none_disables_provider_tools() {
+        run_openai_compat_test_on_large_stack("openai-compat-tool-choice-none", || async move {
+            gateway_openai_chat_completion_tool_choice_none_disables_provider_tools_impl().await;
+        });
+    }
+
+    async fn gateway_openai_chat_completion_tool_choice_none_disables_provider_tools_impl() {
+        let (base_url, server) = spawn_openai_compat_provider_server(
+            "HTTP/1.1 200 OK",
+            r#"{"choices":[{"message":{"role":"assistant","content":"provider says hi"}}]}"#,
+        );
+        let app = build_openai_compat_test_router_no_backend(
+            openai_compat_provider_config(base_url),
+            "tok".to_owned(),
+        );
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tool_choice": "none"
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("authorization", "Bearer tok")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).expect("encode body")))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let requests = server.join().expect("join provider server");
+        assert!(
+            !requests[0].contains("\"tools\":"),
+            "provider request should omit tools when tool_choice=none: {:#?}",
+            requests
+        );
     }
 
     #[tokio::test]
@@ -1796,13 +1881,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gateway_openai_chat_completion_streaming_rejects_truly_unsupported_models() {
+    async fn gateway_openai_chat_completion_streaming_falls_back_for_non_streaming_models() {
+        let (base_url, _server) = spawn_openai_compat_provider_server(
+            "HTTP/1.1 200 OK",
+            r#"{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"fallback reply"}]}]}"#,
+        );
         let app = build_openai_compat_test_router_no_backend(
-            openai_compat_unsupported_stream_config(),
+            openai_compat_responses_provider_config(base_url),
             "tok".to_owned(),
         );
         let body = serde_json::json!({
-            "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "model": "gpt-5",
             "stream": true,
             "messages": [{"role": "user", "content": "hello"}]
         });
@@ -1819,7 +1908,13 @@ mod tests {
             .await
             .expect("response");
 
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body_text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(body_text.contains("\"content\":\"fallback reply\""));
+        assert!(body_text.contains("data: [DONE]"));
     }
 
     #[test]

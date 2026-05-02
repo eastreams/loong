@@ -1094,7 +1094,7 @@ impl<E> DefaultConversationRuntime<E>
 where
     E: ConversationContextEngine,
 {
-    async fn build_context_for_tool_view(
+    pub(crate) async fn build_context_for_tool_view(
         &self,
         config: &LoongConfig,
         session_context: &SessionContext,

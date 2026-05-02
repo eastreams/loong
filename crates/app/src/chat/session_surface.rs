@@ -2665,6 +2665,7 @@ impl ChatSessionSurface {
                         .as_ref()
                         .map(|path| path.display().to_string()),
                     live_surface_enabled: true,
+                    ..Default::default()
                 },
                 None,
                 Some(observer),

@@ -2396,6 +2396,7 @@ async fn turn_submit(
             acp_bootstrap_mcp_servers: Vec::new(),
             acp_cwd: working_directory,
             live_surface_enabled: false,
+            ..Default::default()
         };
         let execution_result = mvp::agent_runtime::AgentRuntime::new()
             .run_turn_with_loaded_config_and_acp_manager(
