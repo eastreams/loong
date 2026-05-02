@@ -1045,7 +1045,6 @@ fn supported_multi_channel_serve_channel_ids() -> Vec<&'static str> {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 #[path = "lib_multi_channel_serve_tests.rs"]
 mod multi_channel_serve_tests;
 
