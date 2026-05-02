@@ -314,6 +314,9 @@ pub struct PluginInitCommand {
     /// Source language for language-specific bridges such as process_stdio or native_ffi
     #[arg(long)]
     pub source_language: Option<String>,
+    /// Additional declared capability names beyond the default connector baseline
+    #[arg(long = "capability")]
+    pub capabilities: Vec<String>,
     /// Declared read-only trusted host hook names to scaffold on the trusted host lane
     #[arg(long = "host-hook")]
     pub host_hooks: Vec<String>,
@@ -556,6 +559,7 @@ pub struct PluginsInventorySummaryView {
     pub loaded_plugins: usize,
     pub source_kind_distribution: BTreeMap<String, usize>,
     pub bridge_kind_distribution: BTreeMap<String, usize>,
+    pub capability_distribution: BTreeMap<String, usize>,
     pub source_language_distribution: BTreeMap<String, usize>,
     pub setup_surface_distribution: BTreeMap<String, usize>,
     pub activation_status_distribution: BTreeMap<String, usize>,
@@ -596,6 +600,7 @@ pub struct PluginsDoctorSummaryView {
     pub total_operator_actions: usize,
     pub remediation_counts: BTreeMap<String, usize>,
     pub bridge_kind_distribution: BTreeMap<String, usize>,
+    pub capability_distribution: BTreeMap<String, usize>,
     pub source_language_distribution: BTreeMap<String, usize>,
     pub setup_surface_distribution: BTreeMap<String, usize>,
     pub activation_status_distribution: BTreeMap<String, usize>,
@@ -1207,6 +1212,8 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let version = normalize_required_cli_value("--version", &command.version)?;
     let summary = normalize_optional_cli_value(command.summary.as_deref());
     let bridge_kind = command.bridge_kind.as_bridge_kind();
+    let declared_capabilities =
+        resolve_scaffold_declared_capabilities(command.capabilities.as_slice())?;
     let declared_host_hooks = resolve_scaffold_host_hooks(command.host_hooks.as_slice())?;
     let declared_tui_surfaces = resolve_scaffold_tui_surfaces(command.tui_surfaces.as_slice())?;
 
@@ -1235,6 +1242,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         &version,
         summary,
         &scaffold_defaults,
+        declared_capabilities,
         declared_host_hooks.clone(),
         declared_tui_surfaces.clone(),
         process_stdio_profile,
@@ -1758,6 +1766,25 @@ fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
     })
 }
 
+fn resolve_scaffold_declared_capabilities(raw: &[String]) -> CliResult<BTreeSet<Capability>> {
+    let mut declared_capabilities = BTreeSet::from([Capability::InvokeConnector]);
+
+    for capability_name in raw {
+        let trimmed = capability_name.trim();
+        if trimmed.is_empty() {
+            return Err("plugins init requires each --capability value to be non-empty".to_owned());
+        }
+        let Some(capability) = Capability::parse(trimmed) else {
+            return Err(format!(
+                "plugins init received unsupported --capability `{trimmed}`"
+            ));
+        };
+        declared_capabilities.insert(capability);
+    }
+
+    Ok(declared_capabilities)
+}
+
 fn resolve_scaffold_host_hooks(raw: &[String]) -> CliResult<Vec<String>> {
     let mut declared_host_hooks = Vec::new();
 
@@ -1904,15 +1931,13 @@ fn build_plugin_scaffold_manifest(
     version: &str,
     summary: Option<String>,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+    capabilities: BTreeSet<Capability>,
     host_hooks: Vec<String>,
     tui_surfaces: Vec<String>,
     process_stdio_profile: Option<
         crate::native_extension_authoring::ProcessStdioNativeExtensionLanguageProfile,
     >,
 ) -> PluginManifest {
-    let mut capabilities = BTreeSet::new();
-    capabilities.insert(Capability::InvokeConnector);
-
     let mut metadata = BTreeMap::new();
     metadata.insert(
         "bridge_kind".to_owned(),
@@ -2330,9 +2355,10 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
         display_text_or_dash(execution.bridge_support_delta_sha256.as_deref())
     ));
     lines.push(format!(
-        "ecosystem source_kind={} bridge={} language={} setup_surface={} activation_status={}",
+        "ecosystem source_kind={} bridge={} capabilities={} language={} setup_surface={} activation_status={}",
         format_rollup_map(&execution.summary.source_kind_distribution),
         format_rollup_map(&execution.summary.bridge_kind_distribution),
+        format_rollup_map(&execution.summary.capability_distribution),
         format_rollup_map(&execution.summary.source_language_distribution),
         format_rollup_map(&execution.summary.setup_surface_distribution),
         format_rollup_map(&execution.summary.activation_status_distribution)
@@ -2340,6 +2366,7 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
     for result in &execution.results {
         let activation_status = inventory_result_status_label(result);
         let setup_surface = inventory_result_setup_surface_label(result);
+        let capabilities = format_csv_or_dash(&result.capabilities);
         let source_language = result.source_language.as_deref().unwrap_or("-");
         let manifest_path = display_text_or_dash(result.package_manifest_path.as_deref());
         let setup_mode = display_text_or_dash(result.setup_mode.as_deref());
@@ -2363,13 +2390,14 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             .as_ref()
             .map(|attestation| attestation.integrity.as_str());
         lines.push(format!(
-            "- plugin={} provider={} status={} loaded={} deferred={} bridge={} language={} setup_surface={}",
+            "- plugin={} provider={} status={} loaded={} deferred={} bridge={} capabilities={} language={} setup_surface={}",
             result.plugin_id,
             result.provider_id,
             activation_status,
             result.loaded,
             result.deferred,
             result.bridge_kind,
+            capabilities,
             source_language,
             setup_surface
         ));
@@ -2457,8 +2485,9 @@ fn render_plugins_doctor_text(execution: &PluginsDoctorExecution) -> String {
         display_text_or_dash(execution.bridge_support_delta_sha256.as_deref())
     ));
     lines.push(format!(
-        "ecosystem bridge={} language={} setup_surface={} activation_status={}",
+        "ecosystem bridge={} capabilities={} language={} setup_surface={} activation_status={}",
         format_rollup_map(&execution.summary.bridge_kind_distribution),
+        format_rollup_map(&execution.summary.capability_distribution),
         format_rollup_map(&execution.summary.source_language_distribution),
         format_rollup_map(&execution.summary.setup_surface_distribution),
         format_rollup_map(&execution.summary.activation_status_distribution)
@@ -2681,6 +2710,7 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
     let activation_status = inventory_result_status_label(plugin);
     let setup_surface = inventory_result_setup_surface_label(plugin);
     let source_language = plugin.source_language.as_deref().unwrap_or("-");
+    let capabilities = format_csv_or_dash(&plugin.capabilities);
     let manifest_path = display_text_or_dash(plugin.package_manifest_path.as_deref());
     let setup_mode = display_text_or_dash(plugin.setup_mode.as_deref());
     let required_env_vars = format_csv_or_dash(&plugin.setup_required_env_vars);
@@ -2705,7 +2735,7 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
         format_preflight_result_recommended_actions(&result.recommended_actions);
 
     let mut lines = vec![format!(
-        "- plugin={} provider={} verdict={} activation_status={} loaded={} deferred={} bridge={} language={} setup_surface={}",
+        "- plugin={} provider={} verdict={} activation_status={} loaded={} deferred={} bridge={} capabilities={} language={} setup_surface={}",
         plugin.plugin_id,
         plugin.provider_id,
         result.verdict,
@@ -2713,6 +2743,7 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
         plugin.loaded,
         plugin.deferred,
         plugin.bridge_kind,
+        capabilities,
         source_language,
         setup_surface
     )];
@@ -3475,6 +3506,7 @@ fn summarize_plugin_inventory_results(
     let mut loaded_plugins = 0;
     let mut source_kind_distribution = BTreeMap::new();
     let mut bridge_kind_distribution = BTreeMap::new();
+    let mut capability_distribution = BTreeMap::new();
     let mut source_language_distribution = BTreeMap::new();
     let mut setup_surface_distribution = BTreeMap::new();
     let mut activation_status_distribution = BTreeMap::new();
@@ -3500,6 +3532,9 @@ fn summarize_plugin_inventory_results(
 
         increment_rollup_count(&mut source_kind_distribution, result.source_kind.as_str());
         increment_rollup_count(&mut bridge_kind_distribution, result.bridge_kind.as_str());
+        for capability in &result.capabilities {
+            increment_rollup_count(&mut capability_distribution, capability.as_str());
+        }
 
         let source_language = result.source_language.as_deref().unwrap_or("unknown");
         increment_rollup_count(&mut source_language_distribution, source_language);
@@ -3520,6 +3555,7 @@ fn summarize_plugin_inventory_results(
         loaded_plugins,
         source_kind_distribution,
         bridge_kind_distribution,
+        capability_distribution,
         source_language_distribution,
         setup_surface_distribution,
         activation_status_distribution,
@@ -3636,6 +3672,7 @@ fn summarize_plugin_doctor_results(
     let mut total_recommended_actions: usize = 0;
     let mut total_operator_actions: usize = 0;
     let mut bridge_kind_distribution = BTreeMap::new();
+    let mut capability_distribution = BTreeMap::new();
     let mut source_language_distribution = BTreeMap::new();
     let mut setup_surface_distribution = BTreeMap::new();
     let mut activation_status_distribution = BTreeMap::new();
@@ -3671,6 +3708,9 @@ fn summarize_plugin_doctor_results(
         }
 
         increment_rollup_count(&mut bridge_kind_distribution, plugin.bridge_kind.as_str());
+        for capability in &plugin.capabilities {
+            increment_rollup_count(&mut capability_distribution, capability.as_str());
+        }
 
         let source_language = plugin.source_language.as_deref().unwrap_or("unknown");
         increment_rollup_count(&mut source_language_distribution, source_language);
@@ -3702,6 +3742,7 @@ fn summarize_plugin_doctor_results(
         total_operator_actions,
         remediation_counts: preflight_summary.remediation_counts.clone(),
         bridge_kind_distribution,
+        capability_distribution,
         source_language_distribution,
         setup_surface_distribution,
         activation_status_distribution,
@@ -5299,6 +5340,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 tui_surfaces: Vec::new(),
                 version: "0.1.0".to_owned(),
@@ -5421,6 +5463,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: None,
+                capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 tui_surfaces: Vec::new(),
                 version: "0.1.0".to_owned(),
@@ -5448,6 +5491,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 tui_surfaces: Vec::new(),
                 version: "not-semver".to_owned(),
@@ -5475,6 +5519,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
+                capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 tui_surfaces: Vec::new(),
                 version: "0.2.0".to_owned(),
@@ -5526,6 +5571,83 @@ mod tests {
         assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
     }
 
+    #[tokio::test]
+    async fn execute_plugins_init_persists_additive_declared_capabilities() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-capabilities");
+        let package_root = format!("{temp_root}/weather-python");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-python".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("py".to_owned()),
+                capabilities: vec!["observe_telemetry".to_owned()],
+                host_hooks: Vec::new(),
+                tui_surfaces: Vec::new(),
+                version: "0.2.0".to_owned(),
+                summary: Some("Python weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("process stdio scaffold with additive capabilities should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        let inventory_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Inventory(PluginInventoryCommand {
+                source: PluginScanSourceArgs {
+                    roots: vec![execution.package_root.clone()],
+                    query: String::new(),
+                    limit: None,
+                    bridge_support: None,
+                    bridge_profile: None,
+                    bridge_support_delta: None,
+                    bridge_support_sha256: None,
+                    bridge_support_delta_sha256: None,
+                },
+                include_ready: true,
+                include_blocked: true,
+                include_deferred: true,
+                include_examples: false,
+            }),
+        })
+        .await
+        .expect("inventory should read scaffolded plugin capabilities");
+
+        let PluginsCommandExecution::Inventory(inventory_execution) = inventory_execution else {
+            panic!("expected inventory execution");
+        };
+
+        assert_eq!(
+            inventory_execution.results[0].capabilities,
+            vec![
+                "invoke_connector".to_owned(),
+                "observe_telemetry".to_owned()
+            ]
+        );
+        assert_eq!(
+            inventory_execution
+                .summary
+                .capability_distribution
+                .get("invoke_connector"),
+            Some(&1)
+        );
+        assert_eq!(
+            inventory_execution
+                .summary
+                .capability_distribution
+                .get("observe_telemetry"),
+            Some(&1)
+        );
+    }
+
     #[test]
     fn write_plugin_scaffold_files_rolls_back_manifest_when_readme_write_fails() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-rollback");
@@ -5575,6 +5697,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
                 host_hooks: vec!["turn_start".to_owned()],
                 tui_surfaces: vec!["command_palette".to_owned()],
                 version: "0.2.0".to_owned(),
@@ -5636,6 +5759,7 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
                 host_hooks: vec!["turn_start".to_owned()],
                 tui_surfaces: Vec::new(),
                 version: "0.2.0".to_owned(),
@@ -5685,6 +5809,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
                 host_hooks: vec!["provider_request".to_owned()],
                 tui_surfaces: Vec::new(),
                 version: "0.2.0".to_owned(),
@@ -5711,6 +5836,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 tui_surfaces: vec!["sidebar_widget".to_owned()],
                 version: "0.2.0".to_owned(),
@@ -5740,6 +5866,7 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 tui_surfaces: Vec::new(),
                 version: "0.1.0".to_owned(),

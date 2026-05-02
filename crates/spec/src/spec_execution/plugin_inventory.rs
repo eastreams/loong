@@ -293,6 +293,11 @@ pub(super) fn collect_plugin_inventory_results(
                     }),
                 summary: manifest.summary.clone(),
                 tags: manifest.tags.clone(),
+                capabilities: manifest
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.as_str().to_owned())
+                    .collect(),
                 input_examples: manifest.input_examples.clone(),
                 output_examples: manifest.output_examples.clone(),
                 deferred: manifest.defer_loading,
@@ -387,6 +392,7 @@ pub(super) fn collect_plugin_inventory_results(
             bootstrap_hint: entry.bootstrap_hint,
             summary: entry.summary,
             tags: entry.tags,
+            capabilities: entry.capabilities,
             input_examples: if include_examples {
                 entry.input_examples
             } else {

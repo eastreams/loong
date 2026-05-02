@@ -58,6 +58,7 @@ runtime seams.
 They currently support:
 
 - scaffolded package creation through `loong plugins init`
+- additive capability intent on top of the default `invoke_connector` baseline
 - declared host hooks
 - declared shell-first TUI surfaces
 - bounded probe execution through the Loong CLI

@@ -466,6 +466,10 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         let provider_id = crate::render_line_safe_text_value(&plugin.provider_id);
         let connector_name = crate::render_line_safe_text_value(&plugin.connector_name);
         let bridge_kind = crate::render_line_safe_text_value(&plugin.bridge_kind);
+        let capabilities = crate::render_line_safe_text_values(
+            plugin.capabilities.iter().map(String::as_str),
+            ",",
+        );
         let adapter_family = crate::render_line_safe_text_value(&plugin.adapter_family);
         let status = crate::render_line_safe_text_value(&plugin.status);
         let setup_mode = crate::render_line_safe_optional_text_value(plugin.setup_mode.as_deref());
@@ -492,13 +496,14 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         );
 
         lines.push(format!(
-            "  runtime_plugin {} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} slot_claims={} conflicting_slot_claims={}",
+            "  runtime_plugin {} source_path={} package_root={} provider={} connector={} bridge={} capabilities={} adapter_family={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} slot_claims={} conflicting_slot_claims={}",
             plugin_id,
             source_path,
             package_root,
             provider_id,
             connector_name,
             bridge_kind,
+            capabilities,
             adapter_family,
             status,
             setup_mode,
@@ -785,6 +790,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
                 "package_root": plugin.package_root,
                 "package_manifest_path": plugin.package_manifest_path,
                 "bridge_kind": plugin.bridge_kind,
+                "capabilities": plugin.capabilities,
                 "adapter_family": plugin.adapter_family,
                 "setup_mode": plugin.setup_mode,
                 "setup_surface": plugin.setup_surface,

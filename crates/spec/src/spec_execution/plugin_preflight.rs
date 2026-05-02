@@ -2171,6 +2171,7 @@ mod tests {
             bootstrap_hint: None,
             summary: None,
             tags: Vec::new(),
+            capabilities: Vec::new(),
             input_examples: Vec::new(),
             output_examples: Vec::new(),
             deferred: false,

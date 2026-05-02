@@ -1793,6 +1793,7 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub package_root: String,
     pub package_manifest_path: Option<String>,
     pub bridge_kind: String,
+    pub capabilities: Vec<String>,
     pub adapter_family: String,
     pub setup_mode: Option<String>,
     pub setup_surface: Option<String>,
@@ -2456,6 +2457,11 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 package_root: entry.package_root.clone(),
                 package_manifest_path: entry.package_manifest_path.clone(),
                 bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
+                capabilities: entry
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.as_str().to_owned())
+                    .collect(),
                 adapter_family: entry.runtime.adapter_family.clone(),
                 setup_mode,
                 setup_surface,

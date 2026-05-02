@@ -290,6 +290,8 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
         "process_stdio",
         "--source-language",
         "python",
+        "--capability",
+        "observe_telemetry",
         "--host-hook",
         "turn_start",
         "--tui-surface",
@@ -314,6 +316,7 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                         loong_daemon::plugins_cli::PluginInitBridgeKindArg::ProcessStdio
                     );
                     assert_eq!(command.source_language.as_deref(), Some("python"));
+                    assert_eq!(command.capabilities, vec!["observe_telemetry".to_owned()]);
                     assert_eq!(command.host_hooks, vec!["turn_start".to_owned()]);
                     assert_eq!(command.tui_surfaces, vec!["command_palette".to_owned()]);
                     assert_eq!(
@@ -523,6 +526,7 @@ fn plugins_init_help_mentions_bridge_contract_flags() {
         help.contains("--source-language <SOURCE_LANGUAGE>"),
         "help: {help}"
     );
+    assert!(help.contains("--capability <CAPABILITIES>"), "help: {help}");
     assert!(help.contains("--provider-id <PROVIDER_ID>"), "help: {help}");
     assert!(
         help.contains("--connector-name <CONNECTOR_NAME>"),

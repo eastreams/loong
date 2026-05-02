@@ -44,7 +44,8 @@ loong plugins init ./weather-host \
   --plugin-id weather-host \
   --bridge-kind process_stdio \
   --source-language js \
-  --host-hook turn_start
+  --host-hook turn_start \
+  --capability observe_telemetry
 ```
 
 ### Example: TUI surface
@@ -66,6 +67,10 @@ The scaffold writes:
 
 It also prints a bounded smoke command so you can validate the package
 immediately.
+
+Scaffolded native extensions keep `invoke_connector` as the baseline capability.
+Use repeated `--capability <name>` flags only to declare additive capability
+intent.
 
 ## Reference Examples
 

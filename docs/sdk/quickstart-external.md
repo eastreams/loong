@@ -57,6 +57,7 @@ For trusted host extensions, the shortest current loop is:
 1. scaffold the package:
    - `loong plugins init ... --bridge-kind process_stdio --source-language <lang>`
    - add `--host-hook <hook>` and/or `--tui-surface <surface>` as needed
+   - add `--capability <name>` when the package needs additive capability intent beyond the default connector baseline
 2. inspect the generated smoke command from `plugins init`
 3. run `loong plugins inventory`
 4. run `loong plugins doctor`
@@ -86,6 +87,7 @@ Right now, trusted host scaffolds are intentionally limited to:
 
 - runnable `process_stdio` packages
 - explicit source-language selection
+- additive capability declaration on top of the default `invoke_connector` baseline
 - generated local runtime stub files
 - bounded smoke probes, not implicit live execution
 
