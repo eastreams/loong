@@ -129,6 +129,18 @@ pub struct GatewayAcpStatusReadModel {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GatewayAcpCloseReadModel {
+    pub config: String,
+    pub requested_session: Option<String>,
+    pub requested_conversation_id: Option<String>,
+    pub requested_route_session_id: Option<String>,
+    pub resolved_session_key: String,
+    pub closed: bool,
+    pub hook_dispatched: bool,
+    pub shutdown_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GatewayAcpActivationAggregateProvenanceReadModel {
     pub surface: &'static str,
     pub activation_origin_counts: BTreeMap<String, usize>,
@@ -678,6 +690,34 @@ pub fn build_acp_status_read_model(
         requested_route_session_id,
         resolved_session_key,
         status,
+    }
+}
+
+pub fn build_acp_close_read_model(
+    config_path: &str,
+    requested_session: Option<&str>,
+    requested_conversation_id: Option<&str>,
+    requested_route_session_id: Option<&str>,
+    resolved_session_key: &str,
+    hook_dispatched: bool,
+    shutdown_reason: &str,
+) -> GatewayAcpCloseReadModel {
+    let config = config_path.to_owned();
+    let requested_session = requested_session.map(str::to_owned);
+    let requested_conversation_id = requested_conversation_id.map(str::to_owned);
+    let requested_route_session_id = requested_route_session_id.map(str::to_owned);
+    let resolved_session_key = resolved_session_key.to_owned();
+    let shutdown_reason = shutdown_reason.to_owned();
+
+    GatewayAcpCloseReadModel {
+        config,
+        requested_session,
+        requested_conversation_id,
+        requested_route_session_id,
+        resolved_session_key,
+        closed: true,
+        hook_dispatched,
+        shutdown_reason,
     }
 }
 

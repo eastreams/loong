@@ -20,8 +20,9 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use loong_protocol::{
-    ControlPlaneChallengeResponse, ControlPlaneConnectErrorCode, ControlPlaneConnectErrorResponse,
-    ControlPlaneConnectRequest, ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
+    ControlPlaneAcpSessionCloseRequest, ControlPlaneChallengeResponse,
+    ControlPlaneConnectErrorCode, ControlPlaneConnectErrorResponse, ControlPlaneConnectRequest,
+    ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
     ControlPlanePairingResolveRequest, ControlPlanePairingResolveResponse,
     ControlPlanePairingStatus, ControlPlanePrincipal, ControlPlaneRole, ControlPlaneScope,
 };
@@ -40,7 +41,9 @@ use crate::{
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
 };
 
-use super::api_acp::{handle_acp_dispatch, handle_acp_observability, handle_acp_status};
+use super::api_acp::{
+    handle_acp_close, handle_acp_dispatch, handle_acp_observability, handle_acp_status,
+};
 use super::api_events::{
     GatewayEventsQuery, bounded_gateway_event_limit, gateway_event_stream, handle_events,
 };
@@ -51,12 +54,13 @@ use super::openai_compat::{handle_chat_completions, handle_models};
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorPairingSummaryReadModel,
     GatewayOperatorSummaryReadModel, GatewayPairingSessionLeaseReadModel,
-    GatewayRuntimeSnapshotReadModel, build_acp_observability_read_model,
-    build_acp_session_list_read_model, build_acp_status_read_model,
-    build_gateway_pairing_complete_read_model, build_gateway_pairing_events_read_model,
-    build_gateway_pairing_session_read_model, build_gateway_pairing_start_read_model,
-    build_node_inventory_read_model, build_operator_nodes_summary_read_model,
-    build_operator_summary_read_model, build_runtime_snapshot_read_model,
+    GatewayRuntimeSnapshotReadModel, build_acp_close_read_model,
+    build_acp_observability_read_model, build_acp_session_list_read_model,
+    build_acp_status_read_model, build_gateway_pairing_complete_read_model,
+    build_gateway_pairing_events_read_model, build_gateway_pairing_session_read_model,
+    build_gateway_pairing_start_read_model, build_node_inventory_read_model,
+    build_operator_nodes_summary_read_model, build_operator_summary_read_model,
+    build_runtime_snapshot_read_model,
 };
 use super::state::{
     GatewayControlSurfaceBinding, GatewayPairingRuntimeState, GatewayPortSource,
@@ -545,6 +549,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             "/api/gateway/acp/observability",
             get(handle_gateway_acp_observability),
         )
+        .route("/api/gateway/acp/close", post(handle_gateway_acp_close))
         .route(
             "/api/gateway/pairing/requests",
             get(handle_gateway_pairing_requests),
@@ -578,6 +583,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route("/v1/status", get(handle_gateway_status))
         .route("/v1/channels", get(handle_gateway_channels))
         .route("/v1/runtime/snapshot", get(handle_gateway_runtime_snapshot))
+        .route("/v1/acp/close", post(handle_acp_close))
         .route("/v1/acp/status", get(handle_acp_status))
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))
@@ -763,6 +769,72 @@ async fn handle_gateway_acp_status(
         &status,
     );
     gateway_control_payload_response(&payload, "gateway ACP status payload")
+}
+
+async fn handle_gateway_acp_close(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Json(request): Json<ControlPlaneAcpSessionCloseRequest>,
+) -> GatewayControlJsonResponse {
+    let request_auth = match GatewayControlRequest::authorize(&headers, app_state.as_ref()) {
+        Ok(request_auth) => request_auth,
+        Err(response) => return response,
+    };
+    let config = match request_auth.config() {
+        Ok(config) => config,
+        Err(response) => return response,
+    };
+    let manager = match request_auth.acp_manager() {
+        Ok(manager) => manager,
+        Err(response) => return response,
+    };
+
+    let close_target = crate::acp_close_runtime::resolve_acp_close_target(
+        config,
+        manager,
+        request.session_key.as_deref(),
+        request.conversation_id.as_deref(),
+        request.route_session_id.as_deref(),
+    )
+    .await;
+    let close_target = match close_target {
+        Ok(close_target) => close_target,
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
+            return json_error(StatusCode::NOT_FOUND, "not_found", error.as_str());
+        }
+        Err(error) => {
+            return json_error(StatusCode::BAD_REQUEST, "invalid_selector", error.as_str());
+        }
+    };
+
+    let close_outcome = crate::acp_close_runtime::close_resolved_acp_target(
+        config,
+        manager,
+        &close_target,
+        crate::trusted_host_runtime::TrustedHostSessionShutdownReason::ExplicitClose,
+    )
+    .await;
+    let close_outcome = match close_outcome {
+        Ok(close_outcome) => close_outcome,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "acp_close_unavailable",
+                error.as_str(),
+            );
+        }
+    };
+
+    let payload = build_acp_close_read_model(
+        request_auth.app_state().config_path.as_str(),
+        request.session_key.as_deref(),
+        request.conversation_id.as_deref(),
+        request.route_session_id.as_deref(),
+        close_outcome.resolved_session_key.as_str(),
+        close_outcome.hook_dispatched,
+        close_outcome.shutdown_reason.as_str(),
+    );
+    gateway_control_payload_response(&payload, "gateway ACP close payload")
 }
 
 async fn handle_gateway_acp_observability(
@@ -2075,6 +2147,8 @@ pub fn build_gateway_acp_test_router(
     state.config = Some(config);
     let app_state = Arc::new(state);
     Router::new()
+        .route("/api/gateway/acp/close", post(handle_gateway_acp_close))
+        .route("/v1/acp/close", post(handle_acp_close))
         .route("/v1/acp/status", get(handle_acp_status))
         .route("/v1/acp/observability", get(handle_acp_observability))
         .route("/v1/acp/dispatch", get(handle_acp_dispatch))

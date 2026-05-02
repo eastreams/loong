@@ -5,18 +5,21 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
 };
+use loong_protocol::ControlPlaneAcpSessionCloseRequest;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::CliResult;
 use crate::build_acp_dispatch_address;
+use crate::trusted_host_runtime::TrustedHostSessionShutdownReason;
 
 use super::control::{
     GatewayControlAppState, authorize_request_from_state, is_gateway_acp_not_found_error,
 };
 use super::read_models::{
-    build_acp_dispatch_read_model, build_acp_observability_read_model, build_acp_status_read_model,
+    build_acp_close_read_model, build_acp_dispatch_read_model, build_acp_observability_read_model,
+    build_acp_status_read_model,
 };
 
 type GatewayAcpJsonResponse = (StatusCode, Json<Value>);
@@ -157,6 +160,66 @@ pub(crate) async fn handle_acp_dispatch(
     );
 
     serialize_ok_json(&payload, "gateway ACP dispatch payload")
+}
+
+pub(crate) async fn handle_acp_close(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+    Json(request): Json<ControlPlaneAcpSessionCloseRequest>,
+) -> GatewayAcpJsonResponse {
+    if let Err(error) = authorize_request_from_state(&headers, &app_state) {
+        return json_error(StatusCode::UNAUTHORIZED, error.as_str());
+    }
+
+    let acp_context = gateway_acp_runtime_context(app_state.as_ref());
+    let (config, acp_manager) = match acp_context {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+
+    let close_target = crate::acp_close_runtime::resolve_acp_close_target(
+        config,
+        acp_manager,
+        request.session_key.as_deref(),
+        request.conversation_id.as_deref(),
+        request.route_session_id.as_deref(),
+    )
+    .await;
+    let close_target = match close_target {
+        Ok(close_target) => close_target,
+        Err(error) if is_gateway_acp_not_found_error(error.as_str()) => {
+            return json_error(StatusCode::NOT_FOUND, error.as_str());
+        }
+        Err(error) => {
+            return json_error(StatusCode::BAD_REQUEST, error.as_str());
+        }
+    };
+
+    let close_outcome = crate::acp_close_runtime::close_resolved_acp_target(
+        config,
+        acp_manager,
+        &close_target,
+        TrustedHostSessionShutdownReason::ExplicitClose,
+    )
+    .await;
+    let close_outcome = match close_outcome {
+        Ok(close_outcome) => close_outcome,
+        Err(error) => {
+            return internal_server_error("gateway ACP close", error.as_str());
+        }
+    };
+
+    let payload = build_acp_close_read_model(
+        config_path_from_state(app_state.as_ref()),
+        request.session_key.as_deref(),
+        request.conversation_id.as_deref(),
+        request.route_session_id.as_deref(),
+        close_outcome.resolved_session_key.as_str(),
+        close_outcome.hook_dispatched,
+        close_outcome.shutdown_reason.as_str(),
+    );
+
+    serialize_ok_json(&payload, "gateway ACP close payload")
 }
 
 fn gateway_acp_runtime_context(
