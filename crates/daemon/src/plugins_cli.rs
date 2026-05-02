@@ -2270,49 +2270,19 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
     lines.join("\n")
 }
 
-struct PluginNativeExtensionAuthoringGuidance {
-    validate_command: String,
-    operator_actions_command: String,
-    smoke_test_command: Option<String>,
-}
-
 fn plugin_native_extension_authoring_guidance(
     result: &PluginInventoryResult,
-) -> Option<PluginNativeExtensionAuthoringGuidance> {
-    let profile = crate::native_extension_authoring::process_stdio_native_extension_language_profile_for_source_language(
-        result.source_language.as_deref()?,
-    )?;
+) -> Option<crate::native_extension_authoring::ProcessStdioNativeExtensionAuthoringGuidance> {
     if result.bridge_kind != PluginBridgeKind::ProcessStdio.as_str() {
         return None;
     }
 
-    let native_extension = &result.native_extension;
-    let has_native_extension_contract = native_extension.contract.as_deref()
-        == Some(crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT)
-        || !native_extension.methods.is_empty()
-        || !native_extension.host_hooks.is_empty()
-        || !native_extension.tui_surfaces.is_empty();
-    if !has_native_extension_contract {
-        return None;
-    }
-
-    Some(PluginNativeExtensionAuthoringGuidance {
-        validate_command: format!(
-            "loong plugins doctor --root \"{}\" --profile sdk-release",
-            result.package_root
-        ),
-        operator_actions_command: format!(
-            "loong plugins actions --root \"{}\" --profile sdk-release",
-            result.package_root
-        ),
-        smoke_test_command: render_plugin_scaffold_smoke_test_command(
-            result.package_root.as_str(),
-            result.plugin_id.as_str(),
-            Some(profile),
-            &native_extension.host_hooks,
-            &native_extension.tui_surfaces,
-        ),
-    })
+    crate::native_extension_authoring::process_stdio_native_extension_authoring_guidance(
+        result.package_root.as_str(),
+        result.plugin_id.as_str(),
+        result.source_language.as_deref(),
+        &result.native_extension,
+    )
 }
 
 fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> String {
@@ -2422,9 +2392,10 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
                 "  authoring validate={} operator_actions={}",
                 guidance.validate_command, guidance.operator_actions_command
             ));
-            if let Some(smoke_test_command) = guidance.smoke_test_command.as_deref() {
-                lines.push(format!("  authoring_smoke_test={smoke_test_command}"));
-            }
+            lines.push(format!(
+                "  authoring_smoke_test={}",
+                guidance.smoke_test_command
+            ));
         }
         if let Some(reason) = result.activation_reason.as_deref() {
             lines.push(format!("  activation_reason={reason}"));
@@ -2763,9 +2734,10 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
             "  authoring validate={} operator_actions={}",
             guidance.validate_command, guidance.operator_actions_command
         ));
-        if let Some(smoke_test_command) = guidance.smoke_test_command.as_deref() {
-            lines.push(format!("  authoring_smoke_test={smoke_test_command}"));
-        }
+        lines.push(format!(
+            "  authoring_smoke_test={}",
+            guidance.smoke_test_command
+        ));
     }
     lines.push(format!(
         "  blocking_diagnostics={} advisory_diagnostics={}",

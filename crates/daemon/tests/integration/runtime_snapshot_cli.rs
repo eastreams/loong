@@ -509,6 +509,20 @@ fn runtime_snapshot_json_payload_projects_trusted_host_extension_declarations() 
         plugin["native_extension"]["metadata_issues"],
         serde_json::json!([])
     );
+    let validate_command = plugin["authoring_guidance"]["validate_command"]
+        .as_str()
+        .expect("authoring validate command");
+    assert!(
+        validate_command.contains("loong plugins doctor --root"),
+        "unexpected validate command: {validate_command}"
+    );
+    let smoke_test_command = plugin["authoring_guidance"]["smoke_test_command"]
+        .as_str()
+        .expect("authoring smoke command");
+    assert!(
+        smoke_test_command.contains("loong plugins invoke-host-hook"),
+        "unexpected smoke command: {smoke_test_command}"
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -801,6 +815,9 @@ fn runtime_snapshot_text_projects_trusted_host_extension_declarations() {
     assert!(rendered.contains("methods=extension/event"));
     assert!(rendered.contains("host_hooks=turn_start,turn_end"));
     assert!(rendered.contains("tui_surfaces=command_palette"));
+    assert!(rendered.contains("authoring validate=loong plugins doctor --root"));
+    assert!(rendered.contains("operator_actions=loong plugins actions --root"));
+    assert!(rendered.contains("smoke_test=loong plugins invoke-host-hook"));
 
     fs::remove_dir_all(&root).ok();
 }

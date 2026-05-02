@@ -1,4 +1,5 @@
 use crate::{CliResult, kernel};
+use serde::{Deserialize, Serialize};
 
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT: &str = "process_stdio_json_line_v1";
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_METHODS: &[&str] =
@@ -20,6 +21,13 @@ pub(crate) struct ProcessStdioNativeExtensionLanguageProfile {
     pub process_timeout_ms: u64,
     pub smoke_allow_command: &'static str,
     pub scaffold_files: &'static [RuntimeScaffoldTemplateFile],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProcessStdioNativeExtensionAuthoringGuidance {
+    pub validate_command: String,
+    pub operator_actions_command: String,
+    pub smoke_test_command: String,
 }
 
 const PYTHON_EXTENSION_SCAFFOLD_FILES: &[RuntimeScaffoldTemplateFile] =
@@ -172,6 +180,52 @@ pub(crate) fn render_authoring_tui_surface_probe_command(
     format!(
         "loong plugins invoke-tui-surface --root \"{package_root}\" --plugin-id \"{plugin_id}\" --tui-surface {surface} --payload '{{}}' --allow-command {allow_command}"
     )
+}
+
+pub(crate) fn process_stdio_native_extension_authoring_guidance(
+    package_root: &str,
+    plugin_id: &str,
+    source_language: Option<&str>,
+    native_extension: &kernel::PluginNativeExtensionDeclarations,
+) -> Option<ProcessStdioNativeExtensionAuthoringGuidance> {
+    let profile =
+        process_stdio_native_extension_language_profile_for_source_language(source_language?)?;
+    let has_native_extension_contract = native_extension.contract.as_deref()
+        == Some(PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT)
+        || !native_extension.methods.is_empty()
+        || !native_extension.host_hooks.is_empty()
+        || !native_extension.tui_surfaces.is_empty();
+    if !has_native_extension_contract {
+        return None;
+    }
+
+    let smoke_test_command = if let Some(hook) = native_extension.host_hooks.first() {
+        render_authoring_host_hook_probe_command(
+            package_root,
+            plugin_id,
+            hook.as_str(),
+            profile.smoke_allow_command,
+        )
+    } else if let Some(surface) = native_extension.tui_surfaces.first() {
+        render_authoring_tui_surface_probe_command(
+            package_root,
+            plugin_id,
+            surface.as_str(),
+            profile.smoke_allow_command,
+        )
+    } else {
+        render_authoring_smoke_test_command(package_root, plugin_id, profile.smoke_allow_command)
+    };
+
+    Some(ProcessStdioNativeExtensionAuthoringGuidance {
+        validate_command: format!(
+            "loong plugins doctor --root \"{package_root}\" --profile sdk-release"
+        ),
+        operator_actions_command: format!(
+            "loong plugins actions --root \"{package_root}\" --profile sdk-release"
+        ),
+        smoke_test_command,
+    })
 }
 
 const PYTHON_EXTENSION_STUB: &str = r#"#!/usr/bin/env python3

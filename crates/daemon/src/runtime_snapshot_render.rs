@@ -528,6 +528,14 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
                 crate::render_line_safe_text_values(native_extension.metadata_issues.iter().map(String::as_str), ","),
             ));
         }
+        if let Some(guidance) = plugin.authoring_guidance.as_ref() {
+            lines.push(format!(
+                "    authoring validate={} operator_actions={} smoke_test={}",
+                guidance.validate_command,
+                guidance.operator_actions_command,
+                guidance.smoke_test_command,
+            ));
+        }
     }
 
     lines
@@ -787,6 +795,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
                 "missing_required_env_vars": plugin.missing_required_env_vars,
                 "missing_required_config_keys": plugin.missing_required_config_keys,
                 "native_extension": plugin.native_extension,
+                "authoring_guidance": plugin.authoring_guidance,
             })
         }).collect::<Vec<_>>(),
     })
