@@ -305,6 +305,7 @@ pub(super) fn collect_plugin_inventory_results(
                 extension_events: extension_declarations.events.clone(),
                 extension_host_hooks: extension_declarations.host_hooks.clone(),
                 extension_host_actions: extension_declarations.host_actions.clone(),
+                extension_tui_surfaces: extension_declarations.tui_surfaces.clone(),
                 extension_metadata_issues: extension_declarations.metadata_issues.clone(),
                 input_examples: manifest.input_examples.clone(),
                 output_examples: manifest.output_examples.clone(),
@@ -407,6 +408,7 @@ pub(super) fn collect_plugin_inventory_results(
             extension_events: entry.extension_events,
             extension_host_hooks: entry.extension_host_hooks,
             extension_host_actions: entry.extension_host_actions,
+            extension_tui_surfaces: entry.extension_tui_surfaces,
             extension_metadata_issues: entry.extension_metadata_issues,
             input_examples: if include_examples {
                 entry.input_examples

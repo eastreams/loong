@@ -118,6 +118,7 @@ For the current public lane, the scaffold also declares:
 The scaffold also reserves:
 
 - `loong_extension_host_hooks_json=[]`
+- `loong_extension_tui_surfaces_json=[]`
 
 If you keep that field empty, the package stays on the current governed sidecar
 lane.
@@ -167,6 +168,30 @@ Automatic trusted-host dispatch currently covers:
 - `turn_end`
 - `session_start`
 - `session_shutdown`
+
+The current shell-first TUI lane also accepts typed trusted-host surface
+declarations for:
+
+- `command_palette`
+- `settings_flow`
+- `startup_onboarding`
+
+Scaffold them with one or more `--tui-surface` flags:
+
+```bash
+loong plugins init ./weather-host-ui \
+  --plugin-id weather-host-ui \
+  --provider-id weather \
+  --connector-name weather-host-ui \
+  --bridge-kind process_stdio \
+  --source-language js \
+  --host-hook turn_start \
+  --tui-surface command_palette
+```
+
+These TUI declarations are contract-first today: Loong inventories and validates
+them on the trusted host lane, but live TUI dispatch is still a separate follow-up
+seam.
 
 with the current live runtime coverage intentionally bounded to daemon-owned
 surfaces first.

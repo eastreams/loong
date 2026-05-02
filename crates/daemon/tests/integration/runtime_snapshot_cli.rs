@@ -615,6 +615,7 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         plugin["extension_host_actions"],
         serde_json::json!(["append_entry", "notify"])
     );
+    assert_eq!(plugin["extension_tui_surfaces"], serde_json::json!([]));
     assert_eq!(plugin["extension_metadata_issues"], serde_json::json!([]));
     assert_eq!(plugin["diagnostic_codes"], serde_json::json!([]));
 
@@ -976,6 +977,10 @@ async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_trut
         serde_json::json!(["notify"])
     );
     assert_eq!(
+        runtime_plugin["extension_tui_surfaces"],
+        serde_json::json!([])
+    );
+    assert_eq!(
         inventory_plugin.extension_contract.as_deref(),
         Some("process_stdio_json_line_v1")
     );
@@ -988,6 +993,7 @@ async fn runtime_snapshot_and_inventory_share_invalid_extension_declaration_trut
         inventory_plugin.extension_host_actions,
         vec!["notify".to_owned()]
     );
+    assert!(inventory_plugin.extension_tui_surfaces.is_empty());
     assert_eq!(runtime_plugin["extension_methods"], serde_json::json!([]));
     assert!(inventory_plugin.extension_methods.is_empty());
     assert_eq!(
@@ -1061,9 +1067,14 @@ async fn runtime_snapshot_and_inventory_share_reserved_host_hook_declaration_tru
         serde_json::json!(["turn_start", "turn_end"])
     );
     assert_eq!(
+        runtime_plugin["extension_tui_surfaces"],
+        serde_json::json!([])
+    );
+    assert_eq!(
         inventory_plugin.extension_host_hooks,
         vec!["turn_start".to_owned(), "turn_end".to_owned()]
     );
+    assert!(inventory_plugin.extension_tui_surfaces.is_empty());
     assert!(
         inventory_plugin
             .extension_metadata_issues
@@ -1371,6 +1382,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("extension_events=session_start,tool_result"));
     assert!(rendered.contains("extension_host_hooks=-"));
     assert!(rendered.contains("extension_host_actions=append_entry,notify"));
+    assert!(rendered.contains("extension_tui_surfaces=-"));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));
 

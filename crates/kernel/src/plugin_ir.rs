@@ -29,6 +29,8 @@ pub const TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS: &[&str] = &[
     "message_start",
     "message_end",
 ];
+pub const TRUSTED_HOST_TUI_EXTENSION_SURFACES: &[&str] =
+    &["command_palette", "settings_flow", "startup_onboarding"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -93,6 +95,7 @@ pub struct PluginNativeExtensionDeclarations {
     pub events: Vec<String>,
     pub host_hooks: Vec<String>,
     pub host_actions: Vec<String>,
+    pub tui_surfaces: Vec<String>,
     pub metadata_issues: Vec<String>,
 }
 
@@ -1457,6 +1460,11 @@ pub fn plugin_native_extension_declarations_from_metadata(
         "loong_extension_host_actions_json",
         &mut declarations.metadata_issues,
     );
+    declarations.tui_surfaces = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_extension_tui_surfaces_json",
+        &mut declarations.metadata_issues,
+    );
     validate_plugin_native_extension_declarations(&mut declarations);
     declarations
 }
@@ -1464,7 +1472,7 @@ pub fn plugin_native_extension_declarations_from_metadata(
 fn validate_plugin_native_extension_declarations(
     declarations: &mut PluginNativeExtensionDeclarations,
 ) {
-    if declarations.host_hooks.is_empty() {
+    if declarations.host_hooks.is_empty() && declarations.tui_surfaces.is_empty() {
         return;
     }
 
@@ -1481,6 +1489,15 @@ fn validate_plugin_native_extension_declarations(
             declarations.metadata_issues.push(format!(
                 "metadata `loong_extension_host_hooks_json` declares unsupported host hook `{hook}`; supported read-only hooks are {}",
                 TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
+            ));
+        }
+    }
+
+    for surface in &declarations.tui_surfaces {
+        if !TRUSTED_HOST_TUI_EXTENSION_SURFACES.contains(&surface.as_str()) {
+            declarations.metadata_issues.push(format!(
+                "metadata `loong_extension_tui_surfaces_json` declares unsupported tui surface `{surface}`; supported surfaces are {}",
+                TRUSTED_HOST_TUI_EXTENSION_SURFACES.join(", ")
             ));
         }
     }

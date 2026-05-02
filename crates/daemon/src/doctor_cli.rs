@@ -6435,6 +6435,7 @@ mod tests {
             plugin["extension_host_actions"],
             json!(["append_entry", "notify"])
         );
+        assert_eq!(plugin["extension_tui_surfaces"], json!([]));
         assert_eq!(plugin["diagnostic_codes"], json!([]));
         assert_eq!(plugin["extension_metadata_issues"], json!([]));
 
@@ -6492,6 +6493,7 @@ mod tests {
         );
         assert_eq!(plugin["extension_trust_lane"], json!("governed_sidecar"));
         assert_eq!(plugin["extension_host_hooks"], json!([]));
+        assert_eq!(plugin["extension_tui_surfaces"], json!([]));
         assert!(plugin.get("activation_attestation").is_some());
         assert!(plugin.get("runtime_health").is_some());
 

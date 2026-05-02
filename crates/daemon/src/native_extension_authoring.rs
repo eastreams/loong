@@ -20,7 +20,7 @@ pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FAMILY: &str =
     kernel::TRUSTED_HOST_EXTENSION_FAMILY;
 pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_TRUST_LANE: &str =
     kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE;
-pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FACETS: &[&str] = &["events", "host_hooks"];
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FACETS: &[&str] = &["events"];
 pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS: &[&str] = &["extension/event"];
 pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_EVENTS: &[&str] = &[];
 pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_HOST_ACTIONS: &[&str] = &[];
@@ -63,6 +63,7 @@ pub struct NativeExtensionAuthoringGuidanceView {
     pub extension_events: Vec<String>,
     pub extension_host_hooks: Vec<String>,
     pub extension_host_actions: Vec<String>,
+    pub extension_tui_surfaces: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub author_remediation_actions: Vec<NativeExtensionAuthoringActionView>,
@@ -284,6 +285,7 @@ pub(crate) fn build_native_extension_authoring_guidance(
         plugin.extension_events.clone(),
         plugin.extension_host_hooks.clone(),
         plugin.extension_host_actions.clone(),
+        plugin.extension_tui_surfaces.clone(),
         plugin.extension_metadata_issues.clone(),
     )
 }
@@ -300,6 +302,7 @@ pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
     extension_events: Vec<String>,
     extension_host_hooks: Vec<String>,
     extension_host_actions: Vec<String>,
+    extension_tui_surfaces: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> Option<NativeExtensionAuthoringGuidanceView> {
     let bridge_kind = kernel::PluginBridgeKind::parse_label(bridge_kind)?;
@@ -319,6 +322,7 @@ pub(crate) fn build_native_extension_authoring_guidance_from_runtime_profile(
         extension_events,
         extension_host_hooks,
         extension_host_actions,
+        extension_tui_surfaces,
         extension_metadata_issues,
     ))
 }
@@ -393,6 +397,7 @@ pub(crate) fn build_native_extension_authoring_view_from_profile(
             .map(|value| (*value).to_owned())
             .collect::<Vec<_>>(),
         Vec::new(),
+        Vec::new(),
     )
 }
 
@@ -409,6 +414,7 @@ fn build_native_extension_authoring_view(
     extension_events: Vec<String>,
     extension_host_hooks: Vec<String>,
     extension_host_actions: Vec<String>,
+    extension_tui_surfaces: Vec<String>,
     extension_metadata_issues: Vec<String>,
 ) -> NativeExtensionAuthoringGuidanceView {
     let author_remediation_actions = native_extension_author_remediation_actions(
@@ -443,6 +449,7 @@ fn build_native_extension_authoring_view(
         extension_events,
         extension_host_hooks,
         extension_host_actions,
+        extension_tui_surfaces,
         extension_metadata_issues,
         author_remediation_actions,
         verdict: None,

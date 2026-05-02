@@ -2526,6 +2526,7 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub extension_events: Vec<String>,
     pub extension_host_hooks: Vec<String>,
     pub extension_host_actions: Vec<String>,
+    pub extension_tui_surfaces: Vec<String>,
     pub extension_metadata_issues: Vec<String>,
     pub authoring_guidance:
         Option<crate::native_extension_authoring::NativeExtensionAuthoringGuidanceView>,
@@ -3181,6 +3182,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                     extension_declarations.events.clone(),
                     extension_declarations.host_hooks.clone(),
                     extension_declarations.host_actions.clone(),
+                    extension_declarations.tui_surfaces.clone(),
                     extension_declarations.metadata_issues.clone(),
                 );
             let compatibility_shim = inventory_entry
@@ -3302,6 +3304,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 extension_events: extension_declarations.events,
                 extension_host_hooks: extension_declarations.host_hooks,
                 extension_host_actions: extension_declarations.host_actions,
+                extension_tui_surfaces: extension_declarations.tui_surfaces,
                 extension_metadata_issues: extension_declarations.metadata_issues,
                 authoring_guidance,
             }

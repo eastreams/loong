@@ -2178,6 +2178,7 @@ mod tests {
             extension_events: Vec::new(),
             extension_host_hooks: Vec::new(),
             extension_host_actions: Vec::new(),
+            extension_tui_surfaces: Vec::new(),
             extension_metadata_issues: Vec::new(),
             input_examples: Vec::new(),
             output_examples: Vec::new(),

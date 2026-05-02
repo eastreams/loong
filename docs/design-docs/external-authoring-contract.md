@@ -73,6 +73,7 @@ For the current public authoring lane, Loong should stabilize:
 - inventory / doctor / operator surfaces that show extension declarations before execution
 - explicit extension family and trust-lane identity for the current governed native runtime lane
 - scaffolded read-only host-hook declarations for the current trusted host-extension lane
+- scaffolded trusted-host TUI surface declarations for the shell-first chat surface
 
 without implying ungoverned in-process host loading.
 
@@ -118,6 +119,7 @@ should be able to show:
 - declared events
 - declared host hooks
 - declared host actions
+- declared TUI surfaces
 
 without requiring the host to execute extension code first.
 

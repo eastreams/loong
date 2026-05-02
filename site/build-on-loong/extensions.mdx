@@ -93,6 +93,7 @@ The generated manifest also includes the native extension metadata keys needed f
 - `loong_extension_methods_json`
 - `loong_extension_events_json`
 - `loong_extension_host_actions_json`
+- `loong_extension_tui_surfaces_json`
 
 The package manifest also carries explicit capability declarations. The current
 native extension scaffold defaults to `InvokeConnector`, and inventory/runtime
@@ -106,6 +107,7 @@ It also declares the current public extension family and trust lane:
 The scaffold also reserves:
 
 - `loong_extension_host_hooks_json=[]`
+- `loong_extension_tui_surfaces_json=[]`
 
 If you keep that field empty, the package stays on the current governed
 sidecar lane.
@@ -126,6 +128,12 @@ The current trusted host lane is still bounded:
 - `process_stdio` only
 - daemon-owned lifecycle seams first
 
+The same trusted-host lane also accepts typed shell-first TUI declarations for:
+
+- `command_palette`
+- `settings_flow`
+- `startup_onboarding`
+
 ### Trusted host scaffold
 
 ```bash
@@ -139,6 +147,19 @@ loong plugins init ./weather-host-js \
   --host-hook turn_end
 ```
 
+TUI-oriented scaffold:
+
+```bash
+loong plugins init ./weather-host-ui \
+  --plugin-id weather-host-ui \
+  --provider-id weather \
+  --connector-name weather-host-ui \
+  --bridge-kind process_stdio \
+  --source-language js \
+  --host-hook turn_start \
+  --tui-surface command_palette
+```
+
 Probe one declared hook:
 
 ```bash
@@ -149,6 +170,10 @@ loong plugins invoke-host-hook \
   --payload '{"turn_id":"demo-turn"}' \
   --allow-command node
 ```
+
+These TUI declarations are contract-first today: Loong inventories and
+validates them on the trusted host lane, while live shell-surface dispatch
+remains a separate follow-up seam.
 
 Automatic trusted-host dispatch currently covers:
 

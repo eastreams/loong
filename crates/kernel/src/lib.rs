@@ -78,8 +78,8 @@ pub use plugin_ir::{
     PluginRuntimeScaffoldDefaults, PluginSetupReadiness, PluginSetupReadinessContext,
     PluginTranslationReport, PluginTranslator, TRUSTED_HOST_EXTENSION_FAMILY,
     TRUSTED_HOST_EXTENSION_TRUST_LANE, TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS,
-    evaluate_plugin_setup_requirements, plugin_native_extension_declarations_from_metadata,
-    plugin_runtime_scaffold_defaults,
+    TRUSTED_HOST_TUI_EXTENSION_SURFACES, evaluate_plugin_setup_requirements,
+    plugin_native_extension_declarations_from_metadata, plugin_runtime_scaffold_defaults,
 };
 pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
