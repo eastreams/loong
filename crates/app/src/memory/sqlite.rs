@@ -1763,6 +1763,7 @@ fn preserve_session_tree_before_rebuild(
     // and is left intact — only the back-references are cleared.
     let stale_artifact_refs: Vec<(
         String,
+        Option<String>, // current head_name
         Option<String>, // current anchor_node_id
         Option<String>, // current source_start_node_id
         Option<String>, // current source_end_node_id
@@ -1776,6 +1777,7 @@ fn preserve_session_tree_before_rebuild(
         let mut stmt = conn
             .prepare(
                 "SELECT a.artifact_id,
+                        a.head_name,
                         a.anchor_node_id,       a.source_start_node_id,    a.source_end_node_id,
                         na.session_turn_index,  nss.session_turn_index,    nse.session_turn_index,
                         na.node_id IS NOT NULL, nss.node_id IS NOT NULL,   nse.node_id IS NOT NULL
@@ -1793,12 +1795,13 @@ fn preserve_session_tree_before_rebuild(
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<i64>>(5)?,
                     row.get::<_, Option<i64>>(6)?,
-                    row.get::<_, bool>(7)?,
+                    row.get::<_, Option<i64>>(7)?,
                     row.get::<_, bool>(8)?,
                     row.get::<_, bool>(9)?,
+                    row.get::<_, bool>(10)?,
                 ))
             })
             .map_err(|error| format!("scan stale artifact refs failed: {error}"))?;
@@ -1815,6 +1818,7 @@ fn preserve_session_tree_before_rebuild(
 
     for (
         artifact_id,
+        head_name,
         anchor_node_id,
         source_start_node_id,
         source_end_node_id,
@@ -1830,12 +1834,19 @@ fn preserve_session_tree_before_rebuild(
         let source_start_drop =
             ref_dangles(source_start_node_id, *source_start_ti, *source_start_exists);
         let source_end_drop = ref_dangles(source_end_node_id, *source_end_ti, *source_end_exists);
-        if !anchor_drop && !source_start_drop && !source_end_drop {
+        let dropped_head_name = head_name.as_deref().filter(|current_head_name| {
+            stale_heads
+                .iter()
+                .any(|(stale_head_name, _, _)| stale_head_name == current_head_name)
+        });
+        let head_name_drop = dropped_head_name.is_some();
+        if !head_name_drop && !anchor_drop && !source_start_drop && !source_end_drop {
             continue;
         }
 
         let payload = json!({
             "artifact_id": artifact_id,
+            "original_head_name": if head_name_drop { head_name.clone() } else { None },
             "original_anchor_node_id":       if anchor_drop       { anchor_node_id.clone()       } else { None },
             "original_source_start_node_id": if source_start_drop { source_start_node_id.clone() } else { None },
             "original_source_end_node_id":   if source_end_drop   { source_end_node_id.clone()   } else { None },
@@ -1856,27 +1867,20 @@ fn preserve_session_tree_before_rebuild(
 
         conn.execute(
             "UPDATE session_artifacts
-             SET anchor_node_id       = CASE WHEN ?2 THEN NULL ELSE anchor_node_id       END,
-                 source_start_node_id = CASE WHEN ?3 THEN NULL ELSE source_start_node_id END,
-                 source_end_node_id   = CASE WHEN ?4 THEN NULL ELSE source_end_node_id   END
+             SET head_name            = CASE WHEN ?2 THEN NULL ELSE head_name            END,
+                 anchor_node_id       = CASE WHEN ?3 THEN NULL ELSE anchor_node_id       END,
+                 source_start_node_id = CASE WHEN ?4 THEN NULL ELSE source_start_node_id END,
+                 source_end_node_id   = CASE WHEN ?5 THEN NULL ELSE source_end_node_id   END
              WHERE artifact_id = ?1",
-            rusqlite::params![artifact_id, anchor_drop, source_start_drop, source_end_drop],
+            rusqlite::params![
+                artifact_id,
+                head_name_drop,
+                anchor_drop,
+                source_start_drop,
+                source_end_drop
+            ],
         )
         .map_err(|error| format!("null stale artifact refs failed: {error}"))?;
-    }
-
-    // --- Null artifact.head_name when the referenced head was just dropped.
-    //
-    // Keeps artifact.head_name referentially consistent with session_heads.
-    // Scoped to the `stale_heads` set we already computed above.
-    for (head_name, _, _) in &stale_heads {
-        conn.execute(
-            "UPDATE session_artifacts
-             SET head_name = NULL
-             WHERE session_id = ?1 AND head_name = ?2",
-            rusqlite::params![session_id, head_name],
-        )
-        .map_err(|error| format!("clear artifact head_name failed: {error}"))?;
     }
 
     Ok(())

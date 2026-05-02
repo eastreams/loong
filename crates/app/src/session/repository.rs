@@ -5308,6 +5308,7 @@ mod tests {
             .collect();
         assert_eq!(null_events.len(), 1);
         let payload = &null_events[0].payload_json;
+        assert!(payload["original_head_name"].is_null());
         assert!(payload["original_anchor_node_id"].is_null());
         assert!(payload["original_source_start_node_id"].is_null());
         assert_eq!(
@@ -5331,6 +5332,107 @@ mod tests {
             !null_event_search_text.is_empty(),
             "null-ref event search_text should be indexed"
         );
+    }
+
+    // Edge: a dropped head can still be referenced by an artifact whose node
+    // refs remain in-range. That `artifact.head_name` cleanup must not be
+    // silent; the preservation event should record the head-name nulling even
+    // when the node-id columns survive untouched.
+    #[test]
+    fn replace_turns_shorter_nulls_artifact_head_name_when_nodes_survive() {
+        let config = isolated_memory_config("replace-turns-head-name-only-dangle");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "root-session");
+        for i in 1..=5 {
+            let role = if i % 2 == 1 { "user" } else { "assistant" };
+            append_session_turn(&config, "root-session", role, &format!("turn-{i}"));
+        }
+
+        repo.fork_session_head(
+            "root-session",
+            "session-turn:root-session:5",
+            "checkpoint/foo",
+        )
+        .expect("fork checkpoint head");
+
+        repo.create_session_artifact(NewSessionArtifactRecord {
+            artifact_id: "artifact-head-name-1".to_owned(),
+            session_id: "root-session".to_owned(),
+            kind: SessionArtifactKind::BranchSummary,
+            head_name: Some("checkpoint/foo".to_owned()),
+            anchor_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_start_node_id: Some("session-turn:root-session:1".to_owned()),
+            source_end_node_id: Some("session-turn:root-session:1".to_owned()),
+            payload_json: json!({ "exclusive_node_count": 1 }),
+            summary_text: Some("Summary still anchored at turn 1".to_owned()),
+        })
+        .expect("create branch summary artifact");
+
+        store::replace_session_turns_direct(
+            "root-session",
+            &[
+                store::SessionWindowTurn {
+                    role: "user".to_owned(),
+                    content: "rewritten-1".to_owned(),
+                    ts: Some(100),
+                },
+                store::SessionWindowTurn {
+                    role: "assistant".to_owned(),
+                    content: "rewritten-2".to_owned(),
+                    ts: Some(101),
+                },
+            ],
+            &config,
+        )
+        .expect("replace session turns");
+
+        let heads = repo.list_session_heads("root-session").expect("list heads");
+        assert!(
+            heads.iter().all(|head| head.head_name != "checkpoint/foo"),
+            "checkpoint/foo head should be dropped after the rewrite: {heads:?}"
+        );
+
+        let artifacts = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts");
+        let artifact = artifacts
+            .iter()
+            .find(|current_artifact| current_artifact.artifact_id == "artifact-head-name-1")
+            .expect("artifact survives");
+        assert!(
+            artifact.head_name.is_none(),
+            "artifact.head_name should be nulled when its head is dropped: {:?}",
+            artifact.head_name
+        );
+        assert_eq!(
+            artifact.anchor_node_id.as_deref(),
+            Some("session-turn:root-session:1")
+        );
+        assert_eq!(
+            artifact.source_start_node_id.as_deref(),
+            Some("session-turn:root-session:1")
+        );
+        assert_eq!(
+            artifact.source_end_node_id.as_deref(),
+            Some("session-turn:root-session:1")
+        );
+
+        let events = repo
+            .list_all_events("root-session", 128)
+            .expect("list events");
+        let null_events: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_kind == "session_tree_rewrite_nulled_artifact_refs")
+            .collect();
+        assert_eq!(null_events.len(), 1);
+        let payload = &null_events[0].payload_json;
+        assert_eq!(
+            payload["original_head_name"].as_str(),
+            Some("checkpoint/foo")
+        );
+        assert!(payload["original_anchor_node_id"].is_null());
+        assert!(payload["original_source_start_node_id"].is_null());
+        assert!(payload["original_source_end_node_id"].is_null());
     }
 
     // Edge: two heads pointing past new tail get separate audit events; one
