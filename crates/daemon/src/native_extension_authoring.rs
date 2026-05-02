@@ -112,10 +112,8 @@ pub(crate) fn process_stdio_native_extension_language_profile(
     let Some(source_language) = scaffold_defaults.source_language.as_deref() else {
         return Ok(None);
     };
-    if let Some(profile) = SUPPORTED_PROCESS_STDIO_AUTHORING_PROFILES
-        .iter()
-        .find(|profile| profile.source_language == source_language)
-        .copied()
+    if let Some(profile) =
+        process_stdio_native_extension_language_profile_for_source_language(source_language)
     {
         return Ok(Some(profile));
     }
@@ -123,6 +121,15 @@ pub(crate) fn process_stdio_native_extension_language_profile(
     Err(format!(
         "plugins init only scaffolds runnable process_stdio extension entrypoints for source_language `python`, `javascript`, `typescript`, `go`, or `rust`; got `{source_language}`"
     ))
+}
+
+pub(crate) fn process_stdio_native_extension_language_profile_for_source_language(
+    source_language: &str,
+) -> Option<ProcessStdioNativeExtensionLanguageProfile> {
+    SUPPORTED_PROCESS_STDIO_AUTHORING_PROFILES
+        .iter()
+        .find(|profile| profile.source_language == source_language)
+        .copied()
 }
 
 pub(crate) fn process_stdio_scaffold_args(
