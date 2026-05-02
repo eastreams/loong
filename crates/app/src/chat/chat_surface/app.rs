@@ -11758,7 +11758,8 @@ description: "actual description"
         assert!(
             current_provider
                 .detail
-                .contains("沿用 config.toml 里的当前 Loong provider"),
+                .contains("沿用 config.toml 里的当前")
+                && current_provider.detail.contains("凭证"),
             "provider detail should be localized after language apply: {}",
             current_provider.detail
         );
