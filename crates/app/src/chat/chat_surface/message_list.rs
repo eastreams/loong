@@ -4022,12 +4022,18 @@ fn render_read_tool_preview_block(preview: &ReadToolPreview, width: u16) -> Vec<
         .as_deref()
         .unwrap_or(if preview.is_image { "image" } else { "file" });
     let content_width = width.saturating_sub(7).max(1) as usize;
-    let file_name = Path::new(path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(path);
-    let preferred_path = if crate::presentation::display_width(file_name) < content_width {
-        file_name
+    let path_buf = Path::new(path);
+    let file_name = path_buf.file_name().and_then(|value| value.to_str());
+    let preferred_path = if path_buf.is_absolute() {
+        if let Some(file_name) = file_name {
+            if crate::presentation::display_width(file_name) < content_width {
+                file_name
+            } else {
+                path
+            }
+        } else {
+            path
+        }
     } else {
         path
     };
