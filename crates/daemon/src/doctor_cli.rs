@@ -16,6 +16,7 @@ use crate::personalize_presentation::personalize_action_title;
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
+use crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView;
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DoctorCommands {
@@ -298,7 +299,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         options.fix,
         path_env.as_deref(),
     );
-    for step in crate::runtime_plugin_discovery::build_runtime_plugin_discovery_next_steps(
+    for step in build_runtime_plugin_discovery_doctor_steps(
         runtime_plugins_surface.state.discovery_guidance.as_ref(),
     ) {
         push_unique_step(&mut next_steps, step);
@@ -2417,6 +2418,26 @@ fn doctor_next_step_actions(next_steps: &[DoctorNextStep]) -> Vec<DoctorNextStep
         .filter_map(DoctorNextStep::as_action)
         .cloned()
         .collect()
+}
+
+fn build_runtime_plugin_discovery_doctor_steps(
+    guidance: Option<&RuntimePluginDiscoveryGuidanceView>,
+) -> Vec<DoctorNextStep> {
+    let Some(guidance) = guidance else {
+        return Vec::new();
+    };
+
+    let mut seen_commands = std::collections::BTreeSet::new();
+    let mut steps = Vec::new();
+    for action in &guidance.discovery_actions {
+        if seen_commands.insert(action.command.clone()) {
+            steps.push(DoctorNextStep::action(
+                action.summary.clone(),
+                action.command.clone(),
+            ));
+        }
+    }
+    steps
 }
 
 fn doctor_primary_action_items(

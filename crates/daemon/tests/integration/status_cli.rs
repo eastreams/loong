@@ -319,6 +319,12 @@ fn run_doctor_cli_process(
         .arg("--config")
         .arg(config_path_text)
         .args(args)
+        .current_dir(
+            config_path
+                .parent()
+                .expect("doctor config fixture should have a parent directory"),
+        )
+        .env("HOME", home_root_text)
         .env("LOONG_HOME", home_root_text)
         .output()
         .expect(context)
@@ -617,6 +623,55 @@ fn doctor_cli_json_projects_structured_runtime_plugin_truth() {
         runtime_plugins_check["runtime_plugins"]["plugins"][0]["native_extension"]["host_hooks"],
         serde_json::json!(["turn_start", "turn_end"])
     );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn doctor_cli_json_surfaces_shadowed_extension_review_actions() {
+    let root = unique_temp_dir("loong-doctor-cli-shadowed-extensions-json");
+    let home_root = root.join("home");
+    fs::create_dir_all(&home_root).expect("create home root");
+    let config_path = write_status_config(
+        &root,
+        false,
+        mvp::config::ProviderToolSchemaModeConfig::Disabled,
+    );
+    enable_auto_discovered_runtime_plugins(&config_path);
+    write_runtime_plugin_manifest(&root, ".loong/extensions/search", "project-extension", 9001);
+    write_runtime_plugin_manifest(
+        &home_root,
+        ".loong/agent/extensions/search",
+        "global-extension",
+        9002,
+    );
+
+    let output = run_doctor_cli_process(
+        &config_path,
+        &home_root,
+        &["--json", "--skip-model-probe"],
+        "run doctor CLI json for shadowed extension review actions",
+    );
+
+    if !output.status.success() {
+        let stdout = render_output(&output.stdout);
+        let stderr = render_output(&output.stderr);
+        panic!(
+            "doctor CLI json should succeed for shadowed extension coverage: status={:?}\nstdout={stdout}\nstderr={stderr}",
+            output.status.code()
+        );
+    }
+
+    let stdout = render_output(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("decode doctor json");
+    let next_step_actions = payload["next_step_actions"]
+        .as_array()
+        .expect("doctor next_step_actions array");
+    assert!(next_step_actions.iter().any(|action| {
+        action["label"].as_str().is_some_and(|label| {
+            label.contains("Inspect the effective project-local package for shared-extension")
+        })
+    }));
 
     fs::remove_dir_all(&root).ok();
 }

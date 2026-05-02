@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(crate) const PROJECT_LOCAL_LOONG_EXTENSION_ROOT: &str = ".loong/extensions/";
@@ -135,23 +135,6 @@ pub fn build_runtime_plugin_discovery_guidance(
         recommended_action: has_shadowed_plugins.then(|| REVIEW_GLOBAL_DUPLICATE_ACTION.to_owned()),
         resolution_hint,
     })
-}
-
-pub fn build_runtime_plugin_discovery_next_steps(
-    guidance: Option<&RuntimePluginDiscoveryGuidanceView>,
-) -> Vec<String> {
-    let Some(guidance) = guidance else {
-        return Vec::new();
-    };
-
-    let mut seen_commands = BTreeSet::new();
-    let mut steps = Vec::new();
-    for action in &guidance.discovery_actions {
-        if seen_commands.insert(action.command.clone()) {
-            steps.push(format!("{}: {}", action.summary, action.command));
-        }
-    }
-    steps
 }
 
 fn build_runtime_plugin_discovery_actions_for_conflict(
