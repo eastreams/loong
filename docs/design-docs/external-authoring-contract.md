@@ -57,6 +57,7 @@ runtime seams.
 
 They currently support:
 
+- scaffolded package creation through `loong plugins init`
 - declared host hooks
 - declared shell-first TUI surfaces
 - bounded probe execution through the Loong CLI
@@ -93,6 +94,8 @@ Trusted host extensions add one more rule:
 
 Today, an external author can rely on these operator-visible surfaces:
 
+- `loong plugins init --host-hook ...`
+- `loong plugins init --tui-surface ...`
 - `loong plugins inventory`
 - `loong plugins doctor`
 - `loong plugins invoke-host-hook`
@@ -108,6 +111,18 @@ The live shell-first TUI currently routes these declared surfaces:
 
 That routing is additive. It does not yet imply a general in-process TUI
 executor contract.
+
+## Current Trusted Host Scaffold Boundary
+
+Today, the scaffolded trusted host lane is intentionally narrow:
+
+- runnable `process_stdio` packages only
+- explicit `--source-language`
+- generated local runtime stub files
+- bounded smoke command output from `plugins init`
+
+That keeps the public authoring contract honest while the broader executor
+story is still evolving.
 
 ## What Is Not Promised
 

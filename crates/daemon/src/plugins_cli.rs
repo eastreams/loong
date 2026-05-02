@@ -293,7 +293,7 @@ impl PluginInitBridgeKindArg {
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 #[command(
     about = "Scaffold a manifest-first plugin package root for external authors",
-    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loong.plugin.json` plus a README that points authors to `loong plugins doctor` and `loong plugins actions` for shared governance validation. This command scaffolds package metadata only; it does not generate runtime code or widen trust policy."
+    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loong.plugin.json` plus a README that points authors to `loong plugins doctor` and `loong plugins actions` for shared governance validation. Use `--host-hook` and `--tui-surface` to scaffold the bounded trusted host lane on top of the same process_stdio runtime path. This command scaffolds package metadata and local runtime stubs only; it does not widen trust policy by itself."
 )]
 pub struct PluginInitCommand {
     /// Target package root to create or reuse when the directory is empty
@@ -314,6 +314,12 @@ pub struct PluginInitCommand {
     /// Source language for language-specific bridges such as process_stdio or native_ffi
     #[arg(long)]
     pub source_language: Option<String>,
+    /// Declared read-only trusted host hook names to scaffold on the trusted host lane
+    #[arg(long = "host-hook")]
+    pub host_hooks: Vec<String>,
+    /// Declared trusted-host TUI surfaces to scaffold on the trusted host lane
+    #[arg(long = "tui-surface")]
+    pub tui_surfaces: Vec<String>,
     /// Initial package version written to the manifest
     #[arg(long, default_value = "0.1.0")]
     pub version: String,
@@ -786,6 +792,10 @@ pub struct PluginsInitExecution {
     pub source_language: Option<String>,
     pub adapter_family: String,
     pub entrypoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smoke_test_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_files_written: Vec<String>,
     pub files_written: Vec<String>,
 }
 
@@ -1191,12 +1201,26 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let version = normalize_required_cli_value("--version", &command.version)?;
     let summary = normalize_optional_cli_value(command.summary.as_deref());
     let bridge_kind = command.bridge_kind.as_bridge_kind();
+    let declared_host_hooks = resolve_scaffold_host_hooks(command.host_hooks.as_slice())?;
+    let declared_tui_surfaces = resolve_scaffold_tui_surfaces(command.tui_surfaces.as_slice())?;
 
     validate_plugin_scaffold_version(&version)?;
 
     let scaffold_defaults =
         plugin_runtime_scaffold_defaults(bridge_kind, command.source_language.as_deref())
             .map_err(|error| format!("plugins init failed: {error}; use --source-language when required by the selected bridge"))?;
+    let process_stdio_profile =
+        crate::native_extension_authoring::process_stdio_native_extension_language_profile(
+            &scaffold_defaults,
+        )?;
+    if (!declared_host_hooks.is_empty() || !declared_tui_surfaces.is_empty())
+        && process_stdio_profile.is_none()
+    {
+        return Err(
+            "plugins init only scaffolds trusted host hooks and TUI surfaces on runnable process_stdio extension entrypoints"
+                .to_owned(),
+        );
+    }
 
     let manifest = build_plugin_scaffold_manifest(
         &plugin_id,
@@ -1205,6 +1229,9 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         &version,
         summary,
         &scaffold_defaults,
+        declared_host_hooks.clone(),
+        declared_tui_surfaces.clone(),
+        process_stdio_profile,
     );
 
     let package_root_path = Path::new(package_root.as_str());
@@ -1216,22 +1243,33 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let manifest_document = plugin_scaffold_manifest_document(&manifest)?;
     let rendered_manifest = serde_json::to_string_pretty(&manifest_document)
         .map_err(|error| format!("serialize scaffold manifest failed: {error}"))?;
+    let smoke_test_command = render_plugin_scaffold_smoke_test_command(
+        package_root.as_str(),
+        plugin_id.as_str(),
+        process_stdio_profile,
+        declared_host_hooks.as_slice(),
+        declared_tui_surfaces.as_slice(),
+    );
     let rendered_readme = render_plugin_scaffold_readme(
         package_root.as_str(),
         plugin_id.as_str(),
         bridge_kind.as_str(),
+        smoke_test_command.as_deref(),
     );
 
-    write_plugin_scaffold_files(
+    let runtime_files_written = write_plugin_scaffold_files(
+        package_root_path,
         &manifest_path,
         rendered_manifest.as_str(),
         &readme_path,
         rendered_readme.as_str(),
+        process_stdio_profile,
     )?;
 
     let manifest_path_string = manifest_path.display().to_string();
     let readme_path_string = readme_path.display().to_string();
-    let files_written = vec![manifest_path_string.clone(), readme_path_string.clone()];
+    let mut files_written = vec![manifest_path_string.clone(), readme_path_string.clone()];
+    files_written.extend(runtime_files_written.iter().cloned());
 
     Ok(PluginsInitExecution {
         schema_version: PLUGINS_COMMAND_SCHEMA_VERSION,
@@ -1247,6 +1285,8 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         source_language: scaffold_defaults.source_language,
         adapter_family: scaffold_defaults.adapter_family,
         entrypoint: scaffold_defaults.entrypoint_hint,
+        smoke_test_command,
+        runtime_files_written,
         files_written,
     })
 }
@@ -1643,11 +1683,15 @@ fn ensure_process_stdio_invocable_plugin(
 }
 
 fn write_plugin_scaffold_files(
+    package_root: &Path,
     manifest_path: &Path,
     rendered_manifest: &str,
     readme_path: &Path,
     rendered_readme: &str,
-) -> CliResult<()> {
+    process_stdio_profile: Option<
+        crate::native_extension_authoring::ProcessStdioNativeExtensionLanguageProfile,
+    >,
+) -> CliResult<Vec<String>> {
     let manifest_write_result = fs::write(manifest_path, rendered_manifest);
     if let Err(error) = manifest_write_result {
         return Err(format!(
@@ -1673,7 +1717,29 @@ fn write_plugin_scaffold_files(
         ));
     }
 
-    Ok(())
+    let mut runtime_files_written = Vec::new();
+    if let Some(profile) = process_stdio_profile {
+        for scaffold_file in profile.scaffold_files {
+            let file_path = package_root.join(scaffold_file.relative_path);
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "create scaffold runtime directory `{}` failed: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::write(&file_path, scaffold_file.contents).map_err(|error| {
+                format!(
+                    "write scaffold runtime file `{}` failed: {error}",
+                    file_path.display()
+                )
+            })?;
+            runtime_files_written.push(file_path.display().to_string());
+        }
+    }
+
+    Ok(runtime_files_written)
 }
 
 fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
@@ -1684,6 +1750,99 @@ fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
         }
         Some(trimmed.to_owned())
     })
+}
+
+fn resolve_scaffold_host_hooks(raw: &[String]) -> CliResult<Vec<String>> {
+    let mut declared_host_hooks = Vec::new();
+
+    for hook_name in raw {
+        let trimmed = hook_name.trim();
+        if trimmed.is_empty() {
+            return Err("plugins init requires each --host-hook value to be non-empty".to_owned());
+        }
+        if !crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.contains(&trimmed) {
+            return Err(format!(
+                "plugins init received unsupported --host-hook `{trimmed}`; supported hooks are {}",
+                crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
+            ));
+        }
+        if declared_host_hooks
+            .iter()
+            .any(|existing| existing == trimmed)
+        {
+            continue;
+        }
+        declared_host_hooks.push(trimmed.to_owned());
+    }
+
+    Ok(declared_host_hooks)
+}
+
+fn resolve_scaffold_tui_surfaces(raw: &[String]) -> CliResult<Vec<String>> {
+    let mut declared_tui_surfaces = Vec::new();
+
+    for surface_name in raw {
+        let trimmed = surface_name.trim();
+        if trimmed.is_empty() {
+            return Err(
+                "plugins init requires each --tui-surface value to be non-empty".to_owned(),
+            );
+        }
+        if !crate::kernel::TRUSTED_HOST_TUI_EXTENSION_SURFACES.contains(&trimmed) {
+            return Err(format!(
+                "plugins init received unsupported --tui-surface `{trimmed}`; supported surfaces are {}",
+                crate::kernel::TRUSTED_HOST_TUI_EXTENSION_SURFACES.join(", ")
+            ));
+        }
+        if declared_tui_surfaces
+            .iter()
+            .any(|existing| existing == trimmed)
+        {
+            continue;
+        }
+        declared_tui_surfaces.push(trimmed.to_owned());
+    }
+
+    Ok(declared_tui_surfaces)
+}
+
+fn render_plugin_scaffold_smoke_test_command(
+    package_root: &str,
+    plugin_id: &str,
+    process_stdio_profile: Option<
+        crate::native_extension_authoring::ProcessStdioNativeExtensionLanguageProfile,
+    >,
+    declared_host_hooks: &[String],
+    declared_tui_surfaces: &[String],
+) -> Option<String> {
+    let profile = process_stdio_profile?;
+    if let Some(hook) = declared_host_hooks.first() {
+        return Some(
+            crate::native_extension_authoring::render_authoring_host_hook_probe_command(
+                package_root,
+                plugin_id,
+                hook.as_str(),
+                profile.smoke_allow_command,
+            ),
+        );
+    }
+    if let Some(surface) = declared_tui_surfaces.first() {
+        return Some(
+            crate::native_extension_authoring::render_authoring_tui_surface_probe_command(
+                package_root,
+                plugin_id,
+                surface.as_str(),
+                profile.smoke_allow_command,
+            ),
+        );
+    }
+    Some(
+        crate::native_extension_authoring::render_authoring_smoke_test_command(
+            package_root,
+            plugin_id,
+            profile.smoke_allow_command,
+        ),
+    )
 }
 
 fn validate_plugin_scaffold_version(version: &str) -> CliResult<()> {
@@ -1739,6 +1898,11 @@ fn build_plugin_scaffold_manifest(
     version: &str,
     summary: Option<String>,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+    host_hooks: Vec<String>,
+    tui_surfaces: Vec<String>,
+    process_stdio_profile: Option<
+        crate::native_extension_authoring::ProcessStdioNativeExtensionLanguageProfile,
+    >,
 ) -> PluginManifest {
     let mut capabilities = BTreeSet::new();
     capabilities.insert(Capability::InvokeConnector);
@@ -1758,6 +1922,73 @@ fn build_plugin_scaffold_manifest(
     );
     if let Some(source_language) = scaffold_defaults.source_language.as_ref() {
         metadata.insert("source_language".to_owned(), source_language.clone());
+    }
+    if let Some(profile) = process_stdio_profile {
+        metadata.insert("command".to_owned(), profile.command.to_owned());
+        metadata.insert(
+            "args_json".to_owned(),
+            serde_json::to_string(
+                &crate::native_extension_authoring::process_stdio_scaffold_args(profile),
+            )
+            .unwrap_or_else(|_| "[]".to_owned()),
+        );
+        metadata.insert(
+            "process_timeout_ms".to_owned(),
+            profile.process_timeout_ms.to_string(),
+        );
+        metadata.insert(
+            "loong_extension_contract".to_owned(),
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
+        );
+        if !host_hooks.is_empty() || !tui_surfaces.is_empty() {
+            metadata.insert(
+                "loong_extension_family".to_owned(),
+                crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY.to_owned(),
+            );
+            metadata.insert(
+                "loong_extension_trust_lane".to_owned(),
+                crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE.to_owned(),
+            );
+            metadata.insert(
+                "loong_extension_methods_json".to_owned(),
+                serde_json::to_string(
+                    &crate::native_extension_authoring::TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_owned()),
+            );
+        } else {
+            metadata.insert(
+                "loong_extension_methods_json".to_owned(),
+                serde_json::to_string(
+                    &crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_owned()),
+            );
+            metadata.insert(
+                "loong_extension_events_json".to_owned(),
+                serde_json::to_string(
+                    &crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_owned()),
+            );
+        }
+        metadata.insert(
+            "loong_extension_host_hooks_json".to_owned(),
+            serde_json::to_string(&host_hooks).unwrap_or_else(|_| "[]".to_owned()),
+        );
+        metadata.insert(
+            "loong_extension_tui_surfaces_json".to_owned(),
+            serde_json::to_string(&tui_surfaces).unwrap_or_else(|_| "[]".to_owned()),
+        );
     }
 
     let host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
@@ -1817,13 +2048,18 @@ fn plugin_scaffold_manifest_document(
     })
 }
 
-fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kind: &str) -> String {
+fn render_plugin_scaffold_readme(
+    package_root: &str,
+    plugin_id: &str,
+    bridge_kind: &str,
+    smoke_test_command: Option<&str>,
+) -> String {
     let doctor_command =
         format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release");
     let actions_command =
         format!("loong plugins actions --root \"{package_root}\" --profile sdk-release");
 
-    [
+    let mut lines = vec![
         format!("# {plugin_id}"),
         String::new(),
         "This package was scaffolded by `loong plugins init`.".to_owned(),
@@ -1853,8 +2089,19 @@ fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kin
         "```bash".to_owned(),
         actions_command,
         "```".to_owned(),
-    ]
-    .join("\n")
+    ];
+    if let Some(smoke_test_command) = smoke_test_command {
+        lines.extend([
+            String::new(),
+            "5. Run the bounded runtime smoke probe before iterating on the package implementation:"
+                .to_owned(),
+            String::new(),
+            "```bash".to_owned(),
+            smoke_test_command.to_owned(),
+            "```".to_owned(),
+        ]);
+    }
+    lines.join("\n")
 }
 
 fn render_plugins_cli_text(execution: &PluginsCommandExecution) -> String {
@@ -2001,6 +2248,15 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
         "- bridge_kind={} source_language={} adapter_family={} entrypoint={}",
         execution.bridge_kind, source_language, execution.adapter_family, execution.entrypoint
     ));
+    if !execution.runtime_files_written.is_empty() {
+        lines.push(format!(
+            "- runtime_files_written={}",
+            execution.runtime_files_written.join(",")
+        ));
+    }
+    if let Some(smoke_test_command) = execution.smoke_test_command.as_deref() {
+        lines.push(format!("- smoke_test_command={smoke_test_command}"));
+    }
     lines.push(format!("- manifest={}", execution.manifest_path));
     lines.push(format!("- readme={}", execution.readme_path));
     lines.push(format!(
@@ -4793,6 +5049,8 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                host_hooks: Vec::new(),
+                tui_surfaces: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: Some("Tavily-backed search package".to_owned()),
             }),
@@ -4913,6 +5171,8 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: None,
+                host_hooks: Vec::new(),
+                tui_surfaces: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: None,
             }),
@@ -4938,6 +5198,8 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                host_hooks: Vec::new(),
+                tui_surfaces: Vec::new(),
                 version: "not-semver".to_owned(),
                 summary: None,
             }),
@@ -4963,6 +5225,8 @@ mod tests {
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
+                host_hooks: Vec::new(),
+                tui_surfaces: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
             }),
@@ -4978,6 +5242,8 @@ mod tests {
         assert_eq!(execution.source_language.as_deref(), Some("python"));
         assert_eq!(execution.adapter_family, "python-stdio-adapter");
         assert_eq!(execution.entrypoint, "stdin/stdout::invoke");
+        assert!(execution.smoke_test_command.is_some());
+        assert!(!execution.runtime_files_written.is_empty());
 
         let rendered_manifest =
             fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
@@ -5025,10 +5291,12 @@ mod tests {
             "{{\"compatibility\":{{\"host_version_req\":\"{expected_host_version_req}\"}}}}"
         );
         let error = write_plugin_scaffold_files(
+            package_root,
             &manifest_path,
             manifest_contents.as_str(),
             &readme_path,
             "# scaffold",
+            None,
         )
         .expect_err("readme directory should force scaffold rollback");
 
@@ -5041,6 +5309,119 @@ mod tests {
             readme_path.is_dir(),
             "readme test fixture directory should remain in place"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_scaffolds_trusted_host_extension_package() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-trusted-host");
+        let package_root = format!("{temp_root}/weather-host");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-host".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                host_hooks: vec!["turn_start".to_owned()],
+                tui_surfaces: vec!["command_palette".to_owned()],
+                version: "0.2.0".to_owned(),
+                summary: Some("Trusted host weather hook".to_owned()),
+            }),
+        })
+        .await
+        .expect("trusted host scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+        assert!(
+            execution
+                .smoke_test_command
+                .as_deref()
+                .is_some_and(|command| command.contains("plugins invoke-host-hook"))
+        );
+        assert!(!execution.runtime_files_written.is_empty());
+
+        let rendered_manifest =
+            fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_family")
+                .map(String::as_str),
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_tui_surfaces_json")
+                .map(String::as_str),
+            Some("[\"command_palette\"]")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_host_hooks_json")
+                .map(String::as_str),
+            Some("[\"turn_start\"]")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_rejects_unsupported_trusted_host_hook() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-bad-hook");
+        let package_root = format!("{temp_root}/weather-host");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-host".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                host_hooks: vec!["provider_request".to_owned()],
+                tui_surfaces: Vec::new(),
+                version: "0.2.0".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("unsupported host hook should be rejected");
+
+        assert!(error.contains("--host-hook"));
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_rejects_unsupported_trusted_tui_surface() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-bad-surface");
+        let package_root = format!("{temp_root}/weather-host");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-host".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                host_hooks: Vec::new(),
+                tui_surfaces: vec!["sidebar_widget".to_owned()],
+                version: "0.2.0".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("unsupported tui surface should be rejected");
+
+        assert!(error.contains("--tui-surface"));
     }
 
     #[tokio::test]
@@ -5060,6 +5441,8 @@ mod tests {
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
+                host_hooks: Vec::new(),
+                tui_surfaces: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: None,
             }),

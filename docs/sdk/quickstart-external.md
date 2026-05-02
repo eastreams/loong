@@ -54,8 +54,10 @@ closer to reusable orchestration.
 
 For trusted host extensions, the shortest current loop is:
 
-1. declare the package metadata for the trusted host lane
-2. declare host hooks or TUI surfaces
+1. scaffold the package:
+   - `loong plugins init ... --bridge-kind process_stdio --source-language <lang>`
+   - add `--host-hook <hook>` and/or `--tui-surface <surface>` as needed
+2. inspect the generated smoke command from `plugins init`
 3. run `loong plugins inventory`
 4. run `loong plugins doctor`
 5. probe with:
@@ -77,6 +79,15 @@ Current live shell-first surfaces:
 
 Those live routes are bounded probe surfaces, not a general-purpose in-process
 executor promise.
+
+## Current Scaffold Boundary
+
+Right now, trusted host scaffolds are intentionally limited to:
+
+- runnable `process_stdio` packages
+- explicit source-language selection
+- generated local runtime stub files
+- bounded smoke probes, not implicit live execution
 
 ## Validation
 

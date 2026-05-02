@@ -290,6 +290,10 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
         "process_stdio",
         "--source-language",
         "python",
+        "--host-hook",
+        "turn_start",
+        "--tui-surface",
+        "command_palette",
         "--summary",
         "Tavily-backed search package",
         "--json",
@@ -310,6 +314,8 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                         loong_daemon::plugins_cli::PluginInitBridgeKindArg::ProcessStdio
                     );
                     assert_eq!(command.source_language.as_deref(), Some("python"));
+                    assert_eq!(command.host_hooks, vec!["turn_start".to_owned()]);
+                    assert_eq!(command.tui_surfaces, vec!["command_palette".to_owned()]);
                     assert_eq!(
                         command.summary.as_deref(),
                         Some("Tavily-backed search package")
@@ -455,6 +461,8 @@ fn plugins_help_mentions_preflight_and_action_plan() {
     assert!(help.contains("bridge-template"), "help: {help}");
     assert!(help.contains("actions"), "help: {help}");
     assert!(help.contains("operator action plan"), "help: {help}");
+    assert!(help.contains("host-hook"), "help: {help}");
+    assert!(help.contains("tui-surface"), "help: {help}");
 }
 
 #[test]
