@@ -1,0 +1,26 @@
+{
+  "api_version": "v1alpha1",
+  "version": "0.1.0",
+  "plugin_id": "trusted-host-extension-javascript-example",
+  "provider_id": "trusted-host-extension-javascript-example",
+  "connector_name": "trusted-host-extension-javascript-example",
+  "capabilities": [
+    "InvokeConnector"
+  ],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_family": "trusted_host_extension",
+    "loong_extension_trust_lane": "trusted_host",
+    "loong_extension_methods_json": "[\"extension/event\"]",
+    "loong_extension_host_hooks_json": "[\"turn_start\",\"turn_end\"]",
+    "loong_extension_tui_surfaces_json": "[\"command_palette\",\"settings_flow\",\"startup_onboarding\"]"
+  },
+  "summary": "Checked-in trusted host JavaScript extension example"
+}

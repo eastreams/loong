@@ -89,6 +89,13 @@ Right now, trusted host scaffolds are intentionally limited to:
 - generated local runtime stub files
 - bounded smoke probes, not implicit live execution
 
+## Reference Example
+
+The repository now keeps one checked-in trusted-host example package you can
+diff against directly:
+
+- `examples/plugins-process/native-extension-trusted-host-javascript/`
+
 ## Validation
 
 Use [SDK Validator Contract](../design-docs/sdk-validator-contract.md) when you
