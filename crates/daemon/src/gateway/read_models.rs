@@ -380,6 +380,9 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub enabled_service_channel_ids: Vec<String>,
     pub enabled_plugin_backed_channel_ids: Vec<String>,
     pub enabled_outbound_only_channel_ids: Vec<String>,
+    pub runtime_plugin_roots_source: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub runtime_plugin_capability_distribution: BTreeMap<String, usize>,
     pub visible_tool_count: usize,
     pub visible_direct_tool_names: Vec<String>,
     pub hidden_tool_surface_ids: Vec<String>,
@@ -1508,6 +1511,10 @@ fn build_operator_runtime_summary_read_model(
         .channels
         .enabled_outbound_only_channel_ids
         .clone();
+    let runtime_plugin_roots_source =
+        json_string_field(&runtime_snapshot.runtime_plugins, "roots_source");
+    let runtime_plugin_capability_distribution =
+        runtime_plugin_capability_distribution(&runtime_snapshot.runtime_plugins);
     let visible_tool_count = runtime_snapshot.tools.visible_tool_count;
     let visible_direct_tool_names = runtime_snapshot.tools.visible_direct_tool_names.clone();
     let hidden_tool_surface_ids = runtime_snapshot
@@ -1532,6 +1539,8 @@ fn build_operator_runtime_summary_read_model(
         enabled_service_channel_ids,
         enabled_plugin_backed_channel_ids,
         enabled_outbound_only_channel_ids,
+        runtime_plugin_roots_source,
+        runtime_plugin_capability_distribution,
         visible_tool_count,
         visible_direct_tool_names,
         hidden_tool_surface_ids,
@@ -1542,6 +1551,24 @@ fn build_operator_runtime_summary_read_model(
         tool_calling,
         web_access,
     }
+}
+
+fn runtime_plugin_capability_distribution(runtime_plugins: &Value) -> BTreeMap<String, usize> {
+    let mut distribution = BTreeMap::new();
+    let Some(plugins) = runtime_plugins.get("plugins").and_then(Value::as_array) else {
+        return distribution;
+    };
+
+    for plugin in plugins {
+        let Some(capabilities) = plugin.get("capabilities").and_then(Value::as_array) else {
+            continue;
+        };
+        for capability in capabilities.iter().filter_map(Value::as_str) {
+            *distribution.entry(capability.to_owned()).or_insert(0) += 1;
+        }
+    }
+
+    distribution
 }
 
 fn build_paired_device_nodes_read_model(
@@ -2438,7 +2465,15 @@ mod tests {
                     separation_note: crate::RUNTIME_WEB_ACCESS_SEPARATION_NOTE.to_owned(),
                 },
             },
-            runtime_plugins: serde_json::json!({}),
+            runtime_plugins: serde_json::json!({
+                "roots_source": "configured",
+                "plugins": [
+                    {
+                        "plugin_id": "weather-extension",
+                        "capabilities": ["invoke_connector", "observe_telemetry"]
+                    }
+                ]
+            }),
             external_skills: serde_json::json!({}),
         };
 
@@ -2446,6 +2481,22 @@ mod tests {
 
         assert_eq!(summary.visible_direct_tool_names, vec!["read", "write"]);
         assert_eq!(summary.hidden_tool_surface_ids, vec!["agent", "web"]);
+        assert_eq!(
+            summary.runtime_plugin_roots_source.as_deref(),
+            Some("configured")
+        );
+        assert_eq!(
+            summary
+                .runtime_plugin_capability_distribution
+                .get("invoke_connector"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary
+                .runtime_plugin_capability_distribution
+                .get("observe_telemetry"),
+            Some(&1)
+        );
         assert!(summary.web_access.ordinary_network_access_enabled);
         assert!(!summary.web_access.query_search_enabled);
     }
