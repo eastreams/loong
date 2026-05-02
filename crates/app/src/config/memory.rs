@@ -207,6 +207,14 @@ impl ResponseDensity {
             Self::Thorough => "thorough",
         }
     }
+
+    pub const fn display_text(self) -> &'static str {
+        match self {
+            Self::Concise => "concise",
+            Self::Balanced => "balanced",
+            Self::Thorough => "thorough",
+        }
+    }
 }
 
 impl InitiativeLevel {
@@ -215,6 +223,14 @@ impl InitiativeLevel {
             Self::AskBeforeActing => "ask_before_acting",
             Self::Balanced => "balanced",
             Self::HighInitiative => "high_initiative",
+        }
+    }
+
+    pub const fn display_text(self) -> &'static str {
+        match self {
+            Self::AskBeforeActing => "ask before acting",
+            Self::Balanced => "balanced",
+            Self::HighInitiative => "high initiative",
         }
     }
 }
@@ -244,6 +260,7 @@ pub enum MemorySystemKind {
     #[default]
     Builtin,
     WorkspaceRecall,
+    RecallFirst,
 }
 
 impl MemorySystemKind {
@@ -251,6 +268,7 @@ impl MemorySystemKind {
         match self {
             Self::Builtin => "builtin",
             Self::WorkspaceRecall => "workspace_recall",
+            Self::RecallFirst => "recall_first",
         }
     }
 
@@ -258,6 +276,7 @@ impl MemorySystemKind {
         match raw.trim().to_ascii_lowercase().as_str() {
             "builtin" => Some(Self::Builtin),
             "workspace_recall" => Some(Self::WorkspaceRecall),
+            "recall_first" => Some(Self::RecallFirst),
             _ => None,
         }
     }
@@ -271,7 +290,7 @@ impl<'de> Deserialize<'de> for MemorySystemKind {
         let raw = String::deserialize(deserializer)?;
         Self::parse_id(&raw).ok_or_else(|| {
             serde::de::Error::custom(format!(
-                "unsupported memory.system `{}` (available: builtin, workspace_recall)",
+                "unsupported memory.system `{}` (available: builtin, workspace_recall, recall_first)",
                 raw.trim()
             ))
         })

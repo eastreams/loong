@@ -829,10 +829,12 @@ mod tests {
         let mut config = mvp::config::LoongConfig::default();
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {
             preferred_name: None,
+            pronouns: None,
             response_density: None,
             initiative_level: None,
             standing_boundaries: None,
             timezone: None,
+            notes: None,
             locale: None,
             prompt_state: mvp::config::PersonalizationPromptState::Suppressed,
             schema_version: 1,
@@ -858,10 +860,12 @@ mod tests {
         let mut config = mvp::config::LoongConfig::default();
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {
             preferred_name: Some("Chum".to_owned()),
+            pronouns: None,
             response_density: Some(mvp::config::ResponseDensity::Balanced),
             initiative_level: Some(mvp::config::InitiativeLevel::Balanced),
             standing_boundaries: None,
             timezone: None,
+            notes: None,
             locale: None,
             prompt_state: mvp::config::PersonalizationPromptState::Configured,
             schema_version: 1,

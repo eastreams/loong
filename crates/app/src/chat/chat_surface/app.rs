@@ -36,7 +36,10 @@ use crate::config::{
 use crate::tools::bundled_preinstall_targets;
 use crate::tui_surface::{TuiCalloutTone, TuiKeyValueSpec, TuiMessageSpec, TuiSectionSpec};
 
-use super::command_palette::{CommandAction, CommandPalette, SkillEntry, slash_command_specs};
+use super::command_palette::{
+    CommandAction, CommandPalette, SettingsCommandAction, SettingsEntry, SettingsSurfaceFocus,
+    SkillEntry, slash_command_specs,
+};
 use super::composer::Composer;
 use super::i18n::{I18nService, Language, SurfaceCopy, resolve_default_language};
 use super::message_list::{MessageList, StartupEyeAnimation, StartupEyeFocus};
@@ -475,6 +478,72 @@ enum StartupOnboardingInteractionKind {
     Navigate,
     Confirm,
     Persist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupProviderAuthBindingKind {
+    ApiKey,
+    OauthAccessToken,
+}
+
+fn startup_provider_config_for_kind(kind: ProviderKind) -> ProviderConfig {
+    let mut provider = ProviderConfig::fresh_for_kind(kind);
+    if let Some((env_name, binding_kind)) = detected_startup_auth_binding(kind) {
+        apply_startup_auth_binding(&mut provider, env_name.as_str(), binding_kind);
+    }
+    provider
+}
+
+fn detected_startup_auth_binding(
+    kind: ProviderKind,
+) -> Option<(String, StartupProviderAuthBindingKind)> {
+    if let Some(env_name) = kind
+        .default_oauth_access_token_env()
+        .filter(|env_name| std::env::var_os(env_name).is_some())
+    {
+        return Some((
+            env_name.to_owned(),
+            StartupProviderAuthBindingKind::OauthAccessToken,
+        ));
+    }
+    for env_name in kind.oauth_access_token_env_aliases() {
+        if std::env::var_os(env_name).is_some() {
+            return Some((
+                (*env_name).to_owned(),
+                StartupProviderAuthBindingKind::OauthAccessToken,
+            ));
+        }
+    }
+    if let Some(env_name) = kind
+        .default_api_key_env()
+        .filter(|env_name| std::env::var_os(env_name).is_some())
+    {
+        return Some((env_name.to_string(), StartupProviderAuthBindingKind::ApiKey));
+    }
+    for env_name in kind.api_key_env_aliases() {
+        if std::env::var_os(env_name).is_some() {
+            return Some((
+                (*env_name).to_owned(),
+                StartupProviderAuthBindingKind::ApiKey,
+            ));
+        }
+    }
+    None
+}
+
+fn apply_startup_auth_binding(
+    provider: &mut ProviderConfig,
+    env_name: &str,
+    binding_kind: StartupProviderAuthBindingKind,
+) {
+    match binding_kind {
+        StartupProviderAuthBindingKind::ApiKey => {
+            provider.set_api_key_env_binding(Some(env_name.to_owned()));
+        }
+        StartupProviderAuthBindingKind::OauthAccessToken => {
+            provider.set_oauth_access_token_env_binding(Some(env_name.to_owned()));
+        }
+    }
 }
 
 impl StartupOnboardingState {
@@ -1561,8 +1630,14 @@ pub async fn run_app<B: Backend>(
                             if command == "/exit" {
                                 break;
                             }
-                            run_surface_command(terminal, &mut app, &runtime, &options, &command)
-                                .await?;
+                            run_surface_command(
+                                terminal,
+                                &mut app,
+                                &mut runtime,
+                                &options,
+                                &command,
+                            )
+                            .await?;
                         }
                         dirty = true;
                         continue;
@@ -1632,7 +1707,7 @@ pub async fn run_app<B: Backend>(
                                     &mut runtime,
                                     current_render_width(terminal)?,
                                     action,
-                                    )?
+                                )?
                             {
                                 command_to_run = Some(command);
                             } else if app.command_palette.is_commands_mode() {
@@ -1672,7 +1747,7 @@ pub async fn run_app<B: Backend>(
                         if let Some(command) = recognized_surface_command(trimmed_msg) {
                             command_to_run = Some(command);
                         } else if submitted_message_is_follow_up(&app, &msg) {
-                            start_turn(terminal, &mut app, &runtime, msg, false).await?;
+                            start_turn(terminal, &mut app, &mut runtime, msg, false).await?;
                         } else {
                             submit_user_turn(terminal, &mut app, &mut runtime, msg).await?;
                         }
@@ -1683,7 +1758,7 @@ pub async fn run_app<B: Backend>(
                             break;
                         }
 
-                        run_surface_command(terminal, &mut app, &runtime, &options, &command)
+                        run_surface_command(terminal, &mut app, &mut runtime, &options, &command)
                             .await?;
                     }
                     dirty = true;
@@ -1693,7 +1768,7 @@ pub async fn run_app<B: Backend>(
                         if command == "/exit" {
                             break;
                         }
-                        run_surface_command(terminal, &mut app, &runtime, &options, &command)
+                        run_surface_command(terminal, &mut app, &mut runtime, &options, &command)
                             .await?;
                     }
                     dirty = true;
@@ -4418,7 +4493,7 @@ fn apply_model_selection(
 async fn run_surface_command<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    runtime: &CliTurnRuntime,
+    runtime: &mut CliTurnRuntime,
     options: &CliChatOptions,
     input: &str,
 ) -> CliResult<()> {
@@ -6314,7 +6389,7 @@ async fn build_command_lines(
             {
                 let diagnostics = runtime
                     .turn_coordinator
-                    .load_turn_checkpoint_diagnostics_with_limit(
+                    .load_production_turn_checkpoint_diagnostics_with_limit(
                         &runtime.config,
                         &runtime.session_id,
                         runtime.config.memory.sliding_window,
@@ -6346,7 +6421,7 @@ async fn build_command_lines(
             {
                 let outcome = runtime
                     .turn_coordinator
-                    .repair_turn_checkpoint_tail(
+                    .repair_production_turn_checkpoint_tail(
                         &runtime.config,
                         &runtime.session_id,
                         runtime.conversation_binding(),
@@ -9487,7 +9562,7 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw after scroll");
         let after = buffer_lines(&terminal).join("\n");
 
-        assert!(app.message_list.scroll_offset > 0);
+        assert!(app.message_list.scroll_offset_for_test() > 0);
         assert_ne!(before, after);
         assert_eq!(app.focus, Focus::Composer);
     }
@@ -9552,7 +9627,7 @@ description: "actual description"
             app.message_list
                 .add_assistant_message(format!("line-{idx}"));
         }
-        app.message_list.scroll_offset = 4;
+        app.message_list.set_scroll_offset_for_test(4);
         app.command_palette.show_commands(":");
         app.focus = Focus::CommandPalette;
 
@@ -9561,7 +9636,7 @@ description: "actual description"
         let palette_col = app.last_palette_area.x.saturating_add(1);
         app.handle_mouse_event(mouse(MouseEventKind::ScrollDown, palette_col, palette_row));
 
-        assert_eq!(app.message_list.scroll_offset, 4);
+        assert_eq!(app.message_list.scroll_offset_for_test(), 4);
         match app
             .command_palette
             .handle_key(crossterm::event::KeyEvent::new(
@@ -11197,7 +11272,7 @@ description: "actual description"
         assert!(restored_lines.contains("new-tail-line after scroll"));
         assert!(restored_lines.contains("streamed preview line"));
         assert!(!restored_lines.contains("PgDn / End"));
-        assert_eq!(app.message_list.scroll_offset, 0);
+        assert_eq!(app.message_list.scroll_offset_for_test(), 0);
     }
 
     #[test]
