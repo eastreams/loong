@@ -22,10 +22,10 @@ use super::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
         FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
         LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
-        NextcloudTalkChannelConfig, NostrChannelConfig, QqbotChannelConfig, SignalChannelConfig,
-        SlackChannelConfig, SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig,
-        TlonChannelConfig, TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig,
-        WhatsappChannelConfig, WhatsappPersonalChannelConfig,
+        NextcloudTalkChannelConfig, NostrChannelConfig, SignalChannelConfig, SlackChannelConfig,
+        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TlonChannelConfig,
+        TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
+        WhatsappPersonalChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -272,7 +272,7 @@ pub struct AcpConfig {
     pub bindings_enabled: bool,
     #[serde(default)]
     pub emit_runtime_events: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub allow_mcp_server_injection: bool,
     #[serde(default)]
     pub backends: AcpBackendProfilesConfig,
@@ -392,7 +392,7 @@ impl Default for AcpConfig {
             queue_owner_ttl_ms: Some(default_acp_queue_owner_ttl_ms()),
             bindings_enabled: false,
             emit_runtime_events: false,
-            allow_mcp_server_injection: false,
+            allow_mcp_server_injection: true,
             backends: AcpBackendProfilesConfig::default(),
         }
     }
@@ -3823,7 +3823,7 @@ model = "gpt-5"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_default_config_keeps_external_skills_guardrails() {
+    fn write_default_config_uses_yolo_external_skills_defaults() {
         let path = unique_config_path("loong-config-runtime-external-skills");
         let path_string = path.display().to_string();
 
@@ -3832,17 +3832,17 @@ model = "gpt-5"
 
         let raw = fs::read_to_string(&path).expect("read written config");
         assert!(raw.contains("[external_skills]"));
-        assert!(raw.contains("enabled = false"));
+        assert!(raw.contains("enabled = true"));
         assert!(raw.contains("require_download_approval = false"));
-        assert!(raw.contains("auto_expose_installed = false"));
+        assert!(raw.contains("auto_expose_installed = true"));
 
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
-        assert!(!loaded.external_skills.enabled);
+        assert!(loaded.external_skills.enabled);
         assert!(!loaded.external_skills.require_download_approval);
         assert!(loaded.external_skills.allowed_domains.is_empty());
         assert!(loaded.external_skills.blocked_domains.is_empty());
         assert!(loaded.external_skills.install_root.is_none());
-        assert!(!loaded.external_skills.auto_expose_installed);
+        assert!(loaded.external_skills.auto_expose_installed);
 
         let _ = fs::remove_file(path);
     }

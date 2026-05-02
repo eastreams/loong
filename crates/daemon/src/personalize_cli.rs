@@ -388,10 +388,12 @@ fn build_configured_personalization(
 
     mvp::config::PersonalizationConfig {
         preferred_name: draft.preferred_name,
+        pronouns: None,
         response_density: draft.response_density,
         initiative_level: draft.initiative_level,
         standing_boundaries: draft.standing_boundaries,
         timezone: draft.timezone,
+        notes: None,
         locale: draft.locale,
         prompt_state: mvp::config::PersonalizationPromptState::Configured,
         schema_version,
@@ -583,10 +585,12 @@ mod tests {
         let schema_version = personalization_schema_version_for_tests();
         mvp::config::PersonalizationConfig {
             preferred_name: Some("Chum".to_owned()),
+            pronouns: None,
             response_density: Some(mvp::config::ResponseDensity::Balanced),
             initiative_level: Some(mvp::config::InitiativeLevel::AskBeforeActing),
             standing_boundaries: Some("Ask before destructive actions.".to_owned()),
             timezone: Some("Asia/Shanghai".to_owned()),
+            notes: None,
             locale: Some("zh-CN".to_owned()),
             prompt_state: mvp::config::PersonalizationPromptState::Configured,
             schema_version,
@@ -739,10 +743,12 @@ mod tests {
         let preserved_updated_at_epoch_seconds = Some(1_700_000_000);
         let personalization = mvp::config::PersonalizationConfig {
             preferred_name: Some("Chum".to_owned()),
+            pronouns: None,
             response_density: Some(mvp::config::ResponseDensity::Balanced),
             initiative_level: Some(mvp::config::InitiativeLevel::AskBeforeActing),
             standing_boundaries: Some("Ask before destructive actions.".to_owned()),
             timezone: Some("Asia/Shanghai".to_owned()),
+            notes: None,
             locale: Some("zh-CN".to_owned()),
             prompt_state: mvp::config::PersonalizationPromptState::Configured,
             schema_version: custom_schema_version,
@@ -891,10 +897,12 @@ mod tests {
         let schema_version = personalization_schema_version_for_tests();
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {
             preferred_name: Some("Chum".to_owned()),
+            pronouns: None,
             response_density: Some(mvp::config::ResponseDensity::Balanced),
             initiative_level: Some(mvp::config::InitiativeLevel::HighInitiative),
             standing_boundaries: None,
             timezone: None,
+            notes: None,
             locale: None,
             prompt_state: mvp::config::PersonalizationPromptState::Configured,
             schema_version,
@@ -955,10 +963,12 @@ mod tests {
         config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {
             preferred_name: None,
+            pronouns: None,
             response_density: None,
             initiative_level: None,
             standing_boundaries: None,
             timezone: None,
+            notes: None,
             locale: None,
             prompt_state: mvp::config::PersonalizationPromptState::Suppressed,
             schema_version,
@@ -1038,10 +1048,12 @@ mod tests {
         config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
         config.memory.personalization = Some(mvp::config::PersonalizationConfig {
             preferred_name: None,
+            pronouns: None,
             response_density: None,
             initiative_level: None,
             standing_boundaries: None,
             timezone: None,
+            notes: None,
             locale: None,
             prompt_state: mvp::config::PersonalizationPromptState::Suppressed,
             schema_version,

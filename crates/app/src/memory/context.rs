@@ -813,7 +813,6 @@ mod tests {
             build_read_stage_envelope_request_with_workspace_root(
                 "durable-recall-stage-envelope-session",
                 Some(workspace_root),
-                &config,
             ),
             &config,
         )
