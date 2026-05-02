@@ -256,6 +256,7 @@ struct StartupOnboardingState {
     web_search_provider_detail: String,
     startup_mcp_count: usize,
     detected_skill_count: usize,
+    startup_extension_plugin_ids: Vec<String>,
     feedback: Option<String>,
     last_interaction_at: std::time::Instant,
     last_interaction_kind: StartupOnboardingInteractionKind,
@@ -453,6 +454,13 @@ impl StartupOnboardingState {
             web_search_provider_detail,
             startup_mcp_count: runtime.effective_bootstrap_mcp_servers.len(),
             detected_skill_count,
+            startup_extension_plugin_ids: collect_ready_trusted_tui_surface_extensions(
+                runtime,
+                "startup_onboarding",
+            )
+            .into_iter()
+            .map(|entry| entry.plugin_id)
+            .collect(),
             feedback: Some(
                 "choose language first, then confirm provider and optional skill packs.".to_owned(),
             ),
@@ -2055,12 +2063,18 @@ fn render_startup_onboarding_lines(
                 .selected_personalization
                 .map(|preset| preset.label())
                 .unwrap_or("not saved");
+            let startup_extensions = if state.startup_extension_plugin_ids.is_empty() {
+                "none".to_owned()
+            } else {
+                format!("{} available", state.startup_extension_plugin_ids.len())
+            };
             for summary in [
                 format!("language · {language}"),
                 format!("provider · {provider}"),
                 format!("skills · {skills}"),
                 format!("setup path · {setup_path}"),
                 format!("personalization · {personalization}"),
+                format!("startup extensions · {startup_extensions}"),
             ] {
                 lines.extend(render_onboarding_wrapped_line(
                     "  • ",
@@ -2078,6 +2092,18 @@ fn render_startup_onboarding_lines(
                 Style::default().fg(SURFACE_GRAY),
                 content_width,
             ));
+            if let Some(first_plugin_id) = state.startup_extension_plugin_ids.first() {
+                lines.extend(render_onboarding_wrapped_line(
+                    "  ",
+                    format!(
+                        "trusted startup extension follow-up stays available through `/extensions {first_plugin_id}`."
+                    )
+                    .as_str(),
+                    Style::default().fg(SURFACE_GRAY),
+                    Style::default().fg(SURFACE_GRAY),
+                    content_width,
+                ));
+            }
         }
     }
 
@@ -2085,7 +2111,7 @@ fn render_startup_onboarding_lines(
 }
 
 fn startup_setup_path_detail_lines(state: &StartupOnboardingState) -> Vec<String> {
-    match state.current_setup_path_choice() {
+    let mut lines = match state.current_setup_path_choice() {
         StartupSetupPathChoice::ChatNow => vec![
             "The current splash/chat shell stays intact; deeper setup remains available on demand."
                 .to_owned(),
@@ -2118,7 +2144,36 @@ fn startup_setup_path_detail_lines(state: &StartupOnboardingState) -> Vec<String
             "Use /mcp and /skills for dedicated views, or /settings when you want to adjust managed workspace setup."
                 .to_owned(),
         ],
+    };
+
+    if !state.startup_extension_plugin_ids.is_empty() {
+        let visible_plugin_ids = state
+            .startup_extension_plugin_ids
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>();
+        let plugin_summary = visible_plugin_ids.join(", ");
+        let overflow_count = state
+            .startup_extension_plugin_ids
+            .len()
+            .saturating_sub(visible_plugin_ids.len());
+        let plugin_summary = if overflow_count == 0 {
+            plugin_summary
+        } else {
+            format!("{plugin_summary}, +{overflow_count} more")
+        };
+        lines.push(format!(
+            "Trusted startup extensions available now: {plugin_summary}."
+        ));
+        if let Some(first_plugin_id) = state.startup_extension_plugin_ids.first() {
+            lines.push(format!(
+                "Inspect one immediately after onboarding with `/extensions {first_plugin_id}`."
+            ));
+        }
     }
+
+    lines
 }
 
 fn startup_web_search_detail(runtime: &CliTurnRuntime, provider: &str) -> String {
@@ -7638,6 +7693,7 @@ mod tests {
             web_search_provider_detail: "web search still needs auth".to_owned(),
             startup_mcp_count: 0,
             detected_skill_count: 1,
+            startup_extension_plugin_ids: Vec::new(),
             feedback: Some("demo feedback".to_owned()),
             last_interaction_at: std::time::Instant::now() - Duration::from_secs(5),
             last_interaction_kind: StartupOnboardingInteractionKind::Passive,
@@ -11221,6 +11277,51 @@ description: "actual description"
         assert!(rendered.contains("provider + web setup"));
         assert!(rendered.contains("Web setup default: DuckDuckGo."));
         assert!(rendered.contains("loong onboard"));
+    }
+
+    #[test]
+    fn startup_onboarding_setup_path_stage_surfaces_startup_extension_follow_up() {
+        let mut state = onboarding_state();
+        state.stage = StartupOnboardingStage::SetupPath;
+        state.setup_path_index = StartupSetupPathChoice::McpAndSkills as usize;
+        state.startup_extension_plugin_ids = vec!["weather-extension".to_owned()];
+
+        let rendered = super::render_startup_onboarding_lines(&state, 90)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Trusted startup extensions available now"));
+        assert!(rendered.contains("weather-extension"));
+        assert!(rendered.contains("/extensions weather-extension"));
+    }
+
+    #[test]
+    fn startup_onboarding_finish_stage_surfaces_startup_extension_summary() {
+        let mut state = onboarding_state();
+        state.stage = StartupOnboardingStage::Finish;
+        state.startup_extension_plugin_ids = vec!["weather-extension".to_owned()];
+
+        let rendered = super::render_startup_onboarding_lines(&state, 90)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("startup extensions · 1 available"));
+        assert!(rendered.contains("trusted startup extension follow-up stays available"));
+        assert!(rendered.contains("weather-extension"));
     }
 
     #[test]
