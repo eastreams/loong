@@ -105,24 +105,109 @@ impl HarnessAdapter for EmbeddedAgentHarness {
                 loong_app::agent_runtime::AgentTurnMode::Interactive
             ),
         };
-        let turn_service =
-            loong_app::agent_runtime::load_turn_execution_service(payload.config_path.as_deref())
-                .map_err(HarnessError::Execution)?;
+        let (resolved_path, config) = loong_app::config::load(payload.config_path.as_deref())
+            .map_err(HarnessError::Execution)?;
         crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
-            turn_service.config(),
+            &config,
             payload.session_hint.as_deref(),
             &turn_request,
         )
         .await
         .map_err(HarnessError::Execution)?;
-        let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
-        let turn_result = turn_service
-            .execute(payload.session_hint.as_deref(), &turn_request, turn_options)
-            .await;
+        let acp_manager = if turn_request.acp
+            || matches!(
+                turn_request.turn_mode,
+                loong_app::agent_runtime::AgentTurnMode::Acp
+            ) {
+            Some(
+                loong_app::acp::shared_acp_session_manager(&config)
+                    .map_err(HarnessError::Execution)?,
+            )
+        } else {
+            None
+        };
+        let acp_session_key = if let Some(session_hint) = payload.session_hint.as_deref() {
+            if turn_request.acp
+                || matches!(
+                    turn_request.turn_mode,
+                    loong_app::agent_runtime::AgentTurnMode::Acp
+                )
+            {
+                Some(
+                    crate::trusted_host_runtime::resolve_acp_session_key_for_request(
+                        &config,
+                        session_hint,
+                        &turn_request,
+                    )
+                    .map_err(HarnessError::Execution)?,
+                )
+            } else {
+                None
+            }
+        } else if turn_request.acp
+            || matches!(
+                turn_request.turn_mode,
+                loong_app::agent_runtime::AgentTurnMode::Acp
+            )
+        {
+            Some(
+                crate::trusted_host_runtime::resolve_acp_session_key_for_request(
+                    &config,
+                    "default",
+                    &turn_request,
+                )
+                .map_err(HarnessError::Execution)?,
+            )
+        } else {
+            None
+        };
+        let acp_session_existed_before = match (&acp_manager, &acp_session_key) {
+            (Some(manager), Some(session_key)) => crate::trusted_host_runtime::acp_session_exists(
+                manager.as_ref(),
+                session_key.as_str(),
+            )
+            .map_err(HarnessError::Execution)?,
+            _ => false,
+        };
+        let runtime = loong_app::agent_runtime::AgentRuntime::new();
+        let turn_result = if let Some(manager) = acp_manager.clone() {
+            runtime
+                .run_turn_with_loaded_config_and_acp_manager(
+                    resolved_path,
+                    config.clone(),
+                    payload.session_hint.as_deref(),
+                    &turn_request,
+                    None,
+                    manager,
+                )
+                .await
+        } else {
+            runtime
+                .run_turn_with_loaded_config(
+                    resolved_path,
+                    config.clone(),
+                    payload.session_hint.as_deref(),
+                    &turn_request,
+                    None,
+                )
+                .await
+        };
         let turn_result = match turn_result {
             Ok(turn_result) => {
+                if let (Some(manager), Some(session_key)) = (&acp_manager, &acp_session_key) {
+                    crate::trusted_host_runtime::dispatch_session_start_hook_for_new_acp_session(
+                        &config,
+                        manager.as_ref(),
+                        session_key.as_str(),
+                        payload.session_hint.as_deref(),
+                        &turn_request,
+                        acp_session_existed_before,
+                    )
+                    .await
+                    .map_err(HarnessError::Execution)?;
+                }
                 crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
-                    turn_service.config(),
+                    &config,
                     payload.session_hint.as_deref(),
                     &turn_request,
                     &turn_result,
@@ -132,9 +217,25 @@ impl HarnessAdapter for EmbeddedAgentHarness {
                 turn_result
             }
             Err(error) => {
+                if let (Some(manager), Some(session_key)) = (&acp_manager, &acp_session_key)
+                    && let Err(session_start_error) =
+                        crate::trusted_host_runtime::dispatch_session_start_hook_for_new_acp_session(
+                            &config,
+                            manager.as_ref(),
+                            session_key.as_str(),
+                            payload.session_hint.as_deref(),
+                            &turn_request,
+                            acp_session_existed_before,
+                        )
+                        .await
+                {
+                    return Err(HarnessError::Execution(format!(
+                        "{error}; trusted host session_start hook failed: {session_start_error}"
+                    )));
+                }
                 if let Err(turn_end_error) =
                     crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
-                        turn_service.config(),
+                        &config,
                         payload.session_hint.as_deref(),
                         &turn_request,
                         error.as_str(),
@@ -724,11 +825,11 @@ mod tests {
         .expect("register task execution ACP backend");
     }
 
-    fn write_turn_end_marker_entrypoint(root: &Path) {
+    fn write_turn_lifecycle_marker_entrypoint(root: &Path) {
         write_file(
             root,
             "runtime-plugins/trusted-host/index.js",
-            "#!/usr/bin/env node\nconst fs = require('fs');\nfunction emitResponse(line) { const trimmed = line.trim(); if (!trimmed) return; const request = JSON.parse(trimmed); const payload = request.payload ?? {}; const markerPath = payload.payload?.hook_payload?.metadata?.hook_marker_path ?? null; if (markerPath) { fs.writeFileSync(markerPath, payload.payload?.host_hook ?? 'unknown'); } const response = { method: request.method ?? '', id: request.id ?? null, payload: { handled_hook: payload.payload?.host_hook ?? null, outcome_status: payload.payload?.hook_payload?.outcome?.status ?? null } }; process.stdout.write(`${JSON.stringify(response)}\\n`); } process.stdin.setEncoding('utf8'); let buffered=''; process.stdin.on('data', chunk => { buffered += chunk; let newlineIndex = buffered.indexOf('\\n'); while (newlineIndex !== -1) { const line = buffered.slice(0, newlineIndex); buffered = buffered.slice(newlineIndex + 1); emitResponse(line); newlineIndex = buffered.indexOf('\\n'); } }); process.stdin.on('end', () => { if (buffered.trim()) emitResponse(buffered); }); process.stdin.resume();\n",
+            "#!/usr/bin/env node\nconst fs = require('fs');\nfunction emitResponse(line) { const trimmed = line.trim(); if (!trimmed) return; const request = JSON.parse(trimmed); const payload = request.payload ?? {}; const hook = payload.payload?.host_hook ?? null; const metadata = payload.payload?.hook_payload?.metadata ?? {}; const hookSpecificKey = hook ? `${hook}_marker_path` : null; const markerPath = (hookSpecificKey && metadata[hookSpecificKey]) || metadata.hook_marker_path || null; if (markerPath) { fs.writeFileSync(markerPath, hook ?? 'unknown'); } const response = { method: request.method ?? '', id: request.id ?? null, payload: { handled_hook: hook, outcome_status: payload.payload?.hook_payload?.outcome?.status ?? null } }; process.stdout.write(`${JSON.stringify(response)}\\n`); } process.stdin.setEncoding('utf8'); let buffered=''; process.stdin.on('data', chunk => { buffered += chunk; let newlineIndex = buffered.indexOf('\\n'); while (newlineIndex !== -1) { const line = buffered.slice(0, newlineIndex); buffered = buffered.slice(newlineIndex + 1); emitResponse(line); newlineIndex = buffered.indexOf('\\n'); } }); process.stdin.on('end', () => { if (buffered.trim()) emitResponse(buffered); }); process.stdin.resume();\n",
         );
     }
 
@@ -790,8 +891,9 @@ mod tests {
     #[tokio::test]
     async fn daemon_runtime_kernel_dispatches_trusted_turn_end_hook_for_successful_acp_turn() {
         let root = unique_temp_dir("loong-daemon-trusted-turn-end-success");
-        install_trusted_host_runtime_plugin(&root, "node", "[\"turn_end\"]");
-        write_turn_end_marker_entrypoint(&root);
+        install_trusted_host_runtime_plugin(&root, "node", "[\"session_start\",\"turn_end\"]");
+        write_turn_lifecycle_marker_entrypoint(&root);
+        let session_start_marker_path = root.join("session-start-marker.txt");
         let marker_path = root.join("turn-end-marker.txt");
         let config_path = root.join("loong.toml");
         let session_hint = format!(
@@ -829,7 +931,11 @@ mod tests {
             .expect("issue token");
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            "hook_marker_path".to_owned(),
+            "session_start_marker_path".to_owned(),
+            session_start_marker_path.display().to_string(),
+        );
+        metadata.insert(
+            "turn_end_marker_path".to_owned(),
             marker_path.display().to_string(),
         );
         let payload = serde_json::to_value(DaemonTurnTaskPayload {
@@ -870,6 +976,9 @@ mod tests {
             execution.outcome.is_some(),
             "expected successful harness outcome"
         );
+        let session_start_marker_contents = fs::read_to_string(&session_start_marker_path)
+            .expect("session_start hook should write marker");
+        assert_eq!(session_start_marker_contents, "session_start");
         let marker_contents =
             fs::read_to_string(&marker_path).expect("turn_end hook should write marker");
         assert_eq!(marker_contents, "turn_end");

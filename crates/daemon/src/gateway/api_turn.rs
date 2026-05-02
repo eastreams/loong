@@ -157,6 +157,29 @@ pub(crate) async fn handle_turn(
             Json(json!({"error": error})),
         );
     }
+    let acp_session_key = crate::trusted_host_runtime::resolve_acp_session_key_for_request(
+        config,
+        turn_request.session_id.as_str(),
+        &trusted_host_turn_request,
+    );
+    let acp_session_key = match acp_session_key {
+        Ok(session_key) => session_key,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": error})));
+        }
+    };
+    let session_existed_before = match crate::trusted_host_runtime::acp_session_exists(
+        acp_manager.as_ref(),
+        acp_session_key.as_str(),
+    ) {
+        Ok(existed) => existed,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": error})),
+            );
+        }
+    };
     let execution = crate::mvp::turn_gateway::TurnGatewayExecution {
         resolved_path: PathBuf::from(app_state.config_path.clone()),
         config: config.clone(),
@@ -188,6 +211,22 @@ pub(crate) async fn handle_turn(
 
     match result {
         Ok(turn_result) => {
+            if let Err(error) =
+                crate::trusted_host_runtime::dispatch_session_start_hook_for_new_acp_session(
+                    config,
+                    acp_manager.as_ref(),
+                    acp_session_key.as_str(),
+                    Some(turn_session_id.as_str()),
+                    &trusted_host_turn_request,
+                    session_existed_before,
+                )
+                .await
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": error})),
+                );
+            }
             if let Err(error) = crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
                 config,
                 Some(turn_session_id.as_str()),
@@ -211,18 +250,33 @@ pub(crate) async fn handle_turn(
             }
         }
         Err(error) => {
+            let rendered_error = if let Err(session_start_error) =
+                crate::trusted_host_runtime::dispatch_session_start_hook_for_new_acp_session(
+                    config,
+                    acp_manager.as_ref(),
+                    acp_session_key.as_str(),
+                    Some(turn_session_id.as_str()),
+                    &trusted_host_turn_request,
+                    session_existed_before,
+                )
+                .await
+            {
+                format!("{error}; trusted host session_start hook failed: {session_start_error}")
+            } else {
+                error
+            };
             let rendered_error = if let Err(turn_end_error) =
                 crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
                     config,
                     Some(turn_session_id.as_str()),
                     &trusted_host_turn_request,
-                    error.as_str(),
+                    rendered_error.as_str(),
                 )
                 .await
             {
-                format!("{error}; trusted host turn_end hook failed: {turn_end_error}")
+                format!("{rendered_error}; trusted host turn_end hook failed: {turn_end_error}")
             } else {
-                error
+                rendered_error
             };
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

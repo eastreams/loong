@@ -89,8 +89,37 @@ pub(super) async fn turn_submit(
         };
         let turn_service =
             crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
-                .with_acp_manager(acp_manager)
+                .with_acp_manager(acp_manager.clone())
                 .without_runtime_environment_init();
+        let acp_session_key = match crate::trusted_host_runtime::resolve_acp_session_key_for_request(
+            turn_service.config(),
+            session_id.as_str(),
+            &turn_request,
+        ) {
+            Ok(session_key) => session_key,
+            Err(error) => {
+                let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                if let Ok(record) = completion {
+                    let payload = map_turn_event_payload(&record);
+                    let _ = manager.record_acp_turn_event(payload, true);
+                }
+                return;
+            }
+        };
+        let acp_session_existed_before = match crate::trusted_host_runtime::acp_session_exists(
+            acp_manager.as_ref(),
+            acp_session_key.as_str(),
+        ) {
+            Ok(existed) => existed,
+            Err(error) => {
+                let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                if let Ok(record) = completion {
+                    let payload = map_turn_event_payload(&record);
+                    let _ = manager.record_acp_turn_event(payload, true);
+                }
+                return;
+            }
+        };
         let trusted_hook_result =
             crate::trusted_host_runtime::dispatch_turn_start_hook_for_request(
                 turn_service.config(),
@@ -116,6 +145,25 @@ pub(super) async fn turn_submit(
 
         match execution_result {
             Ok(result) => {
+                if let Err(error) =
+                    crate::trusted_host_runtime::dispatch_session_start_hook_for_new_acp_session(
+                        turn_service.config(),
+                        acp_manager.as_ref(),
+                        acp_session_key.as_str(),
+                        Some(session_id.as_str()),
+                        &turn_request,
+                        acp_session_existed_before,
+                    )
+                    .await
+                {
+                    let completion =
+                        turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                    if let Ok(record) = completion {
+                        let payload = map_turn_event_payload(&record);
+                        let _ = manager.record_acp_turn_event(payload, true);
+                    }
+                    return;
+                }
                 if let Err(error) = crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
                     turn_service.config(),
                     Some(session_id.as_str()),
@@ -151,18 +199,35 @@ pub(super) async fn turn_submit(
                     error = %crate::observability::summarize_error(error.as_str()),
                     "control-plane turn execution failed"
                 );
+                let rendered_error = if let Err(session_start_error) =
+                    crate::trusted_host_runtime::dispatch_session_start_hook_for_new_acp_session(
+                        turn_service.config(),
+                        acp_manager.as_ref(),
+                        acp_session_key.as_str(),
+                        Some(session_id.as_str()),
+                        &turn_request,
+                        acp_session_existed_before,
+                    )
+                    .await
+                {
+                    format!(
+                        "{error}; trusted host session_start hook failed: {session_start_error}"
+                    )
+                } else {
+                    error
+                };
                 let rendered_error = if let Err(turn_end_error) =
                     crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
                         turn_service.config(),
                         Some(session_id.as_str()),
                         &turn_request,
-                        error.as_str(),
+                        rendered_error.as_str(),
                     )
                     .await
                 {
-                    format!("{error}; trusted host turn_end hook failed: {turn_end_error}")
+                    format!("{rendered_error}; trusted host turn_end hook failed: {turn_end_error}")
                 } else {
-                    error
+                    rendered_error
                 };
                 let completion =
                     turn_registry.complete_failure(spawned_turn_id.as_str(), &rendered_error);
