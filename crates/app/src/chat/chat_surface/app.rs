@@ -36,7 +36,7 @@ use crate::config::{
 use crate::tools::bundled_preinstall_targets;
 use crate::tui_surface::{TuiCalloutTone, TuiKeyValueSpec, TuiMessageSpec, TuiSectionSpec};
 #[cfg(feature = "channel-plugin-bridge")]
-use loong_kernel::PluginActivationInventoryEntry;
+use loong_kernel::{PluginActivationInventoryEntry, PluginIR};
 
 use super::command_palette::{
     CommandAction, CommandPalette, SettingsCommandAction, SettingsEntry, SettingsSurfaceFocus,
@@ -5486,10 +5486,16 @@ fn render_extensions_command_lines_with_width(
         },
     ];
 
+    let translation_entries = &inventory.translation.entries;
     let mut package_items = entries
         .iter()
         .take(12)
-        .map(render_extension_inventory_item)
+        .map(|entry| {
+            let translation = translation_entries.iter().find(|candidate| {
+                candidate.plugin_id == entry.plugin_id && candidate.source_path == entry.source_path
+            });
+            render_extension_inventory_item(entry, translation)
+        })
         .collect::<Vec<_>>();
     if package_items.is_empty() {
         package_items.push(TuiKeyValueSpec::Plain {
@@ -5510,6 +5516,8 @@ fn render_extensions_command_lines_with_width(
         format!(
             "Validate authoring readiness with `loong plugins doctor --root \"{footer_root}\" --profile sdk-release`."
         ),
+        "Probe declared runtime surfaces with `loong plugins invoke-extension`, `loong plugins invoke-host-hook`, or `loong plugins invoke-tui-surface`."
+            .to_owned(),
     ];
     if inventory.activation.has_blockers() {
         footer_lines.push(format!(
@@ -5541,24 +5549,66 @@ fn render_extensions_command_lines_with_width(
 }
 
 #[cfg(feature = "channel-plugin-bridge")]
-fn render_extension_inventory_item(entry: &PluginActivationInventoryEntry) -> TuiKeyValueSpec {
+fn render_extension_inventory_item(
+    entry: &PluginActivationInventoryEntry,
+    translation: Option<&PluginIR>,
+) -> TuiKeyValueSpec {
     let source_language = entry.source_language.as_str();
     let activation_status = entry
         .activation_status
         .map(|status| status.as_str().to_owned())
         .unwrap_or_else(|| "unknown".to_owned());
+    let extension_family = translation
+        .and_then(|entry| entry.metadata.get("loong_extension_family"))
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("-");
+    let extension_trust_lane = translation
+        .and_then(|entry| entry.metadata.get("loong_extension_trust_lane"))
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("-");
+    let declared_tui_surfaces = translation
+        .map(|entry| metadata_string_list(&entry.metadata, "loong_extension_tui_surfaces_json"))
+        .filter(|value: &Vec<String>| !value.is_empty())
+        .map(|values| values.join(","))
+        .unwrap_or_else(|| "-".to_owned());
+    let declared_host_hooks = translation
+        .map(|entry| metadata_string_list(&entry.metadata, "loong_extension_host_hooks_json"))
+        .filter(|value: &Vec<String>| !value.is_empty())
+        .map(|values| values.join(","))
+        .unwrap_or_else(|| "-".to_owned());
     let value = format!(
-        "{} · {} · {} · {}",
+        "{} · {} · {} · family={} · trust={} · hooks={} · ui={}",
         entry.bridge_kind.as_str(),
         source_language,
         activation_status,
-        entry.connector_name
+        extension_family,
+        extension_trust_lane,
+        declared_host_hooks,
+        declared_tui_surfaces
     );
 
     TuiKeyValueSpec::Plain {
         key: entry.plugin_id.clone(),
         value,
     }
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
+fn metadata_string_list(
+    metadata: &std::collections::BTreeMap<String, String>,
+    key: &str,
+) -> Vec<String> {
+    let Some(raw_value) = metadata.get(key) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(raw_value)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -7373,6 +7423,22 @@ mod tests {
                     "entrypoint".to_owned(),
                     "https://extensions.example.test/invoke".to_owned(),
                 ),
+                (
+                    "loong_extension_family".to_owned(),
+                    "trusted_host_extension".to_owned(),
+                ),
+                (
+                    "loong_extension_trust_lane".to_owned(),
+                    "trusted_host".to_owned(),
+                ),
+                (
+                    "loong_extension_host_hooks_json".to_owned(),
+                    "[\"turn_start\"]".to_owned(),
+                ),
+                (
+                    "loong_extension_tui_surfaces_json".to_owned(),
+                    "[\"command_palette\"]".to_owned(),
+                ),
             ]),
             summary: Some("runtime extension example".to_owned()),
             tags: Vec::new(),
@@ -7942,8 +8008,11 @@ mod tests {
         assert!(rendered.contains("weather-extension"));
         assert!(rendered.contains("http_json"));
         assert!(rendered.contains("ready"));
-        assert!(rendered.contains("weather-extension"));
+        assert!(rendered.contains("trusted_host_extension"));
+        assert!(rendered.contains("command_palette"));
+        assert!(rendered.contains("turn_start"));
         assert!(rendered.contains("loong plugins inventory --root"));
+        assert!(rendered.contains("loong plugins invoke-tui-surface"));
 
         let _ = fs::remove_dir_all(root);
     }
