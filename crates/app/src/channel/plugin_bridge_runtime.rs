@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use loong_kernel::{
-    PluginActivationStatus, PluginBridgeKind, PluginIR, PluginScanReport, PluginScanner,
-    PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
+    PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginIR, PluginScanReport,
+    PluginScanner, PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -37,6 +37,13 @@ pub struct ManagedPluginBridgeRuntimeBinding {
     pub runtime_context: Value,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimePluginInventorySnapshot {
+    pub resolved_roots: Vec<std::path::PathBuf>,
+    pub translation: PluginTranslationReport,
+    pub activation: PluginActivationPlan,
+}
+
 impl ManagedPluginBridgeRuntimeBinding {
     #[must_use]
     pub fn supports_operation(&self, operation: &str) -> bool {
@@ -64,22 +71,9 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
         );
     }
 
-    let resolved_roots = config.runtime_plugins.resolved_roots();
-    if resolved_roots.is_empty() {
-        return Err(
-            "managed bridge runtime is enabled but runtime plugin roots are empty".to_owned(),
-        );
-    }
-
-    let scan_report = scan_runtime_plugin_roots(&resolved_roots)?;
-    let translator = PluginTranslator::new();
-    let translation = translator.translate_scan_report(&scan_report);
-    let readiness_context = runtime_plugin_setup_readiness_context(config)?;
-    let bridge_matrix = config
-        .runtime_plugins
-        .resolved_bridge_support_matrix()
-        .map_err(|error| format!("resolve runtime plugin bridge matrix failed: {error}"))?;
-    let activation = translator.plan_activation(&translation, &bridge_matrix, &readiness_context);
+    let inventory = collect_runtime_plugin_inventory_snapshot(config)?;
+    let translation = inventory.translation;
+    let activation = inventory.activation;
 
     let resolved_account = resolve_runtime_account(config, channel_id, requested_account_id)?;
     let runtime_candidates = collect_runtime_candidates(
@@ -119,6 +113,39 @@ pub fn resolve_managed_plugin_bridge_runtime_binding(
         runtime_contract,
         runtime_operations,
         runtime_context,
+    })
+}
+
+pub(crate) fn collect_runtime_plugin_inventory_snapshot(
+    config: &LoongConfig,
+) -> CliResult<RuntimePluginInventorySnapshot> {
+    if !config.runtime_plugins.enabled {
+        return Err(
+            "managed bridge runtime is disabled; set [runtime_plugins].enabled = true".to_owned(),
+        );
+    }
+
+    let resolved_roots = config.runtime_plugins.resolved_roots();
+    if resolved_roots.is_empty() {
+        return Err(
+            "managed bridge runtime is enabled but runtime plugin roots are empty".to_owned(),
+        );
+    }
+
+    let scan_report = scan_runtime_plugin_roots(&resolved_roots)?;
+    let translator = PluginTranslator::new();
+    let translation = translator.translate_scan_report(&scan_report);
+    let readiness_context = runtime_plugin_setup_readiness_context(config)?;
+    let bridge_matrix = config
+        .runtime_plugins
+        .resolved_bridge_support_matrix()
+        .map_err(|error| format!("resolve runtime plugin bridge matrix failed: {error}"))?;
+    let activation = translator.plan_activation(&translation, &bridge_matrix, &readiness_context);
+
+    Ok(RuntimePluginInventorySnapshot {
+        resolved_roots,
+        translation,
+        activation,
     })
 }
 

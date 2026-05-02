@@ -82,6 +82,11 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         ready: true,
     },
     SlashCommandSpec {
+        command: "/extensions",
+        description: "inspect runtime extension packages",
+        ready: true,
+    },
+    SlashCommandSpec {
         command: "/mcp",
         description: "inspect configured MCP servers",
         ready: true,
@@ -2045,6 +2050,7 @@ mod tests {
                 "/settings",
                 "/experimental",
                 "/skills",
+                "/extensions",
                 "/mcp",
                 "/rename",
                 "/review",

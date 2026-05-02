@@ -23,6 +23,8 @@ use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 
 use crate::CliResult;
+#[cfg(feature = "channel-plugin-bridge")]
+use crate::channel::collect_runtime_plugin_inventory_snapshot;
 use crate::chat::CliChatOptions;
 use crate::chat::CliTurnRuntime;
 use crate::chat::control_plane::ChatControlPlaneStore;
@@ -33,6 +35,8 @@ use crate::config::{
 };
 use crate::tools::bundled_preinstall_targets;
 use crate::tui_surface::{TuiCalloutTone, TuiKeyValueSpec, TuiMessageSpec, TuiSectionSpec};
+#[cfg(feature = "channel-plugin-bridge")]
+use loong_kernel::PluginActivationInventoryEntry;
 
 use super::command_palette::{
     CommandAction, CommandPalette, SettingsCommandAction, SettingsEntry, SettingsSurfaceFocus,
@@ -4676,6 +4680,22 @@ async fn build_command_lines(
         "/language" => Ok(render_language_command_lines_with_width(width)),
         "/mcp" => Ok(render_mcp_command_lines_with_width(runtime, width)),
         "/skills" => Ok(render_skills_command_lines_with_width(runtime, width)),
+        "/extensions" => {
+            #[cfg(feature = "channel-plugin-bridge")]
+            {
+                render_extensions_command_lines_with_width(runtime, width)
+            }
+            #[cfg(not(feature = "channel-plugin-bridge"))]
+            {
+                Ok(
+                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                        "extensions",
+                        "extension inventory unavailable: channel-plugin-bridge feature disabled",
+                        width,
+                    ),
+                )
+            }
+        }
         "/usage" => Ok(render_slash_command_usage_lines_with_width(width)),
         "/fast_lane_summary" => {
             #[cfg(feature = "memory-sqlite")]
@@ -5397,6 +5417,148 @@ fn render_skills_command_lines_with_width(runtime: &CliTurnRuntime, width: usize
         footer_lines,
     };
     super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
+fn render_extensions_command_lines_with_width(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> CliResult<Vec<String>> {
+    if !runtime.config.runtime_plugins.enabled {
+        let message_spec = TuiMessageSpec {
+            role: "extensions".to_owned(),
+            caption: Some("extensions".to_owned()),
+            sections: vec![TuiSectionSpec::Callout {
+                tone: TuiCalloutTone::Info,
+                title: Some("runtime plugins disabled".to_owned()),
+                lines: vec![
+                    "Set [runtime_plugins].enabled = true and point roots at one or more extension directories."
+                        .to_owned(),
+                ],
+            }],
+            footer_lines: vec![
+                "Use `loong plugins init` to scaffold a package, then `loong plugins doctor` to validate it."
+                    .to_owned(),
+            ],
+        };
+        return Ok(super::super::render_cli_chat_message_spec_with_width(
+            &message_spec,
+            width,
+        ));
+    }
+
+    let inventory = collect_runtime_plugin_inventory_snapshot(&runtime.config)?;
+    let entries = inventory
+        .activation
+        .inventory_entries(&inventory.translation);
+    let roots = inventory
+        .resolved_roots
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let roots = if roots.is_empty() {
+        "(none)".to_owned()
+    } else {
+        roots
+    };
+
+    let mut summary_items = vec![
+        TuiKeyValueSpec::Plain {
+            key: "roots".to_owned(),
+            value: roots,
+        },
+        TuiKeyValueSpec::Plain {
+            key: "discovered".to_owned(),
+            value: inventory.translation.entries.len().to_string(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: "ready".to_owned(),
+            value: inventory.activation.ready_plugins.to_string(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: "setup incomplete".to_owned(),
+            value: inventory.activation.setup_incomplete_plugins.to_string(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: "blocked".to_owned(),
+            value: inventory.activation.blocked_plugins.to_string(),
+        },
+    ];
+
+    let mut package_items = entries
+        .iter()
+        .take(12)
+        .map(render_extension_inventory_item)
+        .collect::<Vec<_>>();
+    if package_items.is_empty() {
+        package_items.push(TuiKeyValueSpec::Plain {
+            key: "packages".to_owned(),
+            value: "0".to_owned(),
+        });
+    }
+
+    let footer_root = inventory
+        .resolved_roots
+        .first()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<root>".to_owned());
+    let mut footer_lines = vec![
+        format!(
+            "Inspect full package truth with `loong plugins inventory --root \"{footer_root}\"`."
+        ),
+        format!(
+            "Validate authoring readiness with `loong plugins doctor --root \"{footer_root}\" --profile sdk-release`."
+        ),
+    ];
+    if inventory.activation.has_blockers() {
+        footer_lines.push(format!(
+            "Blocked packages: {}",
+            inventory.activation.blocker_summary(2)
+        ));
+    }
+
+    let message_spec = TuiMessageSpec {
+        role: "extensions".to_owned(),
+        caption: Some("extensions".to_owned()),
+        sections: vec![
+            TuiSectionSpec::KeyValues {
+                title: Some("runtime inventory".to_owned()),
+                items: std::mem::take(&mut summary_items),
+            },
+            TuiSectionSpec::KeyValues {
+                title: Some(format!("packages ({})", entries.len())),
+                items: package_items,
+            },
+        ],
+        footer_lines,
+    };
+
+    Ok(super::super::render_cli_chat_message_spec_with_width(
+        &message_spec,
+        width,
+    ))
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
+fn render_extension_inventory_item(entry: &PluginActivationInventoryEntry) -> TuiKeyValueSpec {
+    let source_language = entry.source_language.as_str();
+    let activation_status = entry
+        .activation_status
+        .map(|status| status.as_str().to_owned())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let value = format!(
+        "{} · {} · {} · {}",
+        entry.bridge_kind.as_str(),
+        source_language,
+        activation_status,
+        entry.connector_name
+    );
+
+    TuiKeyValueSpec::Plain {
+        key: entry.plugin_id.clone(),
+        value,
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -7009,8 +7171,10 @@ mod tests {
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
+    use loong_kernel::{Capability, PluginManifest};
     use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Style};
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex as StdMutex};
@@ -7163,9 +7327,13 @@ mod tests {
     }
 
     fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
+        test_runtime_with_config(path, LoongConfig::default())
+    }
+
+    fn test_runtime_with_config(path: PathBuf, config: LoongConfig) -> crate::chat::CliTurnRuntime {
         initialize_cli_turn_runtime_with_loaded_config(
             path,
-            LoongConfig::default(),
+            config,
             Some("chat-surface-test"),
             &CliChatOptions::default(),
             "chat-surface-test",
@@ -7173,6 +7341,48 @@ mod tests {
             false,
         )
         .expect("chat surface runtime")
+    }
+
+    fn write_runtime_plugin_manifest(
+        root: &std::path::Path,
+        directory_name: &str,
+        manifest: &PluginManifest,
+    ) {
+        let plugin_directory = root.join(directory_name);
+        fs::create_dir_all(&plugin_directory).expect("create plugin directory");
+        let manifest_path = plugin_directory.join("loong.plugin.json");
+        let encoded_manifest = serde_json::to_string_pretty(manifest).expect("serialize manifest");
+        fs::write(manifest_path, encoded_manifest).expect("write plugin manifest");
+    }
+
+    fn sample_runtime_plugin_manifest(plugin_id: &str) -> PluginManifest {
+        PluginManifest {
+            api_version: Some("v1alpha1".to_owned()),
+            version: Some("0.1.0".to_owned()),
+            plugin_id: plugin_id.to_owned(),
+            provider_id: plugin_id.to_owned(),
+            connector_name: plugin_id.to_owned(),
+            channel_id: None,
+            endpoint: Some("https://extensions.example.test/invoke".to_owned()),
+            capabilities: BTreeSet::from([Capability::InvokeConnector]),
+            trust_tier: Default::default(),
+            metadata: BTreeMap::from([
+                ("bridge_kind".to_owned(), "http_json".to_owned()),
+                ("adapter_family".to_owned(), "http-adapter".to_owned()),
+                (
+                    "entrypoint".to_owned(),
+                    "https://extensions.example.test/invoke".to_owned(),
+                ),
+            ]),
+            summary: Some("runtime extension example".to_owned()),
+            tags: Vec::new(),
+            input_examples: Vec::new(),
+            output_examples: Vec::new(),
+            defer_loading: false,
+            setup: None,
+            slot_claims: Vec::new(),
+            compatibility: None,
+        }
     }
 
     fn test_runtime_without_config(path: PathBuf) -> crate::chat::CliTurnRuntime {
@@ -7701,6 +7911,53 @@ mod tests {
         assert!(!detail.contains("coming soon"));
         assert!(!detail.contains("placeholder"));
         assert!(!detail.contains("not wired"));
+    }
+
+    #[test]
+    fn extensions_command_surfaces_runtime_plugin_inventory() {
+        let root = std::env::temp_dir().join(format!(
+            "loong-chat-extensions-root-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("mkdir extension root");
+        write_runtime_plugin_manifest(
+            root.as_path(),
+            "weather-extension",
+            &sample_runtime_plugin_manifest("weather-extension"),
+        );
+
+        let mut config = LoongConfig::default();
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![root.display().to_string()];
+
+        let runtime = test_runtime_with_config(root.join("loong.toml"), config);
+        let rendered = super::render_extensions_command_lines_with_width(&runtime, 100)
+            .expect("render extensions command")
+            .join("\n");
+
+        assert!(rendered.contains("runtime inventory"));
+        assert!(rendered.contains("weather-extension"));
+        assert!(rendered.contains("http_json"));
+        assert!(rendered.contains("ready"));
+        assert!(rendered.contains("weather-extension"));
+        assert!(rendered.contains("loong plugins inventory --root"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn extensions_command_guides_when_runtime_plugins_are_disabled() {
+        let runtime = test_runtime_with_path(PathBuf::from("/tmp/example"));
+        let rendered = super::render_extensions_command_lines_with_width(&runtime, 100)
+            .expect("render disabled extensions command")
+            .join("\n");
+
+        assert!(rendered.contains("runtime plugins disabled"));
+        assert!(rendered.contains("loong plugins init"));
+        assert!(rendered.contains("loong plugins doctor"));
     }
 
     #[test]

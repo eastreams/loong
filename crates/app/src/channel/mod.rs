@@ -72,6 +72,8 @@ mod whatsapp;
 #[cfg(feature = "channel-twitch")]
 pub use self::twitch_command::run_twitch_send;
 #[cfg(feature = "channel-plugin-bridge")]
+pub(crate) use plugin_bridge_runtime::collect_runtime_plugin_inventory_snapshot;
+#[cfg(feature = "channel-plugin-bridge")]
 pub use plugin_bridge_runtime::{
     CHANNEL_PLUGIN_BRIDGE_RUNTIME_ACK_INBOUND_OPERATION,
     CHANNEL_PLUGIN_BRIDGE_RUNTIME_COMPLETE_BATCH_OPERATION,
