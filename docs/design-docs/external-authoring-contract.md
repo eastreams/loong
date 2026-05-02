@@ -69,11 +69,19 @@ For the current public authoring lane, Loong should stabilize:
 - `loong plugins init` for manifest-first scaffolding
 - runnable local `process_stdio` entrypoints for the supported public templates
 - `loong plugins invoke-extension` as a bounded smoke surface
+- `loong plugins invoke-host-hook` as a bounded trusted-host probe surface
 - inventory / doctor / operator surfaces that show extension declarations before execution
 - explicit extension family and trust-lane identity for the current governed native runtime lane
-- reserved host-hook declarations for the future trusted host-extension lane
+- scaffolded read-only host-hook declarations for the current trusted host-extension lane
 
 without implying ungoverned in-process host loading.
+
+The current trusted host lane is intentionally bounded:
+
+- it is manifest-first
+- it is still `process_stdio`-backed
+- host hooks are read-only
+- automatic dispatch currently covers daemon-owned lifecycle seams first
 
 The currently supported public runnable templates are:
 

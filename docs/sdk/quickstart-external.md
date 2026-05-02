@@ -119,9 +119,57 @@ The scaffold also reserves:
 
 - `loong_extension_host_hooks_json=[]`
 
-That field is for future `trusted_host_extension` packages on the
-`trusted_host` trust lane. The current governed sidecar lane inventories the
-declaration, but does not execute host hooks.
+If you keep that field empty, the package stays on the current governed sidecar
+lane.
+
+If you declare one or more `--host-hook` values at scaffold time, Loong now
+switches the package onto:
+
+- `loong_extension_family=trusted_host_extension`
+- `loong_extension_trust_lane=trusted_host`
+
+and the smoke path changes from `invoke-extension` to:
+
+- `loong plugins invoke-host-hook`
+
+The current trusted host lane is read-only and starts with daemon-owned
+lifecycle seams.
+
+### Trusted host scaffold
+
+JavaScript:
+
+```bash
+loong plugins init ./weather-host-js \
+  --plugin-id weather-host-js \
+  --provider-id weather \
+  --connector-name weather-host-stdio \
+  --bridge-kind process_stdio \
+  --source-language js \
+  --host-hook turn_start \
+  --host-hook turn_end
+```
+
+Probe one declared hook:
+
+```bash
+loong plugins invoke-host-hook \
+  --root "./weather-host-js" \
+  --plugin-id weather-host-js \
+  --hook turn_start \
+  --payload '{"turn_id":"demo-turn"}' \
+  --allow-command node
+```
+
+Automatic trusted-host dispatch currently covers:
+
+- `turn_start`
+- `turn_end`
+- `session_start`
+- `session_shutdown`
+
+with the current live runtime coverage intentionally bounded to daemon-owned
+surfaces first.
 
 The scaffolded runtime file already handles a small starter surface:
 

@@ -16,6 +16,14 @@ pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_METHODS: &[&str] =
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_EVENTS: &[&str] = &["session_start"];
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS: &[&str] = &[];
 pub(crate) const PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS: &[&str] = &[];
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FAMILY: &str =
+    kernel::TRUSTED_HOST_EXTENSION_FAMILY;
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_TRUST_LANE: &str =
+    kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE;
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FACETS: &[&str] = &["events", "host_hooks"];
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS: &[&str] = &["extension/event"];
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_EVENTS: &[&str] = &[];
+pub(crate) const TRUSTED_HOST_PROCESS_STDIO_EXTENSION_HOST_ACTIONS: &[&str] = &[];
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RuntimeScaffoldTemplateFile {
@@ -247,6 +255,17 @@ pub(crate) fn render_authoring_smoke_test_command(
 ) -> String {
     format!(
         "loong plugins invoke-extension --root \"{package_root}\" --plugin-id \"{plugin_id}\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command {allow_command}"
+    )
+}
+
+pub(crate) fn render_authoring_host_hook_probe_command(
+    package_root: &str,
+    plugin_id: &str,
+    hook: &str,
+    allow_command: &str,
+) -> String {
+    format!(
+        "loong plugins invoke-host-hook --root \"{package_root}\" --plugin-id \"{plugin_id}\" --hook {hook} --payload '{{}}' --allow-command {allow_command}"
     )
 }
 

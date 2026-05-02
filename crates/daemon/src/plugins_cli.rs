@@ -17,13 +17,16 @@ use crate::native_extension_authoring::{
     NativeExtensionAuthoringGuidanceView, NativeExtensionAuthoringSummaryView,
     PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT, PROCESS_STDIO_NATIVE_EXTENSION_EVENTS,
     PROCESS_STDIO_NATIVE_EXTENSION_FACETS, PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS,
-    PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
+    PROCESS_STDIO_NATIVE_EXTENSION_METHODS, TRUSTED_HOST_PROCESS_STDIO_EXTENSION_EVENTS,
+    TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FACETS, TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FAMILY,
+    TRUSTED_HOST_PROCESS_STDIO_EXTENSION_HOST_ACTIONS,
+    TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS, TRUSTED_HOST_PROCESS_STDIO_EXTENSION_TRUST_LANE,
     build_native_extension_authoring_doctor_guidance, build_native_extension_authoring_guidance,
     build_native_extension_authoring_view_from_profile,
     process_stdio_native_extension_language_profile, process_stdio_scaffold_args,
     render_authoring_actions_command, render_authoring_doctor_command,
-    render_authoring_inventory_command, render_rust_extension_cargo_toml,
-    summarize_native_extension_authoring_guidance,
+    render_authoring_host_hook_probe_command, render_authoring_inventory_command,
+    render_rust_extension_cargo_toml, summarize_native_extension_authoring_guidance,
 };
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
@@ -302,7 +305,7 @@ impl PluginInitBridgeKindArg {
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
 #[command(
     about = "Scaffold a manifest-first plugin package root for external authors",
-    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loong.plugin.json` plus a README that points authors to `loong plugins doctor` and `loong plugins actions` for shared governance validation. This command scaffolds package metadata only; it does not generate runtime code or widen trust policy."
+    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loong.plugin.json` plus a README that points authors to `loong plugins doctor` and `loong plugins actions` for shared governance validation. Use `--host-hook` to scaffold the bounded trusted host lane on top of the same process_stdio runtime path. This command scaffolds package metadata and local runtime stubs only; it does not widen trust policy by itself."
 )]
 pub struct PluginInitCommand {
     /// Target package root to create or reuse when the directory is empty
@@ -326,6 +329,9 @@ pub struct PluginInitCommand {
     /// Additional declared capability names beyond the scaffold defaults
     #[arg(long = "capability")]
     pub capabilities: Vec<String>,
+    /// Declared read-only trusted host hook names to scaffold on the trusted host lane
+    #[arg(long = "host-hook")]
+    pub host_hooks: Vec<String>,
     /// Initial package version written to the manifest
     #[arg(long, default_value = "0.1.0")]
     pub version: String,
@@ -1409,12 +1415,21 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let bridge_kind = command.bridge_kind.as_bridge_kind();
     let declared_capabilities =
         resolve_scaffold_declared_capabilities(command.capabilities.as_slice())?;
+    let declared_host_hooks = resolve_scaffold_host_hooks(command.host_hooks.as_slice())?;
 
     validate_plugin_scaffold_version(&version)?;
 
     let scaffold_defaults =
         plugin_runtime_scaffold_defaults(bridge_kind, command.source_language.as_deref())
             .map_err(|error| format!("plugins init failed: {error}; use --source-language when required by the selected bridge"))?;
+    if !declared_host_hooks.is_empty()
+        && process_stdio_native_extension_language_profile(&scaffold_defaults)?.is_none()
+    {
+        return Err(
+            "plugins init only scaffolds trusted host hooks on runnable process_stdio extension entrypoints"
+                .to_owned(),
+        );
+    }
 
     let runtime_scaffold_files =
         build_plugin_runtime_scaffold_files(plugin_id.as_str(), &scaffold_defaults)?;
@@ -1426,6 +1441,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         summary,
         &scaffold_defaults,
         declared_capabilities,
+        declared_host_hooks.clone(),
     );
     let doctor_command = render_authoring_doctor_command(package_root.as_str());
     let inventory_command = render_authoring_inventory_command(package_root.as_str());
@@ -1434,6 +1450,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         package_root.as_str(),
         plugin_id.as_str(),
         &scaffold_defaults,
+        declared_host_hooks.as_slice(),
     );
     let smoke_test_command = native_extension_authoring_profile
         .as_ref()
@@ -1601,6 +1618,32 @@ fn resolve_scaffold_declared_capabilities(raw: &[String]) -> CliResult<BTreeSet<
     Ok(declared_capabilities)
 }
 
+fn resolve_scaffold_host_hooks(raw: &[String]) -> CliResult<Vec<String>> {
+    let mut declared_host_hooks = Vec::new();
+
+    for hook_name in raw {
+        let trimmed = hook_name.trim();
+        if trimmed.is_empty() {
+            return Err("plugins init requires each --host-hook value to be non-empty".to_owned());
+        }
+        if !crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.contains(&trimmed) {
+            return Err(format!(
+                "plugins init received unsupported --host-hook `{trimmed}`; supported hooks are {}",
+                crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
+            ));
+        }
+        if declared_host_hooks
+            .iter()
+            .any(|existing| existing == trimmed)
+        {
+            continue;
+        }
+        declared_host_hooks.push(trimmed.to_owned());
+    }
+
+    Ok(declared_host_hooks)
+}
+
 fn validate_plugin_scaffold_version(version: &str) -> CliResult<()> {
     Version::parse(version)
         .map(|_| ())
@@ -1655,6 +1698,7 @@ fn build_plugin_scaffold_manifest(
     summary: Option<String>,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
     capabilities: BTreeSet<Capability>,
+    host_hooks: Vec<String>,
 ) -> PluginManifest {
     let mut metadata = BTreeMap::new();
     metadata.insert(
@@ -1678,6 +1722,37 @@ fn build_plugin_scaffold_manifest(
         let process_args = process_stdio_scaffold_args(profile);
         let process_command = profile.command;
         let timeout_ms = profile.process_timeout_ms;
+        let trusted_host_scaffold = !host_hooks.is_empty();
+        let extension_family = if trusted_host_scaffold {
+            TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FAMILY
+        } else {
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_FAMILY
+        };
+        let extension_trust_lane = if trusted_host_scaffold {
+            TRUSTED_HOST_PROCESS_STDIO_EXTENSION_TRUST_LANE
+        } else {
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE
+        };
+        let extension_facets = if trusted_host_scaffold {
+            TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FACETS
+        } else {
+            PROCESS_STDIO_NATIVE_EXTENSION_FACETS
+        };
+        let extension_methods = if trusted_host_scaffold {
+            TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS
+        } else {
+            PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+        };
+        let extension_events = if trusted_host_scaffold {
+            TRUSTED_HOST_PROCESS_STDIO_EXTENSION_EVENTS
+        } else {
+            PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+        };
+        let extension_host_actions = if trusted_host_scaffold {
+            TRUSTED_HOST_PROCESS_STDIO_EXTENSION_HOST_ACTIONS
+        } else {
+            PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS
+        };
         metadata.insert("command".to_owned(), process_command.to_owned());
         metadata.insert(
             "args_json".to_owned(),
@@ -1690,36 +1765,31 @@ fn build_plugin_scaffold_manifest(
         );
         metadata.insert(
             "loong_extension_family".to_owned(),
-            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_FAMILY.to_owned(),
+            extension_family.to_owned(),
         );
         metadata.insert(
             "loong_extension_trust_lane".to_owned(),
-            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_TRUST_LANE.to_owned(),
+            extension_trust_lane.to_owned(),
         );
         metadata.insert(
             "loong_extension_facets_json".to_owned(),
-            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_FACETS)
-                .unwrap_or_else(|_| "[]".to_owned()),
+            serde_json::to_string(extension_facets).unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_methods_json".to_owned(),
-            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_METHODS)
-                .unwrap_or_else(|_| "[]".to_owned()),
+            serde_json::to_string(extension_methods).unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_events_json".to_owned(),
-            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_EVENTS)
-                .unwrap_or_else(|_| "[]".to_owned()),
+            serde_json::to_string(extension_events).unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_host_hooks_json".to_owned(),
-            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS)
-                .unwrap_or_else(|_| "[]".to_owned()),
+            serde_json::to_string(&host_hooks).unwrap_or_else(|_| "[]".to_owned()),
         );
         metadata.insert(
             "loong_extension_host_actions_json".to_owned(),
-            serde_json::to_string(PROCESS_STDIO_NATIVE_EXTENSION_HOST_ACTIONS)
-                .unwrap_or_else(|_| "[]".to_owned()),
+            serde_json::to_string(extension_host_actions).unwrap_or_else(|_| "[]".to_owned()),
         );
     }
 
@@ -1806,10 +1876,55 @@ fn build_native_extension_authoring_profile(
     package_root: &str,
     plugin_id: &str,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+    declared_host_hooks: &[String],
 ) -> Option<NativeExtensionAuthoringProfileExecution> {
     let profile = process_stdio_native_extension_language_profile(scaffold_defaults)
         .expect("supported process_stdio scaffold profile should already validate")?;
     let source_language = scaffold_defaults.source_language.as_deref()?;
+    if !declared_host_hooks.is_empty() {
+        let smoke_hook = declared_host_hooks
+            .first()
+            .expect("trusted host scaffold should declare at least one host hook");
+        return Some(NativeExtensionAuthoringProfileExecution {
+            contract: PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT.to_owned(),
+            source_language_arg: profile.source_language_arg.to_owned(),
+            reference_example_path: profile.example_package_root.to_owned(),
+            facets: TRUSTED_HOST_PROCESS_STDIO_EXTENSION_FACETS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            methods: TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            events: TRUSTED_HOST_PROCESS_STDIO_EXTENSION_EVENTS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            host_hooks: declared_host_hooks.to_vec(),
+            host_actions: TRUSTED_HOST_PROCESS_STDIO_EXTENSION_HOST_ACTIONS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+            runtime_files: profile
+                .scaffold_files
+                .iter()
+                .map(|file| file.relative_path.to_owned())
+                .collect(),
+            command: profile.command.to_owned(),
+            args: process_stdio_scaffold_args(profile),
+            process_timeout_ms: profile.process_timeout_ms,
+            inventory_command: render_authoring_inventory_command(package_root),
+            smoke_allow_command: profile.smoke_allow_command.to_owned(),
+            smoke_test_command: render_authoring_host_hook_probe_command(
+                package_root,
+                plugin_id,
+                smoke_hook.as_str(),
+                profile.smoke_allow_command,
+            ),
+            example_package_root: profile.example_package_root.to_owned(),
+        });
+    }
     let authoring_view = build_native_extension_authoring_view_from_profile(
         package_root,
         plugin_id,
@@ -5402,6 +5517,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: Some("Tavily-backed search package".to_owned()),
             }),
@@ -5523,6 +5639,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: None,
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: None,
             }),
@@ -5549,6 +5666,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "not-semver".to_owned(),
                 summary: None,
             }),
@@ -5575,6 +5693,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
             }),
@@ -5742,6 +5861,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
                 capabilities: vec!["observe_telemetry".to_owned()],
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
             }),
@@ -5813,6 +5933,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_plugins_init_scaffolds_trusted_host_extension_package() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-trusted-host");
+        let package_root = format!("{temp_root}/weather-host-js");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "weather-host-js".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-host-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
+                host_hooks: vec!["turn_start".to_owned(), "turn_end".to_owned()],
+                version: "0.2.0".to_owned(),
+                summary: Some("Trusted host weather hook".to_owned()),
+            }),
+        })
+        .await
+        .expect("trusted host scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        let authoring_profile = execution
+            .native_extension_authoring_profile
+            .as_ref()
+            .expect("trusted host scaffold should expose authoring profile");
+        assert_eq!(
+            authoring_profile.methods,
+            vec!["extension/event".to_owned()]
+        );
+        assert_eq!(
+            authoring_profile.host_hooks,
+            vec!["turn_start".to_owned(), "turn_end".to_owned()]
+        );
+        assert_eq!(authoring_profile.smoke_allow_command, "node".to_owned());
+        assert!(
+            authoring_profile
+                .smoke_test_command
+                .contains("plugins invoke-host-hook"),
+            "trusted host scaffold should point at invoke-host-hook"
+        );
+
+        let rendered_manifest =
+            fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_family")
+                .map(String::as_str),
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_trust_lane")
+                .map(String::as_str),
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE)
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_methods_json")
+                .map(String::as_str),
+            Some("[\"extension/event\"]")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_host_hooks_json")
+                .map(String::as_str),
+            Some("[\"turn_start\",\"turn_end\"]")
+        );
+
+        let hook_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::InvokeHostHook(PluginInvokeHostHookCommand {
+                root: execution.package_root.clone(),
+                plugin_id: "weather-host-js".to_owned(),
+                hook: "turn_start".to_owned(),
+                payload: "{\"turn_id\":\"demo-turn\"}".to_owned(),
+                allow_commands: vec!["node".to_owned()],
+            }),
+        })
+        .await
+        .expect("scaffolded trusted host extension should probe");
+
+        let PluginsCommandExecution::InvokeHostHook(hook_execution) = hook_execution else {
+            panic!("expected invoke-host-hook execution");
+        };
+        assert_eq!(
+            hook_execution.extension_family.as_deref(),
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
+        );
+        assert_eq!(hook_execution.hook, "turn_start");
+        assert_eq!(
+            hook_execution.response_payload["handled_event"],
+            json!("turn_start")
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_rejects_unsupported_trusted_host_hook() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-invalid-host-hook");
+        let package_root = format!("{temp_root}/weather-host-js");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-host-js".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-host-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                capabilities: Vec::new(),
+                host_hooks: vec!["provider_request".to_owned()],
+                version: "0.2.0".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("unsupported trusted host hook should be rejected");
+
+        assert!(error.contains("unsupported --host-hook"));
+    }
+
+    #[tokio::test]
     async fn execute_plugins_init_go_process_stdio_scaffold_writes_runnable_entrypoint() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-go");
         let package_root = format!("{temp_root}/weather-go");
@@ -5827,6 +6081,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("go".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Go weather bridge".to_owned()),
             }),
@@ -5876,6 +6131,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("JavaScript weather bridge".to_owned()),
             }),
@@ -5935,6 +6191,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("ts".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("TypeScript weather bridge".to_owned()),
             }),
@@ -6007,6 +6264,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("rs".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Rust weather bridge".to_owned()),
             }),
@@ -6078,6 +6336,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("py".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
             }),
@@ -6129,6 +6388,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("js".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("JavaScript weather bridge".to_owned()),
             }),
@@ -6177,6 +6437,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("ts".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("TypeScript weather bridge".to_owned()),
             }),
@@ -6225,6 +6486,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("go".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Go weather bridge".to_owned()),
             }),
@@ -6273,6 +6535,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                 source_language: Some("rs".to_owned()),
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.2.0".to_owned(),
                 summary: Some("Rust weather bridge".to_owned()),
             }),
@@ -6397,6 +6660,7 @@ mod tests {
                     bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
                     source_language: Some(spec.source_language_arg.to_owned()),
                     capabilities: Vec::new(),
+                    host_hooks: Vec::new(),
                     version: "0.1.0".to_owned(),
                     summary: Some(spec.expected_summary.to_owned()),
                 }),
@@ -6650,7 +6914,7 @@ mod tests {
             );
             assert_eq!(
                 inventory_execution.results[0].extension_host_hooks,
-                PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
+                crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
                     .iter()
                     .map(|value| (*value).to_owned())
                     .collect::<Vec<_>>()
@@ -6973,11 +7237,15 @@ mod tests {
             );
             assert!(
                 doc.contains("loong_extension_host_hooks_json"),
-                "doc should mention reserved host-hook declarations"
+                "doc should mention host-hook declarations"
             );
             assert!(
                 doc.contains("trusted_host_extension"),
-                "doc should mention the reserved trusted host extension family"
+                "doc should mention the trusted host extension family"
+            );
+            assert!(
+                doc.contains("invoke-host-hook"),
+                "doc should mention trusted-host probe commands"
             );
         }
     }
@@ -7080,7 +7348,7 @@ mod tests {
         );
         assert_eq!(
             guidance.extension_host_hooks,
-            PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_HOST_HOOKS
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect::<Vec<_>>()
@@ -7371,6 +7639,7 @@ mod tests {
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
                 source_language: None,
                 capabilities: Vec::new(),
+                host_hooks: Vec::new(),
                 version: "0.1.0".to_owned(),
                 summary: None,
             }),

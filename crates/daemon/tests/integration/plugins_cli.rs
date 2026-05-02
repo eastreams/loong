@@ -333,6 +333,8 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
         "python",
         "--capability",
         "observe_telemetry",
+        "--host-hook",
+        "turn_start",
         "--summary",
         "Tavily-backed search package",
         "--json",
@@ -354,6 +356,7 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
                     );
                     assert_eq!(command.source_language.as_deref(), Some("python"));
                     assert_eq!(command.capabilities, vec!["observe_telemetry".to_owned()]);
+                    assert_eq!(command.host_hooks, vec!["turn_start".to_owned()]);
                     assert_eq!(
                         command.summary.as_deref(),
                         Some("Tavily-backed search package")
@@ -532,6 +535,7 @@ fn plugins_init_help_mentions_bridge_contract_flags() {
         help.contains("--connector-name <CONNECTOR_NAME>"),
         "help: {help}"
     );
+    assert!(help.contains("--host-hook <HOST_HOOKS>"), "help: {help}");
 }
 
 #[test]
