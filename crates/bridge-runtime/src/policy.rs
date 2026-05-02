@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use loong_contracts::ExecutionSecurityTier;
 use loong_kernel as kernel;
@@ -30,7 +30,7 @@ pub fn parse_process_args(provider: &kernel::ProviderConfig) -> Vec<String> {
     if let Some(args_json) = args_json {
         let parsed_args = serde_json::from_str::<Vec<String>>(args_json);
         if let Ok(parsed_args) = parsed_args {
-            return parsed_args;
+            return resolve_process_args_against_plugin_root(provider, parsed_args);
         }
     }
 
@@ -39,7 +39,40 @@ pub fn parse_process_args(provider: &kernel::ProviderConfig) -> Vec<String> {
         return Vec::new();
     };
 
-    args.split_whitespace().map(str::to_owned).collect()
+    let parsed_args = args.split_whitespace().map(str::to_owned).collect();
+    resolve_process_args_against_plugin_root(provider, parsed_args)
+}
+
+fn resolve_process_args_against_plugin_root(
+    provider: &kernel::ProviderConfig,
+    args: Vec<String>,
+) -> Vec<String> {
+    let Some(plugin_package_root) = provider.metadata.get("plugin_package_root") else {
+        return args;
+    };
+    let plugin_package_root = PathBuf::from(plugin_package_root);
+    if !plugin_package_root.is_dir() {
+        return args;
+    }
+
+    args.into_iter()
+        .map(|arg| {
+            if arg.trim().is_empty() || arg.starts_with('-') {
+                return arg;
+            }
+            let arg_path = Path::new(arg.as_str());
+            if arg_path.is_absolute() {
+                return arg;
+            }
+
+            let candidate = plugin_package_root.join(arg_path);
+            if candidate.exists() {
+                return candidate.display().to_string();
+            }
+
+            arg
+        })
+        .collect()
 }
 
 pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> bool {
@@ -76,9 +109,11 @@ pub fn is_process_command_allowed(program: &str, allowed: &BTreeSet<String>) -> 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
 
-    use super::is_process_command_allowed;
+    use super::{is_process_command_allowed, parse_process_args};
+    use loong_kernel::ProviderConfig;
 
     #[test]
     fn process_command_allowlist_rejects_path_spoofing() {
@@ -90,5 +125,43 @@ mod tests {
             &allowed_commands,
         ));
         assert!(!is_process_command_allowed("./python3", &allowed_commands,));
+    }
+
+    #[test]
+    fn parse_process_args_resolves_relative_paths_against_plugin_package_root() {
+        let root = std::env::temp_dir().join(format!(
+            "loong-bridge-process-args-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("src")).expect("create root");
+        fs::write(root.join("index.js"), "console.log('ok');\n").expect("write js");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='demo'\nversion='0.1.0'\n",
+        )
+        .expect("write cargo");
+
+        let provider = ProviderConfig {
+            provider_id: "demo".to_owned(),
+            connector_name: "demo".to_owned(),
+            version: "0.1.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_package_root".to_owned(), root.display().to_string()),
+                (
+                    "args_json".to_owned(),
+                    "[\"run\",\"--manifest-path\",\"Cargo.toml\",\"index.js\"]".to_owned(),
+                ),
+            ]),
+        };
+
+        let args = parse_process_args(&provider);
+
+        assert_eq!(args[0], "run");
+        assert_eq!(args[1], "--manifest-path");
+        assert_eq!(args[2], root.join("Cargo.toml").display().to_string());
+        assert_eq!(args[3], root.join("index.js").display().to_string());
     }
 }

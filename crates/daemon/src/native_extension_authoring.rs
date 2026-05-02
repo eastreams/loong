@@ -177,6 +177,10 @@ def build_extension_payload(operation, payload):
         return {
             "ok": True,
             "handled_event": payload.get("event", "unknown"),
+            "handled_hook": payload.get("host_hook", "unknown"),
+            "handled_tui_surface": payload.get("host_tui_surface", "unknown"),
+            "received_hook_payload": payload.get("hook_payload"),
+            "received_surface_payload": payload.get("surface_payload"),
         }
     if operation == "extension/command":
         command_name = payload.get("command_name", "extension")
@@ -216,6 +220,10 @@ function buildExtensionPayload(operation, payload) {
     return {
       ok: true,
       handled_event: payload.event ?? 'unknown',
+      handled_hook: payload.host_hook ?? 'unknown',
+      handled_tui_surface: payload.host_tui_surface ?? 'unknown',
+      received_hook_payload: payload.hook_payload ?? null,
+      received_surface_payload: payload.surface_payload ?? null,
     };
   }
   if (operation === 'extension/command') {
@@ -283,9 +291,23 @@ type PayloadMap = Record<string, unknown>;
 function buildExtensionPayload(operation: string, payload: PayloadMap): unknown {
   if (operation === 'extension/event') {
     const handledEvent = typeof payload.event === 'string' ? payload.event : 'unknown';
+    const handledHook =
+      typeof payload.host_hook === 'string' ? payload.host_hook : 'unknown';
+    const handledTuiSurface =
+      typeof payload.host_tui_surface === 'string' ? payload.host_tui_surface : 'unknown';
     return {
       ok: true,
       handled_event: handledEvent,
+      handled_hook: handledHook,
+      handled_tui_surface: handledTuiSurface,
+      received_hook_payload:
+        payload.hook_payload && typeof payload.hook_payload === 'object'
+          ? payload.hook_payload
+          : null,
+      received_surface_payload:
+        payload.surface_payload && typeof payload.surface_payload === 'object'
+          ? payload.surface_payload
+          : null,
     };
   }
   if (operation === 'extension/command') {
@@ -386,9 +408,21 @@ func buildExtensionPayload(operation string, payload map[string]any) any {
 		if event == "" {
 			event = "unknown"
 		}
+		hook, _ := payload["host_hook"].(string)
+		if hook == "" {
+			hook = "unknown"
+		}
+		tuiSurface, _ := payload["host_tui_surface"].(string)
+		if tuiSurface == "" {
+			tuiSurface = "unknown"
+		}
 		return map[string]any{
-			"ok":            true,
-			"handled_event": event,
+			"ok":                     true,
+			"handled_event":          event,
+			"handled_hook":           hook,
+			"handled_tui_surface":    tuiSurface,
+			"received_hook_payload":  payload["hook_payload"],
+			"received_surface_payload": payload["surface_payload"],
 		}
 	case "extension/command":
 		commandName, _ := payload["command_name"].(string)
@@ -475,9 +509,21 @@ fn build_extension_payload(operation: &str, payload: &Map<String, Value>) -> Val
                 .get("event")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
+            let handled_hook = payload
+                .get("host_hook")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let handled_tui_surface = payload
+                .get("host_tui_surface")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             json!({
                 "ok": true,
                 "handled_event": handled_event,
+                "handled_hook": handled_hook,
+                "handled_tui_surface": handled_tui_surface,
+                "received_hook_payload": payload.get("hook_payload").cloned().unwrap_or(Value::Null),
+                "received_surface_payload": payload.get("surface_payload").cloned().unwrap_or(Value::Null),
             })
         }
         "extension/command" => {

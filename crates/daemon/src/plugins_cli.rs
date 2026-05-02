@@ -5373,6 +5373,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_plugins_init_trusted_host_scaffold_smoke_probe_succeeds() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-init-trusted-host-smoke");
+        let package_root = format!("{temp_root}/weather-host");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "weather-host".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("js".to_owned()),
+                host_hooks: vec!["turn_start".to_owned()],
+                tui_surfaces: Vec::new(),
+                version: "0.2.0".to_owned(),
+                summary: Some("Trusted host weather hook".to_owned()),
+            }),
+        })
+        .await
+        .expect("trusted host scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        let hook_execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::InvokeHostHook(PluginInvokeHostHookCommand {
+                root: execution.package_root.clone(),
+                plugin_id: "weather-host".to_owned(),
+                hook: "turn_start".to_owned(),
+                payload: "{\"turn_id\":\"demo-turn\"}".to_owned(),
+                allow_commands: vec!["node".to_owned()],
+            }),
+        })
+        .await
+        .expect("scaffolded trusted host package should probe successfully");
+
+        let PluginsCommandExecution::InvokeHostHook(hook_execution) = hook_execution else {
+            panic!("expected invoke-host-hook execution");
+        };
+        assert_eq!(
+            hook_execution.response_payload["handled_hook"],
+            serde_json::json!("turn_start")
+        );
+    }
+
+    #[tokio::test]
     async fn execute_plugins_init_rejects_unsupported_trusted_host_hook() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-bad-hook");
         let package_root = format!("{temp_root}/weather-host");
