@@ -444,6 +444,29 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             .collect::<Vec<_>>()
             .join(",")
     };
+    let runtime_plugin_authoring = runtime
+        .runtime_plugin_authoring_summary
+        .as_ref()
+        .map(|summary| {
+            let smoke_test_kinds = if summary.smoke_test_kind_distribution.is_empty() {
+                "-".to_owned()
+            } else {
+                summary
+                    .smoke_test_kind_distribution
+                    .iter()
+                    .map(|(kind, count)| format!("{kind}:{count}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            format!(
+                "guided={} metadata_issues={} smoke_test_kinds={} allow_command_gated={}",
+                summary.guided_plugin_count,
+                summary.plugins_with_metadata_issues,
+                smoke_test_kinds,
+                summary.allow_command_gated_smoke_test_count
+            )
+        })
+        .unwrap_or_else(|| "-".to_owned());
     let compaction_hygiene = &runtime.compaction_hygiene;
     let compaction_presentation = build_compaction_hygiene_status_values(compaction_hygiene);
     let visible_direct_tools = if runtime.visible_direct_tool_names.is_empty() {
@@ -767,6 +790,10 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "runtime plugin capabilities".to_owned(),
                 value: runtime_plugin_capabilities,
+            },
+            loong_app::tui_surface::TuiKeyValueSpec::Plain {
+                key: "runtime plugin authoring".to_owned(),
+                value: runtime_plugin_authoring,
             },
             loong_app::tui_surface::TuiKeyValueSpec::Plain {
                 key: "compaction samples".to_owned(),
@@ -1394,6 +1421,17 @@ mod tests {
                     ("invoke_connector".to_owned(), 1),
                     ("observe_telemetry".to_owned(), 1),
                 ]),
+                runtime_plugin_authoring_summary: Some(
+                    crate::gateway::read_models::GatewayRuntimePluginAuthoringSummaryReadModel {
+                        guided_plugin_count: 1,
+                        plugins_with_metadata_issues: 0,
+                        smoke_test_kind_distribution: std::collections::BTreeMap::from([(
+                            "host_hook_probe".to_owned(),
+                            1,
+                        )]),
+                        allow_command_gated_smoke_test_count: 1,
+                    },
+                ),
                 visible_tool_count: 4,
                 visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
                 hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
@@ -1571,6 +1609,14 @@ mod tests {
             rendered
                 .contains("runtime plugin capabilities: invoke_connector:1,observe_telemetry:1")
         );
+        assert!(rendered.contains("runtime plugin authoring"), "{rendered}");
+        assert!(rendered.contains("guided=1"), "{rendered}");
+        assert!(rendered.contains("metadata_issues=0"), "{rendered}");
+        assert!(
+            rendered.contains("smoke_test_kinds=host_hook_probe:1"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("allow_command_gated=1"), "{rendered}");
         assert!(rendered.contains("ACP: acp enabled=false availability=disabled"));
     }
 
@@ -1731,6 +1777,7 @@ mod tests {
                 enabled_outbound_only_channel_ids: Vec::new(),
                 runtime_plugin_roots_source: Some("configured".to_owned()),
                 runtime_plugin_capability_distribution: std::collections::BTreeMap::new(),
+                runtime_plugin_authoring_summary: None,
                 visible_tool_count: 4,
                 visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
                 hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
@@ -1882,6 +1929,7 @@ mod tests {
                 enabled_outbound_only_channel_ids: Vec::new(),
                 runtime_plugin_roots_source: Some("configured".to_owned()),
                 runtime_plugin_capability_distribution: std::collections::BTreeMap::new(),
+                runtime_plugin_authoring_summary: None,
                 visible_tool_count: 4,
                 visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
                 hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],
@@ -2021,6 +2069,7 @@ mod tests {
                 enabled_outbound_only_channel_ids: Vec::new(),
                 runtime_plugin_roots_source: Some("configured".to_owned()),
                 runtime_plugin_capability_distribution: std::collections::BTreeMap::new(),
+                runtime_plugin_authoring_summary: None,
                 visible_tool_count: 4,
                 visible_direct_tool_names: vec!["read".to_owned(), "exec".to_owned()],
                 hidden_tool_surface_ids: vec!["agent".to_owned(), "web".to_owned()],

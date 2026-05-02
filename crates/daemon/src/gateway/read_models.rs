@@ -383,6 +383,8 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub runtime_plugin_roots_source: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub runtime_plugin_capability_distribution: BTreeMap<String, usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_authoring_summary: Option<GatewayRuntimePluginAuthoringSummaryReadModel>,
     pub visible_tool_count: usize,
     pub visible_direct_tool_names: Vec<String>,
     pub hidden_tool_surface_ids: Vec<String>,
@@ -392,6 +394,15 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
     pub compaction_hygiene: crate::RuntimeSnapshotCompactionHygieneState,
     pub tool_calling: GatewayToolCallingReadModel,
     pub web_access: GatewayWebAccessReadModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayRuntimePluginAuthoringSummaryReadModel {
+    pub guided_plugin_count: usize,
+    pub plugins_with_metadata_issues: usize,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub smoke_test_kind_distribution: BTreeMap<String, usize>,
+    pub allow_command_gated_smoke_test_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1515,6 +1526,8 @@ fn build_operator_runtime_summary_read_model(
         json_string_field(&runtime_snapshot.runtime_plugins, "roots_source");
     let runtime_plugin_capability_distribution =
         runtime_plugin_capability_distribution(&runtime_snapshot.runtime_plugins);
+    let runtime_plugin_authoring_summary =
+        runtime_plugin_authoring_summary(&runtime_snapshot.runtime_plugins);
     let visible_tool_count = runtime_snapshot.tools.visible_tool_count;
     let visible_direct_tool_names = runtime_snapshot.tools.visible_direct_tool_names.clone();
     let hidden_tool_surface_ids = runtime_snapshot
@@ -1541,6 +1554,7 @@ fn build_operator_runtime_summary_read_model(
         enabled_outbound_only_channel_ids,
         runtime_plugin_roots_source,
         runtime_plugin_capability_distribution,
+        runtime_plugin_authoring_summary,
         visible_tool_count,
         visible_direct_tool_names,
         hidden_tool_surface_ids,
@@ -1569,6 +1583,65 @@ fn runtime_plugin_capability_distribution(runtime_plugins: &Value) -> BTreeMap<S
     }
 
     distribution
+}
+
+fn runtime_plugin_authoring_summary(
+    runtime_plugins: &Value,
+) -> Option<GatewayRuntimePluginAuthoringSummaryReadModel> {
+    let plugins = runtime_plugins.get("plugins").and_then(Value::as_array)?;
+    let mut guided_plugin_count = 0_usize;
+    let mut plugins_with_metadata_issues = 0_usize;
+    let mut smoke_test_kind_distribution = BTreeMap::new();
+    let mut allow_command_gated_smoke_test_count = 0_usize;
+
+    for plugin in plugins {
+        let metadata_issues = plugin
+            .get("native_extension")
+            .and_then(|value| value.get("metadata_issues"))
+            .and_then(Value::as_array)
+            .is_some_and(|issues| !issues.is_empty());
+        if metadata_issues {
+            plugins_with_metadata_issues = plugins_with_metadata_issues.saturating_add(1);
+        }
+
+        let Some(smoke_test_command) = plugin
+            .get("authoring_guidance")
+            .and_then(|value| value.get("smoke_test_command"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+
+        guided_plugin_count = guided_plugin_count.saturating_add(1);
+        if smoke_test_command.contains("--allow-command ") {
+            allow_command_gated_smoke_test_count =
+                allow_command_gated_smoke_test_count.saturating_add(1);
+        }
+
+        let kind = if smoke_test_command.contains("plugins invoke-host-hook") {
+            "host_hook_probe"
+        } else if smoke_test_command.contains("plugins invoke-tui-surface") {
+            "tui_surface_probe"
+        } else if smoke_test_command.contains("plugins invoke-extension") {
+            "extension_probe"
+        } else {
+            "other"
+        };
+        *smoke_test_kind_distribution
+            .entry(kind.to_owned())
+            .or_insert(0) += 1;
+    }
+
+    if guided_plugin_count == 0 && plugins_with_metadata_issues == 0 {
+        return None;
+    }
+
+    Some(GatewayRuntimePluginAuthoringSummaryReadModel {
+        guided_plugin_count,
+        plugins_with_metadata_issues,
+        smoke_test_kind_distribution,
+        allow_command_gated_smoke_test_count,
+    })
 }
 
 fn build_paired_device_nodes_read_model(
@@ -2470,7 +2543,13 @@ mod tests {
                 "plugins": [
                     {
                         "plugin_id": "weather-extension",
-                        "capabilities": ["invoke_connector", "observe_telemetry"]
+                        "capabilities": ["invoke_connector", "observe_telemetry"],
+                        "native_extension": {
+                            "metadata_issues": []
+                        },
+                        "authoring_guidance": {
+                            "smoke_test_command": "loong plugins invoke-host-hook --root \"/tmp/weather-extension\" --plugin-id \"weather-extension\" --hook turn_start --payload '{}' --allow-command node"
+                        }
                     }
                 ]
             }),
@@ -2496,6 +2575,28 @@ mod tests {
                 .runtime_plugin_capability_distribution
                 .get("observe_telemetry"),
             Some(&1)
+        );
+        assert_eq!(
+            summary
+                .runtime_plugin_authoring_summary
+                .as_ref()
+                .map(|value| value.guided_plugin_count),
+            Some(1)
+        );
+        assert_eq!(
+            summary
+                .runtime_plugin_authoring_summary
+                .as_ref()
+                .and_then(|value| value.smoke_test_kind_distribution.get("host_hook_probe"))
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            summary
+                .runtime_plugin_authoring_summary
+                .as_ref()
+                .map(|value| value.allow_command_gated_smoke_test_count),
+            Some(1)
         );
         assert!(summary.web_access.ordinary_network_access_enabled);
         assert!(!summary.web_access.query_search_enabled);
