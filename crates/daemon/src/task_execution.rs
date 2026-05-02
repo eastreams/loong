@@ -918,6 +918,7 @@ mod tests {
         let mut config = loong_app::config::LoongConfig::default();
         config.acp.enabled = true;
         config.acp.backend = Some(backend_id.to_owned());
+        config.memory.sqlite_path = root.join("memory.sqlite3").display().to_string();
         config.runtime_plugins.enabled = true;
         config.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
         config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
