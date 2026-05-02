@@ -116,6 +116,22 @@ pub(super) async fn turn_submit(
 
         match execution_result {
             Ok(result) => {
+                if let Err(error) = crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                    turn_service.config(),
+                    Some(session_id.as_str()),
+                    &turn_request,
+                    &result,
+                )
+                .await
+                {
+                    let completion =
+                        turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                    if let Ok(record) = completion {
+                        let payload = map_turn_event_payload(&record);
+                        let _ = manager.record_acp_turn_event(payload, true);
+                    }
+                    return;
+                }
                 let completion = turn_registry.complete_success(
                     spawned_turn_id.as_str(),
                     result.output_text.as_str(),
@@ -135,7 +151,21 @@ pub(super) async fn turn_submit(
                     error = %crate::observability::summarize_error(error.as_str()),
                     "control-plane turn execution failed"
                 );
-                let completion = turn_registry.complete_failure(spawned_turn_id.as_str(), &error);
+                let rendered_error = if let Err(turn_end_error) =
+                    crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                        turn_service.config(),
+                        Some(session_id.as_str()),
+                        &turn_request,
+                        error.as_str(),
+                    )
+                    .await
+                {
+                    format!("{error}; trusted host turn_end hook failed: {turn_end_error}")
+                } else {
+                    error
+                };
+                let completion =
+                    turn_registry.complete_failure(spawned_turn_id.as_str(), &rendered_error);
                 if let Ok(record) = completion {
                     let payload = map_turn_event_payload(&record);
                     let _ = manager.record_acp_turn_event(payload, true);

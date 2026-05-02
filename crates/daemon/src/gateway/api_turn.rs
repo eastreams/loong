@@ -183,10 +183,24 @@ pub(crate) async fn handle_turn(
         provider_error_mode: crate::mvp::conversation::ProviderErrorMode::InlineMessage,
         retry_progress: None,
     };
+    let turn_session_id = turn_request.address.session_id.clone();
     let result = crate::mvp::turn_gateway::run_turn_gateway(execution, turn_request).await;
 
     match result {
         Ok(turn_result) => {
+            if let Err(error) = crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                config,
+                Some(turn_session_id.as_str()),
+                &trusted_host_turn_request,
+                &turn_result,
+            )
+            .await
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": error})),
+                );
+            }
             let response = GatewayHttpTurnResponse::from_agent_turn_result(&turn_result);
             match serde_json::to_value(response) {
                 Ok(value) => (StatusCode::OK, Json(value)),
@@ -196,10 +210,25 @@ pub(crate) async fn handle_turn(
                 ),
             }
         }
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": error})),
-        ),
+        Err(error) => {
+            let rendered_error = if let Err(turn_end_error) =
+                crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                    config,
+                    Some(turn_session_id.as_str()),
+                    &trusted_host_turn_request,
+                    error.as_str(),
+                )
+                .await
+            {
+                format!("{error}; trusted host turn_end hook failed: {turn_end_error}")
+            } else {
+                error
+            };
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": rendered_error})),
+            )
+        }
     }
 }
 

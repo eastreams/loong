@@ -156,6 +156,54 @@ pub(crate) async fn dispatch_turn_start_hook_for_request(
         .map(|_| ())
 }
 
+pub(crate) async fn dispatch_turn_end_hook_for_success(
+    config: &mvp::config::LoongConfig,
+    session_hint: Option<&str>,
+    request: &mvp::agent_runtime::AgentTurnRequest,
+    result: &mvp::agent_runtime::AgentTurnResult,
+) -> CliResult<()> {
+    let mut payload = trusted_host_request_context_payload(session_hint, request);
+    let Some(payload_object) = payload.as_object_mut() else {
+        return Err("trusted host turn_end payload must be an object".to_owned());
+    };
+    payload_object.insert(
+        "outcome".to_owned(),
+        json!({
+            "status": "ok",
+            "output_text": result.output_text,
+            "state": result.state,
+            "stop_reason": result.stop_reason,
+            "usage": result.usage,
+            "event_count": result.event_count,
+        }),
+    );
+    dispatch_trusted_host_hook(config, "turn_end", payload)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn dispatch_turn_end_hook_for_error(
+    config: &mvp::config::LoongConfig,
+    session_hint: Option<&str>,
+    request: &mvp::agent_runtime::AgentTurnRequest,
+    error: &str,
+) -> CliResult<()> {
+    let mut payload = trusted_host_request_context_payload(session_hint, request);
+    let Some(payload_object) = payload.as_object_mut() else {
+        return Err("trusted host turn_end payload must be an object".to_owned());
+    };
+    payload_object.insert(
+        "outcome".to_owned(),
+        json!({
+            "status": "error",
+            "error": error,
+        }),
+    );
+    dispatch_trusted_host_hook(config, "turn_end", payload)
+        .await
+        .map(|_| ())
+}
+
 fn trusted_host_request_context_payload(
     session_hint: Option<&str>,
     request: &mvp::agent_runtime::AgentTurnRequest,

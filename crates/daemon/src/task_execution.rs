@@ -118,8 +118,36 @@ impl HarnessAdapter for EmbeddedAgentHarness {
         let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
         let turn_result = turn_service
             .execute(payload.session_hint.as_deref(), &turn_request, turn_options)
-            .await
-            .map_err(HarnessError::Execution)?;
+            .await;
+        let turn_result = match turn_result {
+            Ok(turn_result) => {
+                crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                    turn_service.config(),
+                    payload.session_hint.as_deref(),
+                    &turn_request,
+                    &turn_result,
+                )
+                .await
+                .map_err(HarnessError::Execution)?;
+                turn_result
+            }
+            Err(error) => {
+                if let Err(turn_end_error) =
+                    crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                        turn_service.config(),
+                        payload.session_hint.as_deref(),
+                        &turn_request,
+                        error.as_str(),
+                    )
+                    .await
+                {
+                    return Err(HarnessError::Execution(format!(
+                        "{error}; trusted host turn_end hook failed: {turn_end_error}"
+                    )));
+                }
+                return Err(HarnessError::Execution(error));
+            }
+        };
 
         Ok(HarnessOutcome {
             status: "ok".to_owned(),
@@ -304,7 +332,35 @@ pub(crate) async fn run_turn_cli(
     .await?;
     let result = turn_service
         .execute(session_hint, &turn_request, turn_options)
-        .await?;
+        .await;
+    let result = match result {
+        Ok(result) => {
+            crate::trusted_host_runtime::dispatch_turn_end_hook_for_success(
+                turn_service.config(),
+                session_hint,
+                &turn_request,
+                &result,
+            )
+            .await?;
+            result
+        }
+        Err(error) => {
+            if let Err(turn_end_error) =
+                crate::trusted_host_runtime::dispatch_turn_end_hook_for_error(
+                    turn_service.config(),
+                    session_hint,
+                    &turn_request,
+                    error.as_str(),
+                )
+                .await
+            {
+                return Err(format!(
+                    "{error}; trusted host turn_end hook failed: {turn_end_error}"
+                ));
+            }
+            return Err(error);
+        }
+    };
     println!("{}", result.output_text);
     Ok(())
 }
@@ -486,36 +542,193 @@ mod tests {
     }
 
     fn install_blocked_trusted_host_runtime_plugin(root: &Path) {
-        write_file(
-            root,
-            "runtime-plugins/trusted-host/loong.plugin.json",
-            r#"{
-  "api_version": "v1alpha1",
-  "version": "1.0.0",
-  "plugin_id": "trusted-host-extension",
-  "provider_id": "trusted-host-extension",
-  "connector_name": "trusted-host-extension",
-  "capabilities": ["InvokeConnector"],
-  "metadata": {
-    "bridge_kind": "process_stdio",
-    "adapter_family": "javascript-stdio-adapter",
-    "entrypoint": "stdin/stdout::invoke",
-    "source_language": "javascript",
-    "command": "blocked-node",
-    "args_json": "[\"index.js\"]",
-    "process_timeout_ms": "15000",
-    "loong_extension_contract": "process_stdio_json_line_v1",
-    "loong_extension_family": "trusted_host_extension",
-    "loong_extension_trust_lane": "trusted_host",
-    "loong_extension_methods_json": "[\"extension/event\"]",
-    "loong_extension_host_hooks_json": "[\"turn_start\"]"
-  }
-}"#,
-        );
+        install_trusted_host_runtime_plugin(root, "blocked-node", "[\"turn_start\"]");
         write_file(
             root,
             "runtime-plugins/trusted-host/index.js",
             "#!/usr/bin/env node\nprocess.stdin.resume();\n",
+        );
+    }
+
+    fn install_trusted_host_runtime_plugin(root: &Path, command: &str, host_hooks_json: &str) {
+        let manifest = serde_json::json!({
+            "api_version": "v1alpha1",
+            "version": "1.0.0",
+            "plugin_id": "trusted-host-extension",
+            "provider_id": "trusted-host-extension",
+            "connector_name": "trusted-host-extension",
+            "capabilities": ["InvokeConnector"],
+            "metadata": {
+                "bridge_kind": "process_stdio",
+                "adapter_family": "javascript-stdio-adapter",
+                "entrypoint": "stdin/stdout::invoke",
+                "source_language": "javascript",
+                "command": command,
+                "args_json": "[\"index.js\"]",
+                "process_timeout_ms": "15000",
+                "loong_extension_contract": "process_stdio_json_line_v1",
+                "loong_extension_family": "trusted_host_extension",
+                "loong_extension_trust_lane": "trusted_host",
+                "loong_extension_methods_json": "[\"extension/event\"]",
+                "loong_extension_host_hooks_json": host_hooks_json,
+            }
+        });
+        write_file(
+            root,
+            "runtime-plugins/trusted-host/loong.plugin.json",
+            &serde_json::to_string_pretty(&manifest).expect("serialize trusted host manifest"),
+        );
+    }
+
+    struct TestAcpHarnessBackend {
+        id: &'static str,
+    }
+
+    impl TestAcpHarnessBackend {
+        fn new(id: &'static str) -> Self {
+            Self { id }
+        }
+    }
+
+    impl loong_app::acp::AcpRuntimeBackend for TestAcpHarnessBackend {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn metadata(&self) -> loong_app::acp::AcpBackendMetadata {
+            loong_app::acp::AcpBackendMetadata::new(
+                self.id(),
+                std::iter::empty::<loong_app::acp::AcpCapability>(),
+                "TaskExecution ACP Test Backend",
+            )
+        }
+
+        fn ensure_session<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 loong_app::config::LoongConfig,
+            request: &'life2 loong_app::acp::AcpSessionBootstrap,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = CliResult<loong_app::acp::AcpSessionHandle>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                Ok(loong_app::acp::AcpSessionHandle {
+                    session_key: request.session_key.clone(),
+                    backend_id: self.id().to_owned(),
+                    runtime_session_name: format!("task-runtime-{}", request.session_key),
+                    working_directory: request.working_directory.clone(),
+                    backend_session_id: Some(format!("backend-{}", request.session_key)),
+                    agent_session_id: Some(format!("agent-{}", request.session_key)),
+                    binding: request.binding.clone(),
+                })
+            })
+        }
+
+        fn run_turn<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 loong_app::config::LoongConfig,
+            _session: &'life2 loong_app::acp::AcpSessionHandle,
+            request: &'life3 loong_app::acp::AcpTurnRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = CliResult<loong_app::acp::AcpTurnResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            'life3: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move {
+                Ok(loong_app::acp::AcpTurnResult {
+                    output_text: format!("acp: {}", request.input),
+                    state: loong_app::acp::AcpSessionState::Ready,
+                    usage: Some(json!({"total_tokens": 3})),
+                    events: Vec::new(),
+                    stop_reason: Some(loong_app::acp::AcpTurnStopReason::Completed),
+                })
+            })
+        }
+
+        fn run_turn_with_sink<'life0, 'life1, 'life2, 'life3, 'life5, 'async_trait>(
+            &'life0 self,
+            config: &'life1 loong_app::config::LoongConfig,
+            session: &'life2 loong_app::acp::AcpSessionHandle,
+            request: &'life3 loong_app::acp::AcpTurnRequest,
+            _abort: Option<loong_app::acp::AcpAbortSignal>,
+            _sink: Option<&'life5 dyn loong_app::acp::AcpTurnEventSink>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = CliResult<loong_app::acp::AcpTurnResult>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            'life3: 'async_trait,
+            'life5: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.run_turn(config, session, request)
+        }
+
+        fn cancel<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 loong_app::config::LoongConfig,
+            _session: &'life2 loong_app::acp::AcpSessionHandle,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn close<'life0, 'life1, 'life2, 'async_trait>(
+            &'life0 self,
+            _config: &'life1 loong_app::config::LoongConfig,
+            _session: &'life2 loong_app::acp::AcpSessionHandle,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CliResult<()>> + Send + 'async_trait>>
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            'life2: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn register_test_acp_backend(backend_id: &'static str) {
+        loong_app::acp::register_acp_backend(backend_id, move || {
+            Box::new(TestAcpHarnessBackend::new(backend_id))
+        })
+        .expect("register task execution ACP backend");
+    }
+
+    fn write_turn_end_marker_entrypoint(root: &Path) {
+        write_file(
+            root,
+            "runtime-plugins/trusted-host/index.js",
+            "#!/usr/bin/env node\nconst fs = require('fs');\nfunction emitResponse(line) { const trimmed = line.trim(); if (!trimmed) return; const request = JSON.parse(trimmed); const payload = request.payload ?? {}; const markerPath = payload.payload?.hook_payload?.metadata?.hook_marker_path ?? null; if (markerPath) { fs.writeFileSync(markerPath, payload.payload?.host_hook ?? 'unknown'); } const response = { method: request.method ?? '', id: request.id ?? null, payload: { handled_hook: payload.payload?.host_hook ?? null, outcome_status: payload.payload?.hook_payload?.outcome?.status ?? null } }; process.stdout.write(`${JSON.stringify(response)}\\n`); } process.stdin.setEncoding('utf8'); let buffered=''; process.stdin.on('data', chunk => { buffered += chunk; let newlineIndex = buffered.indexOf('\\n'); while (newlineIndex !== -1) { const line = buffered.slice(0, newlineIndex); buffered = buffered.slice(newlineIndex + 1); emitResponse(line); newlineIndex = buffered.indexOf('\\n'); } }); process.stdin.on('end', () => { if (buffered.trim()) emitResponse(buffered); }); process.stdin.resume();\n",
         );
     }
 
@@ -572,5 +785,93 @@ mod tests {
             "expected trusted host hook failure, got: {error}"
         );
         assert!(error.contains("runtime_plugins.allowed_process_commands"));
+    }
+
+    #[tokio::test]
+    async fn daemon_runtime_kernel_dispatches_trusted_turn_end_hook_for_successful_acp_turn() {
+        let root = unique_temp_dir("loong-daemon-trusted-turn-end-success");
+        install_trusted_host_runtime_plugin(&root, "node", "[\"turn_end\"]");
+        write_turn_end_marker_entrypoint(&root);
+        let marker_path = root.join("turn-end-marker.txt");
+        let config_path = root.join("loong.toml");
+        let session_hint = format!(
+            "trusted-turn-end-session-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        );
+        let backend_id: &'static str = Box::leak(
+            format!(
+                "task-execution-turn-end-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system time should be after epoch")
+                    .as_nanos()
+            )
+            .into_boxed_str(),
+        );
+        register_test_acp_backend(backend_id);
+
+        let mut config = loong_app::config::LoongConfig::default();
+        config.acp.enabled = true;
+        config.acp.backend = Some(backend_id.to_owned());
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
+        config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
+        loong_app::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+            .expect("write config");
+
+        let kernel = build_daemon_runtime_kernel();
+        let token = kernel
+            .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
+            .expect("issue token");
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            "hook_marker_path".to_owned(),
+            marker_path.display().to_string(),
+        );
+        let payload = serde_json::to_value(DaemonTurnTaskPayload {
+            config_path: Some(config_path.display().to_string()),
+            session_hint: Some(session_hint),
+            message: Some("hello".to_owned()),
+            turn_mode: loong_app::agent_runtime::AgentTurnMode::Acp,
+            metadata,
+            acp: true,
+            ..DaemonTurnTaskPayload::default()
+        })
+        .expect("serialize turn payload");
+
+        let execution = execute_daemon_task_with_supervisor(
+            &kernel,
+            DEFAULT_PACK_ID,
+            &token,
+            TaskIntent {
+                task_id: "task-trusted-turn-end-success-01".to_owned(),
+                objective: "hello".to_owned(),
+                required_capabilities: BTreeSet::from([
+                    Capability::InvokeTool,
+                    Capability::MemoryRead,
+                    Capability::MemoryWrite,
+                ]),
+                payload,
+            },
+        )
+        .await
+        .expect("execute daemon task");
+
+        assert!(
+            execution.error.is_none(),
+            "unexpected execution error: {:?}",
+            execution.error
+        );
+        assert!(
+            execution.outcome.is_some(),
+            "expected successful harness outcome"
+        );
+        let marker_contents =
+            fs::read_to_string(&marker_path).expect("turn_end hook should write marker");
+        assert_eq!(marker_contents, "turn_end");
     }
 }
