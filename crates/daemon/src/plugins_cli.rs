@@ -38,19 +38,6 @@ pub const PLUGINS_INVOKE_EXTENSION_SCHEMA_PURPOSE: &str = "native_extension_smok
 pub const PLUGINS_INVOKE_HOST_HOOK_SCHEMA_PURPOSE: &str = "trusted_host_hook_probe";
 pub const PLUGINS_INVOKE_TUI_SURFACE_SCHEMA_PURPOSE: &str = "trusted_host_tui_surface_probe";
 
-const TRUSTED_HOST_EXTENSION_FAMILY: &str = "trusted_host_extension";
-const TRUSTED_HOST_EXTENSION_TRUST_LANE: &str = "trusted_host";
-const TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS: &[&str] = &[
-    "session_start",
-    "session_shutdown",
-    "turn_start",
-    "turn_end",
-    "message_start",
-    "message_end",
-];
-const TRUSTED_HOST_TUI_EXTENSION_SURFACES: &[&str] =
-    &["command_palette", "settings_flow", "startup_onboarding"];
-
 fn plugins_command_schema(purpose: &str) -> JsonSchemaDescriptor {
     let version = PLUGINS_COMMAND_SCHEMA_VERSION;
     let surface = PLUGINS_COMMAND_SCHEMA_SURFACE;
@@ -1331,12 +1318,16 @@ async fn execute_plugins_invoke_host_hook(
         "plugins invoke-host-hook",
         "trusted host extensions",
     )?;
-    let declarations = parse_native_extension_declarations(&plugin.metadata)?;
-    if declarations.family.as_deref() != Some(TRUSTED_HOST_EXTENSION_FAMILY)
-        || declarations.trust_lane.as_deref() != Some(TRUSTED_HOST_EXTENSION_TRUST_LANE)
+    let declarations =
+        crate::kernel::plugin_native_extension_declarations_from_metadata(&plugin.metadata);
+    if declarations.family.as_deref() != Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
+        || declarations.trust_lane.as_deref()
+            != Some(crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE)
     {
         return Err(format!(
-            "plugins invoke-host-hook requires plugin `{plugin_id}` to declare loong_extension_family=`{TRUSTED_HOST_EXTENSION_FAMILY}` and loong_extension_trust_lane=`{TRUSTED_HOST_EXTENSION_TRUST_LANE}`"
+            "plugins invoke-host-hook requires plugin `{plugin_id}` to declare loong_extension_family=`{}` and loong_extension_trust_lane=`{}`",
+            crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY,
+            crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE
         ));
     }
     if !declarations
@@ -1357,10 +1348,10 @@ async fn execute_plugins_invoke_host_hook(
             "plugins invoke-host-hook requires plugin `{plugin_id}` to declare host hook `{hook}` in loong_extension_host_hooks_json"
         ));
     }
-    if !TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.contains(&hook.as_str()) {
+    if !crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.contains(&hook.as_str()) {
         return Err(format!(
             "plugins invoke-host-hook requires supported read-only hook `{hook}`; supported hooks are {}",
-            TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
+            crate::kernel::TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
         ));
     }
     let bridge_policy = build_process_stdio_bridge_policy_from_allow_commands(
@@ -1415,12 +1406,16 @@ async fn execute_plugins_invoke_tui_surface(
         "plugins invoke-tui-surface",
         "trusted-host TUI surfaces",
     )?;
-    let declarations = parse_native_extension_declarations(&plugin.metadata)?;
-    if declarations.family.as_deref() != Some(TRUSTED_HOST_EXTENSION_FAMILY)
-        || declarations.trust_lane.as_deref() != Some(TRUSTED_HOST_EXTENSION_TRUST_LANE)
+    let declarations =
+        crate::kernel::plugin_native_extension_declarations_from_metadata(&plugin.metadata);
+    if declarations.family.as_deref() != Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
+        || declarations.trust_lane.as_deref()
+            != Some(crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE)
     {
         return Err(format!(
-            "plugins invoke-tui-surface requires plugin `{plugin_id}` to declare loong_extension_family=`{TRUSTED_HOST_EXTENSION_FAMILY}` and loong_extension_trust_lane=`{TRUSTED_HOST_EXTENSION_TRUST_LANE}`"
+            "plugins invoke-tui-surface requires plugin `{plugin_id}` to declare loong_extension_family=`{}` and loong_extension_trust_lane=`{}`",
+            crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY,
+            crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE
         ));
     }
     if !declarations
@@ -1441,10 +1436,10 @@ async fn execute_plugins_invoke_tui_surface(
             "plugins invoke-tui-surface requires plugin `{plugin_id}` to declare TUI surface `{tui_surface}` in loong_extension_tui_surfaces_json"
         ));
     }
-    if !TRUSTED_HOST_TUI_EXTENSION_SURFACES.contains(&tui_surface.as_str()) {
+    if !crate::kernel::TRUSTED_HOST_TUI_EXTENSION_SURFACES.contains(&tui_surface.as_str()) {
         return Err(format!(
             "plugins invoke-tui-surface requires supported surface `{tui_surface}`; supported surfaces are {}",
-            TRUSTED_HOST_TUI_EXTENSION_SURFACES.join(", ")
+            crate::kernel::TRUSTED_HOST_TUI_EXTENSION_SURFACES.join(", ")
         ));
     }
     let bridge_policy = build_process_stdio_bridge_policy_from_allow_commands(
@@ -1489,65 +1484,10 @@ fn normalize_required_cli_value(field_name: &str, raw: &str) -> CliResult<String
     Ok(trimmed.to_owned())
 }
 
-#[derive(Debug, Clone, Default)]
-struct NativeExtensionDeclarations {
-    family: Option<String>,
-    trust_lane: Option<String>,
-    methods: Vec<String>,
-    host_hooks: Vec<String>,
-    tui_surfaces: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct ProcessStdioExtensionInvocationOutcome {
     response_payload: Value,
     runtime_evidence: Value,
-}
-
-fn parse_native_extension_declarations(
-    metadata: &BTreeMap<String, String>,
-) -> CliResult<NativeExtensionDeclarations> {
-    Ok(NativeExtensionDeclarations {
-        family: normalized_optional_metadata_value(metadata, "loong_extension_family"),
-        trust_lane: normalized_optional_metadata_value(metadata, "loong_extension_trust_lane"),
-        methods: parse_metadata_string_list(metadata, "loong_extension_methods_json")?,
-        host_hooks: parse_metadata_string_list(metadata, "loong_extension_host_hooks_json")?,
-        tui_surfaces: parse_metadata_string_list(metadata, "loong_extension_tui_surfaces_json")?,
-    })
-}
-
-fn normalized_optional_metadata_value(
-    metadata: &BTreeMap<String, String>,
-    key: &str,
-) -> Option<String> {
-    let value = metadata.get(key)?;
-    let trimmed_value = value.trim();
-    if trimmed_value.is_empty() {
-        return None;
-    }
-    Some(trimmed_value.to_owned())
-}
-
-fn parse_metadata_string_list(
-    metadata: &BTreeMap<String, String>,
-    key: &str,
-) -> CliResult<Vec<String>> {
-    let Some(raw_value) = metadata.get(key) else {
-        return Ok(Vec::new());
-    };
-    if raw_value.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
-    serde_json::from_str::<Vec<String>>(raw_value)
-        .map(|values| {
-            values
-                .into_iter()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .collect()
-        })
-        .map_err(|error| format!("metadata `{key}` must be a JSON string array: {error}"))
 }
 
 fn build_process_stdio_bridge_policy_from_allow_commands(
@@ -5183,11 +5123,11 @@ mod tests {
         };
         assert_eq!(
             hook_execution.extension_family.as_deref(),
-            Some(TRUSTED_HOST_EXTENSION_FAMILY)
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
         );
         assert_eq!(
             hook_execution.extension_trust_lane.as_deref(),
-            Some(TRUSTED_HOST_EXTENSION_TRUST_LANE)
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE)
         );
         assert_eq!(hook_execution.dispatched_method, "extension/event");
         assert_eq!(hook_execution.hook, "turn_start");
@@ -5229,7 +5169,7 @@ mod tests {
         };
         assert_eq!(
             surface_execution.extension_family.as_deref(),
-            Some(TRUSTED_HOST_EXTENSION_FAMILY)
+            Some(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY)
         );
         assert_eq!(surface_execution.tui_surface, "command_palette");
         assert_eq!(
@@ -5265,7 +5205,7 @@ mod tests {
         .await
         .expect_err("invoke-host-hook should reject governed sidecar packages");
 
-        assert!(error.contains(TRUSTED_HOST_EXTENSION_FAMILY));
-        assert!(error.contains(TRUSTED_HOST_EXTENSION_TRUST_LANE));
+        assert!(error.contains(crate::kernel::TRUSTED_HOST_EXTENSION_FAMILY));
+        assert!(error.contains(crate::kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE));
     }
 }

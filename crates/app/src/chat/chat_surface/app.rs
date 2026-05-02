@@ -2548,21 +2548,13 @@ fn collect_ready_trusted_tui_surface_extensions(
             continue;
         }
 
-        let extension_family = plugin
-            .metadata
-            .get("loong_extension_family")
-            .map(String::as_str)
-            .unwrap_or_default();
-        let extension_trust_lane = plugin
-            .metadata
-            .get("loong_extension_trust_lane")
-            .map(String::as_str)
-            .unwrap_or_default();
-        let declared_tui_surfaces =
-            metadata_string_list(&plugin.metadata, "loong_extension_tui_surfaces_json");
-        if extension_family != "trusted_host_extension"
-            || extension_trust_lane != "trusted_host"
-            || !declared_tui_surfaces
+        let declarations =
+            loong_kernel::plugin_native_extension_declarations_from_metadata(&plugin.metadata);
+        if declarations.family.as_deref() != Some(loong_kernel::TRUSTED_HOST_EXTENSION_FAMILY)
+            || declarations.trust_lane.as_deref()
+                != Some(loong_kernel::TRUSTED_HOST_EXTENSION_TRUST_LANE)
+            || !declarations
+                .tui_surfaces
                 .iter()
                 .any(|surface| surface == requested_surface)
         {
