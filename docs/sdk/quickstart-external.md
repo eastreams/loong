@@ -276,6 +276,10 @@ When you want Loong to explain those surfaces well, keep
 `loong_extension_tui_surface_specs_json` aligned with each declared surface's
 label, summary, sample payload, and operator hint.
 
+The same applies to trusted host hooks: keep
+`loong_extension_host_hook_specs_json` aligned with each declared hook's label,
+summary, sample payload, and operator hint.
+
 Scaffold them with one or more `--tui-surface` flags:
 
 ```bash

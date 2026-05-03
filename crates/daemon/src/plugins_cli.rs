@@ -1629,7 +1629,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         operator_actions_command.as_str(),
         smoke_test_command.as_deref(),
         runtime_execute_command.as_deref(),
-        !declared_tui_surfaces.is_empty(),
+        !declared_host_hooks.is_empty() || !declared_tui_surfaces.is_empty(),
         native_extension_authoring_profile
             .as_ref()
             .map(|profile| profile.reference_example_path.as_str()),
@@ -2488,6 +2488,14 @@ fn build_plugin_scaffold_manifest(
             "loong_extension_host_hooks_json".to_owned(),
             serde_json::to_string(&host_hooks).unwrap_or_else(|_| "[]".to_owned()),
         );
+        if let Some(host_hook_specs_json) =
+            render_scaffold_host_hook_specs_json(host_hooks.as_slice())
+        {
+            metadata.insert(
+                "loong_extension_host_hook_specs_json".to_owned(),
+                host_hook_specs_json,
+            );
+        }
         metadata.insert(
             "loong_extension_tui_surfaces_json".to_owned(),
             serde_json::to_string(&tui_surfaces).unwrap_or_else(|_| "[]".to_owned()),
@@ -2572,6 +2580,54 @@ fn render_scaffold_tui_surface_specs_json(tui_surfaces: &[String]) -> Option<Str
     serde_json::to_string(&specs).ok()
 }
 
+fn render_scaffold_host_hook_specs_json(host_hooks: &[String]) -> Option<String> {
+    if host_hooks.is_empty() {
+        return None;
+    }
+
+    let specs = host_hooks
+        .iter()
+        .map(|hook| {
+            let human_label = humanize_tui_surface_identifier(hook);
+            let summary = match hook.as_str() {
+                "session_start" => "Observe the start of a trusted host session.".to_owned(),
+                "session_shutdown" => {
+                    "Observe the shutdown of a trusted host session.".to_owned()
+                }
+                "turn_start" => "Observe the start of a trusted host turn.".to_owned(),
+                "turn_end" => "Observe the completion of a trusted host turn.".to_owned(),
+                "message_start" => "Observe the start of a trusted host message.".to_owned(),
+                "message_end" => "Observe the completion of a trusted host message.".to_owned(),
+                _ => format!("Observe the trusted host hook `{hook}`."),
+            };
+            let sample_payload = match hook.as_str() {
+                "session_start" => serde_json::json!({"session_id":"demo-session"}),
+                "session_shutdown" => {
+                    serde_json::json!({"session_id":"demo-session","reason":"explicit_close"})
+                }
+                "turn_start" => serde_json::json!({"turn_id":"demo-turn"}),
+                "turn_end" => serde_json::json!({"turn_id":"demo-turn","status":"ok"}),
+                "message_start" => serde_json::json!({"message_id":"demo-message"}),
+                "message_end" => serde_json::json!({"message_id":"demo-message"}),
+                _ => serde_json::json!({}),
+            };
+            (
+                hook.clone(),
+                serde_json::json!({
+                    "label": human_label,
+                    "summary": summary,
+                    "sample_payload": sample_payload,
+                    "operator_hint": format!(
+                        "Probe this hook with `loong plugins invoke-host-hook --root \\\"<package-root>\\\" --plugin-id \\\"<plugin-id>\\\" --hook {hook} --payload '{{}}' --allow-command <allow-command>` before relying on automatic runtime dispatch."
+                    ),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    serde_json::to_string(&specs).ok()
+}
+
 fn humanize_tui_surface_identifier(surface: &str) -> String {
     let mut label = String::new();
     let mut capitalize_next = true;
@@ -2629,7 +2685,7 @@ fn render_plugin_scaffold_readme(
     operator_actions_command: &str,
     smoke_test_command: Option<&str>,
     runtime_execute_command: Option<&str>,
-    has_trusted_tui_surface_projection: bool,
+    has_trusted_surface_projection: bool,
     reference_example_path: Option<&str>,
 ) -> String {
     let runtime_files_summary = match runtime_files {
@@ -2684,10 +2740,10 @@ fn render_plugin_scaffold_readme(
         operator_actions_command.to_owned(),
         "```".to_owned(),
     ];
-    if has_trusted_tui_surface_projection {
+    if has_trusted_surface_projection {
         lines.extend([
             String::new(),
-            "Keep `loong_extension_tui_surface_specs_json` aligned with each declared trusted TUI surface so Loong can surface labels, summaries, sample payloads, and operator hints."
+            "Keep `loong_extension_host_hook_specs_json` and `loong_extension_tui_surface_specs_json` aligned with each declared trusted host hook or TUI surface so Loong can surface labels, summaries, sample payloads, and operator hints."
                 .to_owned(),
         ]);
     }
@@ -3021,17 +3077,19 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             || native_extension.trust_lane.is_some()
             || !native_extension.methods.is_empty()
             || !native_extension.host_hooks.is_empty()
+            || !native_extension.host_hook_specs.is_empty()
             || !native_extension.tui_surfaces.is_empty()
             || !native_extension.tui_surface_specs.is_empty()
             || !native_extension.metadata_issues.is_empty();
         if has_native_extension_projection {
             lines.push(format!(
-                "  native_extension contract={} family={} trust_lane={} methods={} host_hooks={} tui_surfaces={} tui_surface_specs={} metadata_issues={}",
+                "  native_extension contract={} family={} trust_lane={} methods={} host_hooks={} host_hook_specs={} tui_surfaces={} tui_surface_specs={} metadata_issues={}",
                 display_text_or_dash(native_extension.contract.as_deref()),
                 display_text_or_dash(native_extension.family.as_deref()),
                 display_text_or_dash(native_extension.trust_lane.as_deref()),
                 format_csv_or_dash(&native_extension.methods),
                 format_csv_or_dash(&native_extension.host_hooks),
+                format_host_hook_specs_or_dash(&native_extension.host_hook_specs),
                 format_csv_or_dash(&native_extension.tui_surfaces),
                 format_tui_surface_specs_or_dash(&native_extension.tui_surface_specs),
                 format_csv_or_dash(&native_extension.metadata_issues),
@@ -3373,17 +3431,19 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
         || native_extension.trust_lane.is_some()
         || !native_extension.methods.is_empty()
         || !native_extension.host_hooks.is_empty()
+        || !native_extension.host_hook_specs.is_empty()
         || !native_extension.tui_surfaces.is_empty()
         || !native_extension.tui_surface_specs.is_empty()
         || !native_extension.metadata_issues.is_empty();
     if has_native_extension_projection {
         lines.push(format!(
-            "  native_extension contract={} family={} trust_lane={} methods={} host_hooks={} tui_surfaces={} tui_surface_specs={} metadata_issues={}",
+            "  native_extension contract={} family={} trust_lane={} methods={} host_hooks={} host_hook_specs={} tui_surfaces={} tui_surface_specs={} metadata_issues={}",
             display_text_or_dash(native_extension.contract.as_deref()),
             display_text_or_dash(native_extension.family.as_deref()),
             display_text_or_dash(native_extension.trust_lane.as_deref()),
             format_csv_or_dash(&native_extension.methods),
             format_csv_or_dash(&native_extension.host_hooks),
+            format_host_hook_specs_or_dash(&native_extension.host_hook_specs),
             format_csv_or_dash(&native_extension.tui_surfaces),
             format_tui_surface_specs_or_dash(&native_extension.tui_surface_specs),
             format_csv_or_dash(&native_extension.metadata_issues),
@@ -4487,6 +4547,21 @@ fn format_tui_surface_specs_or_dash(
         .join(",")
 }
 
+fn format_host_hook_specs_or_dash(specs: &[crate::kernel::PluginTrustedHostHookSpec]) -> String {
+    if specs.is_empty() {
+        return "-".to_owned();
+    }
+
+    specs
+        .iter()
+        .map(|spec| match spec.label.as_deref() {
+            Some(label) => format!("{}:{}", spec.hook, label),
+            None => spec.hook.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn format_rollup_map(values: &BTreeMap<String, usize>) -> String {
     if values.is_empty() {
         return "-".to_owned();
@@ -4832,6 +4907,7 @@ mod tests {
                 "loong_extension_trust_lane": "trusted_host",
                 "loong_extension_methods_json": "[\"extension/event\"]",
                 "loong_extension_host_hooks_json": "[\"turn_start\",\"turn_end\"]",
+                "loong_extension_host_hook_specs_json": "{\"turn_start\":{\"label\":\"Turn Start\",\"summary\":\"Observe the start of a trusted host turn.\",\"sample_payload\":{\"turn_id\":\"demo-turn\"}},\"turn_end\":{\"label\":\"Turn End\",\"summary\":\"Observe the completion of a trusted host turn.\",\"sample_payload\":{\"turn_id\":\"demo-turn\",\"status\":\"ok\"}}}",
                 "loong_extension_tui_surfaces_json": "[\"command_palette\"]",
                 "loong_extension_tui_surface_specs_json": "{\"command_palette\":{\"label\":\"Command Palette\",\"summary\":\"Inspect extension commands from the shell-first command palette.\",\"sample_payload\":{\"query\":\":ext\"}}}"
             },
@@ -5127,6 +5203,11 @@ mod tests {
             result.native_extension.host_hooks,
             vec!["turn_start".to_owned(), "turn_end".to_owned()]
         );
+        assert_eq!(result.native_extension.host_hook_specs.len(), 2);
+        assert_eq!(
+            result.native_extension.host_hook_specs[0].hook,
+            "turn_start"
+        );
         assert_eq!(
             result.native_extension.tui_surfaces,
             vec!["command_palette".to_owned()]
@@ -5148,6 +5229,7 @@ mod tests {
         assert!(rendered.contains("trust_lane=trusted_host"));
         assert!(rendered.contains("methods=extension/event"));
         assert!(rendered.contains("host_hooks=turn_start,turn_end"));
+        assert!(rendered.contains("host_hook_specs=turn_start:Turn Start,turn_end:Turn End"));
         assert!(rendered.contains("tui_surfaces=command_palette"));
         assert!(rendered.contains("tui_surface_specs=command_palette:Command Palette"));
         assert!(rendered.contains("authoring validate=loong plugins doctor --root"));
@@ -5163,6 +5245,10 @@ mod tests {
         assert_eq!(
             encoded["results"][0]["native_extension"]["host_hooks"],
             serde_json::json!(["turn_start", "turn_end"])
+        );
+        assert_eq!(
+            encoded["results"][0]["native_extension"]["host_hook_specs"][0]["hook"],
+            serde_json::json!("turn_start")
         );
         assert_eq!(
             encoded["results"][0]["native_extension"]["tui_surfaces"],
@@ -5322,6 +5408,11 @@ mod tests {
             result.native_extension.host_hooks,
             vec!["turn_start".to_owned(), "turn_end".to_owned()]
         );
+        assert_eq!(result.native_extension.host_hook_specs.len(), 2);
+        assert_eq!(
+            result.native_extension.host_hook_specs[0].hook,
+            "turn_start"
+        );
         assert_eq!(
             result.native_extension.tui_surfaces,
             vec!["command_palette".to_owned()]
@@ -5342,6 +5433,7 @@ mod tests {
         assert!(rendered.contains("family=trusted_host_extension"));
         assert!(rendered.contains("trust_lane=trusted_host"));
         assert!(rendered.contains("host_hooks=turn_start,turn_end"));
+        assert!(rendered.contains("host_hook_specs=turn_start:Turn Start,turn_end:Turn End"));
         assert!(rendered.contains("tui_surfaces=command_palette"));
         assert!(rendered.contains("tui_surface_specs=command_palette:Command Palette"));
         assert!(rendered.contains("authoring validate=loong plugins doctor --root"));
@@ -5357,6 +5449,10 @@ mod tests {
         assert_eq!(
             encoded["results"][0]["plugin"]["native_extension"]["tui_surfaces"],
             serde_json::json!(["command_palette"])
+        );
+        assert_eq!(
+            encoded["results"][0]["plugin"]["native_extension"]["host_hook_specs"][0]["hook"],
+            serde_json::json!("turn_start")
         );
         assert_eq!(
             encoded["results"][0]["plugin"]["native_extension"]["tui_surface_specs"][0]["surface"],
@@ -7300,6 +7396,22 @@ mod tests {
             ),
         ] {
             let package_root = repo_root.join(relative_root).display().to_string();
+            let manifest_path = repo_root
+                .join(relative_root)
+                .join(PACKAGE_MANIFEST_FILE_NAME);
+            let manifest = read_plugin_manifest(&manifest_path);
+            assert!(
+                manifest
+                    .metadata
+                    .contains_key("loong_extension_host_hook_specs_json"),
+                "{plugin_id} should carry checked-in trusted host hook specs"
+            );
+            assert!(
+                manifest
+                    .metadata
+                    .contains_key("loong_extension_tui_surface_specs_json"),
+                "{plugin_id} should carry checked-in trusted TUI surface specs"
+            );
 
             let hook_execution = execute_plugins_command(PluginsCommandOptions {
                 json: false,
@@ -7487,6 +7599,10 @@ mod tests {
             assert!(
                 doc.contains("loong_extension_tui_surface_specs_json"),
                 "doc should mention the trusted TUI surface spec metadata field"
+            );
+            assert!(
+                doc.contains("loong_extension_host_hook_specs_json"),
+                "doc should mention the trusted host hook spec metadata field"
             );
         }
     }

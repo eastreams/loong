@@ -80,6 +80,9 @@ When a trusted surface needs stronger self-description, authors should add
 `loong_extension_tui_surface_specs_json` so Loong can project labels,
 summaries, sample payloads, and operator hints from shared contract truth.
 
+Trusted host hooks can follow the same pattern through
+`loong_extension_host_hook_specs_json`.
+
 ### Workflow and flow assets
 
 These are strategically important, especially because promotion already points

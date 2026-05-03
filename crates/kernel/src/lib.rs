@@ -75,11 +75,11 @@ pub use plugin_ir::{
     PluginChannelBridgeReadiness, PluginCompatibilityShimSupport, PluginIR,
     PluginNativeExtensionDeclarations, PluginRuntimeProfile, PluginRuntimeScaffoldDefaults,
     PluginSetupReadiness, PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
-    PluginTrustedTuiSurfaceSpec, TRUSTED_HOST_BUILT_IN_TUI_EXTENSION_SURFACES,
-    TRUSTED_HOST_EXTENSION_FAMILY, TRUSTED_HOST_EXTENSION_TRUST_LANE,
-    TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS, evaluate_plugin_setup_requirements,
-    plugin_native_extension_declarations_from_metadata, plugin_runtime_scaffold_defaults,
-    trusted_host_tui_surface_identifier_is_valid,
+    PluginTrustedHostHookSpec, PluginTrustedTuiSurfaceSpec,
+    TRUSTED_HOST_BUILT_IN_TUI_EXTENSION_SURFACES, TRUSTED_HOST_EXTENSION_FAMILY,
+    TRUSTED_HOST_EXTENSION_TRUST_LANE, TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS,
+    evaluate_plugin_setup_requirements, plugin_native_extension_declarations_from_metadata,
+    plugin_runtime_scaffold_defaults, trusted_host_tui_surface_identifier_is_valid,
 };
 pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};

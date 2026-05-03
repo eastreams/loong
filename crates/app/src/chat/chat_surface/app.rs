@@ -6017,6 +6017,10 @@ fn render_extension_detail_lines_with_width(
         .as_ref()
         .map(|declarations| declarations.host_hooks.clone())
         .unwrap_or_default();
+    let trusted_host_hook_specs = extension_declarations
+        .as_ref()
+        .map(|declarations| declarations.host_hook_specs.clone())
+        .unwrap_or_default();
     let trusted_tui_surface_specs = extension_declarations
         .as_ref()
         .map(|declarations| declarations.tui_surface_specs.clone())
@@ -6039,12 +6043,15 @@ fn render_extension_detail_lines_with_width(
         ),
     ];
     footer_lines.extend(declared_host_hooks.iter().map(|hook| {
+        let sample_payload = trusted_host_hook_spec(trusted_host_hook_specs.as_slice(), hook)
+            .and_then(|spec| spec.sample_payload_json.as_deref())
+            .unwrap_or_else(|| sample_host_hook_payload(hook));
         format!(
             "Probe host hook `{hook}` with `loong plugins invoke-host-hook --root \"{}\" --plugin-id \"{}\" --hook \"{}\" --payload '{}' --allow-command {}`.",
             entry.package_root,
             entry.plugin_id,
             hook,
-            sample_host_hook_payload(hook),
+            sample_payload,
             allow_command_hint,
         )
     }));
@@ -6145,6 +6152,22 @@ fn render_extension_detail_lines_with_width(
                         .collect(),
                 });
             }
+            if !trusted_host_hook_specs.is_empty() {
+                sections.push(TuiSectionSpec::KeyValues {
+                    title: Some("trusted host hook specs".to_owned()),
+                    items: trusted_host_hook_specs
+                        .iter()
+                        .map(|spec| {
+                            let label = spec.label.as_deref().unwrap_or(spec.hook.as_str());
+                            let summary = spec.summary.as_deref().unwrap_or("declared");
+                            TuiKeyValueSpec::Plain {
+                                key: spec.hook.clone(),
+                                value: format!("{label} · {summary}"),
+                            }
+                        })
+                        .collect(),
+                });
+            }
             sections
         },
         footer_lines,
@@ -6209,6 +6232,14 @@ fn trusted_tui_surface_spec<'a>(
     surface: &str,
 ) -> Option<&'a loong_kernel::PluginTrustedTuiSurfaceSpec> {
     specs.iter().find(|spec| spec.surface == surface)
+}
+
+#[cfg(feature = "channel-plugin-bridge")]
+fn trusted_host_hook_spec<'a>(
+    specs: &'a [loong_kernel::PluginTrustedHostHookSpec],
+    hook: &str,
+) -> Option<&'a loong_kernel::PluginTrustedHostHookSpec> {
+    specs.iter().find(|spec| spec.hook == hook)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -8037,6 +8068,10 @@ mod tests {
                     "[\"turn_start\"]".to_owned(),
                 ),
                 (
+                    "loong_extension_host_hook_specs_json".to_owned(),
+                    "{\"turn_start\":{\"label\":\"Turn Start\",\"summary\":\"Observe the start of a trusted host turn.\",\"sample_payload\":{\"turn_id\":\"demo-turn\"},\"operator_hint\":\"Probe this hook with `loong plugins invoke-host-hook --root \\\"<package-root>\\\" --plugin-id \\\"<plugin-id>\\\" --hook turn_start --payload '{}' --allow-command <allow-command>` before relying on automatic runtime dispatch.\"}}".to_owned(),
+                ),
+                (
                     "loong_extension_tui_surfaces_json".to_owned(),
                     "[\"command_palette\"]".to_owned(),
                 ),
@@ -8698,6 +8733,9 @@ mod tests {
         assert!(rendered.contains("command_palette"));
         assert!(rendered.contains("turn_start"));
         assert!(rendered.contains("package root"));
+        assert!(rendered.contains("trusted host hook specs"));
+        assert!(rendered.contains("Turn Start"));
+        assert!(rendered.contains("Observe the start of a trusted host turn."));
         assert!(rendered.contains("trusted TUI surface specs"));
         assert!(rendered.contains("Command Palette"));
         assert!(rendered.contains("Inspect extension commands"));

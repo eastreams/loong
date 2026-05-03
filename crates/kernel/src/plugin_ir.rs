@@ -112,9 +112,20 @@ pub struct PluginNativeExtensionDeclarations {
     pub trust_lane: Option<String>,
     pub methods: Vec<String>,
     pub host_hooks: Vec<String>,
+    pub host_hook_specs: Vec<PluginTrustedHostHookSpec>,
     pub tui_surfaces: Vec<String>,
     pub tui_surface_specs: Vec<PluginTrustedTuiSurfaceSpec>,
     pub metadata_issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PluginTrustedHostHookSpec {
+    pub hook: String,
+    pub label: Option<String>,
+    pub summary: Option<String>,
+    pub sample_payload_json: Option<String>,
+    pub operator_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1473,6 +1484,11 @@ pub fn plugin_native_extension_declarations_from_metadata(
         "loong_extension_host_hooks_json",
         &mut declarations.metadata_issues,
     );
+    declarations.host_hook_specs = normalized_host_hook_specs_with_issue(
+        metadata,
+        "loong_extension_host_hook_specs_json",
+        &mut declarations.metadata_issues,
+    );
     declarations.tui_surfaces = normalized_metadata_string_list_with_issue(
         metadata,
         "loong_extension_tui_surfaces_json",
@@ -1511,6 +1527,27 @@ fn validate_plugin_native_extension_declarations(
         }
     }
 
+    for spec in &declarations.host_hook_specs {
+        if !TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.contains(&spec.hook.as_str()) {
+            declarations.metadata_issues.push(format!(
+                "invalid trusted host hook spec `{}`; supported hooks are {}",
+                spec.hook,
+                TRUSTED_HOST_READ_ONLY_EXTENSION_HOOKS.join(", ")
+            ));
+            continue;
+        }
+        if !declarations
+            .host_hooks
+            .iter()
+            .any(|hook| hook == &spec.hook)
+        {
+            declarations.metadata_issues.push(format!(
+                "trusted host hook spec `{}` requires a matching declaration in loong_extension_host_hooks_json",
+                spec.hook
+            ));
+        }
+    }
+
     for surface in &declarations.tui_surfaces {
         if !trusted_host_tui_surface_identifier_is_valid(surface.as_str()) {
             declarations.metadata_issues.push(format!(
@@ -1538,6 +1575,21 @@ fn validate_plugin_native_extension_declarations(
             ));
         }
     }
+
+    declarations.host_hook_specs.sort_by_key(|spec| {
+        declarations
+            .host_hooks
+            .iter()
+            .position(|hook| hook == &spec.hook)
+            .unwrap_or(usize::MAX)
+    });
+    declarations.tui_surface_specs.sort_by_key(|spec| {
+        declarations
+            .tui_surfaces
+            .iter()
+            .position(|surface| surface == &spec.surface)
+            .unwrap_or(usize::MAX)
+    });
 }
 
 fn normalized_optional_metadata_value(
@@ -1623,6 +1675,64 @@ fn normalized_tui_surface_specs_with_issue(
 
         specs.push(PluginTrustedTuiSurfaceSpec {
             surface,
+            label,
+            summary,
+            sample_payload_json,
+            operator_hint,
+        });
+    }
+
+    specs
+}
+
+fn normalized_host_hook_specs_with_issue(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+    metadata_issues: &mut Vec<String>,
+) -> Vec<PluginTrustedHostHookSpec> {
+    let Some(raw_value) = metadata.get(key) else {
+        return Vec::new();
+    };
+    if raw_value.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let parsed_specs = match serde_json::from_str::<BTreeMap<String, serde_json::Value>>(raw_value)
+    {
+        Ok(parsed_specs) => parsed_specs,
+        Err(error) => {
+            metadata_issues.push(format!(
+                "metadata `{key}` must be a JSON object keyed by trusted host hook id: {error}"
+            ));
+            return Vec::new();
+        }
+    };
+
+    let mut specs = Vec::new();
+    for (hook, spec_value) in parsed_specs {
+        let Some(spec_object) = spec_value.as_object() else {
+            metadata_issues.push(format!(
+                "trusted host hook spec `{hook}` in `{key}` must be a JSON object"
+            ));
+            continue;
+        };
+
+        let label = normalized_optional_json_string(spec_object.get("label"));
+        let summary = normalized_optional_json_string(spec_object.get("summary"));
+        let operator_hint = normalized_optional_json_string(spec_object.get("operator_hint"));
+        let sample_payload_json = spec_object
+            .get("sample_payload")
+            .map(serde_json::to_string)
+            .transpose()
+            .unwrap_or_else(|error| {
+                metadata_issues.push(format!(
+                    "trusted host hook spec `{hook}` in `{key}` has a non-serializable sample_payload: {error}"
+                ));
+                None
+            });
+
+        specs.push(PluginTrustedHostHookSpec {
+            hook,
             label,
             summary,
             sample_payload_json,
@@ -3515,6 +3625,14 @@ mod tests {
                 "[\"extension/event\"]".to_owned(),
             ),
             (
+                "loong_extension_host_hooks_json".to_owned(),
+                "[\"turn_start\"]".to_owned(),
+            ),
+            (
+                "loong_extension_host_hook_specs_json".to_owned(),
+                r#"{"turn_start":{"label":"Turn Start","summary":"Observe the start of a turn","sample_payload":{"turn_id":"demo-turn"},"operator_hint":"Dispatches automatically before turn execution."}}"#.to_owned(),
+            ),
+            (
                 "loong_extension_tui_surfaces_json".to_owned(),
                 "[\"command_palette\"]".to_owned(),
             ),
@@ -3538,6 +3656,12 @@ mod tests {
             declarations.tui_surfaces,
             vec!["command_palette".to_owned()]
         );
+        assert_eq!(declarations.host_hook_specs.len(), 1);
+        assert_eq!(declarations.host_hook_specs[0].hook, "turn_start");
+        assert_eq!(
+            declarations.host_hook_specs[0].label.as_deref(),
+            Some("Turn Start")
+        );
         assert_eq!(declarations.tui_surface_specs.len(), 1);
         assert_eq!(declarations.tui_surface_specs[0].surface, "command_palette");
         assert_eq!(
@@ -3551,6 +3675,34 @@ mod tests {
             Some("{\"query\":\":ext\"}")
         );
         assert!(declarations.metadata_issues.is_empty());
+    }
+
+    #[test]
+    fn plugin_native_extension_declarations_flag_undeclared_host_hook_spec() {
+        let metadata = BTreeMap::from([
+            (
+                "loong_extension_family".to_owned(),
+                TRUSTED_HOST_EXTENSION_FAMILY.to_owned(),
+            ),
+            (
+                "loong_extension_trust_lane".to_owned(),
+                TRUSTED_HOST_EXTENSION_TRUST_LANE.to_owned(),
+            ),
+            (
+                "loong_extension_host_hooks_json".to_owned(),
+                "[\"turn_start\"]".to_owned(),
+            ),
+            (
+                "loong_extension_host_hook_specs_json".to_owned(),
+                r#"{"turn_end":{"label":"Turn End"}}"#.to_owned(),
+            ),
+        ]);
+
+        let declarations = plugin_native_extension_declarations_from_metadata(&metadata);
+
+        assert!(declarations.metadata_issues.iter().any(|issue| {
+            issue.contains("trusted host hook spec `turn_end` requires a matching declaration")
+        }));
     }
 
     #[test]
