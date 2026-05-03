@@ -4,6 +4,10 @@ function buildExtensionPayload(operation, payload) {
     return {
       ok: true,
       handled_event: payload.event ?? 'unknown',
+      handled_hook: payload.host_hook ?? 'unknown',
+      handled_tui_surface: payload.host_tui_surface ?? 'unknown',
+      received_hook_payload: payload.hook_payload ?? null,
+      received_surface_payload: payload.surface_payload ?? null,
     };
   }
   if (operation === 'extension/command') {

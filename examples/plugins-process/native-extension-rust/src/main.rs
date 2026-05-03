@@ -8,9 +8,21 @@ fn build_extension_payload(operation: &str, payload: &Map<String, Value>) -> Val
                 .get("event")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
+            let handled_hook = payload
+                .get("host_hook")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let handled_tui_surface = payload
+                .get("host_tui_surface")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             json!({
                 "ok": true,
                 "handled_event": handled_event,
+                "handled_hook": handled_hook,
+                "handled_tui_surface": handled_tui_surface,
+                "received_hook_payload": payload.get("hook_payload").cloned().unwrap_or(Value::Null),
+                "received_surface_payload": payload.get("surface_payload").cloned().unwrap_or(Value::Null),
             })
         }
         "extension/command" => {

@@ -4,9 +4,23 @@ type PayloadMap = Record<string, unknown>;
 function buildExtensionPayload(operation: string, payload: PayloadMap): unknown {
   if (operation === 'extension/event') {
     const handledEvent = typeof payload.event === 'string' ? payload.event : 'unknown';
+    const handledHook =
+      typeof payload.host_hook === 'string' ? payload.host_hook : 'unknown';
+    const handledTuiSurface =
+      typeof payload.host_tui_surface === 'string' ? payload.host_tui_surface : 'unknown';
     return {
       ok: true,
       handled_event: handledEvent,
+      handled_hook: handledHook,
+      handled_tui_surface: handledTuiSurface,
+      received_hook_payload:
+        payload.hook_payload && typeof payload.hook_payload === 'object'
+          ? payload.hook_payload
+          : null,
+      received_surface_payload:
+        payload.surface_payload && typeof payload.surface_payload === 'object'
+          ? payload.surface_payload
+          : null,
     };
   }
   if (operation === 'extension/command') {

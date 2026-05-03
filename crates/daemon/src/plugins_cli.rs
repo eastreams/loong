@@ -795,11 +795,35 @@ pub struct PluginsInitExecution {
     pub source_language: Option<String>,
     pub adapter_family: String,
     pub entrypoint: String,
+    pub doctor_command: String,
+    pub inventory_command: String,
+    pub operator_actions_command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smoke_test_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_extension_authoring_profile: Option<NativeExtensionAuthoringProfileExecution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_files_written: Vec<String>,
     pub files_written: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct NativeExtensionAuthoringProfileExecution {
+    pub contract: String,
+    pub source_language_arg: String,
+    pub reference_example_path: String,
+    pub methods: Vec<String>,
+    pub events: Vec<String>,
+    pub host_hooks: Vec<String>,
+    pub tui_surfaces: Vec<String>,
+    pub runtime_files: Vec<String>,
+    pub command: String,
+    pub args: Vec<String>,
+    pub process_timeout_ms: u64,
+    pub inventory_command: String,
+    pub smoke_allow_command: String,
+    pub smoke_test_command: String,
+    pub example_package_root: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1262,6 +1286,17 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         declared_host_hooks.as_slice(),
         declared_tui_surfaces.as_slice(),
     );
+    let doctor_command = render_authoring_doctor_command(package_root.as_str());
+    let inventory_command = render_authoring_inventory_command(package_root.as_str());
+    let operator_actions_command = render_authoring_actions_command(package_root.as_str());
+    let native_extension_authoring_profile = build_native_extension_authoring_profile(
+        package_root.as_str(),
+        plugin_id.as_str(),
+        command.source_language.as_deref(),
+        &scaffold_defaults,
+        declared_host_hooks.as_slice(),
+        declared_tui_surfaces.as_slice(),
+    );
     let rendered_readme = render_plugin_scaffold_readme(
         package_root.as_str(),
         plugin_id.as_str(),
@@ -1271,6 +1306,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
 
     let runtime_files_written = write_plugin_scaffold_files(
         package_root_path,
+        plugin_id.as_str(),
         &manifest_path,
         rendered_manifest.as_str(),
         &readme_path,
@@ -1297,7 +1333,11 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         source_language: scaffold_defaults.source_language,
         adapter_family: scaffold_defaults.adapter_family,
         entrypoint: scaffold_defaults.entrypoint_hint,
+        doctor_command,
+        inventory_command,
+        operator_actions_command,
         smoke_test_command,
+        native_extension_authoring_profile,
         runtime_files_written,
         files_written,
     })
@@ -1594,6 +1634,7 @@ fn ensure_process_stdio_invocable_plugin(
 
 fn write_plugin_scaffold_files(
     package_root: &Path,
+    plugin_id: &str,
     manifest_path: &Path,
     rendered_manifest: &str,
     readme_path: &Path,
@@ -1639,7 +1680,12 @@ fn write_plugin_scaffold_files(
                     )
                 })?;
             }
-            fs::write(&file_path, scaffold_file.contents).map_err(|error| {
+            let rendered_contents = render_scaffold_runtime_file_contents(
+                plugin_id,
+                scaffold_file.relative_path,
+                scaffold_file.contents,
+            );
+            fs::write(&file_path, rendered_contents).map_err(|error| {
                 format!(
                     "write scaffold runtime file `{}` failed: {error}",
                     file_path.display()
@@ -1650,6 +1696,20 @@ fn write_plugin_scaffold_files(
     }
 
     Ok(runtime_files_written)
+}
+
+fn render_scaffold_runtime_file_contents(
+    plugin_id: &str,
+    relative_path: &str,
+    contents: &str,
+) -> String {
+    if relative_path == "Cargo.toml" {
+        return format!(
+            "[package]\nname = \"{plugin_id}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde_json = \"1\"\n\n[workspace]\n"
+        );
+    }
+
+    contents.to_owned()
 }
 
 fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
@@ -1774,6 +1834,111 @@ fn render_plugin_scaffold_smoke_test_command(
     )
 }
 
+fn render_authoring_doctor_command(package_root: &str) -> String {
+    format!("loong plugins doctor --root \"{package_root}\" --profile sdk-release")
+}
+
+fn render_authoring_inventory_command(package_root: &str) -> String {
+    format!("loong plugins inventory --root \"{package_root}\"")
+}
+
+fn render_authoring_actions_command(package_root: &str) -> String {
+    format!("loong plugins actions --root \"{package_root}\" --profile sdk-release")
+}
+
+fn governed_native_example_package_root(source_language: &str) -> Option<&'static str> {
+    match source_language {
+        "python" => Some("examples/plugins-process/native-extension-python"),
+        "javascript" => Some("examples/plugins-process/native-extension-javascript"),
+        "typescript" => Some("examples/plugins-process/native-extension-typescript"),
+        "go" => Some("examples/plugins-process/native-extension-go"),
+        "rust" => Some("examples/plugins-process/native-extension-rust"),
+        _ => None,
+    }
+}
+
+fn trusted_host_example_package_root(source_language: &str) -> Option<&'static str> {
+    match source_language {
+        "javascript" => Some("examples/plugins-process/native-extension-trusted-host-javascript"),
+        "go" => Some("examples/plugins-process/native-extension-trusted-host-go"),
+        "rust" => Some("examples/plugins-process/native-extension-trusted-host-rust"),
+        _ => None,
+    }
+}
+
+fn build_native_extension_authoring_profile(
+    package_root: &str,
+    plugin_id: &str,
+    source_language_arg: Option<&str>,
+    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+    declared_host_hooks: &[String],
+    declared_tui_surfaces: &[String],
+) -> Option<NativeExtensionAuthoringProfileExecution> {
+    let profile =
+        crate::native_extension_authoring::process_stdio_native_extension_language_profile(
+            scaffold_defaults,
+        )
+        .expect("supported process_stdio scaffold profile should already validate")?;
+    let source_language = scaffold_defaults.source_language.as_deref()?;
+    let source_language_arg = normalize_optional_cli_value(source_language_arg)
+        .unwrap_or_else(|| source_language.to_owned());
+    let smoke_test_command = render_plugin_scaffold_smoke_test_command(
+        package_root,
+        plugin_id,
+        Some(profile),
+        declared_host_hooks,
+        declared_tui_surfaces,
+    )?;
+    let has_trusted_host_projection =
+        !declared_host_hooks.is_empty() || !declared_tui_surfaces.is_empty();
+    let example_package_root = if has_trusted_host_projection {
+        trusted_host_example_package_root(source_language)
+            .or_else(|| governed_native_example_package_root(source_language))
+    } else {
+        governed_native_example_package_root(source_language)
+    }?;
+
+    Some(NativeExtensionAuthoringProfileExecution {
+        contract: crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_CONTRACT
+            .to_owned(),
+        source_language_arg,
+        reference_example_path: example_package_root.to_owned(),
+        methods: if has_trusted_host_projection {
+            crate::native_extension_authoring::TRUSTED_HOST_PROCESS_STDIO_EXTENSION_METHODS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect()
+        } else {
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect()
+        },
+        events: if has_trusted_host_projection {
+            Vec::new()
+        } else {
+            crate::native_extension_authoring::PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect()
+        },
+        host_hooks: declared_host_hooks.to_vec(),
+        tui_surfaces: declared_tui_surfaces.to_vec(),
+        runtime_files: profile
+            .scaffold_files
+            .iter()
+            .map(|file| file.relative_path.to_owned())
+            .collect(),
+        command: profile.command.to_owned(),
+        args: crate::native_extension_authoring::process_stdio_scaffold_args(profile),
+        process_timeout_ms: profile.process_timeout_ms,
+        inventory_command: render_authoring_inventory_command(package_root),
+        smoke_allow_command: profile.smoke_allow_command.to_owned(),
+        smoke_test_command,
+        example_package_root: example_package_root.to_owned(),
+    })
+}
+
 fn validate_plugin_scaffold_version(version: &str) -> CliResult<()> {
     Version::parse(version)
         .map(|_| ())
@@ -1886,7 +2051,34 @@ fn build_plugin_scaffold_manifest(
                 )
                 .unwrap_or_else(|_| "[]".to_owned()),
             );
+            let mut facets = vec!["events".to_owned()];
+            if !host_hooks.is_empty() {
+                facets.push("host_hooks".to_owned());
+            }
+            if !tui_surfaces.is_empty() {
+                facets.push("tui_surfaces".to_owned());
+            }
+            metadata.insert(
+                "loong_extension_facets_json".to_owned(),
+                serde_json::to_string(&facets).unwrap_or_else(|_| "[]".to_owned()),
+            );
+            metadata.insert(
+                "loong_extension_host_actions_json".to_owned(),
+                "[]".to_owned(),
+            );
         } else {
+            metadata.insert(
+                "loong_extension_family".to_owned(),
+                "governed_native_runtime_extension".to_owned(),
+            );
+            metadata.insert(
+                "loong_extension_trust_lane".to_owned(),
+                "governed_sidecar".to_owned(),
+            );
+            metadata.insert(
+                "loong_extension_facets_json".to_owned(),
+                "[\"events\",\"commands\",\"resources\"]".to_owned(),
+            );
             metadata.insert(
                 "loong_extension_methods_json".to_owned(),
                 serde_json::to_string(
@@ -1906,6 +2098,10 @@ fn build_plugin_scaffold_manifest(
                         .collect::<Vec<_>>(),
                 )
                 .unwrap_or_else(|_| "[]".to_owned()),
+            );
+            metadata.insert(
+                "loong_extension_host_actions_json".to_owned(),
+                "[]".to_owned(),
             );
         }
         metadata.insert(
@@ -2186,13 +2382,14 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
     }
     lines.push(format!("- manifest={}", execution.manifest_path));
     lines.push(format!("- readme={}", execution.readme_path));
+    lines.push(format!("- doctor_command={}", execution.doctor_command));
     lines.push(format!(
-        "- next_steps=loong plugins doctor --root \"{}\" --profile sdk-release",
-        execution.package_root
+        "- inventory_command={}",
+        execution.inventory_command
     ));
     lines.push(format!(
-        "- operator_actions=loong plugins actions --root \"{}\" --profile sdk-release",
-        execution.package_root
+        "- operator_actions_command={}",
+        execution.operator_actions_command
     ));
     lines.join("\n")
 }
@@ -3863,6 +4060,9 @@ mod tests {
     use crate::{
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_PURPOSE, PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_SURFACE,
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_VERSION,
+        native_extension_authoring::{
+            PROCESS_STDIO_NATIVE_EXTENSION_EVENTS, PROCESS_STDIO_NATIVE_EXTENSION_METHODS,
+        },
     };
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -5433,8 +5633,74 @@ mod tests {
         assert_eq!(execution.source_language.as_deref(), Some("python"));
         assert_eq!(execution.adapter_family, "python-stdio-adapter");
         assert_eq!(execution.entrypoint, "stdin/stdout::invoke");
-        assert!(execution.smoke_test_command.is_some());
-        assert!(!execution.runtime_files_written.is_empty());
+        assert_eq!(
+            execution.doctor_command,
+            format!(
+                "loong plugins doctor --root \"{}\" --profile sdk-release",
+                execution.package_root
+            )
+        );
+        assert_eq!(
+            execution.operator_actions_command,
+            format!(
+                "loong plugins actions --root \"{}\" --profile sdk-release",
+                execution.package_root
+            )
+        );
+        assert_eq!(
+            execution.inventory_command,
+            format!(
+                "loong plugins inventory --root \"{}\"",
+                execution.package_root
+            )
+        );
+        let expected_smoke_test_command = format!(
+            "loong plugins invoke-extension --root \"{}\" --plugin-id \"weather-python\" --method extension/event --payload '{{\"event\":\"session_start\"}}' --allow-command python3",
+            execution.package_root
+        );
+        assert_eq!(
+            execution.smoke_test_command.as_deref(),
+            Some(expected_smoke_test_command.as_str())
+        );
+        assert_eq!(execution.runtime_files_written.len(), 1);
+        assert!(
+            execution.runtime_files_written[0].ends_with("index.py"),
+            "expected scaffolded runtime entrypoint, got {:?}",
+            execution.runtime_files_written
+        );
+        let authoring_profile = execution
+            .native_extension_authoring_profile
+            .as_ref()
+            .expect("process stdio scaffold should expose authoring profile");
+        assert_eq!(authoring_profile.runtime_files, vec!["index.py".to_owned()]);
+        assert_eq!(authoring_profile.command, "python3");
+        assert_eq!(authoring_profile.source_language_arg, "py");
+        assert_eq!(authoring_profile.args, vec!["index.py".to_owned()]);
+        assert_eq!(
+            authoring_profile.inventory_command,
+            format!(
+                "loong plugins inventory --root \"{}\"",
+                execution.package_root
+            )
+        );
+        assert_eq!(authoring_profile.smoke_allow_command, "python3".to_owned());
+        assert_eq!(
+            authoring_profile.example_package_root,
+            "examples/plugins-process/native-extension-python".to_owned()
+        );
+        assert_eq!(
+            authoring_profile.reference_example_path,
+            "examples/plugins-process/native-extension-python".to_owned()
+        );
+        assert_eq!(
+            authoring_profile.methods,
+            vec![
+                "extension/event".to_owned(),
+                "extension/command".to_owned(),
+                "extension/resource".to_owned()
+            ]
+        );
+        assert!(authoring_profile.host_hooks.is_empty());
 
         let rendered_manifest =
             fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
@@ -5448,6 +5714,24 @@ mod tests {
         assert_eq!(
             manifest.metadata.get("adapter_family").map(String::as_str),
             Some("python-stdio-adapter")
+        );
+        assert_eq!(
+            manifest.metadata.get("command").map(String::as_str),
+            Some("python3")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_contract")
+                .map(String::as_str),
+            Some("process_stdio_json_line_v1")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_extension_host_hooks_json")
+                .map(String::as_str),
+            Some("[]")
         );
 
         let scanner = crate::kernel::PluginScanner::new();
@@ -5465,6 +5749,236 @@ mod tests {
         );
         assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
         assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
+    }
+
+    struct CheckedInNativeExtensionExampleSpec {
+        package_root_relative: &'static str,
+        plugin_id: &'static str,
+        source_language_arg: &'static str,
+        expected_summary: &'static str,
+        expected_tags: &'static [&'static str],
+    }
+
+    fn repo_root() -> &'static Path {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("repo root")
+    }
+
+    fn read_plugin_manifest(path: &Path) -> crate::kernel::PluginManifest {
+        let raw = fs::read_to_string(path).unwrap_or_else(|error| {
+            panic!("manifest should be readable at {}: {error}", path.display())
+        });
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("manifest should decode at {}: {error}", path.display()))
+    }
+
+    fn checked_in_native_extension_example_specs() -> Vec<CheckedInNativeExtensionExampleSpec> {
+        vec![
+            CheckedInNativeExtensionExampleSpec {
+                package_root_relative: "examples/plugins-process/native-extension-python",
+                plugin_id: "native-extension-python-example",
+                source_language_arg: "py",
+                expected_summary: "Minimal manifest-first native extension example",
+                expected_tags: &["example", "native-extension", "process-stdio"],
+            },
+            CheckedInNativeExtensionExampleSpec {
+                package_root_relative: "examples/plugins-process/native-extension-javascript",
+                plugin_id: "native-extension-javascript-example",
+                source_language_arg: "js",
+                expected_summary: "Minimal manifest-first JavaScript native extension example",
+                expected_tags: &["example", "native-extension", "process-stdio", "javascript"],
+            },
+            CheckedInNativeExtensionExampleSpec {
+                package_root_relative: "examples/plugins-process/native-extension-typescript",
+                plugin_id: "native-extension-typescript-example",
+                source_language_arg: "ts",
+                expected_summary: "Minimal manifest-first TypeScript native extension example",
+                expected_tags: &["example", "native-extension", "process-stdio", "typescript"],
+            },
+            CheckedInNativeExtensionExampleSpec {
+                package_root_relative: "examples/plugins-process/native-extension-go",
+                plugin_id: "native-extension-go-example",
+                source_language_arg: "go",
+                expected_summary: "Minimal manifest-first Go native extension example",
+                expected_tags: &["example", "native-extension", "process-stdio", "go"],
+            },
+            CheckedInNativeExtensionExampleSpec {
+                package_root_relative: "examples/plugins-process/native-extension-rust",
+                plugin_id: "native-extension-rust-example",
+                source_language_arg: "rs",
+                expected_summary: "Minimal manifest-first Rust native extension example",
+                expected_tags: &["example", "native-extension", "process-stdio", "rust"],
+            },
+        ]
+    }
+
+    fn checked_in_native_extension_scaffold_defaults(
+        spec: &CheckedInNativeExtensionExampleSpec,
+    ) -> crate::kernel::PluginRuntimeScaffoldDefaults {
+        let bridge_kind = crate::kernel::PluginBridgeKind::ProcessStdio;
+        crate::kernel::plugin_runtime_scaffold_defaults(bridge_kind, Some(spec.source_language_arg))
+            .expect("checked-in example should resolve scaffold defaults")
+    }
+
+    #[tokio::test]
+    async fn checked_in_native_extension_examples_match_scaffold_authoring_contract() {
+        let repo_root = repo_root();
+        for spec in checked_in_native_extension_example_specs() {
+            let temp_root = unique_temp_dir("loong-plugins-cli-example-conformance");
+            let package_root = format!("{temp_root}/{}", spec.plugin_id);
+            let checked_in_root = repo_root.join(spec.package_root_relative);
+            let scaffold_defaults = checked_in_native_extension_scaffold_defaults(&spec);
+            let profile =
+                crate::native_extension_authoring::process_stdio_native_extension_language_profile(
+                    &scaffold_defaults,
+                )
+                .expect("checked-in example should map to a public authoring profile")
+                .expect("checked-in example should resolve a process stdio profile");
+
+            let execution = execute_plugins_command(PluginsCommandOptions {
+                json: false,
+                command: PluginsCommands::Init(PluginInitCommand {
+                    package_root: package_root.clone(),
+                    plugin_id: spec.plugin_id.to_owned(),
+                    provider_id: Some(spec.plugin_id.to_owned()),
+                    connector_name: Some(spec.plugin_id.to_owned()),
+                    bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                    source_language: Some(spec.source_language_arg.to_owned()),
+                    capabilities: Vec::new(),
+                    host_hooks: Vec::new(),
+                    tui_surfaces: Vec::new(),
+                    version: "0.1.0".to_owned(),
+                    summary: Some(spec.expected_summary.to_owned()),
+                }),
+            })
+            .await
+            .expect("example-conformance scaffold should succeed");
+
+            let PluginsCommandExecution::Init(execution) = execution else {
+                panic!("expected init execution");
+            };
+
+            assert_eq!(
+                execution.source_language.as_deref(),
+                scaffold_defaults.source_language.as_deref()
+            );
+            assert_eq!(execution.adapter_family, scaffold_defaults.adapter_family);
+            assert_eq!(
+                execution.inventory_command,
+                format!(
+                    "loong plugins inventory --root \"{}\"",
+                    execution.package_root
+                )
+            );
+            let authoring_profile = execution
+                .native_extension_authoring_profile
+                .as_ref()
+                .expect("checked-in example scaffold should expose authoring profile");
+            assert_eq!(authoring_profile.command, profile.command);
+            assert_eq!(
+                authoring_profile.runtime_files,
+                profile
+                    .scaffold_files
+                    .iter()
+                    .map(|value| value.relative_path.to_owned())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                authoring_profile.process_timeout_ms,
+                profile.process_timeout_ms
+            );
+            assert_eq!(
+                authoring_profile.example_package_root,
+                spec.package_root_relative
+            );
+            assert_eq!(
+                authoring_profile.inventory_command,
+                format!(
+                    "loong plugins inventory --root \"{}\"",
+                    execution.package_root
+                )
+            );
+            assert_eq!(
+                authoring_profile.methods,
+                PROCESS_STDIO_NATIVE_EXTENSION_METHODS
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                authoring_profile.events,
+                PROCESS_STDIO_NATIVE_EXTENSION_EVENTS
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>()
+            );
+
+            let scaffold_manifest =
+                read_plugin_manifest(std::path::Path::new(&execution.manifest_path));
+            let checked_in_manifest =
+                read_plugin_manifest(&checked_in_root.join(PACKAGE_MANIFEST_FILE_NAME));
+
+            assert_eq!(checked_in_manifest.plugin_id, spec.plugin_id);
+            assert_eq!(checked_in_manifest.provider_id, spec.plugin_id);
+            assert_eq!(checked_in_manifest.connector_name, spec.plugin_id);
+            assert_eq!(
+                checked_in_manifest.tags,
+                spec.expected_tags
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                checked_in_manifest.summary.as_deref(),
+                Some(spec.expected_summary)
+            );
+            assert_eq!(
+                checked_in_manifest
+                    .metadata
+                    .get("command")
+                    .map(String::as_str),
+                Some(profile.command)
+            );
+            let expected_args_json = serde_json::to_string(
+                &crate::native_extension_authoring::process_stdio_scaffold_args(profile),
+            )
+            .expect("serialize scaffold args");
+            assert_eq!(
+                checked_in_manifest
+                    .metadata
+                    .get("args_json")
+                    .map(String::as_str),
+                Some(expected_args_json.as_str())
+            );
+            let expected_timeout_ms = profile.process_timeout_ms.to_string();
+            assert_eq!(
+                checked_in_manifest
+                    .metadata
+                    .get("process_timeout_ms")
+                    .map(String::as_str),
+                Some(expected_timeout_ms.as_str())
+            );
+            assert_eq!(checked_in_manifest.metadata, scaffold_manifest.metadata);
+            assert_eq!(
+                checked_in_manifest.compatibility,
+                scaffold_manifest.compatibility
+            );
+
+            for relative_path in profile.scaffold_files.iter().map(|file| file.relative_path) {
+                let scaffold_runtime = fs::read_to_string(
+                    std::path::Path::new(&execution.package_root).join(relative_path),
+                )
+                .expect("scaffold runtime file should exist");
+                let checked_in_runtime = fs::read_to_string(checked_in_root.join(relative_path))
+                    .expect("checked-in runtime file should exist");
+                assert_eq!(
+                    checked_in_runtime, scaffold_runtime,
+                    "checked-in runtime file `{relative_path}` drifted from scaffold output"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -5560,6 +6074,7 @@ mod tests {
         );
         let error = write_plugin_scaffold_files(
             package_root,
+            "rollback-test-plugin",
             &manifest_path,
             manifest_contents.as_str(),
             &readme_path,

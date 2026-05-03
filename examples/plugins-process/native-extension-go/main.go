@@ -26,9 +26,21 @@ func buildExtensionPayload(operation string, payload map[string]any) any {
 		if event == "" {
 			event = "unknown"
 		}
+		hook, _ := payload["host_hook"].(string)
+		if hook == "" {
+			hook = "unknown"
+		}
+		tuiSurface, _ := payload["host_tui_surface"].(string)
+		if tuiSurface == "" {
+			tuiSurface = "unknown"
+		}
 		return map[string]any{
-			"ok":            true,
-			"handled_event": event,
+			"ok":                     true,
+			"handled_event":          event,
+			"handled_hook":           hook,
+			"handled_tui_surface":    tuiSurface,
+			"received_hook_payload":  payload["hook_payload"],
+			"received_surface_payload": payload["surface_payload"],
 		}
 	case "extension/command":
 		commandName, _ := payload["command_name"].(string)

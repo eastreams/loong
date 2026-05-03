@@ -8,6 +8,10 @@ def build_extension_payload(operation, payload):
         return {
             "ok": True,
             "handled_event": payload.get("event", "unknown"),
+            "handled_hook": payload.get("host_hook", "unknown"),
+            "handled_tui_surface": payload.get("host_tui_surface", "unknown"),
+            "received_hook_payload": payload.get("hook_payload"),
+            "received_surface_payload": payload.get("surface_payload"),
         }
     if operation == "extension/command":
         command_name = payload.get("command_name", "extension")
