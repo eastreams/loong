@@ -1840,6 +1840,13 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
                 managed_bridge_authoring_profile
                     .as_ref()
                     .map(|profile| profile.reference_example_path.as_str())
+            })
+            .or_else(|| {
+                if bridge_kind == PluginBridgeKind::HttpJson {
+                    Some(generic_http_json_example_package_root())
+                } else {
+                    None
+                }
             }),
     );
 
@@ -2801,7 +2808,7 @@ fn render_scaffold_connector_operation_specs_json(operations: &[String]) -> Opti
                     "summary": format!("Invoke connector operation `{operation}` through the declared bridge."),
                     "sample_payload": {},
                     "operator_hint": format!(
-                        "Probe this operation with `loong plugins invoke-connector-operation --root \\\"<package-root>\\\" --plugin-id \\\"<plugin-id>\\\" --operation {operation} --payload '{{}}'`."
+                        "Probe this operation with `loong plugins invoke-connector-operation --root \"<package-root>\" --plugin-id \"<plugin-id>\" --operation {operation} --payload '{{}}'`."
                     ),
                 }),
             )
@@ -2820,6 +2827,10 @@ fn governed_native_example_package_root(source_language: &str) -> Option<&'stati
         "rust" => Some("examples/plugins-process/native-extension-rust"),
         _ => None,
     }
+}
+
+fn generic_http_json_example_package_root() -> &'static str {
+    "examples/plugins-http/http-json-search"
 }
 
 fn trusted_host_example_package_root(source_language: &str) -> Option<&'static str> {
@@ -7731,6 +7742,10 @@ mod tests {
             rendered_readme.contains("loong_connector_operation_specs_json"),
             "README should mention connector operation spec metadata: {rendered_readme}"
         );
+        assert!(
+            rendered_readme.contains("examples/plugins-http/http-json-search/"),
+            "README should point authors to the checked-in http json example: {rendered_readme}"
+        );
 
         let scanner = crate::kernel::PluginScanner::new();
         let scan_report = scanner
@@ -8877,6 +8892,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn checked_in_http_json_example_matches_scaffold_authoring_contract() {
+        let repo_root = repo_root();
+        let temp_root = unique_temp_dir("loong-plugins-cli-http-json-conformance");
+        let package_root = format!("{temp_root}/http-json-search-example");
+        let checked_in_root = repo_root.join("examples/plugins-http/http-json-search");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            config: None,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "http-json-search-example".to_owned(),
+                provider_id: Some("http-json-search-example".to_owned()),
+                connector_name: Some("http-json-search-example".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                source_language: None,
+                endpoint: None,
+                channel_id: None,
+                transport_family: None,
+                target_contract: None,
+                account_scope: None,
+                connector_operations: vec!["search".to_owned()],
+                capabilities: Vec::new(),
+                host_hooks: Vec::new(),
+                host_actions: Vec::new(),
+                tui_surfaces: Vec::new(),
+                version: "0.1.0".to_owned(),
+                summary: Some("Minimal manifest-first HTTP JSON connector example".to_owned()),
+            }),
+        })
+        .await
+        .expect("http json conformance scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        let scaffold_manifest =
+            read_plugin_manifest(std::path::Path::new(&execution.manifest_path));
+        let checked_in_manifest =
+            read_plugin_manifest(&checked_in_root.join(PACKAGE_MANIFEST_FILE_NAME));
+
+        assert_eq!(checked_in_manifest.plugin_id, "http-json-search-example");
+        assert_eq!(checked_in_manifest.provider_id, "http-json-search-example");
+        assert_eq!(
+            checked_in_manifest.connector_name,
+            "http-json-search-example"
+        );
+        assert_eq!(
+            checked_in_manifest.summary.as_deref(),
+            Some("Minimal manifest-first HTTP JSON connector example")
+        );
+        for key in [
+            "bridge_kind",
+            "adapter_family",
+            "entrypoint",
+            "loong_connector_operations_json",
+        ] {
+            assert_eq!(
+                checked_in_manifest.metadata.get(key),
+                scaffold_manifest.metadata.get(key),
+                "checked-in http json metadata key `{key}` drifted from scaffold output"
+            );
+        }
+        let checked_in_operation_specs: serde_json::Value = serde_json::from_str(
+            checked_in_manifest
+                .metadata
+                .get("loong_connector_operation_specs_json")
+                .expect("checked-in example should declare connector operation specs"),
+        )
+        .expect("checked-in connector operation specs should decode");
+        let scaffold_operation_specs: serde_json::Value = serde_json::from_str(
+            scaffold_manifest
+                .metadata
+                .get("loong_connector_operation_specs_json")
+                .expect("scaffold should declare connector operation specs"),
+        )
+        .expect("scaffold connector operation specs should decode");
+        assert_eq!(
+            checked_in_operation_specs, scaffold_operation_specs,
+            "checked-in http json connector operation specs drifted from scaffold output"
+        );
+        assert_eq!(
+            checked_in_manifest.compatibility,
+            scaffold_manifest.compatibility
+        );
+        let rendered_readme =
+            fs::read_to_string(&execution.readme_path).expect("scaffold readme should exist");
+        assert!(
+            rendered_readme.contains("examples/plugins-http/http-json-search/"),
+            "README should point authors to the checked-in http json example: {rendered_readme}"
+        );
+    }
+
+    #[tokio::test]
     async fn execute_plugins_init_persists_additive_declared_capabilities() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-capabilities");
         let package_root = format!("{temp_root}/weather-python");
@@ -9926,6 +10036,10 @@ mod tests {
             assert!(
                 doc.contains("native-extension-trusted-host-javascript"),
                 "doc should mention the trusted-host example lane"
+            );
+            assert!(
+                doc.contains("plugins-http/http-json-search"),
+                "doc should mention the generic http_json example lane"
             );
             assert!(
                 doc.contains("channel-bridge-javascript"),

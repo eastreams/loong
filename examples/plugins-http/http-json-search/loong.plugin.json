@@ -1,0 +1,22 @@
+{
+  "api_version": "v1alpha1",
+  "version": "0.1.0",
+  "plugin_id": "http-json-search-example",
+  "provider_id": "http-json-search-example",
+  "connector_name": "http-json-search-example",
+  "capabilities": [
+    "InvokeConnector"
+  ],
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "http-adapter",
+    "entrypoint": "https://localhost/invoke",
+    "loong_connector_operations_json": "[\"search\"]",
+    "loong_connector_operation_specs_json": "{\"search\":{\"label\":\"Search\",\"summary\":\"Invoke connector operation `search` through the declared bridge.\",\"sample_payload\":{},\"operator_hint\":\"Probe this operation with `loong plugins invoke-connector-operation --root \\\"<package-root>\\\" --plugin-id \\\"<plugin-id>\\\" --operation search --payload '{}'`.\"}}"
+  },
+  "summary": "Minimal manifest-first HTTP JSON connector example",
+  "compatibility": {
+    "host_api": "loong-plugin/v1",
+    "host_version_req": ">=0.1.2-alpha.1"
+  }
+}

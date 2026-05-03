@@ -115,6 +115,10 @@ probe guidance with real operation names.
 The repository now keeps several checked-in example lanes you can diff against
 directly.
 
+Generic endpoint-backed connector packages:
+
+- `examples/plugins-http/http-json-search/`
+
 Governed native runtime extensions:
 
 - `examples/plugins-process/native-extension-python/`

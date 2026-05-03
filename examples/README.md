@@ -99,6 +99,7 @@ Convenience scripts:
 - `plugins/openrouter_plugin.rs` -- Rust plugin with embedded `LOONG_PLUGIN_START` / `LOONG_PLUGIN_END` manifest markers. This example is marked `verified-community` so tool search and catalog reports surface a non-default trust tier.
 - `plugins-wasm/secure_wasm_plugin.rs` -- WASM plugin Rust source. Compiled to `secure_echo.wasm`, with an `official` trust tier for first-party runtime examples.
 - `plugins-process/stdio_echo_plugin.py` -- Python stdio echo plugin for process-bridge testing. This example stays explicitly `unverified` so the trust-policy fixtures can demonstrate blocked auto-apply without hiding the plugin from scan/search results.
+- `plugins-http/http-json-search/` -- checked-in generic HTTP JSON connector example with declared connector operation specs for `search`.
 - `plugins-process/native-extension-python/` -- checked-in governed Python process-stdio native extension example with per-method specs for `extension/event`, `extension/command`, and `extension/resource`.
 - `plugins-process/native-extension-javascript/` -- checked-in governed JavaScript process-stdio native extension example with per-method specs for `extension/event`, `extension/command`, and `extension/resource`.
 - `plugins-process/native-extension-typescript/` -- checked-in governed TypeScript process-stdio native extension example with per-method specs for `extension/event`, `extension/command`, and `extension/resource`.
