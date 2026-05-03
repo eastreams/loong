@@ -5469,7 +5469,9 @@ fn onboard_starting_point_selection_screen_wraps_header_title_and_subtitle_on_na
         loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[candidate], 22);
 
     assert!(
-        lines.iter().all(|line| line.len() <= 22),
+        lines
+            .iter()
+            .all(|line| mvp::presentation::display_width(line.as_str()) <= 22),
         "starting-point screen should keep brand subtitle and title within narrow widths: {lines:#?}"
     );
     assert_eq!(lines[0], "LOONG");
@@ -5567,7 +5569,9 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
     let lines = loong_daemon::onboard_cli::render_model_selection_screen_lines(&config, 22);
 
     assert!(
-        lines.iter().all(|line| line.len() <= 22),
+        lines
+            .iter()
+            .all(|line| mvp::presentation::display_width(line.as_str()) <= 22),
         "model screen should keep compact header and progress copy within narrow terminal widths: {lines:#?}"
     );
     assert_eq!(
@@ -5707,7 +5711,9 @@ fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
     );
 
     assert!(
-        lines.iter().all(|line| line.len() <= 22),
+        lines
+            .iter()
+            .all(|line| mvp::presentation::display_width(line.as_str()) <= 22),
         "credential-env screen should keep the progress line within narrow terminal widths: {lines:#?}"
     );
     assert!(
