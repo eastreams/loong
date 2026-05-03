@@ -6580,6 +6580,7 @@ mod tests {
         assert_eq!(payload["available"], json!(true));
         assert_eq!(payload["returned_results"], json!(1));
         assert!(payload["summary"].is_object());
+        assert!(payload["native_extension_authoring_summary"].is_null());
         assert_eq!(plugin["plugin_id"], json!("demo-extension-plugin"));
         assert_eq!(
             plugin["extension_family"],
@@ -6683,6 +6684,55 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[tokio::test]
+    async fn doctor_runtime_plugin_inventory_json_payload_rolls_up_native_extension_authoring_semantics()
+     {
+        let root = browser_companion_temp_dir("runtime-plugins-inventory-json-authoring-rollup");
+        let config = runtime_plugins_test_config(&root, true);
+        let runtime_root = root.join("runtime-plugins");
+        std::fs::create_dir_all(runtime_root.join("search")).expect("create runtime root");
+        std::fs::write(
+            runtime_root.join("search").join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "broken-extension",
+  "provider_id": "broken-extension",
+  "connector_name": "broken-extension",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "process_stdio",
+    "adapter_family": "javascript-stdio-adapter",
+    "entrypoint": "stdin/stdout::invoke",
+    "source_language": "javascript",
+    "command": "node",
+    "args_json": "[\"index.js\"]",
+    "process_timeout_ms": "15000",
+    "loong_extension_contract": "process_stdio_json_line_v1",
+    "loong_extension_methods_json": "not-json",
+    "loong_extension_events_json": "[\"session_start\"]",
+    "loong_extension_host_actions_json": "[]"
+  }
+}"#,
+        )
+        .expect("write runtime plugin manifest");
+
+        let payload = serde_json::to_value(
+            crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await,
+        )
+        .expect("serialize runtime plugin inventory payload");
+        let summary = &payload["native_extension_authoring_summary"];
+        assert_eq!(summary["guided_plugins"], json!(1));
+        assert_eq!(summary["plugins_with_metadata_issues"], json!(1));
+        assert_eq!(
+            summary["smoke_test_kind_distribution"]["extension_probe"],
+            json!(1)
+        );
+        assert_eq!(summary["allow_command_gated_action_count"], json!(1));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

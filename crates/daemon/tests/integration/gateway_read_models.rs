@@ -448,6 +448,7 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
         roots_source: Some("configured".to_owned()),
         returned_results: Some(1),
         summary: None,
+        native_extension_authoring_summary: None,
         shadowed_plugin_ids: vec!["shared-extension".to_owned()],
         discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
             precedence_rule: "project_local_over_global".to_owned(),

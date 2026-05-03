@@ -611,6 +611,8 @@ pub struct RuntimePluginInventoryReadModel {
     pub returned_results: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<PluginsInventorySummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_extension_authoring_summary: Option<NativeExtensionAuthoringSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shadowed_plugin_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -618,6 +620,14 @@ pub struct RuntimePluginInventoryReadModel {
         Option<crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<RuntimePluginInventoryResultView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeExtensionAuthoringSummaryView {
+    pub guided_plugins: usize,
+    pub plugins_with_metadata_issues: usize,
+    pub smoke_test_kind_distribution: BTreeMap<String, usize>,
+    pub allow_command_gated_action_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1258,6 +1268,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             roots_source: None,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
             discovery_guidance: None,
             results: Vec::new(),
@@ -1279,6 +1290,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             roots_source,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
             discovery_guidance: None,
             results: Vec::new(),
@@ -1321,6 +1333,8 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
                     (execution.results, Vec::new(), BTreeMap::new())
                 };
             let summary = summarize_plugin_inventory_results(&effective_results);
+            let native_extension_authoring_summary =
+                summarize_runtime_plugin_inventory_authoring_guidance(&effective_results);
             let shadowed_conflicts =
                 crate::runtime_plugin_discovery::build_runtime_plugin_shadowing_conflicts(
                     &effective_results,
@@ -1341,6 +1355,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
                 roots_source,
                 returned_results: Some(effective_results.len()),
                 summary: Some(summary),
+                native_extension_authoring_summary,
                 shadowed_plugin_ids,
                 discovery_guidance,
                 results: effective_results
@@ -1369,6 +1384,7 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             roots_source,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
             discovery_guidance: None,
             results: Vec::new(),
@@ -1380,11 +1396,69 @@ pub(crate) async fn runtime_plugin_inventory_read_model(
             roots_source,
             returned_results: None,
             summary: None,
+            native_extension_authoring_summary: None,
             shadowed_plugin_ids: Vec::new(),
             discovery_guidance: None,
             results: Vec::new(),
         },
     }
+}
+
+fn summarize_runtime_plugin_inventory_authoring_guidance(
+    results: &[PluginInventoryResult],
+) -> Option<NativeExtensionAuthoringSummaryView> {
+    let mut guided_plugins = 0_usize;
+    let mut plugins_with_metadata_issues = 0_usize;
+    let mut smoke_test_kind_distribution = BTreeMap::new();
+    let mut allow_command_gated_action_count = 0_usize;
+
+    for result in results {
+        if !result.native_extension.metadata_issues.is_empty() {
+            plugins_with_metadata_issues = plugins_with_metadata_issues.saturating_add(1);
+        }
+
+        let Some(guidance) = plugin_native_extension_authoring_guidance(result) else {
+            continue;
+        };
+
+        guided_plugins = guided_plugins.saturating_add(1);
+        if guidance.smoke_test_command.contains("--allow-command ") {
+            allow_command_gated_action_count = allow_command_gated_action_count.saturating_add(1);
+        }
+
+        let kind = if guidance
+            .smoke_test_command
+            .contains("plugins invoke-host-hook")
+        {
+            "host_hook_probe"
+        } else if guidance
+            .smoke_test_command
+            .contains("plugins invoke-tui-surface")
+        {
+            "tui_surface_probe"
+        } else if guidance
+            .smoke_test_command
+            .contains("plugins invoke-extension")
+        {
+            "extension_probe"
+        } else {
+            "other"
+        };
+        *smoke_test_kind_distribution
+            .entry(kind.to_owned())
+            .or_insert(0) += 1;
+    }
+
+    if guided_plugins == 0 && plugins_with_metadata_issues == 0 {
+        return None;
+    }
+
+    Some(NativeExtensionAuthoringSummaryView {
+        guided_plugins,
+        plugins_with_metadata_issues,
+        smoke_test_kind_distribution,
+        allow_command_gated_action_count,
+    })
 }
 
 const PLUGINS_INIT_README_FILE_NAME: &str = "README.md";
