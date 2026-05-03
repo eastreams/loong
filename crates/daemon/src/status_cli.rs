@@ -12,7 +12,7 @@ use crate::gateway::read_models::{
     GatewayAcpObservabilityReadModel, GatewayOperatorChannelsSummaryReadModel,
     GatewayOperatorSummaryReadModel, build_acp_observability_read_model,
     build_node_inventory_read_model, build_operator_nodes_summary_read_model,
-    build_operator_summary_read_model, build_runtime_snapshot_read_model,
+    build_operator_summary_read_model, build_runtime_snapshot_read_model_with_inventory,
 };
 use crate::gateway::service::default_gateway_owner_status;
 use crate::gateway::state::{default_gateway_runtime_state_dir, load_gateway_owner_status};
@@ -68,6 +68,8 @@ pub struct StatusCliReadModel {
     pub gateway: GatewayOperatorSummaryReadModel,
     pub acp: StatusCliAcpReadModel,
     pub work_units: StatusCliWorkUnitReadModel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_inventory: Option<crate::plugins_cli::RuntimePluginInventoryReadModel>,
     pub next_actions: Vec<StatusCliAction>,
     pub deep_dive_actions: Vec<StatusCliDrillDownAction>,
     // Keep the command-only alias for older automation while the typed surface lands.
@@ -110,7 +112,12 @@ pub async fn collect_status_cli_read_model(
     let config_path_text = config_path_display.as_str();
     let channel_inventory =
         crate::build_channels_cli_json_payload(config_path_text, &snapshot.channels);
-    let runtime_snapshot = build_runtime_snapshot_read_model(&snapshot);
+    let runtime_plugin_inventory =
+        crate::plugins_cli::runtime_plugin_inventory_read_model(&config).await;
+    let runtime_snapshot = build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(runtime_plugin_inventory.clone()),
+    );
     let runtime_dir = default_gateway_runtime_state_dir();
     let gateway = build_status_cli_local_gateway_summary(
         runtime_dir.as_path(),
@@ -152,6 +159,7 @@ pub async fn collect_status_cli_read_model(
         gateway,
         acp,
         work_units,
+        runtime_plugin_inventory: Some(runtime_plugin_inventory),
         next_actions,
         deep_dive_actions,
         recipes,
@@ -1356,6 +1364,7 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
+            runtime_plugin_inventory: None,
             next_actions: vec![StatusCliAction {
                 kind: crate::next_actions::SetupNextActionKind::Ask,
                 label: "first answer".to_owned(),
@@ -1569,6 +1578,7 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
+            runtime_plugin_inventory: None,
             next_actions: vec![
                 StatusCliAction {
                     kind: crate::next_actions::SetupNextActionKind::Ask,
@@ -1723,6 +1733,7 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
+            runtime_plugin_inventory: None,
             next_actions: vec![
                 StatusCliAction {
                     kind: crate::next_actions::SetupNextActionKind::Ask,
@@ -2212,6 +2223,7 @@ mod tests {
                     expired_lease_count: 0,
                 }),
             },
+            runtime_plugin_inventory: None,
             next_actions: vec![StatusCliAction {
                 kind: crate::next_actions::SetupNextActionKind::Doctor,
                 label: "inspect weixin managed bridge runtime (retrying)".to_owned(),

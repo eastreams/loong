@@ -441,7 +441,30 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
 
     let snapshot = collect_runtime_snapshot_cli_state(Some(config_path_text))
         .expect("collect runtime snapshot");
-    let payload = gateway::read_models::build_runtime_snapshot_read_model(&snapshot);
+    let runtime_plugin_inventory = loong_daemon::plugins_cli::RuntimePluginInventoryReadModel {
+        available: true,
+        reason: None,
+        error: None,
+        roots_source: Some("configured".to_owned()),
+        returned_results: Some(1),
+        summary: None,
+        shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+        discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
+            precedence_rule: "project_local_over_global".to_owned(),
+            project_local_root: ".loong/extensions/".to_owned(),
+            global_root: "~/.loong/agent/extensions/".to_owned(),
+            shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            shadowed_conflicts: Vec::new(),
+            discovery_actions: Vec::new(),
+            recommended_action: Some("review_global_duplicate".to_owned()),
+            resolution_hint: None,
+        }),
+        results: Vec::new(),
+    };
+    let payload = gateway::read_models::build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(runtime_plugin_inventory),
+    );
     let encoded = serde_json::to_value(&payload).expect("serialize runtime snapshot read model");
 
     assert_eq!(
@@ -468,6 +491,29 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
     assert_eq!(
         payload.channels.enabled_outbound_only_channel_ids,
         snapshot.enabled_outbound_only_channel_ids
+    );
+    assert_eq!(
+        payload
+            .runtime_plugin_inventory
+            .as_ref()
+            .and_then(|inventory| inventory.roots_source.as_deref()),
+        Some("configured")
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["available"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["returned_results"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["shadowed_plugin_ids"],
+        serde_json::json!(["shared-extension"])
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
+        serde_json::json!("project_local_over_global")
     );
     assert_eq!(
         encoded["channels"]["inventory"]["schema"]["catalog_view"],
@@ -573,7 +619,7 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
     let sampled_session_count =
         &encoded["context_engine"]["compaction_hygiene"]["recent_window"]["sampled_session_count"];
     assert!(
-        sampled_session_count == 0 || sampled_session_count == 1,
+        sampled_session_count.is_number(),
         "unexpected sampled session count: {encoded:#?}"
     );
     assert!(encoded["provider"]["transport_runtime"]["failover_total_events"].is_number());

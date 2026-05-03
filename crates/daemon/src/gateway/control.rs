@@ -310,6 +310,7 @@ impl GatewayControlAppState {
                 },
             },
             runtime_plugins: json!({}),
+            runtime_plugin_inventory: None,
             external_skills: json!({}),
         };
         Self {

@@ -398,6 +398,11 @@ fn status_cli_json_rolls_up_gateway_acp_and_work_unit_sections() {
     assert_eq!(payload["gateway"]["nodes"]["paired_device_count"], 0);
     assert_eq!(payload["gateway"]["nodes"]["managed_bridge_count"], 0);
     assert_eq!(payload["gateway"]["nodes"]["total_count"], 0);
+    assert_eq!(payload["runtime_plugin_inventory"]["available"], false);
+    assert_eq!(
+        payload["runtime_plugin_inventory"]["reason"],
+        "runtime_plugins_disabled"
+    );
     assert_eq!(payload["acp"]["enabled"], true);
     let acp_availability = payload["acp"]["availability"]
         .as_str()
