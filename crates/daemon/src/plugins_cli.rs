@@ -3227,6 +3227,27 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
             display_text_or_dash(host_api),
             display_text_or_dash(host_version_req)
         ));
+        if result.channel_bridge_transport_family.is_some()
+            || result.channel_bridge_target_contract.is_some()
+            || result.channel_bridge_account_scope.is_some()
+            || result.channel_bridge_runtime_contract.is_some()
+            || !result.channel_bridge_runtime_operations.is_empty()
+            || !result.channel_bridge_runtime_operation_specs.is_empty()
+            || result.channel_bridge_ready.is_some()
+            || !result.channel_bridge_missing_fields.is_empty()
+        {
+            lines.push(format!(
+                "  channel_bridge transport_family={} target_contract={} account_scope={} runtime_contract={} runtime_operations={} runtime_operation_specs={} ready={} missing_fields={}",
+                display_text_or_dash(result.channel_bridge_transport_family.as_deref()),
+                display_text_or_dash(result.channel_bridge_target_contract.as_deref()),
+                display_text_or_dash(result.channel_bridge_account_scope.as_deref()),
+                display_text_or_dash(result.channel_bridge_runtime_contract.as_deref()),
+                format_csv_or_dash(&result.channel_bridge_runtime_operations),
+                format_channel_bridge_operation_specs_or_dash(&result.channel_bridge_runtime_operation_specs),
+                result.channel_bridge_ready.map(|value| value.to_string()).unwrap_or_else(|| "-".to_owned()),
+                format_csv_or_dash(&result.channel_bridge_missing_fields),
+            ));
+        }
         lines.push(format!(
             "  source={} bootstrap_hint={} runtime_health={} attestation={} summary={}",
             result.source_path,
@@ -3585,6 +3606,27 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
         "  manifest={} setup_mode={} required_env={} required_config={} setup_remediation={}",
         manifest_path, setup_mode, required_env_vars, required_config_keys, setup_remediation
     ));
+    if plugin.channel_bridge_transport_family.is_some()
+        || plugin.channel_bridge_target_contract.is_some()
+        || plugin.channel_bridge_account_scope.is_some()
+        || plugin.channel_bridge_runtime_contract.is_some()
+        || !plugin.channel_bridge_runtime_operations.is_empty()
+        || !plugin.channel_bridge_runtime_operation_specs.is_empty()
+        || plugin.channel_bridge_ready.is_some()
+        || !plugin.channel_bridge_missing_fields.is_empty()
+    {
+        lines.push(format!(
+            "  channel_bridge transport_family={} target_contract={} account_scope={} runtime_contract={} runtime_operations={} runtime_operation_specs={} ready={} missing_fields={}",
+            display_text_or_dash(plugin.channel_bridge_transport_family.as_deref()),
+            display_text_or_dash(plugin.channel_bridge_target_contract.as_deref()),
+            display_text_or_dash(plugin.channel_bridge_account_scope.as_deref()),
+            display_text_or_dash(plugin.channel_bridge_runtime_contract.as_deref()),
+            format_csv_or_dash(&plugin.channel_bridge_runtime_operations),
+            format_channel_bridge_operation_specs_or_dash(&plugin.channel_bridge_runtime_operation_specs),
+            plugin.channel_bridge_ready.map(|value| value.to_string()).unwrap_or_else(|| "-".to_owned()),
+            format_csv_or_dash(&plugin.channel_bridge_missing_fields),
+        ));
+    }
     lines.push(format!(
         "  source={} activation_ready={} runtime_health={} attestation={} summary={}",
         plugin.source_path,
@@ -4771,6 +4813,23 @@ fn format_event_specs_or_dash(specs: &[crate::kernel::PluginNativeExtensionEvent
         .join(",")
 }
 
+fn format_channel_bridge_operation_specs_or_dash(
+    specs: &[crate::kernel::PluginChannelBridgeOperationSpec],
+) -> String {
+    if specs.is_empty() {
+        return "-".to_owned();
+    }
+
+    specs
+        .iter()
+        .map(|spec| match spec.label.as_deref() {
+            Some(label) => format!("{}:{}", spec.operation, label),
+            None => spec.operation.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn format_rollup_map(values: &BTreeMap<String, usize>) -> String {
     if values.is_empty() {
         return "-".to_owned();
@@ -5132,6 +5191,51 @@ mod tests {
         crate::test_support::write_executable_script_atomically(
             Path::new(&format!("{package_root}/index.js")),
             "#!/usr/bin/env node\nfunction buildExtensionPayload(operation, payload) {\n  if (operation === 'extension/event') {\n    return { ok: true, handled_event: payload.event ?? 'unknown', handled_hook: payload.host_hook ?? 'unknown', handled_tui_surface: payload.host_tui_surface ?? 'unknown', received_hook_payload: payload.hook_payload ?? null, received_surface_payload: payload.surface_payload ?? null };\n  }\n  return { error: `unsupported method: ${operation}` };\n}\nfunction emitResponse(line) {\n  const trimmed = line.trim();\n  if (!trimmed) return;\n  const request = JSON.parse(trimmed);\n  const payload = request.payload ?? {};\n  const response = { method: request.method ?? '', id: request.id ?? null, payload: buildExtensionPayload(payload.operation ?? '', payload.payload ?? {}) };\n  process.stdout.write(`${JSON.stringify(response)}\\n`);\n}\nprocess.stdin.setEncoding('utf8');\nlet buffered = '';\nprocess.stdin.on('data', (chunk) => { buffered += chunk; let newlineIndex = buffered.indexOf('\\n'); while (newlineIndex !== -1) { const line = buffered.slice(0, newlineIndex); buffered = buffered.slice(newlineIndex + 1); emitResponse(line); newlineIndex = buffered.indexOf('\\n'); } });\nprocess.stdin.on('end', () => { if (buffered.trim()) emitResponse(buffered); });\nprocess.stdin.resume();\n",
+        );
+    }
+
+    fn write_channel_bridge_declared_package(package_root: &str) {
+        fs::create_dir_all(package_root).expect("create channel-bridge package root");
+        let args_json = serde_json::to_string(&vec![format!("{package_root}/bridge.js")])
+            .expect("serialize channel-bridge args");
+        let manifest = serde_json::json!({
+            "api_version": "v1alpha1",
+            "version": "0.1.0",
+            "plugin_id": "channel-bridge-extension",
+            "provider_id": "channel-bridge-extension",
+            "connector_name": "channel-bridge-extension",
+            "channel_id": "weixin",
+            "capabilities": ["InvokeConnector"],
+            "setup": {
+                "surface": "channel",
+                "required_env_vars": ["WEIXIN_BRIDGE_URL"],
+                "docs_urls": ["https://example.test/bridge-docs"]
+            },
+            "metadata": {
+                "bridge_kind": "process_stdio",
+                "adapter_family": "channel-bridge",
+                "entrypoint": "stdin/stdout::invoke",
+                "source_language": "javascript",
+                "command": "node",
+                "args_json": args_json,
+                "process_timeout_ms": "15000",
+                "transport_family": "wechat_clawbot_ilink_bridge",
+                "target_contract": "weixin:<account>:contact:<id> | weixin:<account>:room:<id>",
+                "account_scope": "multi_account",
+                "channel_runtime_contract": "loong_channel_bridge_v1",
+                "channel_runtime_operations_json": "[\"send_message\",\"receive_batch\"]",
+                "channel_runtime_operation_specs_json": "{\"send_message\":{\"label\":\"Send Message\",\"summary\":\"Send one outbound message\",\"sample_payload\":{\"target\":\"weixin:contact:demo\",\"text\":\"hello\"}},\"receive_batch\":{\"label\":\"Receive Batch\",\"summary\":\"Poll one inbound batch\",\"sample_payload\":{\"limit\":10}}}"
+            },
+            "summary": "Managed bridge contract example"
+        });
+        fs::write(
+            format!("{package_root}/loong.plugin.json"),
+            serde_json::to_string_pretty(&manifest).expect("serialize channel-bridge manifest"),
+        )
+        .expect("write channel-bridge manifest");
+        crate::test_support::write_executable_script_atomically(
+            Path::new(&format!("{package_root}/bridge.js")),
+            "#!/usr/bin/env node\nprocess.stdin.resume();\n",
         );
     }
 
@@ -5719,6 +5823,111 @@ mod tests {
                 result.plugin_id
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_inventory_surfaces_channel_bridge_runtime_contract_truth() {
+        let plugin_root = unique_temp_dir("loong-plugins-cli-inventory-channel-bridge");
+        write_channel_bridge_declared_package(&plugin_root);
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            config: None,
+            command: PluginsCommands::Inventory(PluginInventoryCommand {
+                source: PluginScanSourceArgs {
+                    roots: vec![plugin_root],
+                    query: "channel-bridge-extension".to_owned(),
+                    limit: None,
+                    bridge_support: None,
+                    bridge_profile: None,
+                    bridge_support_delta: None,
+                    bridge_support_sha256: None,
+                    bridge_support_delta_sha256: None,
+                },
+                include_ready: true,
+                include_blocked: true,
+                include_deferred: true,
+                include_examples: false,
+            }),
+        })
+        .await
+        .expect("channel bridge inventory should execute");
+
+        let PluginsCommandExecution::Inventory(execution) = execution else {
+            panic!("expected inventory execution");
+        };
+        let result = &execution.results[0];
+        assert_eq!(
+            result.channel_bridge_transport_family.as_deref(),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            result.channel_bridge_runtime_contract.as_deref(),
+            Some("loong_channel_bridge_v1")
+        );
+        assert_eq!(
+            result.channel_bridge_runtime_operations,
+            vec!["send_message".to_owned(), "receive_batch".to_owned()]
+        );
+        assert_eq!(
+            result.channel_bridge_runtime_operation_specs[0].operation,
+            "send_message"
+        );
+
+        let rendered = render_plugins_inventory_text(&execution);
+        assert!(rendered.contains("channel_bridge transport_family=wechat_clawbot_ilink_bridge"));
+        assert!(rendered.contains("runtime_operations=send_message,receive_batch"));
+        assert!(rendered.contains(
+            "runtime_operation_specs=send_message:Send Message,receive_batch:Receive Batch"
+        ));
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_doctor_surfaces_channel_bridge_runtime_contract_truth() {
+        let plugin_root = unique_temp_dir("loong-plugins-cli-doctor-channel-bridge");
+        write_channel_bridge_declared_package(&plugin_root);
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            config: None,
+            command: PluginsCommands::Doctor(PluginDoctorCommand {
+                source: plugin_doctor_source(&plugin_root, "channel-bridge-extension"),
+                include_passed: true,
+                include_warned: true,
+                include_blocked: true,
+                include_deferred: true,
+            }),
+        })
+        .await
+        .expect("channel bridge doctor should execute");
+
+        let PluginsCommandExecution::Doctor(execution) = execution else {
+            panic!("expected doctor execution");
+        };
+        let result = &execution.results[0].plugin;
+        assert_eq!(
+            result.channel_bridge_transport_family.as_deref(),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            result.channel_bridge_runtime_contract.as_deref(),
+            Some("loong_channel_bridge_v1")
+        );
+        assert_eq!(
+            result.channel_bridge_runtime_operations,
+            vec!["send_message".to_owned(), "receive_batch".to_owned()]
+        );
+        assert_eq!(
+            result.channel_bridge_runtime_operation_specs[0].operation,
+            "send_message"
+        );
+
+        let rendered = render_plugins_doctor_text(&execution);
+        assert!(rendered.contains("channel_bridge transport_family=wechat_clawbot_ilink_bridge"));
+        assert!(rendered.contains("runtime_operations=send_message,receive_batch"));
+        assert!(rendered.contains(
+            "runtime_operation_specs=send_message:Send Message,receive_batch:Receive Batch"
+        ));
     }
 
     #[tokio::test]

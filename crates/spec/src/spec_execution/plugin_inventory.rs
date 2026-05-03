@@ -11,6 +11,22 @@ use crate::spec_runtime::{
     provider_plugin_runtime_health_result,
 };
 
+#[derive(Clone)]
+struct PluginInventoryTranslationSnapshot {
+    bridge_kind: PluginBridgeKind,
+    adapter_family: String,
+    entrypoint_hint: String,
+    source_language: String,
+    channel_bridge_transport_family: Option<String>,
+    channel_bridge_target_contract: Option<String>,
+    channel_bridge_account_scope: Option<String>,
+    channel_bridge_runtime_contract: Option<String>,
+    channel_bridge_runtime_operations: Vec<String>,
+    channel_bridge_runtime_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
+    channel_bridge_ready: Option<bool>,
+    channel_bridge_missing_fields: Vec<String>,
+}
+
 pub(super) fn execute_plugin_inventory(
     integration_catalog: &IntegrationCatalog,
     plugin_scan_reports: &[PluginScanReport],
@@ -50,10 +66,8 @@ pub(super) fn collect_plugin_inventory_results(
     include_deferred: bool,
     include_examples: bool,
 ) -> Vec<PluginInventoryResult> {
-    let mut translation_by_key: BTreeMap<
-        (String, String),
-        (PluginBridgeKind, String, String, String),
-    > = BTreeMap::new();
+    let mut translation_by_key: BTreeMap<(String, String), PluginInventoryTranslationSnapshot> =
+        BTreeMap::new();
     let mut activation_candidate_by_key: BTreeMap<(String, String), PluginActivationCandidate> =
         BTreeMap::new();
     let mut activation_by_key: BTreeMap<(String, String), PluginActivationInventoryEntry> =
@@ -65,14 +79,33 @@ pub(super) fn collect_plugin_inventory_results(
 
     for report in plugin_translation_reports {
         for entry in &report.entries {
+            let channel_bridge = entry.channel_bridge.as_ref();
             translation_by_key.insert(
                 (entry.source_path.clone(), entry.plugin_id.clone()),
-                (
-                    entry.runtime.bridge_kind,
-                    entry.runtime.adapter_family.clone(),
-                    entry.runtime.entrypoint_hint.clone(),
-                    entry.runtime.source_language.clone(),
-                ),
+                PluginInventoryTranslationSnapshot {
+                    bridge_kind: entry.runtime.bridge_kind,
+                    adapter_family: entry.runtime.adapter_family.clone(),
+                    entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
+                    source_language: entry.runtime.source_language.clone(),
+                    channel_bridge_transport_family: channel_bridge
+                        .and_then(|bridge| bridge.transport_family.clone()),
+                    channel_bridge_target_contract: channel_bridge
+                        .and_then(|bridge| bridge.target_contract.clone()),
+                    channel_bridge_account_scope: channel_bridge
+                        .and_then(|bridge| bridge.account_scope.clone()),
+                    channel_bridge_runtime_contract: channel_bridge
+                        .and_then(|bridge| bridge.runtime_contract.clone()),
+                    channel_bridge_runtime_operations: channel_bridge
+                        .map(|bridge| bridge.runtime_operations.clone())
+                        .unwrap_or_default(),
+                    channel_bridge_runtime_operation_specs: channel_bridge
+                        .map(|bridge| bridge.runtime_operation_specs.clone())
+                        .unwrap_or_default(),
+                    channel_bridge_ready: channel_bridge.map(|bridge| bridge.readiness.ready),
+                    channel_bridge_missing_fields: channel_bridge
+                        .map(|bridge| bridge.readiness.missing_fields.clone())
+                        .unwrap_or_default(),
+                },
             );
         }
     }
@@ -141,22 +174,41 @@ pub(super) fn collect_plugin_inventory_results(
                 .as_deref()
                 .is_some_and(plugin_inventory_status_is_blocked);
             let bridge_kind = translation
-                .map(|(bridge, _, _, _)| *bridge)
+                .map(|snapshot| snapshot.bridge_kind)
                 .or_else(|| activation.map(|entry| entry.bridge_kind))
                 .or_else(|| activation_candidate.map(|candidate| candidate.bridge_kind))
                 .unwrap_or(PluginBridgeKind::Unknown);
             let adapter_family = translation
-                .map(|(_, adapter, _, _)| adapter.clone())
+                .map(|snapshot| snapshot.adapter_family.clone())
                 .or_else(|| activation.map(|entry| entry.adapter_family.clone()))
                 .or_else(|| activation_candidate.map(|candidate| candidate.adapter_family.clone()));
             let entrypoint_hint = translation
-                .map(|(_, _, entrypoint, _)| entrypoint.clone())
+                .map(|snapshot| snapshot.entrypoint_hint.clone())
                 .or_else(|| activation.map(|entry| entry.entrypoint_hint.clone()))
                 .or_else(|| manifest.endpoint.clone());
             let source_language = translation
-                .map(|(_, _, _, language)| language.clone())
+                .map(|snapshot| snapshot.source_language.clone())
                 .or_else(|| activation.map(|entry| entry.source_language.clone()))
                 .or_else(|| Some(descriptor.language.clone()));
+            let channel_bridge_transport_family =
+                translation.and_then(|snapshot| snapshot.channel_bridge_transport_family.clone());
+            let channel_bridge_target_contract =
+                translation.and_then(|snapshot| snapshot.channel_bridge_target_contract.clone());
+            let channel_bridge_account_scope =
+                translation.and_then(|snapshot| snapshot.channel_bridge_account_scope.clone());
+            let channel_bridge_runtime_contract =
+                translation.and_then(|snapshot| snapshot.channel_bridge_runtime_contract.clone());
+            let channel_bridge_runtime_operations = translation
+                .map(|snapshot| snapshot.channel_bridge_runtime_operations.clone())
+                .unwrap_or_default();
+            let channel_bridge_runtime_operation_specs = translation
+                .map(|snapshot| snapshot.channel_bridge_runtime_operation_specs.clone())
+                .unwrap_or_default();
+            let channel_bridge_ready =
+                translation.and_then(|snapshot| snapshot.channel_bridge_ready);
+            let channel_bridge_missing_fields = translation
+                .map(|snapshot| snapshot.channel_bridge_missing_fields.clone())
+                .unwrap_or_default();
 
             if is_deferred {
                 if !include_deferred {
@@ -258,6 +310,14 @@ pub(super) fn collect_plugin_inventory_results(
                     .setup
                     .as_ref()
                     .and_then(|setup| setup.remediation.clone()),
+                channel_bridge_transport_family,
+                channel_bridge_target_contract,
+                channel_bridge_account_scope,
+                channel_bridge_runtime_contract,
+                channel_bridge_runtime_operations,
+                channel_bridge_runtime_operation_specs,
+                channel_bridge_ready,
+                channel_bridge_missing_fields,
                 native_extension: plugin_native_extension_declarations_from_metadata(
                     &manifest.metadata,
                 ),
@@ -380,6 +440,14 @@ pub(super) fn collect_plugin_inventory_results(
             setup_default_env_var: entry.setup_default_env_var,
             setup_docs_urls: entry.setup_docs_urls,
             setup_remediation: entry.setup_remediation,
+            channel_bridge_transport_family: entry.channel_bridge_transport_family,
+            channel_bridge_target_contract: entry.channel_bridge_target_contract,
+            channel_bridge_account_scope: entry.channel_bridge_account_scope,
+            channel_bridge_runtime_contract: entry.channel_bridge_runtime_contract,
+            channel_bridge_runtime_operations: entry.channel_bridge_runtime_operations,
+            channel_bridge_runtime_operation_specs: entry.channel_bridge_runtime_operation_specs,
+            channel_bridge_ready: entry.channel_bridge_ready,
+            channel_bridge_missing_fields: entry.channel_bridge_missing_fields,
             native_extension: entry.native_extension,
             authoring_guidance: None,
             slot_claims: entry.slot_claims,
