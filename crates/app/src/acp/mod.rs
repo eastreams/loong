@@ -19,14 +19,15 @@ pub use analytics::{
 };
 pub use backend::{
     ACP_RUNTIME_API_VERSION, ACP_SESSION_METADATA_ACTIVATION_ORIGIN, ACP_TURN_METADATA_ACK_CURSOR,
-    ACP_TURN_METADATA_ROUTING_INTENT, ACP_TURN_METADATA_ROUTING_ORIGIN,
-    ACP_TURN_METADATA_SOURCE_MESSAGE_ID, ACP_TURN_METADATA_TRACE_ID, AcpAbortController,
-    AcpAbortSignal, AcpBackendMetadata, AcpCapability, AcpConfigPatch, AcpConversationTurnOptions,
-    AcpDoctorReport, AcpRoutingIntent, AcpRoutingOrigin, AcpRuntimeBackend, AcpSessionBootstrap,
-    AcpSessionHandle, AcpSessionMetadata, AcpSessionMode, AcpSessionState, AcpSessionStatus,
-    AcpTurnEventSink, AcpTurnProvenance, AcpTurnRequest, AcpTurnResult, AcpTurnStopReason,
-    BufferedAcpTurnEventSink, CompositeAcpTurnEventSink, JsonlAcpTurnEventSink,
-    PlanningStubAcpBackend, StreamingTokenEvent, TokenDelta, ToolCallDelta,
+    ACP_TURN_METADATA_INITIAL_PROMPT, ACP_TURN_METADATA_ROUTING_INTENT,
+    ACP_TURN_METADATA_ROUTING_ORIGIN, ACP_TURN_METADATA_SOURCE_MESSAGE_ID,
+    ACP_TURN_METADATA_TRACE_ID, AcpAbortController, AcpAbortSignal, AcpBackendMetadata,
+    AcpCapability, AcpConfigPatch, AcpConversationTurnOptions, AcpDoctorReport, AcpRoutingIntent,
+    AcpRoutingOrigin, AcpRuntimeBackend, AcpSessionBootstrap, AcpSessionHandle, AcpSessionMetadata,
+    AcpSessionMode, AcpSessionState, AcpSessionStatus, AcpTurnEventSink, AcpTurnProvenance,
+    AcpTurnRequest, AcpTurnResult, AcpTurnStopReason, BufferedAcpTurnEventSink,
+    CompositeAcpTurnEventSink, JsonlAcpTurnEventSink, PlanningStubAcpBackend, StreamingTokenEvent,
+    TokenDelta, ToolCallDelta,
 };
 pub use binding::AcpSessionBindingScope;
 pub use manager::{

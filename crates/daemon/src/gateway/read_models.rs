@@ -404,6 +404,8 @@ pub struct GatewayOperatorRuntimeSummaryReadModel {
         Option<crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_plugin_authoring_summary: Option<GatewayRuntimePluginAuthoringSummaryReadModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_inventory: Option<GatewayRuntimePluginInventorySummaryReadModel>,
     pub visible_tool_count: usize,
     pub visible_direct_tool_names: Vec<String>,
     pub hidden_tool_surface_ids: Vec<String>,
@@ -422,6 +424,30 @@ pub struct GatewayRuntimePluginAuthoringSummaryReadModel {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub smoke_test_kind_distribution: BTreeMap<String, usize>,
     pub allow_command_gated_smoke_test_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GatewayRuntimePluginInventorySummaryReadModel {
+    pub available: bool,
+    pub reason: Option<String>,
+    pub roots_source: Option<String>,
+    pub returned_results: Option<usize>,
+    pub loaded_plugins: Option<usize>,
+    pub shadowed_plugin_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadowed_plugin_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_guidance:
+        Option<crate::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_extension_authoring_summary:
+        Option<crate::plugins_cli::NativeExtensionAuthoringSummaryView>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capability_distribution: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub activation_attestation_integrity_distribution: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub runtime_health_status_distribution: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1599,6 +1625,10 @@ fn build_operator_runtime_summary_read_model(
         runtime_plugin_discovery_guidance(&runtime_snapshot.runtime_plugins);
     let runtime_plugin_authoring_summary =
         runtime_plugin_authoring_summary(&runtime_snapshot.runtime_plugins);
+    let runtime_plugin_inventory = runtime_snapshot
+        .runtime_plugin_inventory
+        .as_ref()
+        .map(build_runtime_plugin_inventory_summary_read_model);
     let visible_tool_count = runtime_snapshot.tools.visible_tool_count;
     let visible_direct_tool_names = runtime_snapshot.tools.visible_direct_tool_names.clone();
     let hidden_tool_surface_ids = runtime_snapshot
@@ -1628,6 +1658,7 @@ fn build_operator_runtime_summary_read_model(
         runtime_plugin_shadowed_ids,
         runtime_plugin_discovery_guidance,
         runtime_plugin_authoring_summary,
+        runtime_plugin_inventory,
         visible_tool_count,
         visible_direct_tool_names,
         hidden_tool_surface_ids,
@@ -1637,6 +1668,48 @@ fn build_operator_runtime_summary_read_model(
         compaction_hygiene,
         tool_calling,
         web_access,
+    }
+}
+
+fn build_runtime_plugin_inventory_summary_read_model(
+    inventory: &crate::plugins_cli::RuntimePluginInventoryReadModel,
+) -> GatewayRuntimePluginInventorySummaryReadModel {
+    let loaded_plugins = inventory
+        .summary
+        .as_ref()
+        .map(|summary| summary.loaded_plugins);
+    let activation_attestation_integrity_distribution = inventory
+        .summary
+        .as_ref()
+        .map(|summary| {
+            summary
+                .activation_attestation_integrity_distribution
+                .clone()
+        })
+        .unwrap_or_default();
+    let runtime_health_status_distribution = inventory
+        .summary
+        .as_ref()
+        .map(|summary| summary.runtime_health_status_distribution.clone())
+        .unwrap_or_default();
+
+    GatewayRuntimePluginInventorySummaryReadModel {
+        available: inventory.available,
+        reason: inventory.reason.clone(),
+        roots_source: inventory.roots_source.clone(),
+        returned_results: inventory.returned_results,
+        loaded_plugins,
+        shadowed_plugin_count: Some(inventory.shadowed_plugin_ids.len()),
+        shadowed_plugin_ids: inventory.shadowed_plugin_ids.clone(),
+        discovery_guidance: inventory.discovery_guidance.clone(),
+        native_extension_authoring_summary: inventory.native_extension_authoring_summary.clone(),
+        capability_distribution: inventory
+            .summary
+            .as_ref()
+            .map(|summary| summary.capability_distribution.clone())
+            .unwrap_or_default(),
+        activation_attestation_integrity_distribution,
+        runtime_health_status_distribution,
     }
 }
 

@@ -2764,6 +2764,62 @@ mod tests {
     }
 
     #[test]
+    fn prefer_first_plugin_ids_keeps_first_entry_and_reports_shadowed_ids_once() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct Candidate {
+            plugin_id: &'static str,
+            source: &'static str,
+        }
+
+        let selection = prefer_first_plugin_ids(
+            vec![
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "project-local",
+                },
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "global",
+                },
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "fallback",
+                },
+                Candidate {
+                    plugin_id: "unique-extension",
+                    source: "unique",
+                },
+            ],
+            |candidate| candidate.plugin_id,
+        );
+
+        assert_eq!(
+            selection.effective,
+            vec![
+                Candidate {
+                    plugin_id: "shared-extension",
+                    source: "project-local",
+                },
+                Candidate {
+                    plugin_id: "unique-extension",
+                    source: "unique",
+                },
+            ]
+        );
+        assert_eq!(
+            selection.shadowed_plugin_ids,
+            vec!["shared-extension".to_owned()]
+        );
+        assert_eq!(
+            selection
+                .shadowed_by_plugin_id
+                .get("shared-extension")
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
     fn scanner_finds_manifest_in_rust_and_python_files() {
         let root = unique_tmp_dir("loong-plugin-scan");
         fs::create_dir_all(&root).expect("create temp root");

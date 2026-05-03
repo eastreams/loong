@@ -556,6 +556,8 @@ pub struct PluginsInventorySummaryView {
     pub blocked_plugins: usize,
     pub deferred_plugins: usize,
     pub loaded_plugins: usize,
+    pub activation_attestation_integrity_distribution: BTreeMap<String, usize>,
+    pub runtime_health_status_distribution: BTreeMap<String, usize>,
     pub source_kind_distribution: BTreeMap<String, usize>,
     pub bridge_kind_distribution: BTreeMap<String, usize>,
     pub capability_distribution: BTreeMap<String, usize>,
@@ -3893,6 +3895,8 @@ fn summarize_plugin_inventory_results(
     let mut blocked_plugins = 0;
     let mut deferred_plugins = 0;
     let mut loaded_plugins = 0;
+    let mut activation_attestation_integrity_distribution = BTreeMap::new();
+    let mut runtime_health_status_distribution = BTreeMap::new();
     let mut source_kind_distribution = BTreeMap::new();
     let mut bridge_kind_distribution = BTreeMap::new();
     let mut capability_distribution = BTreeMap::new();
@@ -3918,6 +3922,18 @@ fn summarize_plugin_inventory_results(
         if result.loaded {
             loaded_plugins += 1;
         }
+        if let Some(attestation) = result.activation_attestation.as_ref() {
+            increment_rollup_count(
+                &mut activation_attestation_integrity_distribution,
+                attestation.integrity.as_str(),
+            );
+        }
+        if let Some(runtime_health) = result.runtime_health.as_ref() {
+            increment_rollup_count(
+                &mut runtime_health_status_distribution,
+                runtime_health.status.as_str(),
+            );
+        }
 
         increment_rollup_count(&mut source_kind_distribution, result.source_kind.as_str());
         increment_rollup_count(&mut bridge_kind_distribution, result.bridge_kind.as_str());
@@ -3942,6 +3958,8 @@ fn summarize_plugin_inventory_results(
         blocked_plugins,
         deferred_plugins,
         loaded_plugins,
+        activation_attestation_integrity_distribution,
+        runtime_health_status_distribution,
         source_kind_distribution,
         bridge_kind_distribution,
         capability_distribution,

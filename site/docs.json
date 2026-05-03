@@ -130,6 +130,7 @@
         "group": "Build On Loong",
         "pages": [
           "build-on-loong/overview",
+          "build-on-loong/extensions",
           "build-on-loong/architecture",
           "build-on-loong/extensions",
           "build-on-loong/contributing",

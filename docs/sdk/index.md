@@ -44,6 +44,7 @@ Start with:
 | [Internal Integration Quickstart](quickstart-internal.md) | Adding or refactoring repository-owned surfaces |
 | [Provider SDK Convergence Plan](https://github.com/eastreams/knowledge-base/tree/main/loong/implementation-plans) | Converging the provider family into a clearer maintainer-facing seam |
 | [External Authoring Quickstart](quickstart-external.md) | Understanding what external authors should build today |
+| `loong plugins init` + `loong plugins invoke-extension` | Scaffold and smoke-test the shortest native extension authoring path |
 | [Compatibility Matrix](compatibility-matrix.md) | Stability and maturity boundaries across SDK surfaces |
 | [SDK Strategy](../design-docs/sdk-strategy.md) | Overall architecture framing |
 | [SDK Stability Policy](../design-docs/sdk-stability-policy.md) | What is stable, additive, experimental, or internal |

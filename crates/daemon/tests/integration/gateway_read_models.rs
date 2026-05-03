@@ -640,6 +640,134 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
 }
 
 #[test]
+fn gateway_read_model_runtime_snapshot_can_carry_live_plugin_inventory_truth() {
+    let root = unique_temp_dir("loong-gateway-runtime-snapshot-inventory");
+    let config_path = write_gateway_test_config(&root);
+    let config_path_text = config_path
+        .to_str()
+        .expect("config path should be valid utf-8");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(config_path_text))
+        .expect("collect runtime snapshot");
+    let payload = gateway::read_models::build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(loong_daemon::plugins_cli::RuntimePluginInventoryReadModel {
+            available: true,
+            reason: None,
+            error: None,
+            roots_source: Some("configured".to_owned()),
+            returned_results: Some(1),
+            summary: Some(loong_daemon::plugins_cli::PluginsInventorySummaryView {
+                returned_plugins: 1,
+                ready_plugins: 1,
+                setup_incomplete_plugins: 0,
+                blocked_plugins: 0,
+                deferred_plugins: 0,
+                loaded_plugins: 0,
+                activation_attestation_integrity_distribution: std::collections::BTreeMap::new(),
+                runtime_health_status_distribution: std::collections::BTreeMap::new(),
+                source_kind_distribution: std::collections::BTreeMap::new(),
+                bridge_kind_distribution: std::collections::BTreeMap::new(),
+                capability_distribution: std::collections::BTreeMap::from([
+                    ("invoke_connector".to_owned(), 1),
+                    ("observe_telemetry".to_owned(), 1),
+                ]),
+                source_language_distribution: std::collections::BTreeMap::new(),
+                setup_surface_distribution: std::collections::BTreeMap::new(),
+                activation_status_distribution: std::collections::BTreeMap::new(),
+            }),
+            native_extension_authoring_summary: None,
+            shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
+                    precedence_rule: "project_local_over_global".to_owned(),
+                    project_local_root: ".loong/extensions/".to_owned(),
+                    global_root: "~/.loong/agent/extensions/".to_owned(),
+                    shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                    shadowed_conflicts: vec![loong_daemon::RuntimePluginShadowingConflictView {
+                        plugin_id: "shared-extension".to_owned(),
+                        effective_source_path:
+                                ".loong/extensions/search/loong.plugin.json".to_owned(),
+                        shadowed_source_paths: vec![
+                            "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        ],
+                    }],
+                    discovery_actions: vec![loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "inspect_effective_package".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: ".loong/extensions/search".to_owned(),
+                        summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                        command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                    },
+                    loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "compare_shadowed_manifests".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                        summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                        command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
+                    }],
+                    recommended_action: Some("review_global_duplicate".to_owned()),
+                    resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                }),
+            results: Vec::new(),
+        }),
+    );
+    let encoded = serde_json::to_value(&payload).expect("serialize runtime snapshot read model");
+
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["available"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["returned_results"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["shadowed_plugin_ids"],
+        serde_json::json!(["shared-extension"])
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["precedence_rule"],
+        serde_json::json!("project_local_over_global")
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["kind"],
+        serde_json::json!("inspect_effective_package")
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"][0]["role"],
+        serde_json::json!("operator")
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["summary"]["capability_distribution"]["observe_telemetry"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime_plugin_inventory"]["summary"]["capability_distribution"]["invoke_connector"],
+        serde_json::json!(1)
+    );
+    assert!(
+        encoded["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| {
+                action["kind"] == serde_json::json!("compare_shadowed_manifests")
+                    && action["command"]
+                        .as_str()
+                        .is_some_and(|command| command.contains("git diff --no-index"))
+            }))
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups() {
     let root = unique_temp_dir("loong-gateway-operator-summary");
     let config_path = write_gateway_test_config(&root);
@@ -653,7 +781,76 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
         config_path_text,
         &snapshot.channels,
     );
-    let runtime_snapshot = gateway::read_models::build_runtime_snapshot_read_model(&snapshot);
+    let runtime_snapshot = gateway::read_models::build_runtime_snapshot_read_model_with_inventory(
+        &snapshot,
+        Some(loong_daemon::plugins_cli::RuntimePluginInventoryReadModel {
+            available: true,
+            reason: None,
+            error: None,
+            roots_source: Some("auto_discovered".to_owned()),
+            returned_results: Some(1),
+            summary: Some(loong_daemon::plugins_cli::PluginsInventorySummaryView {
+                returned_plugins: 1,
+                ready_plugins: 1,
+                setup_incomplete_plugins: 0,
+                blocked_plugins: 0,
+                deferred_plugins: 0,
+                loaded_plugins: 0,
+                activation_attestation_integrity_distribution: std::collections::BTreeMap::new(),
+                runtime_health_status_distribution: std::collections::BTreeMap::new(),
+                source_kind_distribution: std::collections::BTreeMap::new(),
+                bridge_kind_distribution: std::collections::BTreeMap::new(),
+                capability_distribution: std::collections::BTreeMap::from([
+                    ("invoke_connector".to_owned(), 1),
+                    ("observe_telemetry".to_owned(), 1),
+                ]),
+                source_language_distribution: std::collections::BTreeMap::new(),
+                setup_surface_distribution: std::collections::BTreeMap::new(),
+                activation_status_distribution: std::collections::BTreeMap::new(),
+            }),
+            native_extension_authoring_summary: None,
+            shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+            discovery_guidance: Some(loong_daemon::RuntimePluginDiscoveryGuidanceView {
+                    precedence_rule: "project_local_over_global".to_owned(),
+                    project_local_root: ".loong/extensions/".to_owned(),
+                    global_root: "~/.loong/agent/extensions/".to_owned(),
+                    shadowed_plugin_ids: vec!["shared-extension".to_owned()],
+                    shadowed_conflicts: vec![loong_daemon::RuntimePluginShadowingConflictView {
+                        plugin_id: "shared-extension".to_owned(),
+                        effective_source_path:
+                                ".loong/extensions/search/loong.plugin.json".to_owned(),
+                        shadowed_source_paths: vec![
+                            "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        ],
+                    }],
+                    discovery_actions: vec![loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "inspect_effective_package".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: ".loong/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: ".loong/extensions/search".to_owned(),
+                        summary: "Inspect the effective project-local package for shared-extension".to_owned(),
+                        command: "loong plugins doctor --root '.loong/extensions/search' --profile sdk-release".to_owned(),
+                    },
+                    loong_daemon::RuntimePluginDiscoveryActionView {
+                        kind: "compare_shadowed_manifests".to_owned(),
+                        role: "operator".to_owned(),
+                        execution_kind: "read_only_cli".to_owned(),
+                        agent_runnable: true,
+                        plugin_id: "shared-extension".to_owned(),
+                        target_source_path: "~/.loong/agent/extensions/search/loong.plugin.json".to_owned(),
+                        target_package_root: "~/.loong/agent/extensions/search".to_owned(),
+                        summary: "Compare effective and shadowed manifests for shared-extension".to_owned(),
+                        command: "git diff --no-index '.loong/extensions/search/loong.plugin.json' '~/.loong/agent/extensions/search/loong.plugin.json'".to_owned(),
+                    }],
+                    recommended_action: Some("review_global_duplicate".to_owned()),
+                    resolution_hint: Some("Project-local `.loong/extensions` overrides `~/.loong/agent/extensions` for plugin ids: shared-extension. Remove or rename the global duplicate if the override is accidental.".to_owned()),
+                }),
+            results: Vec::new(),
+        }),
+    );
     let owner_status = gateway::state::GatewayOwnerStatus {
         runtime_dir: "/tmp/loong-gateway-runtime".to_owned(),
         phase: "running".to_owned(),
@@ -786,6 +983,34 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
     assert_eq!(
         encoded["control_surface"]["base_url"],
         "http://127.0.0.1:7777"
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["shadowed_plugin_ids"],
+        serde_json::json!(["shared-extension"])
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["recommended_action"],
+        serde_json::json!("review_global_duplicate")
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["capability_distribution"]["observe_telemetry"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["capability_distribution"]["invoke_connector"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
+            [0]["kind"],
+        serde_json::json!("inspect_effective_package")
+    );
+    assert!(
+        encoded["runtime"]["runtime_plugin_inventory"]["discovery_guidance"]["discovery_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| {
+                action["kind"] == serde_json::json!("compare_shadowed_manifests")
+            }))
     );
 
     fs::remove_dir_all(&root).ok();

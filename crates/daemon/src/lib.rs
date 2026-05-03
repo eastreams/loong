@@ -71,7 +71,10 @@ pub use self::operator_inventory_cli::{
     render_channel_surfaces_text, render_channel_target_kind_ids, run_channels_cli,
     run_list_context_engines_cli, run_list_memory_systems_cli, run_safe_lane_summary_cli,
 };
-pub use self::runtime_plugin_discovery::RuntimePluginDiscoveryGuidanceView;
+pub use self::runtime_plugin_discovery::{
+    RuntimePluginDiscoveryActionView, RuntimePluginDiscoveryGuidanceView,
+    RuntimePluginShadowingConflictView,
+};
 pub use loong_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
