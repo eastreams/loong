@@ -614,6 +614,32 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
                 crate::render_line_safe_text_values(native_extension.metadata_issues.iter().map(String::as_str), ","),
             ));
         }
+        if !plugin.connector_operations.is_empty()
+            || !plugin.connector_operation_specs.is_empty()
+            || !plugin.connector_operation_metadata_issues.is_empty()
+        {
+            lines.push(format!(
+                "    connector_operations operations={} operation_specs={} metadata_issues={}",
+                crate::render_line_safe_text_values(
+                    plugin.connector_operations.iter().map(String::as_str),
+                    ",",
+                ),
+                crate::render_line_safe_text_values(
+                    plugin
+                        .connector_operation_specs
+                        .iter()
+                        .map(|spec| spec.operation.as_str()),
+                    ",",
+                ),
+                crate::render_line_safe_text_values(
+                    plugin
+                        .connector_operation_metadata_issues
+                        .iter()
+                        .map(String::as_str),
+                    ",",
+                ),
+            ));
+        }
         if let Some(guidance) = plugin.authoring_guidance.as_ref() {
             let mut authoring_line = format!(
                 "    authoring validate={} operator_actions={} smoke_test={}",
@@ -870,28 +896,52 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
         "shadowed_plugin_ids": snapshot.shadowed_plugin_ids,
         "discovery_guidance": snapshot.discovery_guidance,
         "plugins": snapshot.plugins.iter().map(|plugin| {
-            json!({
-                "plugin_id": plugin.plugin_id,
-                "provider_id": plugin.provider_id,
-                "connector_name": plugin.connector_name,
-                "source_path": plugin.source_path,
-                "source_kind": plugin.source_kind,
-                "package_root": plugin.package_root,
-                "package_manifest_path": plugin.package_manifest_path,
-                "bridge_kind": plugin.bridge_kind,
-                "capabilities": plugin.capabilities,
-                "adapter_family": plugin.adapter_family,
-                "setup_mode": plugin.setup_mode,
-                "setup_surface": plugin.setup_surface,
-                "slot_claims": plugin.slot_claims,
-                "conflicting_slot_claims": plugin.conflicting_slot_claims,
-                "status": plugin.status,
-                "reason": plugin.reason,
-                "missing_required_env_vars": plugin.missing_required_env_vars,
-                "missing_required_config_keys": plugin.missing_required_config_keys,
-                "native_extension": plugin.native_extension,
-                "authoring_guidance": plugin.authoring_guidance,
-            })
+            let mut object = serde_json::Map::new();
+            object.insert("plugin_id".to_owned(), json!(plugin.plugin_id));
+            object.insert("provider_id".to_owned(), json!(plugin.provider_id));
+            object.insert("connector_name".to_owned(), json!(plugin.connector_name));
+            object.insert("source_path".to_owned(), json!(plugin.source_path));
+            object.insert("source_kind".to_owned(), json!(plugin.source_kind));
+            object.insert("package_root".to_owned(), json!(plugin.package_root));
+            object.insert(
+                "package_manifest_path".to_owned(),
+                json!(plugin.package_manifest_path),
+            );
+            object.insert("bridge_kind".to_owned(), json!(plugin.bridge_kind));
+            object.insert("capabilities".to_owned(), json!(plugin.capabilities));
+            object.insert("adapter_family".to_owned(), json!(plugin.adapter_family));
+            object.insert("setup_mode".to_owned(), json!(plugin.setup_mode));
+            object.insert("setup_surface".to_owned(), json!(plugin.setup_surface));
+            object.insert("slot_claims".to_owned(), json!(plugin.slot_claims));
+            object.insert(
+                "conflicting_slot_claims".to_owned(),
+                json!(plugin.conflicting_slot_claims),
+            );
+            object.insert("status".to_owned(), json!(plugin.status));
+            object.insert("reason".to_owned(), json!(plugin.reason));
+            object.insert(
+                "missing_required_env_vars".to_owned(),
+                json!(plugin.missing_required_env_vars),
+            );
+            object.insert(
+                "missing_required_config_keys".to_owned(),
+                json!(plugin.missing_required_config_keys),
+            );
+            object.insert(
+                "connector_operations".to_owned(),
+                json!(plugin.connector_operations),
+            );
+            object.insert(
+                "connector_operation_specs".to_owned(),
+                json!(plugin.connector_operation_specs),
+            );
+            object.insert(
+                "connector_operation_metadata_issues".to_owned(),
+                json!(plugin.connector_operation_metadata_issues),
+            );
+            object.insert("native_extension".to_owned(), json!(plugin.native_extension));
+            object.insert("authoring_guidance".to_owned(), json!(plugin.authoring_guidance));
+            Value::Object(object)
         }).collect::<Vec<_>>(),
     })
 }

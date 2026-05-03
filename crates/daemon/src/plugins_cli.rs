@@ -340,6 +340,9 @@ pub struct PluginInitCommand {
     /// Optional account scope for scaffolding a managed channel-bridge package lane
     #[arg(long)]
     pub account_scope: Option<String>,
+    /// Declared generic connector operations for packages that expose endpoint-backed connector calls
+    #[arg(long = "connector-operation")]
+    pub connector_operations: Vec<String>,
     /// Additional declared capability names beyond the default connector baseline
     #[arg(long = "capability")]
     pub capabilities: Vec<String>,
@@ -1706,6 +1709,8 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     let declared_host_hooks = resolve_scaffold_host_hooks(command.host_hooks.as_slice())?;
     let declared_host_actions = resolve_scaffold_host_actions(command.host_actions.as_slice())?;
     let declared_tui_surfaces = resolve_scaffold_tui_surfaces(command.tui_surfaces.as_slice())?;
+    let declared_connector_operations =
+        resolve_scaffold_connector_operations(command.connector_operations.as_slice())?;
 
     validate_plugin_scaffold_version(&version)?;
 
@@ -1728,6 +1733,12 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
     {
         return Err(
             "plugins init only scaffolds trusted host hooks, host actions, and TUI surfaces on runnable process_stdio extension entrypoints"
+                .to_owned(),
+        );
+    }
+    if !declared_connector_operations.is_empty() && bridge_kind != PluginBridgeKind::HttpJson {
+        return Err(
+            "plugins init currently scaffolds declared connector operations only for http_json packages"
                 .to_owned(),
         );
     }
@@ -1754,6 +1765,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         effective_channel_id.as_deref(),
         effective_endpoint.as_deref(),
         effective_adapter_family.as_str(),
+        declared_connector_operations.as_slice(),
         declared_capabilities,
         declared_host_hooks.clone(),
         declared_host_actions.clone(),
@@ -1775,6 +1787,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         package_root.as_str(),
         plugin_id.as_str(),
         bridge_kind,
+        declared_connector_operations.as_slice(),
         process_stdio_profile,
         managed_bridge_plan.as_ref(),
         declared_host_hooks.as_slice(),
@@ -1819,6 +1832,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         runtime_execute_command.as_deref(),
         process_stdio_profile.is_some(),
         managed_bridge_plan.is_some(),
+        !declared_connector_operations.is_empty(),
         native_extension_authoring_profile
             .as_ref()
             .map(|profile| profile.reference_example_path.as_str())
@@ -1940,6 +1954,18 @@ async fn execute_plugins_invoke_connector_operation(
         return Err(format!(
             "plugins invoke-connector-operation currently supports only http_json packages; plugin `{plugin_id}` declares bridge_kind `{}`",
             plugin.runtime.bridge_kind.as_str()
+        ));
+    }
+    let connector_operations =
+        crate::kernel::plugin_connector_operation_declarations_from_metadata(&plugin.metadata);
+    if !connector_operations.operations.is_empty()
+        && !connector_operations
+            .operations
+            .iter()
+            .any(|declared| declared == &operation)
+    {
+        return Err(format!(
+            "plugins invoke-connector-operation requires plugin `{plugin_id}` to declare connector operation `{operation}` in loong_connector_operations_json"
         ));
     }
 
@@ -2640,6 +2666,7 @@ fn render_plugin_scaffold_smoke_test_command(
     package_root: &str,
     plugin_id: &str,
     bridge_kind: PluginBridgeKind,
+    connector_operations: &[String],
     process_stdio_profile: Option<
         crate::native_extension_authoring::ProcessStdioNativeExtensionLanguageProfile,
     >,
@@ -2662,7 +2689,10 @@ fn render_plugin_scaffold_smoke_test_command(
         return Some(render_authoring_connector_probe_command(
             package_root,
             plugin_id,
-            "<operation>",
+            connector_operations
+                .first()
+                .map(String::as_str)
+                .unwrap_or("<operation>"),
             None,
         ));
     }
@@ -2737,6 +2767,50 @@ fn resolve_scaffold_endpoint(
     Ok(endpoint)
 }
 
+fn resolve_scaffold_connector_operations(raw: &[String]) -> CliResult<Vec<String>> {
+    let mut operations = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for operation in raw {
+        let trimmed = operation.trim();
+        if trimmed.is_empty() {
+            return Err(
+                "plugins init requires each --connector-operation value to be non-empty".to_owned(),
+            );
+        }
+        if seen.insert(trimmed.to_owned()) {
+            operations.push(trimmed.to_owned());
+        }
+    }
+
+    Ok(operations)
+}
+
+fn render_scaffold_connector_operation_specs_json(operations: &[String]) -> Option<String> {
+    if operations.is_empty() {
+        return None;
+    }
+
+    let specs = operations
+        .iter()
+        .map(|operation| {
+            (
+                operation.clone(),
+                serde_json::json!({
+                    "label": humanize_tui_surface_identifier(operation),
+                    "summary": format!("Invoke connector operation `{operation}` through the declared bridge."),
+                    "sample_payload": {},
+                    "operator_hint": format!(
+                        "Probe this operation with `loong plugins invoke-connector-operation --root \\\"<package-root>\\\" --plugin-id \\\"<plugin-id>\\\" --operation {operation} --payload '{{}}'`."
+                    ),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    serde_json::to_string(&specs).ok()
+}
+
 fn governed_native_example_package_root(source_language: &str) -> Option<&'static str> {
     match source_language {
         "python" => Some("examples/plugins-process/native-extension-python"),
@@ -2778,6 +2852,7 @@ fn build_native_extension_authoring_profile(
         package_root,
         plugin_id,
         scaffold_defaults.bridge_kind,
+        &[],
         Some(profile),
         None,
         declared_host_hooks,
@@ -3027,6 +3102,7 @@ fn build_plugin_scaffold_manifest(
     channel_id: Option<&str>,
     endpoint: Option<&str>,
     adapter_family: &str,
+    connector_operations: &[String],
     capabilities: BTreeSet<Capability>,
     host_hooks: Vec<String>,
     host_actions: Vec<String>,
@@ -3045,6 +3121,22 @@ fn build_plugin_scaffold_manifest(
     metadata.insert("entrypoint".to_owned(), entrypoint.to_owned());
     if let Some(source_language) = scaffold_defaults.source_language.as_ref() {
         metadata.insert("source_language".to_owned(), source_language.clone());
+    }
+    if scaffold_defaults.bridge_kind == PluginBridgeKind::HttpJson
+        && !connector_operations.is_empty()
+    {
+        metadata.insert(
+            "loong_connector_operations_json".to_owned(),
+            serde_json::to_string(connector_operations).unwrap_or_else(|_| "[]".to_owned()),
+        );
+        if let Some(connector_operation_specs_json) =
+            render_scaffold_connector_operation_specs_json(connector_operations)
+        {
+            metadata.insert(
+                "loong_connector_operation_specs_json".to_owned(),
+                connector_operation_specs_json,
+            );
+        }
     }
     if let Some(managed_bridge_plan) = managed_bridge_plan {
         let profile = managed_bridge_plan.profile;
@@ -3511,6 +3603,7 @@ fn render_plugin_scaffold_readme(
     runtime_execute_command: Option<&str>,
     has_native_extension_projection: bool,
     has_managed_bridge_projection: bool,
+    has_connector_operation_projection: bool,
     reference_example_path: Option<&str>,
 ) -> String {
     let runtime_files_summary = match runtime_files {
@@ -3576,6 +3669,13 @@ fn render_plugin_scaffold_readme(
         lines.extend([
             String::new(),
             "Keep `channel_runtime_operations_json` and `channel_runtime_operation_specs_json` aligned with each declared managed bridge runtime operation so Loong can surface labels, summaries, sample payloads, and operator hints."
+                .to_owned(),
+        ]);
+    }
+    if has_connector_operation_projection {
+        lines.extend([
+            String::new(),
+            "Keep `loong_connector_operations_json` and `loong_connector_operation_specs_json` aligned with each declared connector operation so Loong can surface operation names, summaries, sample payloads, and probe hints."
                 .to_owned(),
         ]);
     }
@@ -3902,6 +4002,7 @@ fn plugin_authoring_guidance(
                 result.package_root.as_str(),
                 result.plugin_id.as_str(),
                 result.bridge_kind.as_str(),
+                result.connector_operations.as_slice(),
             )
         })
     })
@@ -3951,10 +4052,16 @@ pub(crate) fn connector_package_authoring_guidance(
     package_root: &str,
     plugin_id: &str,
     bridge_kind: &str,
+    connector_operations: &[String],
 ) -> Option<crate::PluginNativeExtensionAuthoringGuidance> {
     if bridge_kind != PluginBridgeKind::HttpJson.as_str() {
         return None;
     }
+
+    let operation = connector_operations
+        .first()
+        .map(String::as_str)
+        .unwrap_or("<operation>");
 
     Some(crate::PluginNativeExtensionAuthoringGuidance {
         validate_command: format!(
@@ -3966,7 +4073,7 @@ pub(crate) fn connector_package_authoring_guidance(
         smoke_test_command: render_authoring_connector_probe_command(
             package_root,
             plugin_id,
-            "<operation>",
+            operation,
             None,
         ),
         runtime_execute_command: None,
@@ -4070,6 +4177,17 @@ fn render_plugins_inventory_text(execution: &PluginsInventoryExecution) -> Strin
                 format_channel_bridge_operation_specs_or_dash(&result.channel_bridge_runtime_operation_specs),
                 result.channel_bridge_ready.map(|value| value.to_string()).unwrap_or_else(|| "-".to_owned()),
                 format_csv_or_dash(&result.channel_bridge_missing_fields),
+            ));
+        }
+        if !result.connector_operations.is_empty()
+            || !result.connector_operation_specs.is_empty()
+            || !result.connector_operation_metadata_issues.is_empty()
+        {
+            lines.push(format!(
+                "  connector_operations operations={} operation_specs={} metadata_issues={}",
+                format_csv_or_dash(&result.connector_operations),
+                format_channel_bridge_operation_specs_or_dash(&result.connector_operation_specs),
+                format_csv_or_dash(&result.connector_operation_metadata_issues),
             ));
         }
         lines.push(format!(
@@ -4449,6 +4567,17 @@ fn render_plugin_doctor_result_lines(result: &PluginPreflightResult) -> Vec<Stri
             format_channel_bridge_operation_specs_or_dash(&plugin.channel_bridge_runtime_operation_specs),
             plugin.channel_bridge_ready.map(|value| value.to_string()).unwrap_or_else(|| "-".to_owned()),
             format_csv_or_dash(&plugin.channel_bridge_missing_fields),
+        ));
+    }
+    if !plugin.connector_operations.is_empty()
+        || !plugin.connector_operation_specs.is_empty()
+        || !plugin.connector_operation_metadata_issues.is_empty()
+    {
+        lines.push(format!(
+            "  connector_operations operations={} operation_specs={} metadata_issues={}",
+            format_csv_or_dash(&plugin.connector_operations),
+            format_channel_bridge_operation_specs_or_dash(&plugin.connector_operation_specs),
+            format_csv_or_dash(&plugin.connector_operation_metadata_issues),
         ));
     }
     lines.push(format!(
@@ -7474,6 +7603,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: vec!["search".to_owned()],
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -7505,7 +7635,7 @@ mod tests {
         assert_eq!(execution.version, "0.1.0");
         assert_eq!(execution.files_written.len(), 2);
         let expected_smoke_test_command = format!(
-            "loong plugins invoke-connector-operation --root \"{}\" --plugin-id \"tavily-search\" --operation <operation> --payload '{{}}'",
+            "loong plugins invoke-connector-operation --root \"{}\" --plugin-id \"tavily-search\" --operation search --payload '{{}}'",
             execution.package_root
         );
         assert_eq!(
@@ -7550,6 +7680,19 @@ mod tests {
             manifest.metadata.get("entrypoint").map(String::as_str),
             Some("https://localhost/invoke")
         );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("loong_connector_operations_json")
+                .map(String::as_str),
+            Some("[\"search\"]")
+        );
+        assert!(
+            manifest
+                .metadata
+                .contains_key("loong_connector_operation_specs_json"),
+            "http json scaffold should emit connector operation specs"
+        );
         let expected_host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
         assert_eq!(
             manifest
@@ -7581,8 +7724,12 @@ mod tests {
             "README should point authors to the generic connector probe: {rendered_readme}"
         );
         assert!(
-            rendered_readme.contains("Replace `<operation>`"),
-            "README should explain how to specialize the connector probe: {rendered_readme}"
+            !rendered_readme.contains("Replace `<operation>`"),
+            "README should not keep the placeholder note once connector operations are declared: {rendered_readme}"
+        );
+        assert!(
+            rendered_readme.contains("loong_connector_operation_specs_json"),
+            "README should mention connector operation spec metadata: {rendered_readme}"
         );
 
         let scanner = crate::kernel::PluginScanner::new();
@@ -7631,10 +7778,18 @@ mod tests {
             inventory_execution.results[0]
                 .authoring_guidance
                 .as_ref()
-                .is_some_and(|guidance| guidance
-                    .smoke_test_command
-                    .contains("plugins invoke-connector-operation"))
+                .is_some_and(|guidance| guidance.smoke_test_command.contains("--operation search"))
         );
+        assert_eq!(
+            inventory_execution.results[0].connector_operations,
+            vec!["search".to_owned()]
+        );
+        assert_eq!(
+            inventory_execution.results[0].connector_operation_specs[0].operation,
+            "search"
+        );
+        let rendered_inventory = render_plugins_inventory_text(&inventory_execution);
+        assert!(rendered_inventory.contains("connector_operations operations=search"));
     }
 
     #[tokio::test]
@@ -7677,6 +7832,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: vec!["search".to_owned()],
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -7735,6 +7891,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_plugins_invoke_connector_operation_rejects_undeclared_operation() {
+        let temp_root = unique_temp_dir("loong-plugins-cli-http-probe-undeclared");
+        let package_root = format!("{temp_root}/search-http");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            config: None,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "search-http".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                source_language: None,
+                endpoint: Some("http://127.0.0.1:8080/invoke".to_owned()),
+                channel_id: None,
+                transport_family: None,
+                target_contract: None,
+                account_scope: None,
+                connector_operations: vec!["search".to_owned()],
+                capabilities: Vec::new(),
+                host_hooks: Vec::new(),
+                host_actions: Vec::new(),
+                tui_surfaces: Vec::new(),
+                version: "0.1.0".to_owned(),
+                summary: Some("HTTP JSON search package".to_owned()),
+            }),
+        })
+        .await
+        .expect("http json scaffold should succeed");
+
+        let PluginsCommandExecution::Init(_execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            config: None,
+            command: PluginsCommands::InvokeConnectorOperation(
+                PluginInvokeConnectorOperationCommand {
+                    root: package_root,
+                    plugin_id: "search-http".to_owned(),
+                    operation: "lookup".to_owned(),
+                    payload: "{\"query\":\"ping\"}".to_owned(),
+                },
+            ),
+        })
+        .await
+        .expect_err("undeclared connector operation should be rejected");
+
+        assert!(error.contains("loong_connector_operations_json"));
+        assert!(error.contains("lookup"));
+    }
+
+    #[tokio::test]
     async fn execute_plugins_init_requires_source_language_for_process_stdio() {
         let temp_root = unique_temp_dir("loong-plugins-cli-init-process-language");
         let package_root = format!("{temp_root}/tavily-search");
@@ -7754,6 +7965,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -7789,6 +8001,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -7824,6 +8037,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -8023,6 +8237,7 @@ mod tests {
                     "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
                 ),
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -8211,6 +8426,7 @@ mod tests {
                     "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
                 ),
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -8371,6 +8587,7 @@ mod tests {
                     transport_family: None,
                     target_contract: None,
                     account_scope: None,
+                    connector_operations: Vec::new(),
                     capabilities: Vec::new(),
                     host_hooks: Vec::new(),
                     host_actions: Vec::new(),
@@ -8531,6 +8748,7 @@ mod tests {
                     "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
                 ),
                 account_scope: Some("multi_account".to_owned()),
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -8678,6 +8896,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: vec!["observe_telemetry".to_owned()],
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -8800,6 +9019,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: vec!["turn_start".to_owned()],
                 host_actions: vec!["open_settings".to_owned()],
@@ -8908,6 +9128,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: vec!["turn_start".to_owned()],
                 host_actions: Vec::new(),
@@ -8966,6 +9187,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: vec!["provider_request".to_owned()],
                 host_actions: Vec::new(),
@@ -9000,6 +9222,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -9037,6 +9260,7 @@ mod tests {
                 transport_family: None,
                 target_contract: None,
                 account_scope: None,
+                connector_operations: Vec::new(),
                 capabilities: Vec::new(),
                 host_hooks: Vec::new(),
                 host_actions: Vec::new(),
@@ -9754,6 +9978,10 @@ mod tests {
             assert!(
                 doc.contains("loong_extension_event_specs_json"),
                 "doc should mention the governed event spec metadata field"
+            );
+            assert!(
+                doc.contains("loong_connector_operation_specs_json"),
+                "doc should mention the generic connector operation spec metadata field"
             );
         }
     }

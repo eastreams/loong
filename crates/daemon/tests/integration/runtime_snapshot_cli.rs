@@ -228,7 +228,9 @@ fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
   "capabilities": ["InvokeConnector"],
   "metadata": {
     "bridge_kind": "http_json",
-    "adapter_family": "web-search"
+    "adapter_family": "web-search",
+    "loong_connector_operations_json": "[\"search\"]",
+    "loong_connector_operation_specs_json": "{\"search\":{\"label\":\"Search\",\"summary\":\"Run the search connector operation.\",\"sample_payload\":{\"query\":\"ping\"}}}"
   },
   "setup": {
     "mode": "metadata_only",
@@ -475,6 +477,14 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
     )
     .expect("runtime snapshot plugin should be present");
     assert_eq!(
+        plugin["connector_operations"],
+        serde_json::json!(["search"])
+    );
+    assert_eq!(
+        plugin["connector_operation_specs"][0]["operation"],
+        serde_json::json!("search")
+    );
+    assert_eq!(
         plugin["authoring_guidance"]["validate_command"],
         serde_json::json!(format!(
             "loong plugins doctor --root \"{}\" --profile sdk-release",
@@ -484,7 +494,7 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
     assert!(
         plugin["authoring_guidance"]["smoke_test_command"]
             .as_str()
-            .is_some_and(|command| command.contains("plugins invoke-connector-operation")),
+            .is_some_and(|command| command.contains("--operation search")),
         "unexpected connector authoring command: {}",
         plugin["authoring_guidance"]["smoke_test_command"]
     );

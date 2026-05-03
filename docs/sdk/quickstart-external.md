@@ -99,12 +99,16 @@ Right now, trusted host scaffolds are intentionally limited to:
 For generic endpoint-backed connector packages, the current public loop is:
 
 1. scaffold the package:
-   - `loong plugins init ... --bridge-kind http_json --endpoint <url>`
+   - `loong plugins init ... --bridge-kind http_json --endpoint <url> --connector-operation <name>`
 2. inspect the generated probe command from `plugins init`
 3. run `loong plugins inventory`
 4. run `loong plugins doctor`
 5. probe one real connector operation with:
    - `loong plugins invoke-connector-operation`
+
+If you declare connector operations, keep `loong_connector_operations_json` and
+`loong_connector_operation_specs_json` aligned so Loong can replace placeholder
+probe guidance with real operation names.
 
 ## Reference Examples
 

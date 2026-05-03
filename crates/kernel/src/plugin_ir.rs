@@ -223,6 +223,14 @@ pub struct PluginChannelBridgeOperationSpec {
     pub operator_hint: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PluginConnectorOperationDeclarations {
+    pub operations: Vec<String>,
+    pub operation_specs: Vec<PluginChannelBridgeOperationSpec>,
+    pub metadata_issues: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PluginIR {
     pub manifest_api_version: Option<String>,
@@ -1649,6 +1657,37 @@ pub fn plugin_native_extension_declarations_from_metadata(
     declarations
 }
 
+pub fn plugin_connector_operation_declarations_from_metadata(
+    metadata: &BTreeMap<String, String>,
+) -> PluginConnectorOperationDeclarations {
+    let mut declarations = PluginConnectorOperationDeclarations::default();
+    declarations.operations = normalized_metadata_string_list_with_issue(
+        metadata,
+        "loong_connector_operations_json",
+        &mut declarations.metadata_issues,
+    );
+    declarations.operation_specs = normalized_connector_operation_specs_with_issue(
+        metadata,
+        "loong_connector_operation_specs_json",
+        &mut declarations.metadata_issues,
+    );
+
+    for spec in &declarations.operation_specs {
+        if !declarations
+            .operations
+            .iter()
+            .any(|operation| operation == &spec.operation)
+        {
+            declarations.metadata_issues.push(format!(
+                "connector operation spec `{}` requires a matching declaration in loong_connector_operations_json",
+                spec.operation
+            ));
+        }
+    }
+
+    declarations
+}
+
 fn validate_plugin_native_extension_declarations(
     declarations: &mut PluginNativeExtensionDeclarations,
 ) {
@@ -1893,6 +1932,64 @@ fn normalized_tui_surface_specs_with_issue(
 
         specs.push(PluginTrustedTuiSurfaceSpec {
             surface,
+            label,
+            summary,
+            sample_payload_json,
+            operator_hint,
+        });
+    }
+
+    specs
+}
+
+fn normalized_connector_operation_specs_with_issue(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+    metadata_issues: &mut Vec<String>,
+) -> Vec<PluginChannelBridgeOperationSpec> {
+    let Some(raw_value) = metadata.get(key) else {
+        return Vec::new();
+    };
+    if raw_value.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let parsed_specs = match serde_json::from_str::<BTreeMap<String, serde_json::Value>>(raw_value)
+    {
+        Ok(parsed_specs) => parsed_specs,
+        Err(error) => {
+            metadata_issues.push(format!(
+                "metadata `{key}` must be a JSON object keyed by connector operation id: {error}"
+            ));
+            return Vec::new();
+        }
+    };
+
+    let mut specs = Vec::new();
+    for (operation, spec_value) in parsed_specs {
+        let Some(spec_object) = spec_value.as_object() else {
+            metadata_issues.push(format!(
+                "connector operation spec `{operation}` in `{key}` must be a JSON object"
+            ));
+            continue;
+        };
+
+        let label = normalized_optional_json_string(spec_object.get("label"));
+        let summary = normalized_optional_json_string(spec_object.get("summary"));
+        let operator_hint = normalized_optional_json_string(spec_object.get("operator_hint"));
+        let sample_payload_json = spec_object
+            .get("sample_payload")
+            .map(serde_json::to_string)
+            .transpose()
+            .unwrap_or_else(|error| {
+                metadata_issues.push(format!(
+                    "connector operation spec `{operation}` in `{key}` has a non-serializable sample_payload: {error}"
+                ));
+                None
+            });
+
+        specs.push(PluginChannelBridgeOperationSpec {
+            operation,
             label,
             summary,
             sample_payload_json,

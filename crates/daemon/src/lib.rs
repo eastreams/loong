@@ -1817,6 +1817,9 @@ pub struct RuntimeSnapshotRuntimePluginState {
     pub reason: String,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,
+    pub connector_operations: Vec<String>,
+    pub connector_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
+    pub connector_operation_metadata_issues: Vec<String>,
     pub native_extension: kernel::PluginNativeExtensionDeclarations,
     pub authoring_guidance: Option<crate::PluginNativeExtensionAuthoringGuidance>,
 }
@@ -2469,6 +2472,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
 
             let native_extension =
                 kernel::plugin_native_extension_declarations_from_metadata(&entry.metadata);
+            let connector_operations =
+                kernel::plugin_connector_operation_declarations_from_metadata(&entry.metadata);
             let authoring_guidance =
                 crate::native_extension_authoring::process_stdio_native_extension_authoring_guidance(
                     entry.package_root.as_str(),
@@ -2492,6 +2497,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                         entry.package_root.as_str(),
                         entry.plugin_id.as_str(),
                         entry.runtime.bridge_kind.as_str(),
+                        connector_operations.operations.as_slice(),
                     )
                 });
 
@@ -2518,6 +2524,9 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 reason,
                 missing_required_env_vars,
                 missing_required_config_keys,
+                connector_operations: connector_operations.operations,
+                connector_operation_specs: connector_operations.operation_specs,
+                connector_operation_metadata_issues: connector_operations.metadata_issues,
                 native_extension,
                 authoring_guidance,
             }

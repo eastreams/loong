@@ -1050,6 +1050,9 @@ pub struct PluginInventoryEntry {
     pub channel_bridge_runtime_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
     pub channel_bridge_ready: Option<bool>,
     pub channel_bridge_missing_fields: Vec<String>,
+    pub connector_operations: Vec<String>,
+    pub connector_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
+    pub connector_operation_metadata_issues: Vec<String>,
     pub native_extension: kernel::PluginNativeExtensionDeclarations,
     pub slot_claims: Vec<PluginSlotClaim>,
     pub diagnostic_findings: Vec<PluginDiagnosticFinding>,
@@ -1105,6 +1108,9 @@ pub struct PluginInventoryResult {
     pub channel_bridge_runtime_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
     pub channel_bridge_ready: Option<bool>,
     pub channel_bridge_missing_fields: Vec<String>,
+    pub connector_operations: Vec<String>,
+    pub connector_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
+    pub connector_operation_metadata_issues: Vec<String>,
     #[serde(default)]
     pub native_extension: kernel::PluginNativeExtensionDeclarations,
     #[serde(default)]

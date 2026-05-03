@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use kernel::{
     IntegrationCatalog, PluginActivationCandidate, PluginActivationInventoryEntry,
     PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginDiagnosticFinding,
-    PluginScanReport, PluginTranslationReport, plugin_native_extension_declarations_from_metadata,
+    PluginScanReport, PluginTranslationReport,
+    plugin_connector_operation_declarations_from_metadata,
+    plugin_native_extension_declarations_from_metadata,
 };
 
 use crate::spec_runtime::{
@@ -25,6 +27,9 @@ struct PluginInventoryTranslationSnapshot {
     channel_bridge_runtime_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
     channel_bridge_ready: Option<bool>,
     channel_bridge_missing_fields: Vec<String>,
+    connector_operations: Vec<String>,
+    connector_operation_specs: Vec<kernel::PluginChannelBridgeOperationSpec>,
+    connector_operation_metadata_issues: Vec<String>,
 }
 
 pub(super) fn execute_plugin_inventory(
@@ -80,6 +85,8 @@ pub(super) fn collect_plugin_inventory_results(
     for report in plugin_translation_reports {
         for entry in &report.entries {
             let channel_bridge = entry.channel_bridge.as_ref();
+            let connector_operations =
+                plugin_connector_operation_declarations_from_metadata(&entry.metadata);
             translation_by_key.insert(
                 (entry.source_path.clone(), entry.plugin_id.clone()),
                 PluginInventoryTranslationSnapshot {
@@ -105,6 +112,9 @@ pub(super) fn collect_plugin_inventory_results(
                     channel_bridge_missing_fields: channel_bridge
                         .map(|bridge| bridge.readiness.missing_fields.clone())
                         .unwrap_or_default(),
+                    connector_operations: connector_operations.operations,
+                    connector_operation_specs: connector_operations.operation_specs,
+                    connector_operation_metadata_issues: connector_operations.metadata_issues,
                 },
             );
         }
@@ -208,6 +218,15 @@ pub(super) fn collect_plugin_inventory_results(
                 translation.and_then(|snapshot| snapshot.channel_bridge_ready);
             let channel_bridge_missing_fields = translation
                 .map(|snapshot| snapshot.channel_bridge_missing_fields.clone())
+                .unwrap_or_default();
+            let connector_operations = translation
+                .map(|snapshot| snapshot.connector_operations.clone())
+                .unwrap_or_default();
+            let connector_operation_specs = translation
+                .map(|snapshot| snapshot.connector_operation_specs.clone())
+                .unwrap_or_default();
+            let connector_operation_metadata_issues = translation
+                .map(|snapshot| snapshot.connector_operation_metadata_issues.clone())
                 .unwrap_or_default();
 
             if is_deferred {
@@ -318,6 +337,9 @@ pub(super) fn collect_plugin_inventory_results(
                 channel_bridge_runtime_operation_specs,
                 channel_bridge_ready,
                 channel_bridge_missing_fields,
+                connector_operations,
+                connector_operation_specs,
+                connector_operation_metadata_issues,
                 native_extension: plugin_native_extension_declarations_from_metadata(
                     &manifest.metadata,
                 ),
@@ -448,6 +470,9 @@ pub(super) fn collect_plugin_inventory_results(
             channel_bridge_runtime_operation_specs: entry.channel_bridge_runtime_operation_specs,
             channel_bridge_ready: entry.channel_bridge_ready,
             channel_bridge_missing_fields: entry.channel_bridge_missing_fields,
+            connector_operations: entry.connector_operations,
+            connector_operation_specs: entry.connector_operation_specs,
+            connector_operation_metadata_issues: entry.connector_operation_metadata_issues,
             native_extension: entry.native_extension,
             authoring_guidance: None,
             slot_claims: entry.slot_claims,

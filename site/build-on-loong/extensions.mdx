@@ -146,10 +146,13 @@ loong plugins doctor --root ./weather-host --profile sdk-release
 loong plugins init ./search-http \
   --plugin-id search-http \
   --bridge-kind http_json \
-  --endpoint http://127.0.0.1:8080/invoke
+  --endpoint http://127.0.0.1:8080/invoke \
+  --connector-operation search
 ```
 
-Then choose one concrete connector operation and probe it:
+Keep `loong_connector_operations_json` and `loong_connector_operation_specs_json`
+aligned with the operations your package exposes, then probe one declared
+operation:
 
 ```bash
 loong plugins invoke-connector-operation \

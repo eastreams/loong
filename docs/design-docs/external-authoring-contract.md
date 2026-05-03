@@ -147,9 +147,10 @@ story is still evolving.
 For generic endpoint-backed connector packages, the current public probe loop is
 lighter:
 
-- scaffold with `loong plugins init --bridge-kind http_json --endpoint ...`
+- scaffold with `loong plugins init --bridge-kind http_json --endpoint ... --connector-operation <name>`
 - choose one real connector operation name
 - probe it with `loong plugins invoke-connector-operation`
+- keep `loong_connector_operations_json` and `loong_connector_operation_specs_json` aligned with the declared operations
 
 ## What Is Not Promised
 
