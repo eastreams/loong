@@ -20,7 +20,7 @@
     "loong_extension_trust_lane": "trusted_host",
     "loong_extension_methods_json": "[\"extension/event\"]",
     "loong_extension_host_hooks_json": "[\"turn_start\",\"turn_end\"]",
-    "loong_extension_tui_surfaces_json": "[\"command_palette\",\"settings_flow\",\"startup_onboarding\"]"
+    "loong_extension_tui_surfaces_json": "[\"command_palette\",\"settings_flow\",\"startup_onboarding\",\"sidebar_widget\"]"
   },
   "summary": "Checked-in trusted host Rust extension example"
 }

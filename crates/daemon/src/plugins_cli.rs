@@ -7187,7 +7187,7 @@ mod tests {
                 json: false,
                 config: None,
                 command: PluginsCommands::InvokeTuiSurface(PluginInvokeTuiSurfaceCommand {
-                    root: package_root,
+                    root: package_root.clone(),
                     plugin_id: plugin_id.to_owned(),
                     tui_surface: "command_palette".to_owned(),
                     payload: "{\"query\":\":ext\"}".to_owned(),
@@ -7206,6 +7206,32 @@ mod tests {
             assert_eq!(
                 surface_execution.response_payload["handled_tui_surface"],
                 serde_json::json!("command_palette")
+            );
+
+            let custom_surface_execution = execute_plugins_command(PluginsCommandOptions {
+                json: false,
+                config: None,
+                command: PluginsCommands::InvokeTuiSurface(PluginInvokeTuiSurfaceCommand {
+                    root: package_root,
+                    plugin_id: plugin_id.to_owned(),
+                    tui_surface: "sidebar_widget".to_owned(),
+                    payload: "{\"tab\":\"plugins\"}".to_owned(),
+                    allow_commands: vec![allow_command.to_owned()],
+                }),
+            })
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{plugin_id} should probe custom tui surface successfully: {error}")
+            });
+
+            let PluginsCommandExecution::InvokeTuiSurface(custom_surface_execution) =
+                custom_surface_execution
+            else {
+                panic!("expected invoke-tui-surface execution");
+            };
+            assert_eq!(
+                custom_surface_execution.response_payload["handled_tui_surface"],
+                serde_json::json!("sidebar_widget")
             );
         }
     }
