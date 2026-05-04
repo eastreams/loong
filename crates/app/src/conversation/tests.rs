@@ -2743,7 +2743,7 @@ fn default_runtime_session_context_uses_persisted_subagent_profile() {
                 "max_active_children": 3,
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
-                "child_tool_allowlist": ["file.read"],
+                "child_tool_allowlist": ["read"],
                 "kernel_bound": false,
                 "identity": {
                     "nickname": "Child",
@@ -12942,7 +12942,7 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -13065,7 +13065,7 @@ async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_res
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -13161,7 +13161,7 @@ async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anc
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -13299,7 +13299,7 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -13372,7 +13372,7 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -13454,7 +13454,7 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -13530,7 +13530,7 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
         max_active_children: 3,
         timeout_seconds: 17,
         allow_shell_in_child: false,
-        child_tool_allowlist: vec!["file.read".to_owned()],
+        child_tool_allowlist: vec!["read".to_owned()],
         workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
@@ -19207,7 +19207,7 @@ async fn session_context_uses_persisted_child_tool_view_constraints() {
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
-    config.tools.delegate.child_tool_allowlist = vec!["file.read".to_owned()];
+    config.tools.delegate.child_tool_allowlist = vec!["read".to_owned()];
 
     let memory_config = session_store_config_from_config(&config);
     let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -19327,7 +19327,7 @@ async fn session_context_preserves_child_workspace_root_from_delegate_execution_
                 "max_active_children": 3,
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
-                "child_tool_allowlist": ["file.read"],
+                "child_tool_allowlist": ["read"],
                 "workspace_root": workspace_root.clone(),
                 "kernel_bound": false,
                 "runtime_narrowing": {}
@@ -19582,7 +19582,7 @@ async fn trait_default_session_context_preserves_delegate_execution_contract() {
                 "max_active_children": 3,
                 "timeout_seconds": 60,
                 "allow_shell_in_child": true,
-                "child_tool_allowlist": ["file.read", "file.write"],
+                "child_tool_allowlist": ["read", "write"],
                 "workspace_root": workspace_root,
                 "kernel_bound": true,
                 "runtime_narrowing": runtime_narrowing,
@@ -23124,11 +23124,7 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
     assert_eq!(spawn_request.execution.timeout_seconds, 30);
     assert_eq!(
         spawn_request.execution.child_tool_allowlist,
-        vec![
-            "file.read".to_owned(),
-            "web.fetch".to_owned(),
-            "web.search".to_owned()
-        ]
+        vec!["read".to_owned(), "web.fetch".to_owned(), "web.search".to_owned()]
     );
     assert!(!spawn_request.execution.allow_shell_in_child);
     assert_eq!(

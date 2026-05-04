@@ -428,12 +428,6 @@ fn surface_covers_tool_name(surface: &ToolSurfaceDescriptor, tool_name: &str) ->
 }
 
 fn surface_has_visible_covered_tool(surface: &ToolSurfaceDescriptor, view: &ToolView) -> bool {
-    if let Some(direct_tool_name) = surface.direct_tool_name
-        && view.contains(direct_tool_name)
-    {
-        return true;
-    }
-
     surface
         .covered_tool_names
         .iter()
@@ -631,6 +625,10 @@ fn web_surface_state_for_view(surface: ToolSurfaceDescriptor, view: &ToolView) -
 }
 
 pub(crate) fn direct_tool_visible_in_view(tool_name: &str, view: &ToolView) -> bool {
+    if matches!(tool_name, "read" | "write" | "edit") && view.contains(tool_name) {
+        return true;
+    }
+
     let Some(surface) = direct_surface_descriptor_for_direct_tool_name(tool_name) else {
         return false;
     };
@@ -700,7 +698,14 @@ mod tests {
 
     #[test]
     fn visible_direct_tool_states_follow_runtime_view() {
-        let view = ToolView::from_tool_names(["read", "write", "edit", "bash", "web", "memory"]);
+        let view = ToolView::from_tool_names([
+            "read",
+            "write",
+            "edit",
+            "shell.exec",
+            "web.fetch",
+            "memory_search",
+        ]);
 
         let states = visible_direct_tool_states_for_view(&view);
         let state_ids: Vec<&str> = states
@@ -715,15 +720,12 @@ mod tests {
     }
 
     #[test]
-    fn direct_tool_visibility_accepts_direct_allowlist_names() {
-        let view = ToolView::from_tool_names(["read", "write", "edit", "bash", "web", "memory"]);
+    fn direct_tool_visibility_accepts_direct_file_allowlist_names() {
+        let view = ToolView::from_tool_names(["read", "write", "edit"]);
 
         assert!(direct_tool_visible_in_view("read", &view));
         assert!(direct_tool_visible_in_view("write", &view));
         assert!(direct_tool_visible_in_view("edit", &view));
-        assert!(direct_tool_visible_in_view("bash", &view));
-        assert!(direct_tool_visible_in_view("web", &view));
-        assert!(direct_tool_visible_in_view("memory", &view));
     }
 
     #[test]
