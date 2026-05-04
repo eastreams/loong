@@ -23124,7 +23124,11 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
     assert_eq!(spawn_request.execution.timeout_seconds, 30);
     assert_eq!(
         spawn_request.execution.child_tool_allowlist,
-        vec!["read".to_owned(), "web.fetch".to_owned(), "web.search".to_owned()]
+        vec![
+            "read".to_owned(),
+            "web.fetch".to_owned(),
+            "web.search".to_owned()
+        ]
     );
     assert!(!spawn_request.execution.allow_shell_in_child);
     assert_eq!(
