@@ -1092,7 +1092,9 @@ fn extract_plain_json_tool_call_turn(
                 tool_intent,
             } => {
                 found_json_tool_block = true;
-                cleaned.push_str(&text[cursor..start]);
+                let prefix_end = strip_trailing_tool_wrapper_marker_line_start(text, cursor, start)
+                    .unwrap_or(start);
+                cleaned.push_str(&text[cursor..prefix_end]);
                 tool_intents.push(tool_intent);
                 cursor = start + consumed_bytes;
             }
@@ -1204,68 +1206,93 @@ fn parse_plain_json_tool_call_candidate(
         Err(_) => return JsonToolBlockCandidate::Malformed(JsonToolBlockParseError::InvalidJson),
     };
     let consumed_bytes = stream.byte_offset();
-    if !is_standalone_block_end(text, consumed_bytes) {
-        if let Some((repaired_value, repaired_consumed_bytes)) =
-            repair_misordered_json_tool_call_candidate(text, &value, consumed_bytes)
-        {
-            let envelope = match json_tool_call_envelope(
-                &repaired_value,
-                JsonToolCallEnvelopeMode::PlainStandalone,
-            ) {
-                Ok(Some(envelope)) => envelope,
-                Ok(None) => {
-                    return JsonToolBlockCandidate::Unsupported {
-                        consumed_bytes: Some(repaired_consumed_bytes),
-                    };
-                }
-                Err(error) => return JsonToolBlockCandidate::Malformed(error),
-            };
-            let tool_intent = match build_json_tool_intent(
-                envelope,
-                session_id,
-                turn_id,
-                bridge_context,
-                tool_offset,
-            ) {
-                Some(tool_intent) => tool_intent,
-                None => {
-                    return JsonToolBlockCandidate::Unsupported {
-                        consumed_bytes: Some(repaired_consumed_bytes),
-                    };
-                }
-            };
-            return JsonToolBlockCandidate::Parsed {
-                consumed_bytes: repaired_consumed_bytes,
-                tool_intent,
-            };
+    if is_standalone_block_end(text, consumed_bytes) {
+        if let Some(candidate) = build_plain_json_tool_call_candidate(
+            text,
+            &value,
+            consumed_bytes,
+            session_id,
+            turn_id,
+            bridge_context,
+            tool_offset,
+        ) {
+            return candidate;
         }
         return JsonToolBlockCandidate::Unsupported {
-            consumed_bytes: None,
+            consumed_bytes: Some(consumed_bytes),
         };
     }
-    let envelope = match json_tool_call_envelope(&value, JsonToolCallEnvelopeMode::PlainStandalone)
+
+    if let Some((repaired_value, repaired_consumed_bytes)) =
+        repair_misordered_json_tool_call_candidate(text, &value, consumed_bytes)
+        && let Some(candidate) = build_plain_json_tool_call_candidate(
+            text,
+            &repaired_value,
+            repaired_consumed_bytes,
+            session_id,
+            turn_id,
+            bridge_context,
+            tool_offset,
+        )
     {
+        return candidate;
+    }
+
+    if let Some(candidate) = build_plain_json_tool_call_candidate(
+        text,
+        &value,
+        consumed_bytes,
+        session_id,
+        turn_id,
+        bridge_context,
+        tool_offset,
+    ) {
+        return candidate;
+    }
+
+    JsonToolBlockCandidate::Unsupported {
+        consumed_bytes: None,
+    }
+}
+
+fn build_plain_json_tool_call_candidate(
+    text: &str,
+    value: &Value,
+    consumed_bytes: usize,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+    bridge_context: &ProviderToolBridgeContext,
+    tool_offset: usize,
+) -> Option<JsonToolBlockCandidate> {
+    let standalone_end = is_standalone_block_end(text, consumed_bytes);
+    let recoverable_trailing_text = has_recoverable_trailing_text(text, consumed_bytes);
+    if !standalone_end && !recoverable_trailing_text {
+        return None;
+    }
+
+    let envelope = match json_tool_call_envelope(value, JsonToolCallEnvelopeMode::PlainStandalone) {
         Ok(Some(envelope)) => envelope,
         Ok(None) => {
-            return JsonToolBlockCandidate::Unsupported {
+            return Some(JsonToolBlockCandidate::Unsupported {
                 consumed_bytes: Some(consumed_bytes),
-            };
+            });
         }
-        Err(error) => return JsonToolBlockCandidate::Malformed(error),
+        Err(error) => return Some(JsonToolBlockCandidate::Malformed(error)),
     };
     let tool_intent =
         match build_json_tool_intent(envelope, session_id, turn_id, bridge_context, tool_offset) {
             Some(tool_intent) => tool_intent,
             None => {
-                return JsonToolBlockCandidate::Unsupported {
+                return Some(JsonToolBlockCandidate::Unsupported {
                     consumed_bytes: Some(consumed_bytes),
-                };
+                });
             }
         };
-    JsonToolBlockCandidate::Parsed {
+
+    Some(JsonToolBlockCandidate::Parsed {
         consumed_bytes,
         tool_intent,
-    }
+    })
 }
 
 fn repair_misordered_json_tool_call_candidate(
@@ -1291,7 +1318,9 @@ fn repair_misordered_json_tool_call_candidate(
         _ => return None,
     };
     let tail_consumed_bytes = tail_stream.byte_offset();
-    if !is_standalone_block_end(repaired_tail.as_str(), tail_consumed_bytes) {
+    if !is_standalone_block_end(repaired_tail.as_str(), tail_consumed_bytes)
+        && !has_recoverable_trailing_text(repaired_tail.as_str(), tail_consumed_bytes)
+    {
         return None;
     }
 
@@ -1319,6 +1348,40 @@ fn repair_misordered_json_tool_call_candidate(
 
     let repaired_consumed_bytes = consumed_bytes + trimmed_prefix_len + tail_consumed_bytes;
     Some((Value::Object(tail_object), repaired_consumed_bytes))
+}
+
+fn has_recoverable_trailing_text(text: &str, end: usize) -> bool {
+    let line_end = text[end..]
+        .find('\n')
+        .map(|relative| end + relative)
+        .unwrap_or(text.len());
+    !text[end..line_end].trim().is_empty()
+}
+
+fn strip_trailing_tool_wrapper_marker_line_start(
+    text: &str,
+    cursor: usize,
+    start: usize,
+) -> Option<usize> {
+    let current_line_start = text[..start]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    if current_line_start == 0 {
+        return None;
+    }
+
+    let previous_line_end = current_line_start.saturating_sub(1);
+    let previous_line_start = text[..previous_line_end]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    if previous_line_start < cursor {
+        return None;
+    }
+
+    let previous_line = text[previous_line_start..previous_line_end].trim();
+    matches!(previous_line, "[tool_request]" | "[tool_failure]").then_some(previous_line_start)
 }
 
 fn json_tool_call_envelope(
@@ -3218,6 +3281,29 @@ mod tests {
         assert_eq!(turn.assistant_text, "open the page.");
         assert_eq!(turn.tool_intents.len(), 1);
         assert_eq!(turn.tool_intents[0].tool_name, "browse");
+        assert_eq!(
+            turn.tool_intents[0].args_json,
+            json!({"url": "https://example.com"})
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_recovers_glued_tool_request_markup_and_trailing_summary_text() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "[tool_request]\n{\"url\":\"https://example.com\"},\"name\":\"web\"}Example Domain is a short documentation example page."
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(
+            turn.assistant_text,
+            "Example Domain is a short documentation example page."
+        );
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "web");
         assert_eq!(
             turn.tool_intents[0].args_json,
             json!({"url": "https://example.com"})
