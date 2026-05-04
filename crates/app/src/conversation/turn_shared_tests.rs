@@ -531,6 +531,19 @@ fn missing_tool_call_followup_detects_pseudo_tool_commands() {
 }
 
 #[test]
+fn missing_tool_call_followup_detects_to_equals_pseudo_tool_commands() {
+    let payload = missing_tool_call_followup_payload("to=read content='{\"path\":\"README.md\"}'")
+        .expect("to= pseudo-tool text should trigger missing-tool-call recovery");
+
+    let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
+        panic!("expected tool failure payload");
+    };
+
+    assert!(reason.contains("pseudo-tool text"));
+    assert!(retryable);
+}
+
+#[test]
 fn missing_tool_call_followup_truncates_long_reply_excerpt() {
     let long_excerpt = format!(
         "/tool.search:{}",

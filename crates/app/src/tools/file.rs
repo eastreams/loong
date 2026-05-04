@@ -1345,19 +1345,50 @@ fn search_outcome(
     truncated: bool,
     matches: Vec<Value>,
 ) -> ToolCoreOutcome {
+    let continuation = glob_search_continuation_payload(tool_name.as_str(), &matches);
+    let mut payload = json!({
+        "adapter": "core-tools",
+        "tool_name": tool_name,
+        "root": root.display().to_string(),
+        "query": needle,
+        "max_results": max_results,
+        "truncated": truncated,
+        "match_count": matches.len(),
+        "matches": matches,
+    });
+
+    if let Some(continuation) = continuation
+        && let Some(payload_object) = payload.as_object_mut()
+    {
+        payload_object.insert("continuation".to_owned(), continuation);
+    }
+
     ToolCoreOutcome {
         status: "ok".to_owned(),
-        payload: json!({
-            "adapter": "core-tools",
-            "tool_name": tool_name,
-            "root": root.display().to_string(),
-            "query": needle,
-            "max_results": max_results,
-            "truncated": truncated,
-            "match_count": matches.len(),
-            "matches": matches,
-        }),
+        payload,
     }
+}
+
+#[cfg(feature = "tool-file")]
+fn glob_search_continuation_payload(tool_name: &str, matches: &[Value]) -> Option<Value> {
+    if tool_name != "glob.search" {
+        return None;
+    }
+
+    let first_path = matches
+        .iter()
+        .filter_map(|entry| entry.get("path").and_then(Value::as_str))
+        .find(|path| !path.trim().is_empty())?;
+
+    Some(json!({
+        "state": "path_listing",
+        "is_terminal": false,
+        "recommended_tool": "read",
+        "recommended_payload": {
+            "path": first_path,
+        },
+        "note": "The last read result only listed candidate paths. If the user still needs grounded file contents or a repository summary, continue with direct `read` calls before answering."
+    }))
 }
 
 #[cfg(feature = "tool-file")]
@@ -2460,6 +2491,13 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0]["path"], "src/lib.rs");
         assert_eq!(matches[1]["path"], "src/nested/mod.rs");
+        assert_eq!(outcome.payload["continuation"]["state"], "path_listing");
+        assert_eq!(outcome.payload["continuation"]["is_terminal"], false);
+        assert_eq!(outcome.payload["continuation"]["recommended_tool"], "read");
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["path"],
+            "src/lib.rs"
+        );
         let _ = fs::remove_dir_all(base);
     }
 

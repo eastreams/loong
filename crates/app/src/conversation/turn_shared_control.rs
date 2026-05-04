@@ -84,19 +84,36 @@ fn contains_pseudo_tool_markup(reply_text: &str) -> bool {
 }
 
 fn line_looks_like_pseudo_tool_command(line: &str) -> bool {
-    let Some(trimmed_line) = line.strip_prefix('/') else {
+    if let Some(trimmed_line) = line.strip_prefix('/') {
+        let Some((surface, remainder)) = trimmed_line.split_once(':') else {
+            return false;
+        };
+        let has_surface = !surface.trim().is_empty();
+        let has_remainder = !remainder.trim().is_empty();
+        let surface_is_tool_like = surface
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || ".-_".contains(character));
+
+        return has_surface && has_remainder && surface_is_tool_like;
+    }
+
+    let Some(trimmed_line) = line.strip_prefix("to=") else {
         return false;
     };
-    let Some((surface, remainder)) = trimmed_line.split_once(':') else {
+    let mut parts = trimmed_line.split_whitespace();
+    let Some(surface) = parts.next() else {
         return false;
     };
-    let has_surface = !surface.trim().is_empty();
-    let has_remainder = !remainder.trim().is_empty();
+    let remainder = parts.collect::<Vec<_>>().join(" ");
     let surface_is_tool_like = surface
         .chars()
         .all(|character| character.is_ascii_lowercase() || ".-_".contains(character));
+    let has_remainder = remainder.contains("content=")
+        || remainder.contains("json")
+        || remainder.contains('{')
+        || remainder.contains(':');
 
-    has_surface && has_remainder && surface_is_tool_like
+    !surface.is_empty() && surface_is_tool_like && has_remainder
 }
 
 fn truncated_missing_tool_call_excerpt(reply_text: &str) -> String {
@@ -169,6 +186,7 @@ impl ToolDrivenContinuationState {
 pub(crate) enum ToolDrivenFollowupContractMode {
     RetryableFailure,
     RepairRetryableFailure,
+    ToolResultContinuation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +236,12 @@ pub(crate) fn render_tool_followup_continuation_contract(
             | ToolDrivenFollowupContractMode::RepairRetryableFailure
     ) {
         sections.push(TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT.to_owned());
+    }
+    if matches!(mode, ToolDrivenFollowupContractMode::ToolResultContinuation) {
+        sections.push(
+            "The previous tool step was intermediate. Default to [followup_state:continue] and issue the next tool call unless the task is genuinely complete or blocked."
+                .to_owned(),
+        );
     }
     sections.push(format!(
         "Structured continuation contract:\n- Start your reply with exactly one marker: {}, {}, or {}.\n- If you choose continue, emit the next tool call now. Do not only describe a plan.\n- If you choose done, give the completed final answer now.\n- If you choose blocked, explain the blocker briefly and do not claim the task is running or complete.",

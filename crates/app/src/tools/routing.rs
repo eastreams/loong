@@ -125,18 +125,10 @@ fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> 
     let has_query = payload_has_non_empty_string_field(payload, "query");
     let has_pattern = payload_has_non_empty_string_field(payload, "pattern")
         || payload_has_non_empty_string_field(payload, "glob");
-    let mode_count = count_true([has_path, has_query, has_pattern]);
 
-    if mode_count == 0 {
+    if !has_path && !has_query && !has_pattern {
         return Err(
             "direct_read_requires_one_of: expected exactly one of `path`, `query`, or `pattern`"
-                .to_owned(),
-        );
-    }
-
-    if mode_count > 1 {
-        return Err(
-            "direct_read_ambiguous: provide exactly one of `path`, `query`, or `pattern`"
                 .to_owned(),
         );
     }
@@ -713,29 +705,52 @@ fn normalize_direct_payload_for_routed_tool(
     routed_tool_name: &str,
     payload: &mut Value,
 ) {
-    if original_tool_name != "read" || routed_tool_name != "glob.search" {
+    if original_tool_name != "read" {
         return;
     }
     let Some(payload_object) = payload.as_object_mut() else {
         return;
     };
-    let pattern_missing = payload_object
-        .get("pattern")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_none_or(str::is_empty);
-    if pattern_missing
-        && let Some(glob_value) = payload_object
-            .get("glob")
-            .cloned()
-            .filter(|value| value.as_str().map(str::trim).is_some_and(|v| !v.is_empty()))
-    {
-        let normalized_glob = glob_value
-            .as_str()
-            .map(normalize_direct_read_glob_alias_pattern)
-            .map(Value::String)
-            .unwrap_or(glob_value);
-        payload_object.insert("pattern".to_owned(), normalized_glob);
+
+    match routed_tool_name {
+        "file.read" => {
+            payload_object.remove("query");
+            payload_object.remove("pattern");
+            payload_object.remove("glob");
+            payload_object.remove("root");
+            payload_object.remove("max_results");
+            payload_object.remove("max_bytes_per_file");
+            payload_object.remove("case_sensitive");
+            payload_object.remove("include_directories");
+        }
+        "content.search" => {
+            payload_object.remove("path");
+            payload_object.remove("pattern");
+            payload_object.remove("include_directories");
+            payload_object.remove("offset");
+            payload_object.remove("limit");
+        }
+        "glob.search" => {
+            let pattern_missing = payload_object
+                .get("pattern")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_none_or(str::is_empty);
+            if pattern_missing
+                && let Some(glob_value) = payload_object
+                    .get("glob")
+                    .cloned()
+                    .filter(|value| value.as_str().map(str::trim).is_some_and(|v| !v.is_empty()))
+            {
+                let normalized_glob = glob_value
+                    .as_str()
+                    .map(normalize_direct_read_glob_alias_pattern)
+                    .map(Value::String)
+                    .unwrap_or(glob_value);
+                payload_object.insert("pattern".to_owned(), normalized_glob);
+            }
+        }
+        _ => {}
     }
 }
 

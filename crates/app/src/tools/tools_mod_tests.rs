@@ -1910,6 +1910,26 @@ fn direct_read_ignores_empty_mode_fields_and_accepts_glob_alias() {
 }
 
 #[test]
+fn direct_read_prioritizes_path_over_incidental_search_fields() {
+    assert_eq!(
+        super::routing::route_direct_tool_name(
+            "read",
+            &json!({
+                "path": "CLAUDE.md",
+                "query": "",
+                "pattern": "",
+                "glob": "*.md",
+                "root": "",
+                "max_results": 20,
+                "max_bytes_per_file": 20000
+            })
+        )
+        .expect("path mode should win over incidental search fields"),
+        "file.read"
+    );
+}
+
+#[test]
 fn direct_read_glob_alias_executes_glob_search_with_pattern_rewrite() {
     let root = unique_temp_dir("loong-direct-read-glob-alias");
     std::fs::create_dir_all(root.join("docs")).expect("create docs dir");
@@ -1941,6 +1961,34 @@ fn direct_read_glob_alias_executes_glob_search_with_pattern_rewrite() {
         matches.iter().any(|entry| entry["path"] == "AGENTS.md"),
         "glob alias should return AGENTS.md: {matches:?}"
     );
+}
+
+#[test]
+fn direct_read_path_mode_executes_after_dropping_incidental_search_fields() {
+    let root = unique_temp_dir("loong-direct-read-path-priority");
+    std::fs::create_dir_all(&root).expect("create read-priority root");
+    std::fs::write(root.join("CLAUDE.md"), "claude guidance").expect("write CLAUDE fixture");
+    let config = test_tool_runtime_config(&root).into_inner();
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "read".to_owned(),
+            payload: json!({
+                "path": "CLAUDE.md",
+                "query": "",
+                "pattern": "",
+                "glob": "*.md",
+                "root": "",
+                "max_results": 20,
+                "max_bytes_per_file": 20000
+            }),
+        },
+        &config,
+    )
+    .expect("path-priority direct read should execute");
+
+    assert_eq!(outcome.payload["tool_name"], "file.read");
+    assert_eq!(outcome.payload["content"], "claude guidance");
 }
 
 #[test]

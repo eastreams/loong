@@ -691,7 +691,7 @@ impl JsonToolBlockParseError {
 enum JsonToolBlockCandidate {
     Parsed {
         consumed_bytes: usize,
-        tool_intent: ToolIntent,
+        tool_intents: Vec<ToolIntent>,
     },
     Malformed(JsonToolBlockParseError),
     Unsupported {
@@ -1068,8 +1068,7 @@ fn extract_plain_json_tool_call_turn(
     let mut tool_intents = Vec::new();
     let mut found_json_tool_block = false;
 
-    while let Some(relative_start) = text[cursor..].find('{') {
-        let start = cursor + relative_start;
+    while let Some(start) = find_next_plain_json_candidate_start(text, cursor) {
         if !is_standalone_block_start(text, start)
             || is_inside_markdown_fence(text, start)
             || is_inside_markdown_indented_code_block(text, start)
@@ -1089,13 +1088,13 @@ fn extract_plain_json_tool_call_turn(
         ) {
             JsonToolBlockCandidate::Parsed {
                 consumed_bytes,
-                tool_intent,
+                tool_intents: parsed_tool_intents,
             } => {
                 found_json_tool_block = true;
                 let prefix_end = strip_trailing_tool_wrapper_marker_line_start(text, cursor, start)
                     .unwrap_or(start);
                 cleaned.push_str(&text[cursor..prefix_end]);
-                tool_intents.push(tool_intent);
+                tool_intents.extend(parsed_tool_intents);
                 cursor = start + consumed_bytes;
             }
             JsonToolBlockCandidate::Malformed(error_code) => {
@@ -1126,6 +1125,31 @@ fn extract_plain_json_tool_call_turn(
         telemetry: JsonToolBlockParseTelemetry::parsed(tool_intents.len()),
         tool_intents,
     }
+}
+
+fn find_next_plain_json_candidate_start(text: &str, cursor: usize) -> Option<usize> {
+    let remainder = text.get(cursor..)?;
+    for (relative_index, character) in remainder.char_indices() {
+        let absolute_index = cursor + relative_index;
+        match character {
+            '{' => return Some(absolute_index),
+            '[' if array_candidate_starts_with_object(text, absolute_index) => {
+                return Some(absolute_index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn array_candidate_starts_with_object(text: &str, start: usize) -> bool {
+    let Some(remainder) = text.get(start + 1..) else {
+        return false;
+    };
+    remainder
+        .chars()
+        .find(|character| !character.is_whitespace())
+        .is_some_and(|character| character == '{')
 }
 
 fn parse_json_tool_call_sequence(
@@ -1270,6 +1294,48 @@ fn build_plain_json_tool_call_candidate(
         return None;
     }
 
+    if let Some(array) = value.as_array() {
+        let mut tool_intents = Vec::new();
+        for entry in array {
+            let envelope =
+                match json_tool_call_envelope(entry, JsonToolCallEnvelopeMode::PlainStandalone) {
+                    Ok(Some(envelope)) => envelope,
+                    Ok(None) => {
+                        return Some(JsonToolBlockCandidate::Unsupported {
+                            consumed_bytes: Some(consumed_bytes),
+                        });
+                    }
+                    Err(error) => return Some(JsonToolBlockCandidate::Malformed(error)),
+                };
+            let tool_intent = match build_json_tool_intent(
+                envelope,
+                session_id,
+                turn_id,
+                bridge_context,
+                tool_offset + tool_intents.len(),
+            ) {
+                Some(tool_intent) => tool_intent,
+                None => {
+                    return Some(JsonToolBlockCandidate::Unsupported {
+                        consumed_bytes: Some(consumed_bytes),
+                    });
+                }
+            };
+            tool_intents.push(tool_intent);
+        }
+
+        if tool_intents.is_empty() {
+            return Some(JsonToolBlockCandidate::Unsupported {
+                consumed_bytes: Some(consumed_bytes),
+            });
+        }
+
+        return Some(JsonToolBlockCandidate::Parsed {
+            consumed_bytes,
+            tool_intents,
+        });
+    }
+
     let envelope = match json_tool_call_envelope(value, JsonToolCallEnvelopeMode::PlainStandalone) {
         Ok(Some(envelope)) => envelope,
         Ok(None) => {
@@ -1291,7 +1357,7 @@ fn build_plain_json_tool_call_candidate(
 
     Some(JsonToolBlockCandidate::Parsed {
         consumed_bytes,
-        tool_intent,
+        tool_intents: vec![tool_intent],
     })
 }
 
@@ -1363,6 +1429,17 @@ fn strip_trailing_tool_wrapper_marker_line_start(
     cursor: usize,
     start: usize,
 ) -> Option<usize> {
+    let current_prefix = text.get(cursor..start)?;
+    for marker in ["[tool_request]", "[tool_failure]"] {
+        if let Some(relative_marker_start) = current_prefix.rfind(marker) {
+            let marker_end = relative_marker_start + marker.len();
+            let trailing_suffix = current_prefix.get(marker_end..)?.trim();
+            if trailing_suffix.is_empty() {
+                return Some(cursor + relative_marker_start);
+            }
+        }
+    }
+
     let between = text.get(cursor..start)?.trim();
     if matches!(between, "[tool_request]" | "[tool_failure]") {
         return Some(cursor);
@@ -3364,6 +3441,51 @@ mod tests {
         assert_eq!(
             turn.tool_intents[2].args_json,
             json!({"path": "docs/ROADMAP.md"})
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_strips_same_line_tool_request_wrapper_after_leading_preface() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "to summarize repo need inspect key docs.[tool_request]\n{\"arguments\":{\"path\":\"docs/README.md\"},\"name\":\"read\"}"
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(
+            turn.assistant_text,
+            "to summarize repo need inspect key docs."
+        );
+        assert_eq!(turn.tool_intents.len(), 1);
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(
+            turn.tool_intents[0].args_json,
+            json!({"path": "docs/README.md"})
+        );
+    }
+
+    #[test]
+    fn extract_provider_turn_recovers_tool_request_array_wrapper_with_trailing_text() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "content": "[tool_request]\n[{\"arguments\":{\"path\":\"AGENTS.md\"},\"name\":\"read\"},{\"arguments\":{\"path\":\"docs/README.md\"},\"name\":\"read\"}]This repository is a Rust workspace."
+                }
+            }]
+        });
+
+        let turn = extract_provider_turn(&body).expect("turn");
+        assert_eq!(turn.assistant_text, "This repository is a Rust workspace.");
+        assert_eq!(turn.tool_intents.len(), 2);
+        assert_eq!(turn.tool_intents[0].tool_name, "read");
+        assert_eq!(turn.tool_intents[0].args_json, json!({"path": "AGENTS.md"}));
+        assert_eq!(turn.tool_intents[1].tool_name, "read");
+        assert_eq!(
+            turn.tool_intents[1].args_json,
+            json!({"path": "docs/README.md"})
         );
     }
 

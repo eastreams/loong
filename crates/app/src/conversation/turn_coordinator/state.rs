@@ -39,6 +39,7 @@ pub(super) struct ProviderTurnLaneExecution {
     pub(super) assistant_preface: String,
     pub(super) provider_usage: Option<Value>,
     pub(super) had_tool_intents: bool,
+    pub(super) textual_tool_parse_followup_turn: bool,
     pub(super) tool_request_summary: Option<String>,
     pub(super) discovery_search_turn: bool,
     pub(super) search_tool_intents: usize,
@@ -165,6 +166,7 @@ pub(super) fn provider_turn_tool_name_signature(intents: &[ToolIntent]) -> Strin
 pub(super) struct ProviderTurnContinuePhase {
     pub(super) request: TurnCheckpointRequest,
     pub(super) lane_execution: ProviderTurnLaneExecution,
+    pub(super) carried_followup_payload: Option<ToolDrivenFollowupPayload>,
     pub(super) reply_phase: ToolDrivenReplyPhase,
     pub(super) loop_verdict: Option<ProviderTurnLoopVerdict>,
     pub(super) followup_config: LoongConfig,
@@ -175,6 +177,7 @@ impl ProviderTurnContinuePhase {
     pub(super) fn new(
         tool_intents: usize,
         lane_execution: ProviderTurnLaneExecution,
+        carried_followup_payload: Option<ToolDrivenFollowupPayload>,
         loop_verdict: Option<ProviderTurnLoopVerdict>,
         followup_config: LoongConfig,
         ingress: Option<&ConversationIngressContext>,
@@ -183,6 +186,7 @@ impl ProviderTurnContinuePhase {
         Self {
             request: TurnCheckpointRequest::Continue { tool_intents },
             lane_execution,
+            carried_followup_payload,
             reply_phase,
             loop_verdict,
             followup_config,

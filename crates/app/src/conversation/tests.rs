@@ -7230,14 +7230,14 @@ async fn handle_turn_with_runtime_nonterminal_continuation_requests_followup_pro
             .expect("completion calls lock"),
         0
     );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
 
     let requested_turn_messages = runtime
         .turn_requested_messages
         .lock()
         .expect("turn request lock")
         .clone();
-    assert_eq!(requested_turn_messages.len(), 2);
+    assert_eq!(requested_turn_messages.len(), 3);
     assert!(
         requested_turn_messages[1].iter().any(|message| {
             let role = message.get("role").and_then(Value::as_str);
@@ -7255,6 +7255,17 @@ async fn handle_turn_with_runtime_nonterminal_continuation_requests_followup_pro
                 && content.is_some_and(|content| content.contains("`session_wait`"))
         }),
         "second provider turn should receive the recommended wait tool guidance: {requested_turn_messages:?}"
+    );
+    assert!(
+        requested_turn_messages[2].iter().any(|message| {
+            let role = message.get("role").and_then(Value::as_str);
+            let content = message.get("content").and_then(Value::as_str);
+            role == Some("user")
+                && content.is_some_and(|content| {
+                    content.contains("Continuation guidance:") && content.contains("`session_wait`")
+                })
+        }),
+        "third provider turn should continue carrying the nonterminal wait guidance after the plain-text interim reply: {requested_turn_messages:?}"
     );
 }
 
@@ -11131,8 +11142,8 @@ fn turn_engine_unknown_tool_exposes_structured_policy_denial() {
 }
 
 #[test]
-fn turn_engine_exceeding_max_steps_returns_denied() {
-    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine};
+fn turn_engine_allows_tool_batches_larger_than_the_legacy_step_limit() {
+    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnValidation};
     let engine = TurnEngine::new(1);
     let intent = provider_tool_intent("file.read", serde_json::json!({}), "s1", "t1", "c1");
     let turn = ProviderTurn {
@@ -11142,11 +11153,11 @@ fn turn_engine_exceeding_max_steps_returns_denied() {
     };
     let result = engine.validate_turn(&turn);
     match result {
-        Err(reason) => assert!(
-            reason.contains("max_tool_steps_exceeded"),
-            "reason: {reason}"
+        Ok(TurnValidation::ToolExecutionRequired) => {}
+        other => panic!(
+            "expected multi-tool batch to remain executable after removing the legacy step limit, got {:?}",
+            other
         ),
-        other => panic!("expected ToolDenied for max steps, got {:?}", other),
     }
 }
 

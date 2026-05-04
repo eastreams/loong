@@ -56,13 +56,6 @@ impl TurnEngine {
             return Ok(TurnValidation::FinalText(turn.assistant_text.clone()));
         }
 
-        if turn.tool_intents.len() > self.max_tool_steps {
-            return Err(TurnFailure::policy_denied(
-                "max_tool_steps_exceeded",
-                "max_tool_steps_exceeded",
-            ));
-        }
-
         let catalog = crate::tools::tool_catalog();
         for intent in &turn.tool_intents {
             let outer_request = ToolCoreRequest {

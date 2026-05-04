@@ -43,6 +43,7 @@ pub(super) async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                 observer,
                 1,
                 false,
+                None,
             )
             .await;
             continue_phase
@@ -128,6 +129,7 @@ pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime 
     observer: Option<&ConversationTurnObserverHandle>,
     provider_round: usize,
     followup_chain_active: bool,
+    carried_followup_payload: Option<ToolDrivenFollowupPayload>,
 ) -> ProviderTurnContinuePhase {
     let tool_intents = turn.tool_intents.len();
     let lane = preparation.lane_plan.decision.lane;
@@ -160,9 +162,12 @@ pub(super) async fn prepare_provider_turn_continue_phase<R: ConversationRuntime 
     let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
     let followup_config =
         ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
+    let latest_followup_payload =
+        tool_driven_followup_payload(lane_execution.had_tool_intents, &lane_execution.turn_result);
     ProviderTurnContinuePhase::new(
         tool_intents,
         lane_execution,
+        latest_followup_payload.or(carried_followup_payload),
         loop_verdict,
         followup_config,
         ingress,

@@ -185,42 +185,30 @@ fn tool_is_auto_eligible(
 /// `evaluate_turn` performs synchronous validation (no execution).
 /// `execute_turn` performs policy-gated tool execution through the kernel.
 pub struct TurnEngine {
-    max_tool_steps: usize,
     tool_result_payload_summary_limit_chars: usize,
     parallel_tool_execution_enabled: bool,
     parallel_tool_execution_max_in_flight: usize,
 }
 
 impl TurnEngine {
-    pub fn new(max_tool_steps: usize) -> Self {
-        Self::with_parallel_tool_execution(
-            max_tool_steps,
-            TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-            false,
-            1,
-        )
+    pub fn new(_max_tool_steps: usize) -> Self {
+        Self::with_parallel_tool_execution(0, TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS, false, 1)
     }
 
     pub fn with_tool_result_payload_summary_limit(
-        max_tool_steps: usize,
+        _max_tool_steps: usize,
         tool_result_payload_summary_limit_chars: usize,
     ) -> Self {
-        Self::with_parallel_tool_execution(
-            max_tool_steps,
-            tool_result_payload_summary_limit_chars,
-            false,
-            1,
-        )
+        Self::with_parallel_tool_execution(0, tool_result_payload_summary_limit_chars, false, 1)
     }
 
     pub fn with_parallel_tool_execution(
-        max_tool_steps: usize,
+        _max_tool_steps: usize,
         tool_result_payload_summary_limit_chars: usize,
         parallel_tool_execution_enabled: bool,
         parallel_tool_execution_max_in_flight: usize,
     ) -> Self {
         Self {
-            max_tool_steps,
             tool_result_payload_summary_limit_chars: tool_result_payload_summary_limit_chars.clamp(
                 MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
                 MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
