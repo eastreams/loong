@@ -942,9 +942,9 @@ fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_w
 
     assert!(!results.is_empty());
     assert_eq!(results[0]["tool_id"], "bash");
-    assert_eq!(outcome.payload["exact_tool_id"], "file_read");
+    assert_eq!(outcome.payload["exact_tool_id"], "read");
     assert_eq!(diagnostics["reason"], "exact_tool_id_not_visible");
-    assert_eq!(diagnostics["requested_tool_id"], "file_read");
+    assert_eq!(diagnostics["requested_tool_id"], "read");
 
     std::fs::remove_dir_all(&root).ok();
 }

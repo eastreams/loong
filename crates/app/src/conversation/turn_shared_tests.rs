@@ -2169,13 +2169,14 @@ fn reduce_followup_payload_for_model_compacts_tool_search_summary() {
         .expect("reduced payload should keep the first result");
 
     assert_eq!(summary["query"], "read repo file");
-    assert_eq!(summary["exact_tool_id"], "file.read");
+    assert_eq!(summary["exact_tool_id"], "read");
     assert_eq!(
         summary["diagnostics"]["reason"],
         "exact_tool_id_not_visible"
     );
+    assert_eq!(summary["diagnostics"]["requested_tool_id"], "read");
     assert_eq!(summary["returned"], 1);
-    assert_eq!(first["tool_id"], "file.read");
+    assert_eq!(first["tool_id"], "read");
     assert_eq!(first["lease"], "lease-file");
     assert_eq!(summary["adapter"], Value::Null);
     assert_eq!(summary["tool_name"], Value::Null);

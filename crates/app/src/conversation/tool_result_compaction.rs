@@ -38,11 +38,17 @@ pub(crate) fn compact_tool_search_payload_summary(payload: &Value) -> Option<Val
     }
 
     if let Some(exact_tool_id) = payload_object.get("exact_tool_id") {
-        compacted.insert("exact_tool_id".to_owned(), exact_tool_id.clone());
+        compacted.insert(
+            "exact_tool_id".to_owned(),
+            normalize_visible_tool_id_value(exact_tool_id),
+        );
     }
 
     if let Some(diagnostics) = payload_object.get("diagnostics") {
-        compacted.insert("diagnostics".to_owned(), diagnostics.clone());
+        compacted.insert(
+            "diagnostics".to_owned(),
+            normalize_tool_search_diagnostics(diagnostics),
+        );
     }
 
     if let Some(returned) = payload_object.get("returned") {
@@ -121,7 +127,12 @@ fn compact_tool_search_payload_result(result: &Value) -> Value {
 
     let mut compacted = Map::new();
 
-    clone_field_if_present(result_object, &mut compacted, "tool_id");
+    if let Some(tool_id) = result_object.get("tool_id") {
+        compacted.insert(
+            "tool_id".to_owned(),
+            normalize_visible_tool_id_value(tool_id),
+        );
+    }
     clone_field_if_present(result_object, &mut compacted, "summary");
     clone_field_if_present(result_object, &mut compacted, "argument_hint");
     clone_array_field_if_present(result_object, &mut compacted, "required_fields");
@@ -129,6 +140,28 @@ fn compact_tool_search_payload_result(result: &Value) -> Value {
     clone_field_if_present(result_object, &mut compacted, "lease");
 
     Value::Object(compacted)
+}
+
+fn normalize_tool_search_diagnostics(diagnostics: &Value) -> Value {
+    let Some(diagnostics_object) = diagnostics.as_object() else {
+        return diagnostics.clone();
+    };
+    let mut normalized = diagnostics_object.clone();
+    if let Some(requested_tool_id) = diagnostics_object.get("requested_tool_id") {
+        normalized.insert(
+            "requested_tool_id".to_owned(),
+            normalize_visible_tool_id_value(requested_tool_id),
+        );
+    }
+    Value::Object(normalized)
+}
+
+fn normalize_visible_tool_id_value(value: &Value) -> Value {
+    value
+        .as_str()
+        .map(crate::tools::user_visible_tool_name)
+        .map(Value::String)
+        .unwrap_or_else(|| value.clone())
 }
 
 fn clone_field_if_present(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {

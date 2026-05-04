@@ -70,6 +70,14 @@ pub(super) fn execute_tool_search_tool_with_config(
         .as_deref()
         .map(canonical_tool_name)
         .map(str::to_owned);
+    let visible_requested_exact_tool_id = exact_tool_id
+        .as_deref()
+        .map(super::user_visible_tool_name)
+        .or_else(|| {
+            requested_exact_tool_id
+                .as_deref()
+                .map(super::user_visible_tool_name)
+        });
 
     let limit = payload
         .get("limit")
@@ -140,15 +148,15 @@ pub(super) fn execute_tool_search_tool_with_config(
             .collect::<Result<Vec<_>, _>>()?
     };
     let diagnostics = tool_search_diagnostics_json(
-        requested_exact_tool_id.as_deref(),
+        visible_requested_exact_tool_id.as_deref(),
         exact_match_found,
         query.as_deref(),
         diagnostics_reason,
     );
     let response_exact_tool_id = if exact_match_found {
-        exact_tool_id
+        visible_requested_exact_tool_id.clone()
     } else {
-        requested_exact_tool_id
+        visible_requested_exact_tool_id
     };
 
     Ok(ToolCoreOutcome {
