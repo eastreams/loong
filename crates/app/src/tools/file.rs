@@ -628,10 +628,23 @@ pub(super) fn execute_file_edit_tool_with_config(
             "replacements_made": replacements_made,
             "bytes_written": updated.len(),
         });
-        if let Some(edit_blocks_applied) = edit_blocks_applied
-            && let Some(response_object) = response_payload.as_object_mut()
-        {
-            response_object.insert("edit_blocks_applied".to_owned(), json!(edit_blocks_applied));
+        if let Some(response_object) = response_payload.as_object_mut() {
+            if let Some(edit_blocks_applied) = edit_blocks_applied {
+                response_object
+                    .insert("edit_blocks_applied".to_owned(), json!(edit_blocks_applied));
+            }
+            response_object.insert(
+                "continuation".to_owned(),
+                json!({
+                    "state": "verify_file_change",
+                    "is_terminal": false,
+                    "recommended_tool": "read",
+                    "recommended_payload": {
+                        "path": resolved.display().to_string()
+                    },
+                    "note": "If the user still depends on the updated file contents, verify the file before finalizing."
+                }),
+            );
         }
 
         Ok(ToolCoreOutcome {
@@ -2347,6 +2360,16 @@ mod tests {
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["replacements_made"], 2);
         assert_eq!(outcome.payload["edit_blocks_applied"], 2);
+        let canonical_target = target
+            .canonicalize()
+            .expect("canonical target path")
+            .display()
+            .to_string();
+        assert_eq!(outcome.payload["continuation"]["recommended_tool"], "read");
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["path"],
+            canonical_target
+        );
         assert_eq!(fs::read_to_string(&target).unwrap(), "ALPHA\nbeta\nGAMMA\n");
         let _ = fs::remove_dir_all(base);
     }

@@ -40,7 +40,6 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 assistant_preface,
                 provider_usage: provider_turn_usage(turn),
                 had_tool_intents,
-                textual_tool_parse_followup_turn,
                 tool_request_summary,
                 discovery_search_turn,
                 search_tool_intents,
@@ -178,21 +177,17 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
     let runtime_followup_turn = tool_driven_followup_payload(had_tool_intents, &turn_result)
         .is_some_and(|payload| payload.requests_runtime_followup_chain());
-    let preface_signals_provider_turn_followup =
-        assistant_preface_signals_provider_turn_followup(assistant_preface.as_str());
     let supports_provider_turn_followup = followup_chain_active
         || discovery_search_turn
         || recovery_followup_turn
         || malformed_parse_followup_turn
         || runtime_followup_turn
-        || textual_tool_parse_followup_turn
-        || preface_signals_provider_turn_followup;
+        || textual_tool_parse_followup_turn;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
         provider_usage: provider_turn_usage(turn),
         had_tool_intents,
-        textual_tool_parse_followup_turn,
         tool_request_summary,
         discovery_search_turn,
         search_tool_intents,
@@ -239,15 +234,4 @@ fn provider_turn_has_textual_tool_parse_followup_signal(
         let status = entry.get("status").and_then(Value::as_str);
         status == Some("parsed")
     })
-}
-
-pub(super) fn assistant_preface_signals_provider_turn_followup(assistant_preface: &str) -> bool {
-    let normalized_preface = assistant_preface.to_ascii_lowercase();
-    let contains_first = normalized_preface.contains("first");
-    let contains_then = normalized_preface.contains("then");
-    let contains_next = normalized_preface.contains("next");
-    let contains_after_that = normalized_preface.contains("after that");
-    let contains_afterwards = normalized_preface.contains("afterwards");
-
-    contains_first || contains_then || contains_next || contains_after_that || contains_afterwards
 }

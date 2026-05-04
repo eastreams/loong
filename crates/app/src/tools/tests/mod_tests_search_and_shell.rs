@@ -905,7 +905,7 @@ fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
     assert!(
         first["usage_guidance"]
             .as_str()
-            .is_some_and(|value| value.contains("normal repo inspection"))
+            .is_some_and(|value| value.contains("repo inspection"))
     );
     assert!(first.get("lease").is_none());
 

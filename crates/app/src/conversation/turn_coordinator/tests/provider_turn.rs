@@ -419,7 +419,6 @@ fn provider_continuation_test_continue_phase_with_lane(
             assistant_preface,
             provider_usage: None,
             had_tool_intents,
-            textual_tool_parse_followup_turn: false,
             tool_request_summary: None,
             discovery_search_turn: false,
             search_tool_intents: 0,
@@ -525,6 +524,93 @@ async fn provider_continuation_recovers_malformed_parse_followup_without_real_to
     assert_eq!(request_turn_messages.len(), 2);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_continuation_uses_provider_turn_followup_for_nonterminal_tool_results() {
+    let config = LoongConfig::default();
+    let user_input = "Replace beta with gamma, then reply with the final file contents only.";
+    let preparation = provider_continuation_test_preparation(&config, user_input);
+    let tool_result_text = format!(
+        "[ok] {}",
+        serde_json::json!({
+            "status": "ok",
+            "tool": "edit",
+            "tool_call_id": "call-edit",
+            "payload_summary": serde_json::json!({
+                "path": "notes.txt",
+                "content": "alpha\\ngamma",
+                "continuation": {
+                    "state": "verify_edit",
+                    "is_terminal": false,
+                    "recommended_tool": "read",
+                    "recommended_payload": {
+                        "path": "notes.txt"
+                    }
+                }
+            })
+            .to_string(),
+            "payload_chars": 32,
+            "payload_truncated": false
+        })
+    );
+    let continue_phase = provider_continuation_test_continue_phase_with_lane(
+        &config,
+        "Updated the file.".to_owned(),
+        true,
+        true,
+        false,
+        TurnResult::FinalText(tool_result_text),
+    );
+    let runtime = MissingToolContinuationRuntime {
+        queued_turns: StdMutex::new(vec![
+            ProviderTurn {
+                assistant_text: "Verifying the updated contents.".to_owned(),
+                tool_intents: vec![provider_continuation_test_intent(
+                    "session-edit",
+                    "turn-read",
+                    "call-read",
+                    "read",
+                    json!({
+                        "path": "notes.txt"
+                    }),
+                )],
+                raw_meta: Value::Null,
+            },
+            ProviderTurn {
+                assistant_text: "alpha\ngamma".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            },
+        ]),
+        request_turn_messages: StdMutex::new(Vec::new()),
+    };
+    let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+    let mut turn_loop_state = ProviderTurnLoopState::default();
+
+    let resolved = resolve_provider_turn_reply(
+        &runtime,
+        &config,
+        "session-edit",
+        &preparation,
+        &continue_phase,
+        user_input,
+        &turn_loop_policy,
+        &mut turn_loop_state,
+        4,
+        ConversationRuntimeBinding::advisory_only(),
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(resolved.reply_text(), Some("alpha\ngamma"));
+    let request_turn_messages = runtime
+        .request_turn_messages
+        .lock()
+        .expect("request-turn messages lock should not be poisoned");
+    assert_eq!(request_turn_messages.len(), 2);
+}
+
 #[test]
 fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape() {
     let config = LoongConfig::default();
@@ -544,7 +630,6 @@ fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape
             assistant_preface: "preface".to_owned(),
             provider_usage: None,
             had_tool_intents: true,
-            textual_tool_parse_followup_turn: false,
             tool_request_summary: None,
             discovery_search_turn: false,
             search_tool_intents: 0,
@@ -769,7 +854,6 @@ fn provider_turn_continue_phase_checkpoint_keeps_direct_reply_without_followup()
             assistant_preface: "preface".to_owned(),
             provider_usage: None,
             had_tool_intents: false,
-            textual_tool_parse_followup_turn: false,
             tool_request_summary: None,
             discovery_search_turn: false,
             search_tool_intents: 0,

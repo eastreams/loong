@@ -290,7 +290,7 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     assert!(snapshot.contains("- bash:"));
     assert!(snapshot.contains("Available tools:"));
     assert!(snapshot.contains("Guidelines:"));
-    assert!(snapshot.contains("Use write for whole-file writes and file creation."));
+    assert!(snapshot.contains("Use write for new files and whole-file writes."));
     assert!(!snapshot.contains("claw.migrate"));
     assert!(!snapshot.contains("external_skills.fetch"));
     assert!(!snapshot.contains("file.read"));
@@ -615,8 +615,8 @@ fn runtime_tool_view_exposes_sessions_send_only_when_messages_enabled() {
 fn delegate_child_tool_view_hides_shell_by_default() {
     let view = delegate_child_tool_view_for_config(&crate::config::ToolConfig::default());
 
-    assert!(view.contains("file.read"));
-    assert!(view.contains("file.write"));
+    assert!(view.contains("read"));
+    assert!(view.contains("write"));
     assert!(!view.contains("shell.exec"));
 }
 
@@ -628,8 +628,8 @@ fn delegate_child_tool_view_can_allow_shell_when_enabled() {
 
     let view = delegate_child_tool_view_for_config(&config);
 
-    assert!(view.contains("file.read"));
-    assert!(view.contains("file.write"));
+    assert!(view.contains("read"));
+    assert!(view.contains("write"));
     assert!(view.contains("shell.exec"));
 }
 

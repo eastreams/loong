@@ -27,7 +27,6 @@ pub(super) struct ProviderTurnLaneExecution {
     pub(super) assistant_preface: String,
     pub(super) provider_usage: Option<Value>,
     pub(super) had_tool_intents: bool,
-    pub(super) textual_tool_parse_followup_turn: bool,
     pub(super) tool_request_summary: Option<String>,
     pub(super) discovery_search_turn: bool,
     pub(super) search_tool_intents: usize,

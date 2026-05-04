@@ -2051,6 +2051,17 @@ fn provider_tool_intent(
     }
 }
 
+fn parsed_provider_tool_turn_meta() -> Value {
+    json!({
+        "loong_provider_parse": {
+            "inline_function": {
+                "status": "parsed",
+                "tool_count": 1
+            }
+        }
+    })
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn delegate_test_git_executable() -> std::path::PathBuf {
     crate::conversation::workspace_isolation::resolve_git_executable()
@@ -2504,8 +2515,8 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
         )
         .expect("child tool view");
 
-    assert!(child_view.contains("file.read"));
-    assert!(child_view.contains("file.write"));
+    assert!(child_view.contains("read"));
+    assert!(child_view.contains("write"));
     assert!(!child_view.contains("shell.exec"));
 }
 
@@ -2619,8 +2630,8 @@ fn default_runtime_tool_view_denies_delegate_for_broken_lineage_child() {
         )
         .expect("child tool view");
 
-    assert!(child_view.contains("file.read"));
-    assert!(child_view.contains("file.write"));
+    assert!(child_view.contains("read"));
+    assert!(child_view.contains("write"));
     assert!(!child_view.contains("shell.exec"));
     assert!(!child_view.contains("delegate"));
     assert!(!child_view.contains("delegate_async"));
@@ -2899,7 +2910,7 @@ fn default_runtime_tool_view_respects_persisted_leaf_subagent_profile() {
                 "max_active_children": 3,
                 "timeout_seconds": 60,
                 "allow_shell_in_child": false,
-                "child_tool_allowlist": ["file.read", "file.write"],
+                "child_tool_allowlist": ["read", "write"],
                 "kernel_bound": false,
                 "profile": {
                     "role": "leaf",
@@ -2919,8 +2930,8 @@ fn default_runtime_tool_view_respects_persisted_leaf_subagent_profile() {
         )
         .expect("child tool view");
 
-    assert!(child_view.contains("file.read"));
-    assert!(child_view.contains("file.write"));
+    assert!(child_view.contains("read"));
+    assert!(child_view.contains("write"));
     assert!(!child_view.contains("delegate"));
     assert!(!child_view.contains("delegate_async"));
 }
@@ -7622,7 +7633,7 @@ async fn handle_turn_with_runtime_includes_same_tool_warning_in_followup_provide
                 "turn-tool-search-warning",
                 &format!("call-tool-search-warning-{index}"),
             )],
-            raw_meta: Value::Null,
+            raw_meta: parsed_provider_tool_turn_meta(),
         })
     });
     let final_turn = std::iter::once(Ok(ProviderTurn {
@@ -7699,7 +7710,7 @@ async fn handle_turn_with_runtime_continues_direct_tool_chain_after_initial_tool
                     "turn-direct-chain",
                     "call-read",
                 )],
-                raw_meta: Value::Null,
+                raw_meta: parsed_provider_tool_turn_meta(),
             }),
             Ok(ProviderTurn {
                 assistant_text: "Now I'll save it into response.log.".to_owned(),
@@ -7713,7 +7724,7 @@ async fn handle_turn_with_runtime_continues_direct_tool_chain_after_initial_tool
                     "turn-direct-chain",
                     "call-write",
                 )],
-                raw_meta: Value::Null,
+                raw_meta: parsed_provider_tool_turn_meta(),
             }),
             Ok(ProviderTurn {
                 assistant_text: "Done: saved response.log.".to_owned(),

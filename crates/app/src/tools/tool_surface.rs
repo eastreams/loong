@@ -772,7 +772,7 @@ mod tests {
         );
         assert_eq!(
             direct_tool_required_fields("edit"),
-            Some(["path"].as_slice())
+            Some(["path", "edits"].as_slice())
         );
         assert_eq!(
             direct_tool_tags(DIRECT_WEB_TOOL_NAME),

@@ -4,8 +4,6 @@ use super::*;
 enum MissingToolContinuationExpectation {
     MissingToolCall,
     MissingToolCallAfterRepair,
-    ToolResultContinuation,
-    ToolResultContinuationAfterRepair,
 }
 
 impl MissingToolContinuationExpectation {
@@ -20,10 +18,7 @@ impl MissingToolContinuationExpectation {
         }
     }
 
-    fn from_followup_payload(
-        payload: &ToolDrivenFollowupPayload,
-        lane_execution: &ProviderTurnLaneExecution,
-    ) -> Option<Self> {
+    fn from_followup_payload(payload: &ToolDrivenFollowupPayload) -> Option<Self> {
         match payload {
             ToolDrivenFollowupPayload::ToolFailure { reason, retryable } if *retryable => {
                 if reason.starts_with("missing_tool_call_followup:") {
@@ -31,11 +26,6 @@ impl MissingToolContinuationExpectation {
                 } else {
                     None
                 }
-            }
-            ToolDrivenFollowupPayload::ToolResult { .. }
-                if lane_execution.textual_tool_parse_followup_turn =>
-            {
-                Some(Self::ToolResultContinuation)
             }
             ToolDrivenFollowupPayload::ToolFailure { .. }
             | ToolDrivenFollowupPayload::ToolResult { .. }
@@ -49,9 +39,6 @@ impl MissingToolContinuationExpectation {
             Self::MissingToolCallAfterRepair => {
                 ToolDrivenFollowupContractMode::RepairRetryableFailure
             }
-            Self::ToolResultContinuation | Self::ToolResultContinuationAfterRepair => {
-                ToolDrivenFollowupContractMode::ToolResultContinuation
-            }
         }
     }
 
@@ -59,25 +46,17 @@ impl MissingToolContinuationExpectation {
         match self {
             Self::MissingToolCall => Self::MissingToolCallAfterRepair,
             Self::MissingToolCallAfterRepair => Self::MissingToolCallAfterRepair,
-            Self::ToolResultContinuation => Self::ToolResultContinuationAfterRepair,
-            Self::ToolResultContinuationAfterRepair => Self::ToolResultContinuationAfterRepair,
         }
     }
 
     fn after_attempted(self) -> bool {
-        matches!(
-            self,
-            Self::MissingToolCallAfterRepair | Self::ToolResultContinuationAfterRepair
-        )
+        matches!(self, Self::MissingToolCallAfterRepair)
     }
 
     fn payload_kind(self) -> ToolDrivenFollowupKind {
         match self {
             Self::MissingToolCall | Self::MissingToolCallAfterRepair => {
                 ToolDrivenFollowupKind::ToolFailure
-            }
-            Self::ToolResultContinuation | Self::ToolResultContinuationAfterRepair => {
-                ToolDrivenFollowupKind::ToolResult
             }
         }
     }
@@ -320,14 +299,7 @@ fn build_reply_loop_decision(state: &mut ProviderReplyLoopState) -> ReplyLoopDec
                     || state
                         .current_continue_phase
                         .lane_execution
-                        .discovery_search_turn
-                    || assistant_preface_signals_provider_turn_followup(
-                        state
-                            .current_continue_phase
-                            .lane_execution
-                            .assistant_preface
-                            .as_str(),
-                    ))
+                        .discovery_search_turn)
                 && let Some(payload) = latest_tool_payload
             {
                 ReplyLoopDecision::Followup {
@@ -492,10 +464,8 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
     requires_completion_pass: bool,
     loop_warning_reason: Option<String>,
 ) -> Option<ResolvedProviderTurn> {
-    let continuation_expectation = MissingToolContinuationExpectation::from_followup_payload(
-        &followup,
-        &current_continue_phase.lane_execution,
-    );
+    let continuation_expectation =
+        MissingToolContinuationExpectation::from_followup_payload(&followup);
     let provider_continuation_enabled = current_continue_phase
         .lane_execution
         .supports_provider_turn_followup;

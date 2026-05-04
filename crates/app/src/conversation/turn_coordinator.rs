@@ -107,7 +107,7 @@ use self::flow::{
     build_turn_loop_circuit_breaker_resolved_turn, prepare_provider_turn_continue_phase,
     provider_turn_usage, resolve_provider_turn, scope_provider_turn_tool_intents,
 };
-use self::lane::{assistant_preface_signals_provider_turn_followup, execute_provider_turn_lane};
+use self::lane::execute_provider_turn_lane;
 #[cfg(test)]
 use self::observer::summarize_tool_event_request;
 use self::observer::{
