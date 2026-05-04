@@ -250,7 +250,6 @@ fn provider_turn_lane_plan_fast_lane_uses_internal_limits() {
     let plan = ProviderTurnLanePlan::from_user_input(&config, "read note.md");
 
     assert_eq!(plan.decision.lane, ExecutionLane::Fast);
-    assert_eq!(plan.max_tool_steps, 5);
     assert!(plan.decision.reasons.is_empty());
 }
 
@@ -276,7 +275,6 @@ fn provider_turn_preparation_derives_lane_plan_and_raw_mode() {
     );
     assert!(preparation.raw_tool_output_requested);
     assert_eq!(preparation.lane_plan.decision.lane, ExecutionLane::Safe);
-    assert_eq!(preparation.lane_plan.max_tool_steps, 2);
 }
 
 #[test]

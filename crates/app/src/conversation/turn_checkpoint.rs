@@ -361,7 +361,6 @@ impl TurnCheckpointIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TurnPreparationSnapshot {
     pub(super) lane: ExecutionLane,
-    pub(super) max_tool_steps: usize,
     pub(super) raw_tool_output_requested: bool,
     pub(super) context_message_count: usize,
     pub(super) context_fingerprint_sha256: String,

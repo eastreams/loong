@@ -1,27 +1,15 @@
 use super::*;
-use crate::conversation::{
-    FAST_LANE_MAX_TOOL_STEPS_PER_TURN, SAFE_LANE_MAX_TOOL_STEPS_PER_TURN,
-    TURN_LOOP_MAX_CONSECUTIVE_SAME_TOOL, TURN_LOOP_MAX_TOTAL_TOOL_CALLS,
-};
+use crate::conversation::{TURN_LOOP_MAX_CONSECUTIVE_SAME_TOOL, TURN_LOOP_MAX_TOTAL_TOOL_CALLS};
 
 #[derive(Debug, Clone)]
 pub(super) struct ProviderTurnLanePlan {
     pub(super) decision: LaneDecision,
-    pub(super) max_tool_steps: usize,
 }
 
 impl ProviderTurnLanePlan {
     pub(super) fn from_user_input(config: &LoongConfig, user_input: &str) -> Self {
         let decision = lane_policy_from_config(config).decide(user_input);
-        let max_tool_steps = match decision.lane {
-            ExecutionLane::Fast => FAST_LANE_MAX_TOOL_STEPS_PER_TURN,
-            ExecutionLane::Safe => SAFE_LANE_MAX_TOOL_STEPS_PER_TURN,
-        };
-
-        Self {
-            decision,
-            max_tool_steps,
-        }
+        Self { decision }
     }
 
     pub(super) fn should_use_safe_lane_plan_path(

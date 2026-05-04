@@ -10,7 +10,6 @@ fn task_progress_test_checkpoint(
         identity: None,
         preparation: TurnPreparationSnapshot {
             lane: ExecutionLane::Fast,
-            max_tool_steps: 1,
             raw_tool_output_requested: false,
             context_message_count: 1,
             context_fingerprint_sha256: "ctx".to_owned(),

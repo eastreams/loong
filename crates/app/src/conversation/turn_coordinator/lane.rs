@@ -74,7 +74,7 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .lane_plan
         .should_use_safe_lane_plan_path(config, turn);
     let engine = TurnEngine::with_parallel_tool_execution(
-        preparation.lane_plan.max_tool_steps,
+        0,
         payload_summary_limit_chars,
         parallel_tool_execution_enabled,
         parallel_tool_execution_max_in_flight,

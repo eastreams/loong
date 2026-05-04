@@ -168,7 +168,6 @@ impl ProviderTurnPreparation {
     pub(super) fn checkpoint(&self) -> TurnPreparationSnapshot {
         TurnPreparationSnapshot {
             lane: self.lane_plan.decision.lane,
-            max_tool_steps: self.lane_plan.max_tool_steps,
             raw_tool_output_requested: self.raw_tool_output_requested,
             context_message_count: self.session.messages.len(),
             context_fingerprint_sha256: checkpoint_context_fingerprint_sha256(
