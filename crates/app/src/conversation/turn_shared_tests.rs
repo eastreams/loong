@@ -399,6 +399,95 @@ async fn request_completion_with_raw_fallback_detailed_uses_raw_reply_when_compl
     assert_eq!(reply.reply, "fallback body");
 }
 
+#[tokio::test]
+async fn request_completion_with_raw_fallback_detailed_salvages_glued_tool_request_markup() {
+    #[derive(Clone)]
+    struct ToolMarkupRuntime;
+
+    #[async_trait]
+    impl ConversationRuntime for ToolMarkupRuntime {
+        fn tool_view(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ToolView> {
+            Ok(crate::tools::runtime_tool_view())
+        }
+
+        async fn build_messages(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(Vec::new())
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok("[tool_request]\n{\"url\":\"https://example.com\"}Example Domain is a reserved placeholder page.".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            Ok(ProviderTurn::default())
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            Ok(ProviderTurn::default())
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
+
+    let reply = request_completion_with_raw_fallback_detailed(
+        &ToolMarkupRuntime,
+        &LoongConfig::default(),
+        &[],
+        ConversationRuntimeBinding::direct(),
+        "fallback body",
+        None,
+    )
+    .await;
+
+    assert_eq!(reply.state, None);
+    assert_eq!(
+        reply.reply,
+        "Example Domain is a reserved placeholder page."
+    );
+}
+
 #[test]
 fn tool_driven_followup_payload_reports_result_kind_and_context() {
     let payload = ToolDrivenFollowupPayload::ToolResult {
@@ -534,6 +623,21 @@ fn missing_tool_call_followup_detects_pseudo_tool_commands() {
 fn missing_tool_call_followup_detects_to_equals_pseudo_tool_commands() {
     let payload = missing_tool_call_followup_payload("to=read content='{\"path\":\"README.md\"}'")
         .expect("to= pseudo-tool text should trigger missing-tool-call recovery");
+
+    let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
+        panic!("expected tool failure payload");
+    };
+
+    assert!(reason.contains("pseudo-tool text"));
+    assert!(retryable);
+}
+
+#[test]
+fn missing_tool_call_followup_detects_to_equals_pseudo_tool_commands_with_leading_noise() {
+    let payload = missing_tool_call_followup_payload(
+        "### to=web json\n{\"url\":\"https://example.com\"}summary",
+    )
+    .expect("noisy to= pseudo-tool text should trigger missing-tool-call recovery");
 
     let ToolDrivenFollowupPayload::ToolFailure { reason, retryable } = payload else {
         panic!("expected tool failure payload");

@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::ToolDrivenFollowupPayload;
 
-const TOOL_FOLLOWUP_REPAIR_PROMPT: &str = "Repair notice:\nThe previous reply described a next step without issuing the required tool call. Do not describe the plan again.";
+const TOOL_FOLLOWUP_REPAIR_PROMPT: &str = "Repair notice:\nThe previous reply described a next step without issuing the required tool call. Do not describe the plan again. Do not emit raw wrapper text such as [tool_request], [tool_failure], to=<tool>, or inline JSON tool snippets in the final answer.";
 const TOOL_FOLLOWUP_RETRYABLE_FAILURE_PROMPT: &str = "The previous tool failure was retryable. Default to [followup_state:continue] and retry or repair the tool call unless the task is already complete or genuinely blocked.";
 const FOLLOWUP_STATE_MARKER_PREFIX: &str = "[followup_state:";
 const MISSING_TOOL_CALL_REASON_PREFIX: &str = "missing_tool_call_followup:";
@@ -14,6 +14,108 @@ const THINK_CLOSE_TAG: &str = "</think>";
 
 pub(crate) fn sanitize_reply_text(text: &str) -> String {
     parse_tool_driven_continuation_reply(text).reply
+}
+
+pub(crate) fn salvage_missing_tool_call_reply_text(reply_text: &str) -> Option<String> {
+    let mut remaining = reply_text.trim();
+    let mut changed = false;
+
+    loop {
+        let stripped = remaining.trim_start();
+        if stripped.starts_with("[tool_request]") || stripped.starts_with("[tool_failure]") {
+            let (_, rest) = stripped.split_once('\n')?;
+            remaining = rest;
+            changed = true;
+            continue;
+        }
+
+        let first_line = stripped.lines().next().unwrap_or_default().trim();
+        if line_looks_like_pseudo_tool_command(first_line) {
+            let rest = stripped
+                .strip_prefix(first_line)
+                .unwrap_or_default()
+                .trim_start();
+            if rest.is_empty() {
+                return None;
+            }
+            remaining = rest;
+            changed = true;
+            continue;
+        }
+
+        if let Some(rest) = strip_leading_malformed_assignment_tail(stripped) {
+            remaining = rest;
+            changed = true;
+            continue;
+        }
+
+        let stripped = stripped.trim_start();
+        let mut stream =
+            serde_json::Deserializer::from_str(stripped).into_iter::<serde_json::Value>();
+        if stream.next().is_some_and(|result| result.is_ok()) {
+            let rest = stripped[stream.byte_offset()..].trim_start();
+            if let Some(rest) = strip_glued_tool_wrapper_tail(rest) {
+                remaining = rest;
+                changed = true;
+                continue;
+            }
+            if rest.is_empty() {
+                return None;
+            }
+            remaining = rest;
+            changed = true;
+            continue;
+        }
+
+        break;
+    }
+
+    let cleaned = remaining.trim();
+    if !changed || cleaned.is_empty() {
+        return None;
+    }
+    if contains_pseudo_tool_markup(cleaned) {
+        return None;
+    }
+    if cleaned
+        .lines()
+        .map(str::trim)
+        .any(line_looks_like_pseudo_tool_command)
+    {
+        return None;
+    }
+
+    Some(cleaned.to_owned())
+}
+
+fn strip_glued_tool_wrapper_tail(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    let wrapper_end = trimmed.find('}')?;
+    let wrapper_prefix = trimmed.get(..=wrapper_end)?;
+    let looks_like_tool_wrapper_tail = wrapper_prefix.contains("\"name\"")
+        || wrapper_prefix.contains("\"tool\"")
+        || wrapper_prefix.contains("\"tool_name\"")
+        || wrapper_prefix.contains("name")
+        || wrapper_prefix.contains("tool");
+    if !looks_like_tool_wrapper_tail {
+        return None;
+    }
+    let rest = trimmed.get(wrapper_end + 1..)?.trim_start();
+    (!rest.is_empty()).then_some(rest)
+}
+
+fn strip_leading_malformed_assignment_tail(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    for marker in ["=\"", ":\""] {
+        let marker_index = trimmed.find(marker)?;
+        let value = trimmed.get(marker_index + marker.len()..)?;
+        let end_quote = value.find('"')?;
+        let rest = value.get(end_quote + 1..)?.trim_start();
+        if !rest.is_empty() {
+            return Some(rest);
+        }
+    }
+    None
 }
 
 pub fn missing_tool_call_followup_payload(reply_text: &str) -> Option<ToolDrivenFollowupPayload> {
@@ -84,6 +186,18 @@ fn contains_pseudo_tool_markup(reply_text: &str) -> bool {
 }
 
 fn line_looks_like_pseudo_tool_command(line: &str) -> bool {
+    if let Some(index) = line.find("to=") {
+        let prefix = line[..index].trim();
+        let prefix_is_noise =
+            prefix.is_empty() || prefix.chars().all(|character| !character.is_alphanumeric());
+        if prefix_is_noise {
+            let candidate = &line[index..];
+            if candidate != line && line_looks_like_pseudo_tool_command(candidate) {
+                return true;
+            }
+        }
+    }
+
     if let Some(trimmed_line) = line.strip_prefix('/') {
         let Some((surface, remainder)) = trimmed_line.split_once(':') else {
             return false;

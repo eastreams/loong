@@ -10783,6 +10783,227 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
 }
 
 #[tokio::test]
+async fn handle_turn_with_runtime_repairs_done_reply_that_still_leaks_tool_request_markup() {
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text:
+                "[tool_request]\n{\"url\":\"https://github.com/chumyin\",\"max_bytes\":300000}The page is a GitHub profile for chumyin."
+                    .to_owned(),
+            tool_intents: Vec::new(),
+            raw_meta: Value::Null,
+        })],
+        vec![Ok("[followup_state:done]\n[tool_request]\n{\"url\":\"https://github.com/chumyin\",\"max_bytes\":300000}The page is a GitHub profile for chumyin.".to_owned())],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-web-markup-repair",
+            "Summarize https://github.com/chumyin",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("repairable markup leak should still return a clean reply");
+
+    assert_eq!(reply, "The page is a GitHub profile for chumyin.");
+    assert!(!reply.contains("[tool_request]"));
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_repairs_done_reply_that_still_leaks_to_equals_tool_text() {
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text:
+                "to=web json\n{\"url\":\"https://example.com\",\"method\":\"GET\"}Example Domain is a reserved placeholder page."
+                    .to_owned(),
+            tool_intents: Vec::new(),
+            raw_meta: Value::Null,
+        })],
+        vec![
+            Ok("[followup_state:done]\nto=web json\n{\"url\":\"https://example.com\",\"method\":\"GET\"}Example Domain is a reserved placeholder page.".to_owned()),
+            Ok("[followup_state:done]\nExample Domain is a reserved placeholder page used for documentation examples.".to_owned()),
+        ],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-web-to-equals-repair",
+            "Summarize https://example.com",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("repairable to= leak should still return a clean reply");
+
+    assert_eq!(reply, "Example Domain is a reserved placeholder page.");
+    assert!(!reply.contains("to=web"));
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_accepts_clean_repair_reply_without_followup_marker() {
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text: "[tool_request]\n{\"url\":\"https://example.com\"}Example Domain is a placeholder page reserved for documentation examples."
+                .to_owned(),
+            tool_intents: Vec::new(),
+            raw_meta: Value::Null,
+        })],
+        vec![Ok("[tool_request]\n{\"url\":\"https://example.com\"}Example Domain is a placeholder page reserved for documentation examples.".to_owned())],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-web-clean-repair-without-marker",
+            "Summarize https://example.com",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("clean repair reply without a marker should be accepted");
+
+    assert_eq!(
+        reply,
+        "Example Domain is a placeholder page reserved for documentation examples."
+    );
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_accepts_clean_to_equals_repair_reply_without_followup_marker() {
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![Ok(ProviderTurn {
+            assistant_text:
+                "to=web json\n{\"url\":\"https://example.com\"}Example Domain is a placeholder page."
+                    .to_owned(),
+            tool_intents: Vec::new(),
+            raw_meta: Value::Null,
+        })],
+        vec![
+            Ok("to=web json\n{\"url\":\"https://example.com\"}Example Domain is a placeholder page.".to_owned()),
+            Ok("Example Domain is a placeholder page reserved for documentation examples.".to_owned()),
+        ],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-web-clean-to-equals-repair-without-marker",
+            "Summarize https://example.com",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("clean to= repair reply without a marker should be accepted");
+
+    assert_eq!(reply, "Example Domain is a placeholder page.");
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_turn_with_runtime_salvages_browse_repair_wrapper_reply() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::with_capabilities(std::collections::BTreeSet::from([
+        loong_contracts::Capability::InvokeTool,
+        loong_contracts::Capability::FilesystemRead,
+        loong_contracts::Capability::FilesystemWrite,
+        loong_contracts::Capability::NetworkEgress,
+    ]));
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Opening the page now.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "browse",
+                    json!({"url": "https://example.com"}),
+                    "session-browse-repair-salvage",
+                    "turn-browse-repair-salvage-1",
+                    "call-browse-repair-salvage-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text:
+                    "Example Domain page stating the domain is reserved for illustrative use in documentation and examples, with a link to learn more."
+                        .to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-browse-repair-salvage",
+            "Open https://example.com and summarize it.",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        )
+        .await
+        .expect("browse repair wrapper reply should be salvaged");
+
+    assert_eq!(
+        reply,
+        "Example Domain page stating the domain is reserved for illustrative use in documentation and examples, with a link to learn more."
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 2);
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+}
+
+#[tokio::test]
 async fn handle_turn_with_runtime_direct_core_tool_persists_trust_binding_missing_event() {
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],

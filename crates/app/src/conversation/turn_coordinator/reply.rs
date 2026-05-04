@@ -82,6 +82,16 @@ fn evaluate_missing_tool_continuation(
     expectation: MissingToolContinuationExpectation,
     parsed_reply: &ParsedToolDrivenContinuationReply,
 ) -> MissingToolContinuationDecision {
+    let reply_still_leaks_missing_tool_markup = expectation.missing_tool_call()
+        && missing_tool_call_followup_payload(parsed_reply.reply.as_str()).is_some();
+    if reply_still_leaks_missing_tool_markup {
+        return if expectation.after_attempted() {
+            MissingToolContinuationDecision::ForceBlockedReply
+        } else {
+            MissingToolContinuationDecision::RequestRepair
+        };
+    }
+
     match parsed_reply.state {
         Some(ToolDrivenContinuationState::Continue) => {
             if expectation.after_attempted() {
@@ -113,12 +123,37 @@ fn evaluate_missing_tool_continuation(
             }
         }
         None => {
+            let clean_plaintext_repair = expectation.missing_tool_call()
+                && !parsed_reply.reply.is_empty()
+                && !reply_still_leaks_missing_tool_markup;
+            if clean_plaintext_repair {
+                return MissingToolContinuationDecision::Finish {
+                    continuation_state: None,
+                };
+            }
             if expectation.after_attempted() {
                 MissingToolContinuationDecision::ForceBlockedReply
             } else {
                 MissingToolContinuationDecision::RequestRepair
             }
         }
+    }
+}
+
+fn sanitized_missing_tool_continuation_reply(
+    expectation: MissingToolContinuationExpectation,
+    parsed_reply: ParsedToolDrivenContinuationReply,
+) -> ParsedToolDrivenContinuationReply {
+    if !expectation.missing_tool_call() {
+        return parsed_reply;
+    }
+    let Some(clean_reply) = salvage_missing_tool_call_reply_text(parsed_reply.reply.as_str())
+    else {
+        return parsed_reply;
+    };
+    ParsedToolDrivenContinuationReply {
+        state: parsed_reply.state,
+        reply: clean_reply,
     }
 }
 
@@ -288,10 +323,14 @@ fn build_reply_loop_decision(state: &mut ProviderReplyLoopState) -> ReplyLoopDec
                         .loop_warning_reason()
                         .map(ToOwned::to_owned),
                 }
-            } else if state
+            } else if (state
                 .current_continue_phase
                 .lane_execution
                 .supports_provider_turn_followup
+                || state
+                    .current_continue_phase
+                    .lane_execution
+                    .provider_originated_tool_intents)
                 && (!state
                     .current_continue_phase
                     .lane_execution
@@ -695,6 +734,8 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
         )
         .await;
         let (reply, continuation_state) = if let Some(expectation) = continuation_expectation {
+            let completion_reply =
+                sanitized_missing_tool_continuation_reply(expectation, completion_reply);
             match evaluate_missing_tool_continuation(expectation, &completion_reply) {
                 MissingToolContinuationDecision::Finish { continuation_state } => {
                     (completion_reply.reply, continuation_state)
@@ -708,15 +749,18 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                         loop_warning_reason.as_deref(),
                         repair_expectation,
                     );
-                    let repaired_completion_reply = request_completion_with_raw_fallback_detailed(
-                        runtime,
-                        &current_continue_phase.followup_config,
-                        &repair_messages,
-                        binding,
-                        raw_reply.as_str(),
-                        retry_progress.clone(),
-                    )
-                    .await;
+                    let repaired_completion_reply = sanitized_missing_tool_continuation_reply(
+                        repair_expectation,
+                        request_completion_with_raw_fallback_detailed(
+                            runtime,
+                            &current_continue_phase.followup_config,
+                            &repair_messages,
+                            binding,
+                            raw_reply.as_str(),
+                            retry_progress.clone(),
+                        )
+                        .await,
+                    );
                     match evaluate_missing_tool_continuation(
                         repair_expectation,
                         &repaired_completion_reply,

@@ -7,7 +7,8 @@ use super::super::runtime::ConversationRuntime;
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::super::turn_engine::ProviderTurn;
 use super::{
-    ParsedToolDrivenContinuationReply, parse_tool_driven_continuation_reply, sanitize_reply_text,
+    ParsedToolDrivenContinuationReply, parse_tool_driven_continuation_reply,
+    salvage_missing_tool_call_reply_text, sanitize_reply_text,
 };
 use crate::CliResult;
 
@@ -49,6 +50,11 @@ pub async fn request_completion_with_raw_fallback_detailed<R: ConversationRuntim
     {
         Ok(final_reply) => {
             let parsed_reply = parse_tool_driven_continuation_reply(final_reply.as_str());
+            let parsed_reply = ParsedToolDrivenContinuationReply {
+                state: parsed_reply.state,
+                reply: salvage_missing_tool_call_reply_text(parsed_reply.reply.as_str())
+                    .unwrap_or(parsed_reply.reply),
+            };
             if parsed_reply.reply.is_empty() && parsed_reply.state.is_none() {
                 parse_tool_driven_continuation_reply(raw_reply)
             } else if parsed_reply.reply.is_empty() {

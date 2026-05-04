@@ -75,9 +75,11 @@ pub(super) struct ProviderTurnReplyTailPhase {
 
 impl ProviderTurnReplyTailPhase {
     pub(super) fn from_session(session: &ProviderTurnSessionState, reply: &str) -> Self {
+        let normalized_reply =
+            salvage_missing_tool_call_reply_text(reply).unwrap_or_else(|| reply.to_owned());
         Self {
-            reply: reply.to_owned(),
-            after_turn_messages: session.after_turn_messages(reply),
+            reply: normalized_reply.clone(),
+            after_turn_messages: session.after_turn_messages(normalized_reply.as_str()),
             estimated_tokens: session.estimated_tokens,
         }
     }

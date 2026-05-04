@@ -251,10 +251,10 @@ pub(super) use super::turn_shared::{
     format_approval_required_reply, missing_tool_call_followup_payload, next_conversation_turn_id,
     parse_tool_driven_continuation_reply, reduce_followup_payload_for_model,
     render_tool_followup_continuation_contract, request_completion_with_raw_fallback,
-    request_completion_with_raw_fallback_detailed, summarize_provider_lane_tool_request,
-    summarize_single_tool_followup_request, tool_driven_followup_payload,
-    tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
-    user_requested_raw_tool_output,
+    request_completion_with_raw_fallback_detailed, salvage_missing_tool_call_reply_text,
+    summarize_provider_lane_tool_request, summarize_single_tool_followup_request,
+    tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
+    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::workspace_isolation::{

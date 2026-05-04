@@ -80,6 +80,38 @@ fn provider_turn_reply_tail_phase_captures_reply_and_after_turn_context() {
 }
 
 #[test]
+fn provider_turn_reply_tail_phase_salvages_leaked_tool_wrapper_prefix() {
+    let session = ProviderTurnSessionState::from_assembled_context(
+        AssembledConversationContext {
+            messages: vec![serde_json::json!({
+                "role": "system",
+                "content": "sys"
+            })],
+            artifacts: vec![],
+            estimated_tokens: Some(42),
+            prompt_fragments: Vec::new(),
+            system_prompt_addition: None,
+        },
+        "hello world",
+        None,
+    );
+
+    let phase = ProviderTurnReplyTailPhase::from_session(
+        &session,
+        "[tool_request]\n{\"url\":\"https://example.com\"}Example Domain is reserved for documentation examples.",
+    );
+
+    assert_eq!(
+        phase.reply(),
+        "Example Domain is reserved for documentation examples."
+    );
+    assert_eq!(
+        phase.after_turn_messages()[2]["content"],
+        "Example Domain is reserved for documentation examples."
+    );
+}
+
+#[test]
 fn provider_turn_followup_preparation_preserves_stable_prefix_hash_and_updates_tail_hash() {
     let base_fragment = crate::conversation::PromptFragment::new(
         "base-system",

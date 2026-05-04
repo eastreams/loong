@@ -43,6 +43,7 @@ pub use approval::{
     ApprovalPromptView, format_approval_required_reply, normalize_approval_prompt_control_input,
     parse_approval_prompt_action_input, parse_approval_prompt_view,
 };
+pub(crate) use control::salvage_missing_tool_call_reply_text;
 pub(crate) use control::sanitize_reply_text;
 #[cfg(test)]
 pub(crate) use control::{MISSING_TOOL_CALL_REPLY_EXCERPT_CHARS, strip_think_tags};
@@ -59,12 +60,12 @@ pub use external_skill::{
     parse_external_skill_invoke_context,
 };
 pub(crate) use followup_tail::build_tool_driven_followup_tail_with_request_summary_and_contract;
+pub use followup_tail::build_tool_loop_guard_tail;
 #[cfg(test)]
 pub use followup_tail::{
     build_tool_driven_followup_tail, build_tool_failure_followup_tail,
     build_tool_result_followup_tail,
 };
-pub use followup_tail::build_tool_loop_guard_tail;
 #[cfg(test)]
 pub use payload::ToolDrivenFollowupMessageOwned;
 #[cfg(test)]
