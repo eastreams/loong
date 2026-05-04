@@ -1,5 +1,7 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-webfetch")]
+use scraper::{Html, Selector};
+#[cfg(feature = "tool-webfetch")]
 use serde_json::{Map, Value, json};
 
 #[cfg_attr(not(feature = "tool-webfetch"), allow(dead_code))]
@@ -353,12 +355,40 @@ pub(crate) fn extract_html_title(html: &str) -> Option<String> {
     feature = "tool-websearch"
 ))]
 pub(crate) fn extract_readable_text_from_html(html: &str) -> String {
+    if let Some(main_text) = extract_primary_html_text(html) {
+        return main_text;
+    }
+
     let mut sanitized = strip_tag_block(html, "script");
     sanitized = strip_tag_block(&sanitized, "style");
     sanitized = strip_tag_block(&sanitized, "noscript");
     sanitized = strip_tag_block(&sanitized, "head");
+    sanitized = strip_tag_block(&sanitized, "nav");
+    sanitized = strip_tag_block(&sanitized, "header");
+    sanitized = strip_tag_block(&sanitized, "footer");
+    sanitized = strip_tag_block(&sanitized, "aside");
     let text = strip_tags(&sanitized);
     collapse_whitespace(&decode_basic_entities(&text))
+}
+
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
+fn extract_primary_html_text(html: &str) -> Option<String> {
+    let document = Html::parse_document(html);
+    let selector = Selector::parse("main, article, [role='main']").ok()?;
+
+    document
+        .select(&selector)
+        .filter_map(|element| {
+            let text = collapse_whitespace(&decode_basic_entities(
+                &element.text().collect::<Vec<_>>().join(" "),
+            ));
+            (text.chars().count() >= 48).then_some(text)
+        })
+        .next()
 }
 
 #[cfg(any(
@@ -652,6 +682,30 @@ mod tests {
         assert!(content.contains("Hello world"));
         assert!(content.contains("Loong fetches docs."));
         assert!(!content.contains("window.alert"));
+    }
+
+    #[test]
+    fn web_fetch_readable_text_prefers_main_content_over_navigation_shell() {
+        let readable = extract_readable_text_from_html(
+            "<html><body><header>Global Nav Settings Pricing Docs</header><main><h1>Profile</h1><p>Focused page content for the target resource.</p></main><footer>footer links</footer></body></html>",
+        );
+
+        assert!(readable.contains("Focused page content for the target resource."));
+        assert!(!readable.contains("Global Nav Settings Pricing Docs"));
+        assert!(!readable.contains("footer links"));
+    }
+
+    #[test]
+    fn web_fetch_readable_text_fallback_strips_common_boilerplate_regions() {
+        let readable = extract_readable_text_from_html(
+            "<html><body><nav>site nav</nav><header>marketing header</header><section><h1>Release notes</h1><p>Actual content body.</p></section><aside>sidebar noise</aside><footer>footer noise</footer></body></html>",
+        );
+
+        assert!(readable.contains("Release notes Actual content body."));
+        assert!(!readable.contains("site nav"));
+        assert!(!readable.contains("marketing header"));
+        assert!(!readable.contains("sidebar noise"));
+        assert!(!readable.contains("footer noise"));
     }
 
     #[test]
