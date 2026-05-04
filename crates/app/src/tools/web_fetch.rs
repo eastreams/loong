@@ -1,7 +1,15 @@
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-#[cfg(feature = "tool-webfetch")]
-use scraper::{Html, Selector};
-#[cfg(feature = "tool-webfetch")]
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
+use scraper::{ElementRef, Html, Selector};
+#[cfg(any(
+    feature = "tool-webfetch",
+    feature = "tool-browser",
+    feature = "tool-websearch"
+))]
 use serde_json::{Map, Value, json};
 
 #[cfg_attr(not(feature = "tool-webfetch"), allow(dead_code))]
@@ -370,9 +378,9 @@ pub(crate) fn extract_html_summary(html: &str) -> Option<String> {
 
     document
         .select(&selector)
-        .filter_map(|element| element.value().attr("content"))
-        .map(|value| collapse_whitespace(&decode_basic_entities(value.trim())))
-        .find(|value| !value.is_empty())
+        .filter_map(|element: ElementRef<'_>| element.value().attr("content"))
+        .map(|value: &str| collapse_whitespace(&decode_basic_entities(value.trim())))
+        .find(|value: &String| !value.is_empty())
 }
 
 #[cfg(any(
@@ -428,7 +436,7 @@ fn extract_primary_html_text(html: &str) -> Option<String> {
 
     document
         .select(&selector)
-        .filter_map(|element| {
+        .filter_map(|element: ElementRef<'_>| {
             let text = collapse_whitespace(&decode_basic_entities(
                 &element.text().collect::<Vec<_>>().join(" "),
             ));
