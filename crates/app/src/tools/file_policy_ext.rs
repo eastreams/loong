@@ -259,6 +259,7 @@ impl PolicyExtension for FilePolicyExtension {
             .unwrap_or("");
 
         let tool_name = super::canonical_tool_name(raw_tool_name);
+        let visible_tool_name = super::user_visible_tool_name(tool_name);
 
         let payload = params.get("payload").and_then(serde_json::Value::as_object);
         let Some(payload) = payload else {
@@ -281,7 +282,7 @@ impl PolicyExtension for FilePolicyExtension {
 
             let extension = self.name().to_owned();
             let reason = format!(
-                "tool `{tool_name}` requires capability `{required_capability:?}` not granted to token"
+                "tool `{visible_tool_name}` requires capability `{required_capability:?}` not granted to token"
             );
             return Err(PolicyError::ExtensionDenied { extension, reason });
         }
@@ -356,10 +357,10 @@ mod tests {
             json!({"tool_name": "file.write", "payload": {"path": "foo.txt", "content": "x"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         let result = ext.authorize_extension(&ctx);
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
+        let error = result.expect_err("missing write capability should deny");
+        let rendered = error.to_string();
+        assert!(rendered.contains("tool `write` requires capability"));
+        assert!(!rendered.contains("file.write"));
     }
 
     #[test]
