@@ -1,4 +1,15 @@
+fn direct_metadata_alias(name: &str) -> Option<&'static str> {
+    match name {
+        "file.write" => Some("write"),
+        _ => None,
+    }
+}
+
 pub(super) fn tool_argument_hint(name: &str) -> &'static str {
+    if let Some(alias) = direct_metadata_alias(name) {
+        return tool_argument_hint(alias);
+    }
+
     if let Some(argument_hint) = crate::tools::tool_surface::direct_tool_argument_hint(name) {
         return argument_hint;
     }
@@ -195,6 +206,10 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
 }
 
 pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
+    if let Some(alias) = direct_metadata_alias(name) {
+        return tool_search_hint(alias, fallback);
+    }
+
     if let Some(search_hint) = crate::tools::tool_surface::direct_tool_search_hint(name) {
         return search_hint;
     }
@@ -233,6 +248,10 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
 }
 
 pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
+    if let Some(alias) = direct_metadata_alias(name) {
+        return tool_parameter_types(alias);
+    }
+
     if let Some(parameter_types) = crate::tools::tool_surface::direct_tool_parameter_types(name) {
         return parameter_types;
     }
@@ -720,6 +739,10 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
 }
 
 pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
+    if let Some(alias) = direct_metadata_alias(name) {
+        return tool_required_fields(alias);
+    }
+
     if let Some(required_fields) = crate::tools::tool_surface::direct_tool_required_fields(name) {
         return required_fields;
     }
@@ -802,6 +825,10 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
 }
 
 pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
+    if let Some(alias) = direct_metadata_alias(name) {
+        return tool_tags(alias);
+    }
+
     if let Some(tags) = crate::tools::tool_surface::direct_tool_tags(name) {
         return tags;
     }
