@@ -278,6 +278,7 @@ pub(super) fn search_tool_view_from_payload(
                     .iter()
                     .filter_map(Value::as_str)
                     .map(canonical_tool_name)
+                    .map(super::user_visible_tool_name)
                     .collect::<Vec<_>>()
             })
     } else {
