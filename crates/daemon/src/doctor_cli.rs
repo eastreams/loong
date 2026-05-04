@@ -72,6 +72,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     }
 
     let (config_path, mut config) = mvp::config::load(options.config.as_deref())?;
+    mvp::runtime_env::initialize_runtime_environment(&config, Some(config_path.as_path()));
     let mut checks = Vec::new();
     let mut fixes = Vec::new();
     let mut config_mutated = false;

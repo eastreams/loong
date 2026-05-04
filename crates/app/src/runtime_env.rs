@@ -14,6 +14,9 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
         Some(path) => {
             let value = path.display().to_string();
             set_env_var("LOONG_CONFIG_PATH", value);
+            if let Some(loong_home) = resolved_loong_home_for_config_path(path) {
+                set_env_var("LOONG_HOME", loong_home.display().to_string());
+            }
         }
         None => {
             remove_env_var("LOONG_CONFIG_PATH");
@@ -200,6 +203,10 @@ fn remove_env_var(key: &str) {
     crate::process_env::remove_var(key);
 }
 
+fn resolved_loong_home_for_config_path(config_path: &Path) -> Option<&Path> {
+    config_path.parent().filter(|path| !path.as_os_str().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -212,6 +219,7 @@ mod tests {
     fn clear_runtime_environment_exports(env: &mut ScopedEnv) {
         for key in [
             "LOONG_CONFIG_PATH",
+            "LOONG_HOME",
             "LOONG_MEMORY_BACKEND",
             "LOONG_MEMORY_PROFILE",
             "LOONG_SQLITE_PATH",
@@ -284,6 +292,10 @@ mod tests {
         assert_eq!(
             std::env::var("LOONG_CONFIG_PATH").ok().as_deref(),
             Some("/tmp/loong-runtime-env.toml")
+        );
+        assert_eq!(
+            std::env::var("LOONG_HOME").ok().as_deref(),
+            Some("/tmp")
         );
         assert_eq!(
             std::env::var("LOONG_MEMORY_PROFILE").ok().as_deref(),
@@ -424,5 +436,21 @@ mod tests {
         initialize_runtime_environment(&config, None);
 
         assert_eq!(std::env::var("LOONG_FILE_ROOT").ok(), None);
+    }
+
+    #[test]
+    fn initialize_runtime_environment_updates_loong_home_from_resolved_config_parent() {
+        let mut env = ScopedEnv::new();
+        clear_runtime_environment_exports(&mut env);
+        env.set("LOONG_HOME", "/tmp/old-home");
+        let config = LoongConfig::default();
+        let config_path = PathBuf::from("/tmp/demo-home/config.toml");
+
+        initialize_runtime_environment(&config, Some(&config_path));
+
+        assert_eq!(
+            std::env::var("LOONG_HOME").ok().as_deref(),
+            Some("/tmp/demo-home")
+        );
     }
 }
