@@ -464,7 +464,7 @@ fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPla
                 "max_active_children": 2,
                 "timeout_seconds": 90,
                 "allow_shell_in_child": false,
-                "child_tool_allowlist": ["file.read"],
+                "child_tool_allowlist": ["read"],
                 "workspace_root": "/tmp/loong/control-plane/child-session",
                 "kernel_bound": false,
                 "runtime_narrowing": {}
@@ -490,7 +490,7 @@ fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPla
     .expect("create visible approval");
     repo.upsert_session_tool_policy(mvp::session::repository::NewSessionToolPolicyRecord {
         session_id: "child-session".to_owned(),
-        requested_tool_ids: vec!["file.read".to_owned()],
+        requested_tool_ids: vec!["read".to_owned()],
         runtime_narrowing: mvp::tools::runtime_config::ToolRuntimeNarrowing::default(),
     })
     .expect("create visible tool policy");
@@ -2209,9 +2209,9 @@ async fn task_list_returns_visible_background_tasks() {
         "child-session"
     );
     assert_eq!(task.delegate_mode.as_deref(), Some("async"));
-    assert_eq!(task.requested_tool_ids, vec!["file.read".to_owned()]);
+    assert_eq!(task.requested_tool_ids, vec!["read".to_owned()]);
     assert_eq!(task.visible_requested_tool_ids, vec!["read".to_owned()]);
-    assert_eq!(task.effective_tool_ids, vec!["file.read".to_owned()]);
+    assert_eq!(task.effective_tool_ids, vec!["read".to_owned()]);
     assert_eq!(task.visible_effective_tool_ids, vec!["read".to_owned()]);
 }
 
@@ -2259,12 +2259,12 @@ async fn task_read_returns_visible_background_task_detail() {
     );
     assert_eq!(task.task.delegate_phase.as_deref(), Some("running"));
     assert_eq!(task.task.approval_request_count, 1);
-    assert_eq!(task.task.requested_tool_ids, vec!["file.read".to_owned()]);
+    assert_eq!(task.task.requested_tool_ids, vec!["read".to_owned()]);
     assert_eq!(
         task.task.visible_requested_tool_ids,
         vec!["read".to_owned()]
     );
-    assert_eq!(task.task.effective_tool_ids, vec!["file.read".to_owned()]);
+    assert_eq!(task.task.effective_tool_ids, vec!["read".to_owned()]);
     assert_eq!(
         task.task.visible_effective_tool_ids,
         vec!["read".to_owned()]

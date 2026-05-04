@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -248,7 +248,46 @@ fn load_last_audit_entry_hash(path: &Path) -> Result<Option<String>, AuditError>
         return Ok(None);
     };
 
-    let persisted_event = decode_persisted_audit_event_line(&line, path, "tail line")?;
+    decode_last_audit_entry_hash_from_line(&line, path)
+}
+
+fn load_last_audit_entry_hash_from_file(file: &File, path: &Path) -> Result<Option<String>, AuditError> {
+    let mut clone = file.try_clone().map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to clone audit journal handle `{}` while loading tail hash: {error}",
+            path.display()
+        ))
+    })?;
+    clone.seek(SeekFrom::Start(0)).map_err(|error| {
+        AuditError::Sink(format!(
+            "failed to rewind audit journal `{}` while loading tail hash: {error}",
+            path.display()
+        ))
+    })?;
+    let reader = BufReader::new(clone);
+    let mut last_non_empty_line = None;
+
+    for line_result in reader.lines() {
+        let line = line_result.map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to read audit journal `{}` while loading tail hash: {error}",
+                path.display()
+            ))
+        })?;
+        if !line.trim().is_empty() {
+            last_non_empty_line = Some(line);
+        }
+    }
+
+    let Some(line) = last_non_empty_line else {
+        return Ok(None);
+    };
+
+    decode_last_audit_entry_hash_from_line(&line, path)
+}
+
+fn decode_last_audit_entry_hash_from_line(line: &str, path: &Path) -> Result<Option<String>, AuditError> {
+    let persisted_event = decode_persisted_audit_event_line(line, path, "tail line")?;
     let last_hash = persisted_event.integrity.and_then(|value| {
         let hash = value.entry_hash;
         let trimmed_hash = hash.trim();
@@ -621,7 +660,7 @@ impl AuditSink for JsonlAuditSink {
             .map_err(|_error| AuditError::Sink("audit journal mutex poisoned".to_owned()))?;
         lock_audit_journal(&guard.file, &self.path)?;
 
-        let previous_hash = load_last_audit_entry_hash(&self.path)?;
+        let previous_hash = load_last_audit_entry_hash_from_file(&guard.file, &self.path)?;
         let entry_hash =
             compute_audit_event_entry_hash(&event, previous_hash.as_deref(), &self.path)?;
         let persisted_event = event_with_integrity(event, previous_hash, entry_hash.clone());

@@ -2360,15 +2360,14 @@ mod tests {
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["replacements_made"], 2);
         assert_eq!(outcome.payload["edit_blocks_applied"], 2);
-        let canonical_target = target
-            .canonicalize()
-            .expect("canonical target path")
+        let resolved_target = resolve_safe_file_path_with_config("file.txt", &config)
+            .expect("resolved target path")
             .display()
             .to_string();
         assert_eq!(outcome.payload["continuation"]["recommended_tool"], "read");
         assert_eq!(
             outcome.payload["continuation"]["recommended_payload"]["path"],
-            canonical_target
+            resolved_target
         );
         assert_eq!(fs::read_to_string(&target).unwrap(), "ALPHA\nbeta\nGAMMA\n");
         let _ = fs::remove_dir_all(base);
