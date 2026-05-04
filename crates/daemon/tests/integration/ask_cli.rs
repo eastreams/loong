@@ -1211,8 +1211,8 @@ fn ask_cli_recovers_textual_tool_request_wrappers_and_completes() {
     .expect("write docs README fixture");
 
     let final_reply = "E2E PASS textual tool request recovery.";
-    let provider_server =
-        DynamicMockProviderServer::spawn(2, move |request_index, request| match request_index {
+    let provider_server = DynamicMockProviderServer::spawn(2, move |request_index, request| {
+        match request_index {
             0 => MockProviderResponse::ok_json(openai_chat_final_body(
                 "[tool_request]\n{\"arguments\":{\"path\":\"AGENTS.md\"},\"name\":\"read\"}[tool_request]\n{\"arguments\":{\"path\":\"docs/README.md\"},\"name\":\"read\"}I need the contents of `AGENTS.md` and `docs/README.md` to ground the summary, but I do not have their tool outputs yet.",
             )),
@@ -1230,7 +1230,8 @@ fn ask_cli_recovers_textual_tool_request_wrappers_and_completes() {
                 MockProviderResponse::ok_json(openai_chat_final_body(final_reply))
             }
             _ => MockProviderResponse::unexpected_extra_request(),
-        });
+        }
+    });
     let provider_base_url = provider_server.base_url().to_owned();
     fixture.write_config_with(|config| {
         config.provider.kind = ProviderKind::Openai;

@@ -204,7 +204,9 @@ fn remove_env_var(key: &str) {
 }
 
 fn resolved_loong_home_for_config_path(config_path: &Path) -> Option<&Path> {
-    config_path.parent().filter(|path| !path.as_os_str().is_empty())
+    config_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
 }
 
 #[cfg(test)]
@@ -293,10 +295,7 @@ mod tests {
             std::env::var("LOONG_CONFIG_PATH").ok().as_deref(),
             Some("/tmp/loong-runtime-env.toml")
         );
-        assert_eq!(
-            std::env::var("LOONG_HOME").ok().as_deref(),
-            Some("/tmp")
-        );
+        assert_eq!(std::env::var("LOONG_HOME").ok().as_deref(), Some("/tmp"));
         assert_eq!(
             std::env::var("LOONG_MEMORY_PROFILE").ok().as_deref(),
             Some("window_plus_summary")
