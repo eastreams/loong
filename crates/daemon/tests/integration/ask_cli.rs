@@ -562,6 +562,69 @@ impl BrowserFixtureServer {
     }
 }
 
+struct WebSummaryFixtureServer {
+    base_url: String,
+    join_handle: std::thread::JoinHandle<Vec<String>>,
+}
+
+impl WebSummaryFixtureServer {
+    fn spawn(expected_requests: usize) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local web summary listener");
+        let address = listener.local_addr().expect("local web summary address");
+        let join_handle = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+
+            while requests.len() < expected_requests {
+                let (mut stream, _) = listener.accept().expect("accept web summary request");
+                let request = read_provider_request(&mut stream);
+                let body = r#"<!doctype html>
+<html>
+  <head>
+    <title>Example Summary Fixture</title>
+    <meta name="description" content="Short profile summary for the target page.">
+  </head>
+  <body>
+    <header>Marketing Nav Pricing Docs</header>
+    <main>
+      <h1>Summary Fixture</h1>
+      <p>Main profile content with links and details.</p>
+    </main>
+    <footer>Footer noise</footer>
+  </body>
+</html>"#;
+                let content_type = "text/html; charset=utf-8";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write web summary fixture response");
+                requests.push(request);
+            }
+
+            requests
+        });
+        let base_url = format!("http://{address}");
+
+        Self {
+            base_url,
+            join_handle,
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.join_handle
+            .join()
+            .expect("join web summary fixture server")
+    }
+}
+
 fn browser_fixture_body_for_request(request: &str) -> &'static str {
     if request.starts_with("GET /next ") {
         return r#"<!doctype html>
@@ -1039,6 +1102,96 @@ fn ask_cli_browser_open_extract_click_runs_full_e2e() {
     assert!(
         browser_requests[1].starts_with("GET /next "),
         "second browser request should follow the discovered link: {browser_requests:#?}"
+    );
+}
+
+#[test]
+fn ask_cli_web_summary_uses_page_metadata_and_hides_tool_markup() {
+    let fixture = LatestSelectorCliFixture::new("ask-web-summary-e2e");
+    let web_server = WebSummaryFixtureServer::spawn(1);
+    let web_base_url = web_server.base_url().to_owned();
+    let final_reply = "E2E PASS web summary.";
+    let provider_server =
+        DynamicMockProviderServer::spawn(2, move |request_index, request| match request_index {
+            0 => {
+                assert_provider_request_contains_text(
+                    request,
+                    "Summarize the fixture page",
+                    "initial web summary provider request",
+                );
+                MockProviderResponse::ok_json(openai_chat_tool_call_body(
+                    "I will fetch the page first.",
+                    "call-web-fetch",
+                    "web",
+                    json!({
+                        "url": web_base_url,
+                    }),
+                ))
+            }
+            1 => {
+                assert_provider_request_contains_text(
+                    request,
+                    "Summary: Short profile summary for the target page.",
+                    "web follow-up provider request",
+                );
+                assert_provider_request_contains_text(
+                    request,
+                    "Main profile content with links and details.",
+                    "web follow-up provider request",
+                );
+                MockProviderResponse::ok_json(openai_chat_final_body(final_reply))
+            }
+            _ => MockProviderResponse::unexpected_extra_request(),
+        });
+    let provider_base_url = provider_server.base_url().to_owned();
+    fixture.write_config_with(|config| {
+        config.provider.kind = ProviderKind::Openai;
+        config.provider.base_url = provider_base_url;
+        config.provider.model = "test-model".to_owned();
+        config.provider.wire_api = ProviderWireApi::ChatCompletions;
+        config.provider.api_key = Some(SecretRef::Inline("test-provider-key".to_owned()));
+        config.tools.web.allow_private_hosts = true;
+    });
+
+    provider_server.arm();
+    let output = fixture.run_process(
+        &[
+            "ask",
+            "--message",
+            "Summarize the fixture page without asking for confirmation.",
+        ],
+        None,
+    );
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+    let provider_requests = provider_server.finish(&stdout, &stderr);
+    let web_requests = web_server.finish();
+
+    assert!(
+        output.status.success(),
+        "ask web summary e2e should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains(final_reply),
+        "stdout should contain the terminal web summary answer: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("[tool_request]"),
+        "stdout should not leak tool request markup: {stdout:?}"
+    );
+    assert_eq!(
+        provider_requests.len(),
+        2,
+        "ask should continue through one web fetch and final reply: {provider_requests:#?}"
+    );
+    assert_eq!(
+        web_requests.len(),
+        1,
+        "web summary fixture should receive a single fetch request: {web_requests:#?}"
+    );
+    assert!(
+        web_requests[0].starts_with("GET / "),
+        "web summary fixture should receive a fetch for the root page: {web_requests:#?}"
     );
 }
 
