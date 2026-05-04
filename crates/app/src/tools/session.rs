@@ -7201,7 +7201,7 @@ mod tests {
                     "max_active_children": 2,
                     "timeout_seconds": 120,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read"],
+                    "child_tool_allowlist": ["read"],
                     "workspace_root": "/tmp/loong/sessions-list-workflow/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
@@ -7714,7 +7714,7 @@ mod tests {
                     "max_active_children": 2,
                     "timeout_seconds": 90,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read"],
+                    "child_tool_allowlist": ["read"],
                     "workspace_root": "/tmp/loong/session-status-workflow/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
@@ -8236,7 +8236,7 @@ mod tests {
                     "max_active_children": 2,
                     "timeout_seconds": 90,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read"],
+                    "child_tool_allowlist": ["read"],
                     "workspace_root": "/tmp/loong/task-status-binding-only/child-session",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
@@ -8423,7 +8423,7 @@ mod tests {
                     "max_active_children": 2,
                     "timeout_seconds": 90,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read"],
+                    "child_tool_allowlist": ["read"],
                     "workspace_root": "/tmp/loong/task-history-lineage/owner-new",
                     "kernel_bound": false,
                     "runtime_narrowing": {}
@@ -10917,7 +10917,7 @@ mod tests {
                     "max_active_children": 3,
                     "timeout_seconds": 60,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read", "file.write", "file.edit"],
+                    "child_tool_allowlist": ["read", "write", "edit"],
                     "kernel_bound": false,
                     "runtime_narrowing": {
                         "web_fetch": {
@@ -10991,7 +10991,7 @@ mod tests {
         );
         assert_eq!(
             outcome.payload["delegate_lifecycle"]["execution"]["child_tool_allowlist"],
-            json!(["file.read", "file.write", "file.edit"])
+            json!(["read", "write", "edit"])
         );
         assert_eq!(
             outcome.payload["delegate_lifecycle"]["execution"]["kernel_bound"],
@@ -11124,7 +11124,7 @@ mod tests {
                         "max_active_children": 3,
                         "timeout_seconds": 60,
                         "allow_shell_in_child": false,
-                        "child_tool_allowlist": ["file.read"],
+                        "child_tool_allowlist": ["read"],
                         "kernel_bound": false
                     }
                 }),

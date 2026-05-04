@@ -318,20 +318,18 @@ fn parse_delegate_isolation(raw: &str) -> Result<ConstrainedSubagentIsolation, S
 fn delegate_profile_child_tool_allowlist(profile: DelegateBuiltinProfile) -> Vec<String> {
     match profile {
         DelegateBuiltinProfile::Research => vec![
-            "file.read".to_owned(),
+            "read".to_owned(),
             "web.fetch".to_owned(),
             "web.search".to_owned(),
             "browser.open".to_owned(),
             "browser.extract".to_owned(),
         ],
         DelegateBuiltinProfile::Plan => vec![
-            "file.read".to_owned(),
+            "read".to_owned(),
             "web.fetch".to_owned(),
             "web.search".to_owned(),
         ],
-        DelegateBuiltinProfile::Verify => {
-            vec!["file.read".to_owned(), "web.fetch".to_owned()]
-        }
+        DelegateBuiltinProfile::Verify => vec!["read".to_owned(), "web.fetch".to_owned()],
     }
 }
 
@@ -568,7 +566,7 @@ mod tests {
         let config = DelegateToolConfig {
             allow_shell_in_child: true,
             timeout_seconds: 60,
-            child_tool_allowlist: vec!["file.read".to_owned(), "file.write".to_owned()],
+            child_tool_allowlist: vec!["read".to_owned(), "write".to_owned()],
             ..DelegateToolConfig::default()
         };
 
@@ -581,7 +579,7 @@ mod tests {
         assert!(policy.allow_shell_in_child);
         assert_eq!(
             policy.child_tool_allowlist,
-            vec!["file.read".to_owned(), "web.fetch".to_owned()]
+            vec!["read".to_owned(), "web.fetch".to_owned()]
         );
     }
 

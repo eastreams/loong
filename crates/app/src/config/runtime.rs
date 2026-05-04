@@ -3885,7 +3885,7 @@ model = "gpt-5"
         config.tools.delegate.timeout_seconds = 90;
         config.tools.delegate.allow_shell_in_child = true;
         config.tools.delegate.child_tool_allowlist =
-            vec!["file.read".to_owned(), "shell.exec".to_owned()];
+            vec!["read".to_owned(), "shell.exec".to_owned()];
 
         let encoded = encode_toml_config(&config).expect("encode config");
         let parsed = toml::from_str::<LoongConfig>(&encoded).expect("parse encoded config");

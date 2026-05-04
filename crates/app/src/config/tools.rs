@@ -1795,7 +1795,7 @@ allow_shell_in_child = true
 max_frozen_bytes = 131072
 announce_debounce_ms = 250
 announce_max_batch = 7
-child_tool_allowlist = ["file.read", "shell.exec"]
+child_tool_allowlist = ["read", "shell.exec"]
 
 [tools.delegate.child_runtime.web]
 allow_private_hosts = false
@@ -1839,7 +1839,7 @@ max_text_chars = 1024
         assert_eq!(parsed.tools.delegate.announce_max_batch, 7);
         assert_eq!(
             parsed.tools.delegate.child_tool_allowlist,
-            vec!["file.read".to_owned(), "shell.exec".to_owned()]
+            vec!["read".to_owned(), "shell.exec".to_owned()]
         );
         assert_eq!(
             parsed

@@ -692,7 +692,7 @@ mod tests {
                     "max_active_children": 2,
                     "timeout_seconds": 60,
                     "allow_shell_in_child": false,
-                    "child_tool_allowlist": ["file.read"],
+                    "child_tool_allowlist": ["read"],
                     "kernel_bound": false,
                     "runtime_narrowing": {
                         "browser": {
@@ -910,11 +910,7 @@ mod tests {
             max_active_children: 1,
             timeout_seconds: 60,
             allow_shell_in_child: false,
-            child_tool_allowlist: vec![
-                "file.read".to_owned(),
-                "file.write".to_owned(),
-                "file.edit".to_owned(),
-            ],
+            child_tool_allowlist: vec!["read".to_owned(), "write".to_owned(), "edit".to_owned()],
             workspace_root: None,
             runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
