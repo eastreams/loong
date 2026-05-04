@@ -1,6 +1,7 @@
 fn direct_metadata_alias(name: &str) -> Option<&'static str> {
     match name {
         "file.write" => Some("write"),
+        "file.edit" => Some("edit"),
         _ => None,
     }
 }
@@ -168,9 +169,6 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         }
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
-        "file.edit" => {
-            "path:string,edits?:array,old_string?:string,new_string?:string,replace_all?:boolean"
-        }
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
@@ -225,9 +223,6 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
         }
         "content.search" => {
             "search workspace file contents, find text in repo files, grep text in the project"
-        }
-        "file.edit" => {
-            "edit a workspace file, patch file content, or apply exact replacement blocks in a repo file"
         }
         "shell.exec" => {
             "run a shell command, execute a terminal command, bash, zsh, powershell, cli"
@@ -624,13 +619,6 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("from", "integer"),
             ("lines", "integer"),
         ],
-        "file.edit" => &[
-            ("path", "string"),
-            ("edits", "array"),
-            ("old_string", "string"),
-            ("new_string", "string"),
-            ("replace_all", "boolean"),
-        ],
         "shell.exec" => &[
             ("command", "string"),
             ("args", "array"),
@@ -788,7 +776,6 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "content.search" => &["query"],
         "memory_search" => &["query"],
         "memory_get" => &["path"],
-        "file.edit" => &["path"],
         "shell.exec" => &["command"],
         "bash.exec" => &["command"],
         "delegate" | "delegate_async" => &["task"],
@@ -893,7 +880,6 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "content.search" => &["file", "search", "content", "filesystem", "repo"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
-        "file.edit" => &["file", "edit", "filesystem", "exact", "replace"],
         "shell.exec" => &["shell", "command", "process", "exec"],
         "bash.exec" => &["bash", "command", "process", "exec"],
         "provider.switch" => &["provider", "switch", "model", "runtime"],
