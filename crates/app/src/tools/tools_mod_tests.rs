@@ -1993,6 +1993,58 @@ fn direct_read_path_mode_executes_after_dropping_incidental_search_fields() {
 }
 
 #[test]
+fn direct_write_executes_without_hopping_through_hidden_file_write() {
+    let root = unique_temp_dir("loong-direct-write");
+    std::fs::create_dir_all(&root).expect("create direct-write root");
+    let config = test_tool_runtime_config(&root).into_inner();
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "write".to_owned(),
+            payload: json!({
+                "path": "notes.txt",
+                "content": "hello"
+            }),
+        },
+        &config,
+    )
+    .expect("direct write should execute");
+
+    assert_eq!(outcome.payload["tool_name"], "write");
+    assert_eq!(
+        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "hello"
+    );
+}
+
+#[test]
+fn direct_edit_executes_without_hopping_through_hidden_file_edit() {
+    let root = unique_temp_dir("loong-direct-edit");
+    std::fs::create_dir_all(&root).expect("create direct-edit root");
+    std::fs::write(root.join("notes.txt"), "alpha\nbeta\n").expect("write edit fixture");
+    let config = test_tool_runtime_config(&root).into_inner();
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "edit".to_owned(),
+            payload: json!({
+                "path": "notes.txt",
+                "old_string": "beta",
+                "new_string": "gamma"
+            }),
+        },
+        &config,
+    )
+    .expect("direct edit should execute");
+
+    assert_eq!(outcome.payload["tool_name"], "edit");
+    assert_eq!(
+        std::fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "alpha\ngamma\n"
+    );
+}
+
+#[test]
 fn direct_web_runtime_routing_keeps_network_mode_when_search_mode_is_unavailable() {
     let view = ToolView::from_tool_names(["web.fetch", "http.request"]);
     let error = route_direct_web_tool_name_for_view(

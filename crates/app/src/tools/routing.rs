@@ -160,7 +160,7 @@ fn route_direct_write_tool_name(payload: &Value) -> Result<&'static str, String>
     if !has_content {
         return Err("direct_write_requires_content: expected `content`".to_owned());
     }
-    Ok("file.write")
+    Ok("write")
 }
 
 fn route_direct_edit_tool_name(payload: &Value) -> Result<&'static str, String> {
@@ -191,7 +191,7 @@ fn route_direct_edit_tool_name(payload: &Value) -> Result<&'static str, String> 
                 .to_owned(),
         );
     }
-    Ok("file.edit")
+    Ok("edit")
 }
 
 pub(super) fn route_direct_web_tool_name(payload: &Value) -> Result<&'static str, String> {

@@ -311,6 +311,8 @@ fn dispatch_tool_request(
         "http.request" => http_request::execute_http_request_tool_with_config(request, config),
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "bash.exec" => bash::execute_bash_tool_with_config(request, config),
+        "write" => file::execute_file_write_tool_with_config(request, config),
+        "edit" => file::execute_file_edit_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
         "glob.search" => file::execute_glob_search_tool_with_config(request, config),
         "content.search" => file::execute_content_search_tool_with_config(request, config),

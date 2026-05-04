@@ -4,8 +4,8 @@ use loong_contracts::{Capability, ToolCoreRequest};
 use serde_json::Value;
 
 use super::{
-    HTTP_REQUEST_TOOL_NAME, ToolExecutionKind, ToolView, config_import,
-    feishu, runtime_tool_view, tool_catalog, tool_surface,
+    HTTP_REQUEST_TOOL_NAME, ToolExecutionKind, ToolView, config_import, feishu, runtime_tool_view,
+    tool_catalog, tool_surface,
 };
 
 pub fn canonical_tool_name(raw: &str) -> &str {
