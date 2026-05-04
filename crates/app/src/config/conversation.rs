@@ -22,8 +22,6 @@ pub struct ConversationConfig {
     pub compact_preserve_recent_estimated_tokens: Option<usize>,
     #[serde(default = "default_true")]
     pub compact_fail_open: bool,
-    #[serde(default)]
-    pub turn_loop: ConversationTurnLoopConfig,
 }
 
 impl Default for ConversationConfig {
@@ -37,25 +35,6 @@ impl Default for ConversationConfig {
             compact_preserve_recent_turns: default_compact_preserve_recent_turns(),
             compact_preserve_recent_estimated_tokens: None,
             compact_fail_open: default_true(),
-            turn_loop: ConversationTurnLoopConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConversationTurnLoopConfig {
-    #[serde(default = "default_turn_loop_max_followup_tool_payload_chars")]
-    pub max_followup_tool_payload_chars: usize,
-    #[serde(default = "default_turn_loop_max_followup_tool_payload_chars_total")]
-    pub max_followup_tool_payload_chars_total: usize,
-}
-
-impl Default for ConversationTurnLoopConfig {
-    fn default() -> Self {
-        Self {
-            max_followup_tool_payload_chars: default_turn_loop_max_followup_tool_payload_chars(),
-            max_followup_tool_payload_chars_total:
-                default_turn_loop_max_followup_tool_payload_chars_total(),
         }
     }
 }
@@ -138,12 +117,4 @@ impl ConversationConfig {
 
 const fn default_true() -> bool {
     true
-}
-
-const fn default_turn_loop_max_followup_tool_payload_chars() -> usize {
-    8_000
-}
-
-const fn default_turn_loop_max_followup_tool_payload_chars_total() -> usize {
-    20_000
 }

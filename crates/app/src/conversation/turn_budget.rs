@@ -2,35 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnRoundBudgetDecision {
-    ContinueWithFollowup,
-    FinalizeWithCompletionPass,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TurnRoundBudget {
-    round_index: usize,
-    max_rounds: usize,
-}
-
-impl TurnRoundBudget {
-    pub fn for_round_index(round_index: usize, max_rounds: usize) -> Self {
-        Self {
-            round_index,
-            max_rounds: max_rounds.max(1),
-        }
-    }
-
-    pub fn followup_decision(self) -> TurnRoundBudgetDecision {
-        if self.round_index.saturating_add(1) < self.max_rounds {
-            TurnRoundBudgetDecision::ContinueWithFollowup
-        } else {
-            TurnRoundBudgetDecision::FinalizeWithCompletionPass
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SafeLaneReplanBudget {
     current_round: u8,
     max_replans: u8,
@@ -209,26 +180,8 @@ impl SafeLaneBackpressureBudget {
 mod tests {
     use super::{
         SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision, SafeLaneFailureRouteReason,
-        SafeLaneReplanBudget, TurnRoundBudget, TurnRoundBudgetDecision,
+        SafeLaneReplanBudget,
     };
-
-    #[test]
-    fn turn_round_budget_followup_decision_reports_remaining_capacity() {
-        let budget = TurnRoundBudget::for_round_index(0, 2);
-        assert_eq!(
-            budget.followup_decision(),
-            TurnRoundBudgetDecision::ContinueWithFollowup
-        );
-    }
-
-    #[test]
-    fn turn_round_budget_followup_decision_reports_round_limit_reached() {
-        let budget = TurnRoundBudget::for_round_index(1, 2);
-        assert_eq!(
-            budget.followup_decision(),
-            TurnRoundBudgetDecision::FinalizeWithCompletionPass
-        );
-    }
 
     #[test]
     fn safe_lane_replan_budget_continuation_decision_reports_budget_exhaustion() {

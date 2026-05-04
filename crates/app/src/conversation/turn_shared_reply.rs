@@ -52,16 +52,13 @@ impl ToolDrivenReplyPhase {
         }
     }
 
+    #[cfg(test)]
     pub fn raw_reply(&self) -> Option<&str> {
         self.raw_reply.as_deref()
     }
 
     pub fn decision(&self) -> &ToolDrivenReplyBaseDecision {
         &self.decision
-    }
-
-    pub fn into_decision(self) -> ToolDrivenReplyBaseDecision {
-        self.decision
     }
 
     pub fn resolution_mode(&self) -> ReplyResolutionMode {

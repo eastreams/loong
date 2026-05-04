@@ -64,9 +64,7 @@ pub use followup_tail::{
     build_tool_driven_followup_tail, build_tool_failure_followup_tail,
     build_tool_result_followup_tail,
 };
-pub use followup_tail::{
-    build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
-};
+pub use followup_tail::build_tool_loop_guard_tail;
 #[cfg(test)]
 pub use payload::ToolDrivenFollowupMessageOwned;
 #[cfg(test)]

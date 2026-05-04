@@ -75,7 +75,7 @@ pub(crate) use channels::{
     parse_nostr_private_key_hex, parse_nostr_public_key_hex,
 };
 #[allow(unused_imports)]
-pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
+pub use conversation::ConversationConfig;
 pub use feishu_integration::{FeishuCapabilityConfig, FeishuIntegrationConfig};
 pub(crate) use irc::{
     IRC_NICKNAME_ENV, IRC_SERVER_ENV, IrcServerEndpoint, IrcServerTransport,
@@ -2392,51 +2392,6 @@ bot_token = { file = "/run/secrets/telegram" }
         let config = ProviderConfig::default();
         assert_eq!(config.model, "auto");
         assert!(config.model_selection_requires_fetch());
-    }
-
-    #[test]
-    fn turn_loop_policy_defaults_are_stable() {
-        let config = LoongConfig::default();
-        assert_eq!(
-            config
-                .conversation
-                .turn_loop
-                .max_followup_tool_payload_chars,
-            8_000
-        );
-        assert_eq!(
-            config
-                .conversation
-                .turn_loop
-                .max_followup_tool_payload_chars_total,
-            20_000
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn turn_loop_policy_can_be_overridden_from_toml() {
-        let raw = r#"
-[conversation.turn_loop]
-max_followup_tool_payload_chars = 1200
-max_followup_tool_payload_chars_total = 3200
-"#;
-        let parsed =
-            toml::from_str::<LoongConfig>(raw).expect("parse turn-loop config should pass");
-        assert_eq!(
-            parsed
-                .conversation
-                .turn_loop
-                .max_followup_tool_payload_chars,
-            1200
-        );
-        assert_eq!(
-            parsed
-                .conversation
-                .turn_loop
-                .max_followup_tool_payload_chars_total,
-            3200
-        );
     }
 
     #[test]

@@ -37,11 +37,6 @@ mod turn_budget;
 mod turn_checkpoint;
 mod turn_coordinator;
 pub mod turn_engine;
-mod turn_loop;
-mod turn_loop_followup;
-mod turn_loop_request;
-mod turn_loop_round;
-mod turn_loop_state;
 mod turn_middleware;
 mod turn_middleware_registry;
 mod turn_observer;
@@ -50,13 +45,11 @@ pub(crate) mod workspace_isolation;
 
 pub(crate) const FAST_LANE_PARALLEL_TOOL_EXECUTION_ENABLED: bool = true;
 pub(crate) const FAST_LANE_PARALLEL_TOOL_EXECUTION_MAX_IN_FLIGHT: usize = 4;
-pub(crate) const FAST_LANE_MAX_TOOL_STEPS_PER_TURN: usize = 5;
 pub(crate) const SAFE_LANE_NODE_MAX_ATTEMPTS: u8 = 1;
 pub(crate) const SAFE_LANE_REPLAN_MAX_ROUNDS: u8 = 16;
 pub(crate) const SAFE_LANE_REPLAN_MAX_NODE_ATTEMPTS: u8 = 4;
 pub(crate) const TURN_LOOP_MAX_CONSECUTIVE_SAME_TOOL: usize = 10;
 pub(crate) const TURN_LOOP_MAX_DISCOVERY_FOLLOWUP_ROUNDS: usize = 12;
-pub(crate) const TURN_LOOP_MAX_ROUNDS: usize = 6;
 pub(crate) const TURN_LOOP_MAX_TOTAL_TOOL_CALLS: usize = 200;
 pub(crate) const TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 2_048;
 
@@ -160,7 +153,6 @@ pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,
     ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
 };
-pub use turn_loop::ConversationTurnLoop;
 pub use turn_middleware::{
     ConversationTurnMiddleware, SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID,
     SYSTEM_PROMPT_TOOL_VIEW_TURN_MIDDLEWARE_ID, TURN_MIDDLEWARE_API_VERSION,

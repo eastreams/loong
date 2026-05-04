@@ -262,27 +262,6 @@ pub fn build_tool_driven_followup_tail<F>(
 where
     F: FnMut(&str, &str) -> String,
 {
-    build_tool_driven_followup_tail_with_request_summary(
-        assistant_preface,
-        payload,
-        user_input,
-        loop_warning_reason,
-        tool_request_summary,
-        payload_mapper,
-    )
-}
-
-pub fn build_tool_driven_followup_tail_with_request_summary<F>(
-    assistant_preface: &str,
-    payload: &ToolDrivenFollowupPayload,
-    user_input: &str,
-    loop_warning_reason: Option<&str>,
-    tool_request_summary: Option<&str>,
-    payload_mapper: F,
-) -> Vec<Value>
-where
-    F: FnMut(&str, &str) -> String,
-{
     build_tool_driven_followup_tail_with_request_summary_and_contract(
         assistant_preface,
         payload,

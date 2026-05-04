@@ -308,6 +308,7 @@ pub(crate) fn build_observer_streaming_token_callback(
     Some(Arc::new(callback))
 }
 
+#[cfg(test)]
 pub(crate) fn map_streaming_callback_data_to_token_event(
     data: crate::provider::StreamingCallbackData,
 ) -> StreamingTokenEvent {
