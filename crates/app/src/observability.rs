@@ -55,6 +55,10 @@ pub(crate) fn top_level_json_keys(value: &Value) -> Vec<String> {
     keys
 }
 
+pub(crate) fn json_string_array(values: &[String]) -> String {
+    serde_json::to_string(values).unwrap_or_else(|_error| "[]".to_owned())
+}
+
 fn truncate_logged_json_key(key: &str) -> String {
     let key_chars = key.chars().count();
     if key_chars <= MAX_LOGGED_JSON_KEY_CHARS {
@@ -150,7 +154,7 @@ fn redact_long_hex_tokens(input: &str) -> String {
 mod tests {
     use serde_json::{Map, Value, json};
 
-    use super::{json_value_kind, summarize_error, top_level_json_keys};
+    use super::{json_string_array, json_value_kind, summarize_error, top_level_json_keys};
 
     #[test]
     fn json_value_kind_labels_common_shapes() {
@@ -204,6 +208,14 @@ mod tests {
         let first_key = keys.first().expect("first key should exist");
 
         assert!(first_key.chars().count() <= 48);
+    }
+
+    #[test]
+    fn json_string_array_encodes_keys_as_json_array() {
+        let encoded = json_string_array(&["path".to_owned(), "quoted\"key".to_owned()]);
+        let decoded: Value = serde_json::from_str(&encoded).expect("encoded keys should parse");
+
+        assert_eq!(decoded, json!(["path", "quoted\"key"]));
     }
 
     #[test]

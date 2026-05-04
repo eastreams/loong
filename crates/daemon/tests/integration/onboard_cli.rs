@@ -32,6 +32,15 @@ fn assert_compact_loong_header(lines: &[String], context: &str) {
     );
 }
 
+fn assert_lines_fit_display_width(lines: &[String], width: usize, context: &str) {
+    assert!(
+        lines
+            .iter()
+            .all(|line| mvp::presentation::display_width(line) <= width),
+        "{context} should fit within {width} display columns: {lines:#?}"
+    );
+}
+
 fn collapse_wrapped_lines(lines: &[String]) -> String {
     lines
         .iter()
@@ -5460,10 +5469,7 @@ fn onboard_starting_point_selection_screen_wraps_header_title_and_subtitle_on_na
     let lines =
         loong_daemon::onboard_cli::render_starting_point_selection_screen_lines(&[candidate], 22);
 
-    assert!(
-        lines.iter().all(|line| line.len() <= 22),
-        "starting-point screen should keep brand subtitle and title within narrow widths: {lines:#?}"
-    );
+    assert_lines_fit_display_width(&lines, 22, "starting-point screen brand subtitle and title");
     assert_eq!(lines[0], "LOONG");
     assert!(
         lines.iter().any(|line| line == "choose detected"),
@@ -5558,10 +5564,7 @@ fn onboard_model_selection_screen_wraps_compact_header_and_progress_on_narrow_wi
 
     let lines = loong_daemon::onboard_cli::render_model_selection_screen_lines(&config, 22);
 
-    assert!(
-        lines.iter().all(|line| line.len() <= 22),
-        "model screen should keep compact header and progress copy within narrow terminal widths: {lines:#?}"
-    );
+    assert_lines_fit_display_width(&lines, 22, "model screen compact header and progress copy");
     assert_eq!(
         lines[0], "LOONG",
         "narrow model screen should split the compact header instead of forcing brand and version onto one line: {lines:#?}"
@@ -5676,10 +5679,7 @@ fn onboard_api_key_env_screen_wraps_long_unbroken_env_names() {
         36,
     );
 
-    assert!(
-        lines.iter().all(|line| line.len() <= 36),
-        "credential-env screen should split long env tokens instead of letting them overflow narrow widths: {lines:#?}"
-    );
+    assert_lines_fit_display_width(&lines, 36, "credential-env screen long env tokens");
     assert!(
         lines
             .iter()
@@ -5698,10 +5698,7 @@ fn onboard_api_key_env_screen_wraps_progress_line_on_narrow_width() {
         22,
     );
 
-    assert!(
-        lines.iter().all(|line| line.len() <= 22),
-        "credential-env screen should keep the progress line within narrow terminal widths: {lines:#?}"
-    );
+    assert_lines_fit_display_width(&lines, 22, "credential-env screen progress line");
     assert!(
         lines.iter().any(|line| line == "step 3 of 8 ·"),
         "narrow credential-env screen should keep the step label on the first wrapped line: {lines:#?}"

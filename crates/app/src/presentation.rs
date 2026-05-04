@@ -214,7 +214,7 @@ fn render_compact_brand_header_with_version(
     let brand = "LOONG";
     let width = width.max(display_width(brand));
     let combined = format!("{brand}  {version}");
-    let mut lines = if combined.len() <= width {
+    let mut lines = if display_width(combined.as_str()) <= width {
         vec![BrandLine::new(BrandLineRole::Banner, combined)]
     } else {
         let mut compact_lines = vec![BrandLine::new(BrandLineRole::Banner, brand)];
@@ -765,7 +765,9 @@ mod tests {
         );
 
         assert!(
-            lines.iter().all(|line| line.text.len() <= 18),
+            lines
+                .iter()
+                .all(|line| display_width(line.text.as_str()) <= 18),
             "full brand header should respect narrow widths for version and subtitle lines: {lines:#?}"
         );
         assert_eq!(lines[0].text, "LOONG");
@@ -952,7 +954,7 @@ mod tests {
         );
 
         assert!(
-            lines.iter().all(|line| line.len() <= 28),
+            lines.iter().all(|line| display_width(line) <= 28),
             "shared presentation wrapping should split oversized single segments instead of overflowing the target width: {lines:#?}"
         );
         assert!(
@@ -969,7 +971,7 @@ mod tests {
             render_wrapped_display_line("- press Enter to use suggested env: OPENAI_API_KEY", 22);
 
         assert!(
-            lines.iter().all(|line| line.len() <= 22),
+            lines.iter().all(|line| display_width(line) <= 22),
             "long label prefixes should wrap instead of overflowing narrow widths: {lines:#?}"
         );
         assert_eq!(

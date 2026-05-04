@@ -8498,7 +8498,7 @@ mod tests {
         CliChatOptions, CliSessionRequirement, initialize_cli_turn_runtime_with_loaded_config,
     };
     use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
-    use crate::test_support::ScopedEnv;
+    use crate::test_support::{ScopedEnv, unique_temp_dir};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
@@ -8676,9 +8676,16 @@ mod tests {
     }
 
     fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
+        let mut config = LoongConfig::default();
+        config.audit.path = unique_temp_dir("loong-chat-surface-audit")
+            .join("audit")
+            .join("events.jsonl")
+            .display()
+            .to_string();
+
         initialize_cli_turn_runtime_with_loaded_config(
             path,
-            LoongConfig::default(),
+            config,
             Some("chat-surface-test"),
             &CliChatOptions::default(),
             "chat-surface-test",

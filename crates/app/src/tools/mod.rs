@@ -971,17 +971,18 @@ pub fn execute_tool_core_with_config(
         }
     };
     let result = execute_request();
-    let duration_ms = started_at.elapsed().as_millis();
+    let duration_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
     match &result {
         Ok(outcome) => {
             if debug_log_enabled {
+                let payload_keys_json = crate::observability::json_string_array(&payload_keys);
                 tracing::debug!(
                     target: "loong.tools",
                     requested_tool_name = %requested_tool_name,
                     canonical_tool_name = %canonical_name,
                     inner_tool_name = %inner_tool_name,
                     payload_kind,
-                    payload_keys = ?payload_keys,
+                    payload_keys_json = payload_keys_json.as_str(),
                     status = %outcome.status,
                     duration_ms,
                     "tool execution completed"
@@ -991,26 +992,28 @@ pub fn execute_tool_core_with_config(
         Err(error) => {
             if is_expected_tool_request_error(error) {
                 if debug_log_enabled {
+                    let payload_keys_json = crate::observability::json_string_array(&payload_keys);
                     tracing::debug!(
                         target: "loong.tools",
                         requested_tool_name = %requested_tool_name,
                         canonical_tool_name = %canonical_name,
                         inner_tool_name = %inner_tool_name,
                         payload_kind,
-                        payload_keys = ?payload_keys,
+                        payload_keys_json = payload_keys_json.as_str(),
                         duration_ms,
                         error = %crate::observability::summarize_error(error),
                         "tool execution rejected"
                     );
                 }
             } else if warn_log_enabled {
+                let payload_keys_json = crate::observability::json_string_array(&payload_keys);
                 tracing::warn!(
                     target: "loong.tools",
                     requested_tool_name = %requested_tool_name,
                     canonical_tool_name = %canonical_name,
                     inner_tool_name = %inner_tool_name,
                     payload_kind,
-                    payload_keys = ?payload_keys,
+                    payload_keys_json = payload_keys_json.as_str(),
                     duration_ms,
                     error = %crate::observability::summarize_error(error),
                     "tool execution failed"
