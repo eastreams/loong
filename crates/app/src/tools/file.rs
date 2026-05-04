@@ -1146,6 +1146,7 @@ pub(super) fn execute_glob_search_tool_with_config(
                         pattern,
                         max_results,
                         true,
+                        true,
                         matches,
                     ));
                 }
@@ -1162,6 +1163,7 @@ pub(super) fn execute_glob_search_tool_with_config(
             pattern,
             max_results,
             false,
+            true,
             matches,
         ))
     }
@@ -1266,6 +1268,7 @@ pub(super) fn execute_content_search_tool_with_config(
                         query,
                         max_results,
                         true,
+                        false,
                         matches,
                     ));
                 }
@@ -1277,6 +1280,7 @@ pub(super) fn execute_content_search_tool_with_config(
             root,
             query,
             max_results,
+            false,
             false,
             matches,
         ))
@@ -1290,9 +1294,10 @@ fn search_outcome(
     needle: &str,
     max_results: usize,
     truncated: bool,
+    path_listing_mode: bool,
     matches: Vec<Value>,
 ) -> ToolCoreOutcome {
-    let continuation = glob_search_continuation_payload(tool_name.as_str(), &matches);
+    let continuation = glob_search_continuation_payload(path_listing_mode, &matches);
     let mut payload = json!({
         "adapter": "core-tools",
         "tool_name": tool_name,
@@ -1317,8 +1322,8 @@ fn search_outcome(
 }
 
 #[cfg(feature = "tool-file")]
-fn glob_search_continuation_payload(tool_name: &str, matches: &[Value]) -> Option<Value> {
-    if tool_name != "glob.search" {
+fn glob_search_continuation_payload(path_listing_mode: bool, matches: &[Value]) -> Option<Value> {
+    if !path_listing_mode {
         return None;
     }
 
