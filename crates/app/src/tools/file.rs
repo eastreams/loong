@@ -217,20 +217,21 @@ pub(super) fn execute_file_write_tool_with_config(
 
     #[cfg(feature = "tool-file")]
     {
+        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
         let payload = request
             .payload
             .as_object()
-            .ok_or_else(|| "file.write payload must be an object".to_owned())?;
+            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
         let target = payload
             .get("path")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| "file.write requires payload.path".to_owned())?;
+            .ok_or_else(|| format!("{tool_name} requires payload.path"))?;
         let content = payload
             .get("content")
             .and_then(Value::as_str)
-            .ok_or_else(|| "file.write requires payload.content".to_owned())?;
+            .ok_or_else(|| format!("{tool_name} requires payload.content"))?;
         let create_dirs = payload
             .get("create_dirs")
             .and_then(Value::as_bool)
@@ -258,7 +259,7 @@ pub(super) fn execute_file_write_tool_with_config(
         let path_is_symlink = symlink_metadata_is_symlink(&resolved);
         if path_is_symlink {
             return Err(format!(
-                "policy_denied: file.write refuses to open symlink {}",
+                "policy_denied: {tool_name} refuses to open symlink {}",
                 resolved.display()
             ));
         }
@@ -276,7 +277,7 @@ pub(super) fn execute_file_write_tool_with_config(
         if overwrite {
             write_file_atomically(&resolved, content)?;
         } else {
-            write_new_file_without_overwrite(&resolved, content)?;
+            write_new_file_without_overwrite(&resolved, content, tool_name.as_str())?;
         }
 
         let change_kind = if existed_before_write {
@@ -311,7 +312,11 @@ fn symlink_metadata_is_symlink(path: &Path) -> bool {
 }
 
 #[cfg(feature = "tool-file")]
-fn write_new_file_without_overwrite(path: &Path, content: &str) -> Result<(), String> {
+fn write_new_file_without_overwrite(
+    path: &Path,
+    content: &str,
+    tool_name: &str,
+) -> Result<(), String> {
     let mut options = fs::OpenOptions::new();
     options.write(true);
     options.create_new(true);
@@ -320,7 +325,7 @@ fn write_new_file_without_overwrite(path: &Path, content: &str) -> Result<(), St
         let error_kind = error.kind();
         if error_kind == std::io::ErrorKind::AlreadyExists {
             return format!(
-                "tool_preflight_repairable: file.write requires overwrite=true for existing file {}",
+                "tool_preflight_repairable: {tool_name} requires overwrite=true for existing file {}",
                 path.display()
             );
         }
@@ -379,6 +384,7 @@ struct LocatedExactTextEditBlock<'a> {
 fn payload_optional_edit_string_field<'a>(
     payload: &'a serde_json::Map<String, Value>,
     field_name: &str,
+    tool_name: &str,
 ) -> Result<Option<&'a str>, String> {
     let Some(value) = payload.get(field_name) else {
         return Ok(None);
@@ -386,7 +392,7 @@ fn payload_optional_edit_string_field<'a>(
 
     let string_value = value
         .as_str()
-        .ok_or_else(|| format!("file.edit payload.{field_name} must be a string"))?;
+        .ok_or_else(|| format!("{tool_name} payload.{field_name} must be a string"))?;
     Ok(Some(string_value))
 }
 
@@ -405,31 +411,36 @@ fn exact_edit_block_field<'a>(
 #[cfg(feature = "tool-file")]
 fn parse_exact_edit_blocks(
     payload: &serde_json::Map<String, Value>,
+    tool_name: &str,
 ) -> Result<Option<Vec<ExactTextEditBlock>>, String> {
     let Some(raw_blocks) = payload.get("edits") else {
         return Ok(None);
     };
     let blocks = raw_blocks
         .as_array()
-        .ok_or_else(|| "file.edit payload.edits must be an array".to_owned())?;
+        .ok_or_else(|| format!("{tool_name} payload.edits must be an array"))?;
     if blocks.is_empty() {
-        return Err("file.edit payload.edits must contain at least one edit block".to_owned());
+        return Err(format!(
+            "{tool_name} payload.edits must contain at least one edit block"
+        ));
     }
 
     let mut parsed_blocks = Vec::with_capacity(blocks.len());
     for (index, raw_block) in blocks.iter().enumerate() {
         let block = raw_block
             .as_object()
-            .ok_or_else(|| format!("file.edit payload.edits[{index}] must be an object"))?;
-        let old_text = exact_edit_block_field(block, "old_text", "oldText")
-            .ok_or_else(|| format!("file.edit payload.edits[{index}].old_text must be a string"))?;
+            .ok_or_else(|| format!("{tool_name} payload.edits[{index}] must be an object"))?;
+        let old_text = exact_edit_block_field(block, "old_text", "oldText").ok_or_else(|| {
+            format!("{tool_name} payload.edits[{index}].old_text must be a string")
+        })?;
         if old_text.is_empty() {
             return Err(format!(
                 "edit_failed: edits[{index}].old_text must not be empty"
             ));
         }
-        let new_text = exact_edit_block_field(block, "new_text", "newText")
-            .ok_or_else(|| format!("file.edit payload.edits[{index}].new_text must be a string"))?;
+        let new_text = exact_edit_block_field(block, "new_text", "newText").ok_or_else(|| {
+            format!("{tool_name} payload.edits[{index}].new_text must be a string")
+        })?;
         parsed_blocks.push(ExactTextEditBlock {
             old_text: old_text.to_owned(),
             new_text: new_text.to_owned(),
@@ -442,10 +453,11 @@ fn parse_exact_edit_blocks(
 #[cfg(feature = "tool-file")]
 fn parse_file_edit_request(
     payload: &serde_json::Map<String, Value>,
+    tool_name: &str,
 ) -> Result<FileEditRequest, String> {
-    let parsed_blocks = parse_exact_edit_blocks(payload)?;
-    let old_string = payload_optional_edit_string_field(payload, "old_string")?;
-    let new_string = payload_optional_edit_string_field(payload, "new_string")?;
+    let parsed_blocks = parse_exact_edit_blocks(payload, tool_name)?;
+    let old_string = payload_optional_edit_string_field(payload, "old_string", tool_name)?;
+    let new_string = payload_optional_edit_string_field(payload, "new_string", tool_name)?;
     let replace_all = payload
         .get("replace_all")
         .and_then(Value::as_bool)
@@ -453,10 +465,9 @@ fn parse_file_edit_request(
     let mixed_modes = parsed_blocks.is_some()
         && (old_string.is_some() || new_string.is_some() || payload.contains_key("replace_all"));
     if mixed_modes {
-        return Err(
-            "file.edit does not allow mixing `edits` with legacy `old_string` / `new_string` fields"
-                .to_owned(),
-        );
+        return Err(format!(
+            "{tool_name} does not allow mixing `edits` with legacy `old_string` / `new_string` fields"
+        ));
     }
 
     if let Some(blocks) = parsed_blocks {
@@ -464,13 +475,12 @@ fn parse_file_edit_request(
     }
 
     let Some(old_string) = old_string else {
-        return Err(
-            "file.edit requires payload.edits, or legacy payload.old_string and payload.new_string"
-                .to_owned(),
-        );
+        return Err(format!(
+            "{tool_name} requires payload.edits, or legacy payload.old_string and payload.new_string"
+        ));
     };
     let Some(new_string) = new_string else {
-        return Err("file.edit requires payload.new_string (string)".to_owned());
+        return Err(format!("{tool_name} requires payload.new_string (string)"));
     };
     if old_string.is_empty() {
         return Err("edit_failed: old_string must not be empty".to_owned());
@@ -586,18 +596,19 @@ pub(super) fn execute_file_edit_tool_with_config(
     }
     #[cfg(feature = "tool-file")]
     {
+        let tool_name = super::user_visible_tool_name(request.tool_name.as_str());
         let payload = request
             .payload
             .as_object()
-            .ok_or_else(|| "file.edit payload must be an object".to_owned())?;
+            .ok_or_else(|| format!("{tool_name} payload must be an object"))?;
 
         let path = payload
             .get("path")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| "file.edit requires payload.path (string)".to_owned())?;
-        let edit_request = parse_file_edit_request(payload)?;
+            .ok_or_else(|| format!("{tool_name} requires payload.path (string)"))?;
+        let edit_request = parse_file_edit_request(payload, tool_name.as_str())?;
 
         let resolved = resolve_safe_file_path_with_config(path, config)?;
         let content = fs::read_to_string(&resolved)
