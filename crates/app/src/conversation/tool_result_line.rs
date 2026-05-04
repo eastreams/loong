@@ -58,4 +58,8 @@ impl ToolResultLine {
     pub fn replace_payload_summary_str(&mut self, payload_summary: String) {
         self.envelope.payload_summary = payload_summary;
     }
+
+    pub fn envelope(&self) -> &ToolResultEnvelope {
+        &self.envelope
+    }
 }

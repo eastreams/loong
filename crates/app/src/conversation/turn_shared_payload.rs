@@ -1,7 +1,7 @@
 use serde::Serialize;
-use serde_json::Value;
 
-use super::super::turn_engine::{ToolResultEnvelope, TurnFailure, TurnResult};
+pub use super::super::tool_result_line::ToolResultLine;
+use super::super::turn_engine::{TurnFailure, TurnResult};
 use super::{
     parse_tool_result_continuation, parse_tool_result_followup_context, sanitize_reply_text,
 };
@@ -98,58 +98,6 @@ impl ToolDrivenFollowupMessageOwned {
 
     pub fn body(&self) -> &str {
         self.body.as_str()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolResultLine {
-    status_marker: String,
-    envelope: ToolResultEnvelope,
-}
-
-impl ToolResultLine {
-    pub fn new(status_marker: impl Into<String>, envelope: ToolResultEnvelope) -> Self {
-        Self {
-            status_marker: status_marker.into(),
-            envelope,
-        }
-    }
-
-    pub fn parse(line: &str) -> Option<Self> {
-        let trimmed = line.trim();
-        let (status_prefix, payload) = trimmed.split_once(' ')?;
-        let status_marker = status_prefix.strip_prefix('[')?.strip_suffix(']')?.trim();
-        if status_marker.is_empty() {
-            return None;
-        }
-        let envelope = serde_json::from_str::<ToolResultEnvelope>(payload).ok()?;
-        Some(Self::new(status_marker, envelope))
-    }
-
-    #[cfg(test)]
-    pub fn render(&self) -> Option<String> {
-        let payload = serde_json::to_string(&self.envelope).ok()?;
-        Some(format!("[{}] {payload}", self.status_marker))
-    }
-
-    pub fn tool_name(&self) -> &str {
-        self.envelope.tool.as_str()
-    }
-
-    pub fn payload_truncated(&self) -> bool {
-        self.envelope.payload_truncated
-    }
-
-    pub fn payload_summary_str(&self) -> &str {
-        self.envelope.payload_summary.as_str()
-    }
-
-    pub fn payload_summary_json(&self) -> Option<Value> {
-        serde_json::from_str(self.envelope.payload_summary.as_str()).ok()
-    }
-
-    pub fn envelope(&self) -> &ToolResultEnvelope {
-        &self.envelope
     }
 }
 
