@@ -7462,6 +7462,81 @@ async fn handle_turn_with_runtime_repairs_done_reply_that_still_requests_more_ev
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 4);
 }
 
+#[tokio::test]
+async fn handle_turn_with_runtime_rejects_done_reply_that_admits_missing_page_evidence() {
+    use crate::test_support::TurnTestHarness;
+
+    let harness = TurnTestHarness::new();
+    std::fs::create_dir_all(harness.temp_dir.join("docs")).expect("create docs dir");
+    std::fs::write(
+        harness.temp_dir.join("README.md"),
+        "Repository overview for evidence-gap continuation.",
+    )
+    .expect("write README fixture");
+    std::fs::write(
+        harness.temp_dir.join("ARCHITECTURE.md"),
+        "Architecture notes for evidence-gap continuation.",
+    )
+    .expect("write ARCHITECTURE fixture");
+    std::fs::write(
+        harness.temp_dir.join("docs/ROADMAP.md"),
+        "Roadmap notes for evidence-gap continuation.",
+    )
+    .expect("write ROADMAP fixture");
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "I will inspect the repo docs first.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "read",
+                    json!({
+                        "glob": "README.md|ARCHITECTURE.md|docs/ROADMAP.md",
+                        "root": ".",
+                        "max_results": 20
+                    }),
+                    "session-web-evidence-gap",
+                    "turn-web-evidence-gap-1",
+                    "call-read-evidence-gap-1",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "[followup_state:done]\nI could not reliably retrieve the specific repository evidence from the available tool results. I should not claim more specific contents without another read.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-web-evidence-gap",
+            "Summarize this repository and suggest the best next step.",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+        )
+        .await
+        .expect("web evidence-gap continuation turn should succeed");
+
+    assert_eq!(
+        reply,
+        "I couldn't continue because the required follow-up tool call was never issued. The turn stopped here instead of pretending the work completed."
+    );
+    assert_eq!(
+        *runtime
+            .completion_calls
+            .lock()
+            .expect("completion calls lock"),
+        0
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 3);
+}
+
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn default_runtime_build_context_includes_tool_discovery_delta_from_persisted_state() {

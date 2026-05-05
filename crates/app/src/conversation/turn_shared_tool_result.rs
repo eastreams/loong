@@ -138,6 +138,7 @@ impl ToolResultContinuation {
         let mentions_more_work = normalized.contains("still need")
             || normalized.contains("need one more")
             || normalized.contains("do not yet have usable")
+            || normalized.contains("could not reliably retrieve")
             || normalized.contains("not enough evidence")
             || normalized.contains("gather enough evidence")
             || normalized.contains("finish the summary")
@@ -148,7 +149,10 @@ impl ToolResultContinuation {
             || normalized.contains("another read")
             || normalized.contains("another fetch")
             || normalized.contains("another inspect")
-            || normalized.contains("inspection step");
+            || normalized.contains("inspection step")
+            || normalized.contains("without another read")
+            || normalized.contains("without a successful fetch")
+            || normalized.contains("should not claim more specific");
 
         let matches_structured_continuation_context = match self.kind() {
             ToolResultContinuationKind::PathListing => {
