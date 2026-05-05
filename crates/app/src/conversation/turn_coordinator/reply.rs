@@ -1,7 +1,4 @@
 use super::*;
-use crate::conversation::turn_shared::{
-    parse_tool_result_continuation, parse_tool_result_followup_context,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MissingToolCallExpectation {
@@ -75,12 +72,11 @@ impl ToolResultContinuationExpectation {
         }
 
         match payload {
-            ToolDrivenFollowupPayload::ToolResult { text }
+            ToolDrivenFollowupPayload::ToolResult { .. }
                 if payload.has_nonterminal_tool_result_continuation() =>
             {
-                let continuation_state = parse_tool_result_followup_context(text.as_str())
-                    .as_ref()
-                    .and_then(|context| parse_tool_result_continuation(&context.payload_json))
+                let continuation_state = payload
+                    .tool_result_continuation()
                     .map(|continuation| {
                         match (
                             continuation.state.as_str(),
@@ -94,7 +90,6 @@ impl ToolResultContinuationExpectation {
                         }
                     })
                     .unwrap_or(ToolResultContinuationState::Other);
-
                 Some(Self {
                     after_repair: false,
                     continuation_state,

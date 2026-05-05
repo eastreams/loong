@@ -3,7 +3,8 @@ use serde::Serialize;
 pub use super::super::tool_result_line::ToolResultLine;
 use super::super::turn_engine::{TurnFailure, TurnResult};
 use super::{
-    parse_tool_result_continuation, parse_tool_result_followup_context, sanitize_reply_text,
+    ToolResultContinuation, parse_tool_result_continuation, parse_tool_result_followup_context,
+    sanitize_reply_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,15 +153,19 @@ impl ToolDrivenFollowupPayload {
     }
 
     pub fn has_nonterminal_tool_result_continuation(&self) -> bool {
+        self.tool_result_continuation()
+            .is_some_and(|continuation| !continuation.is_terminal)
+    }
+
+    pub fn tool_result_continuation(&self) -> Option<ToolResultContinuation> {
         match self {
             Self::ToolResult { text } => {
                 let tool_result_context = parse_tool_result_followup_context(text.as_str());
-                let continuation = tool_result_context
+                tool_result_context
                     .as_ref()
-                    .and_then(|context| parse_tool_result_continuation(&context.payload_json));
-                continuation.is_some_and(|continuation| !continuation.is_terminal)
+                    .and_then(|context| parse_tool_result_continuation(&context.payload_json))
             }
-            Self::ToolFailure { .. } | Self::DiscoveryRecovery { .. } => false,
+            Self::ToolFailure { .. } | Self::DiscoveryRecovery { .. } => None,
         }
     }
 }
