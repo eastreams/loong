@@ -160,7 +160,6 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "http.request" => {
             "url:string,method?:string,headers?:object,body?:string,content_type?:string,max_bytes?:integer"
         }
-        "file.read" => "path:string,offset?:integer,limit?:integer,max_bytes?:integer",
         "glob.search" => {
             "pattern:string,root?:string,max_results?:integer,include_directories?:boolean"
         }
@@ -214,9 +213,6 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
     match name {
         "http.request" => {
             "send a bounded http request, inspect status and headers, fetch text or binary responses"
-        }
-        "file.read" => {
-            "read a workspace file, inspect file contents, or page through a file window"
         }
         "glob.search" => {
             "find workspace files by glob pattern, list files in a directory, browse folder contents, search repo paths, match files under a root"
@@ -593,12 +589,6 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("allowed_domains", "array"),
             ("blocked_domains", "array"),
         ],
-        "file.read" => &[
-            ("path", "string"),
-            ("offset", "integer"),
-            ("limit", "integer"),
-            ("max_bytes", "integer"),
-        ],
         "glob.search" => &[
             ("pattern", "string"),
             ("root", "string"),
@@ -771,7 +761,6 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "browser.extract" => &["session_id"],
         "browser.click" => &["session_id", "link_id"],
         "http.request" => &["url"],
-        "file.read" => &["path"],
         "glob.search" => &["pattern"],
         "content.search" => &["query"],
         "memory_search" => &["query"],
@@ -865,7 +854,6 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "browser.open" | "browser.extract" => &["browser", "page", "read"],
         "browser.click" => &["browser", "page", "navigate"],
         "http.request" => &["http", "request", "web", "network", "external"],
-        "file.read" => &["file", "read", "filesystem", "repo"],
         "glob.search" => &[
             "file",
             "search",
