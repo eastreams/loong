@@ -279,7 +279,7 @@ fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
     use std::collections::BTreeMap;
 
     let mut per_tool = BTreeMap::new();
-    per_tool.insert("file.read".to_owned(), 30u64);
+    per_tool.insert("read".to_owned(), 30u64);
     per_tool.insert("write".to_owned(), 45u64);
     per_tool.insert("edit".to_owned(), 15u64);
 
@@ -340,7 +340,7 @@ fn tool_without_timeout_config_completes_normally() {
     let config = test_tool_runtime_config(root);
 
     let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
+        tool_name: "read".to_owned(),
         payload: json!({
             "path": "README.md"
         }),
@@ -365,13 +365,13 @@ fn framework_timeout_returns_without_waiting_for_worker_completion() {
             Ok::<(), String>(())
         },
         1,
-        "file.read",
+        "read",
     )
     .expect_err("timeout should be reported");
 
     let elapsed = start.elapsed();
 
-    assert_eq!(error, "tool_execution_timeout: file.read exceeded 1s");
+    assert_eq!(error, "tool_execution_timeout: read exceeded 1s");
     assert!(
         elapsed < Duration::from_secs(2),
         "timeout helper should return promptly, got {elapsed:?}"
@@ -392,7 +392,7 @@ async fn framework_timeout_supports_async_core_tool_calls() {
 
     let adapter = MvpToolAdapter::with_config(config.into_inner());
     let request = ToolCoreRequest {
-        tool_name: "file.read".to_owned(),
+        tool_name: "read".to_owned(),
         payload: json!({
             "path": "README.md"
         }),

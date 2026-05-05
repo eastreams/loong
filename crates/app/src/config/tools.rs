@@ -1686,14 +1686,14 @@ mod tests {
         config
             .tool_execution
             .per_tool_timeout
-            .insert("file.read".to_owned(), 0);
+            .insert("read".to_owned(), 0);
 
         let issues = config.validate();
 
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.field_path == "tools.tool_execution.per_tool_timeout.file.read"),
+                .any(|issue| issue.field_path == "tools.tool_execution.per_tool_timeout.read"),
             "expected per-tool timeout validation issue, got {issues:?}"
         );
     }
@@ -1727,7 +1727,7 @@ default_mode = "{raw_mode}"
         let raw = r#"
 [tools.tool_execution]
 default_timeout_seconds = 12
-per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
+per_tool_timeout = { "read" = 3, "web.search" = 9 }
 "#;
         let parsed = toml::from_str::<crate::config::LoongConfig>(raw).expect("parse tool config");
 
@@ -1736,11 +1736,7 @@ per_tool_timeout = { "file.read" = 3, "web.search" = 9 }
             Some(12)
         );
         assert_eq!(
-            parsed
-                .tools
-                .tool_execution
-                .per_tool_timeout
-                .get("file.read"),
+            parsed.tools.tool_execution.per_tool_timeout.get("read"),
             Some(&3)
         );
         assert_eq!(
