@@ -99,7 +99,7 @@ pub use runtime_support::{
     ProviderTurnRequestAction, decide_provider_turn_request_action,
     request_completion_with_raw_fallback, request_completion_with_raw_fallback_detailed,
 };
-use tool_result::{parse_tool_result_continuation, parse_tool_result_followup_context};
+pub(crate) use tool_result::{parse_tool_result_continuation, parse_tool_result_followup_context};
 pub use tool_result::{reduce_followup_payload_for_model, tool_result_contains_truncation_signal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

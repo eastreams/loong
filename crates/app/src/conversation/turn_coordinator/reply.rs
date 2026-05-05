@@ -1,4 +1,7 @@
 use super::*;
+use crate::conversation::turn_shared::{
+    parse_tool_result_continuation, parse_tool_result_followup_context,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MissingToolCallExpectation {
@@ -50,9 +53,16 @@ impl MissingToolCallExpectation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolResultContinuationExpectation {
-    Initial,
-    AfterRepair,
+struct ToolResultContinuationExpectation {
+    after_repair: bool,
+    continuation_state: ToolResultContinuationState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolResultContinuationState {
+    PathListing,
+    InsufficientPageEvidence,
+    Other,
 }
 
 impl ToolResultContinuationExpectation {
@@ -60,10 +70,48 @@ impl ToolResultContinuationExpectation {
         payload: &ToolDrivenFollowupPayload,
         lane_execution: &ProviderTurnLaneExecution,
     ) -> Option<Self> {
-        ((payload.has_nonterminal_tool_result_continuation()
-            || lane_execution.textual_tool_parse_followup_turn)
-            && lane_execution.supports_provider_turn_followup)
-            .then_some(Self::Initial)
+        if !lane_execution.supports_provider_turn_followup {
+            return None;
+        }
+
+        match payload {
+            ToolDrivenFollowupPayload::ToolResult { text }
+                if payload.has_nonterminal_tool_result_continuation() =>
+            {
+                let continuation_state = parse_tool_result_followup_context(text.as_str())
+                    .as_ref()
+                    .and_then(|context| parse_tool_result_continuation(&context.payload_json))
+                    .map(|continuation| {
+                        match (
+                            continuation.state.as_str(),
+                            continuation.recommended_tool.as_deref(),
+                        ) {
+                            ("path_listing", _) => ToolResultContinuationState::PathListing,
+                            ("insufficient_page_evidence", Some("web" | "browse")) => {
+                                ToolResultContinuationState::InsufficientPageEvidence
+                            }
+                            _ => ToolResultContinuationState::Other,
+                        }
+                    })
+                    .unwrap_or(ToolResultContinuationState::Other);
+
+                Some(Self {
+                    after_repair: false,
+                    continuation_state,
+                })
+            }
+            ToolDrivenFollowupPayload::ToolResult { .. }
+                if lane_execution.textual_tool_parse_followup_turn =>
+            {
+                Some(Self {
+                    after_repair: false,
+                    continuation_state: ToolResultContinuationState::Other,
+                })
+            }
+            ToolDrivenFollowupPayload::ToolFailure { .. }
+            | ToolDrivenFollowupPayload::ToolResult { .. }
+            | ToolDrivenFollowupPayload::DiscoveryRecovery { .. } => None,
+        }
     }
 
     fn contract_mode(self) -> ToolDrivenFollowupContractMode {
@@ -71,11 +119,14 @@ impl ToolResultContinuationExpectation {
     }
 
     fn after_attempt(self) -> Self {
-        Self::AfterRepair
+        Self {
+            after_repair: true,
+            ..self
+        }
     }
 
     fn after_attempted(self) -> bool {
-        matches!(self, Self::AfterRepair)
+        self.after_repair
     }
 }
 
@@ -208,7 +259,10 @@ fn evaluate_tool_result_continuation_expectation(
         }
         Some(ToolDrivenContinuationState::Done) => {
             if parsed_reply.reply.is_empty()
-                || reply_requests_more_evidence(parsed_reply.reply.as_str())
+                || tool_result_reply_requests_more_evidence(
+                    expectation.continuation_state,
+                    parsed_reply.reply.as_str(),
+                )
             {
                 if expectation.after_attempted() {
                     ProviderFollowupExpectationDecision::ForceBlockedReply
@@ -240,7 +294,10 @@ fn evaluate_tool_result_continuation_expectation(
     }
 }
 
-fn reply_requests_more_evidence(reply: &str) -> bool {
+fn tool_result_reply_requests_more_evidence(
+    continuation_state: ToolResultContinuationState,
+    reply: &str,
+) -> bool {
     let normalized = reply.trim().to_ascii_lowercase();
     if normalized.is_empty() {
         return false;
@@ -259,12 +316,24 @@ fn reply_requests_more_evidence(reply: &str) -> bool {
         || normalized.contains("another read")
         || normalized.contains("another fetch")
         || normalized.contains("another inspect")
-        || normalized.contains("inspection step")
-        || normalized.contains("narrower browser extract")
-        || normalized.contains("narrower fetch")
-        || normalized.contains("shell-heavy navigation");
+        || normalized.contains("inspection step");
 
-    mentions_more_work && requests_permission_like_followup
+    let matches_structured_continuation_context = match continuation_state {
+        ToolResultContinuationState::PathListing => {
+            normalized.contains("ground the summary")
+                || normalized.contains("top-level docs")
+                || normalized.contains("actual docs")
+        }
+        ToolResultContinuationState::InsufficientPageEvidence => {
+            normalized.contains("narrower browser extract")
+                || normalized.contains("narrower fetch")
+                || normalized.contains("shell-heavy navigation")
+        }
+        ToolResultContinuationState::Other => false,
+    };
+
+    mentions_more_work
+        && (requests_permission_like_followup || matches_structured_continuation_context)
 }
 
 fn evaluate_pending_provider_followup(

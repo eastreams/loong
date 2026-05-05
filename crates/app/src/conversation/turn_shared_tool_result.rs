@@ -87,11 +87,11 @@ fn parse_tool_result_envelope(line: &str) -> Option<Value> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ToolResultFollowupContext {
-    pub(super) payload_json: Value,
+pub(crate) struct ToolResultFollowupContext {
+    pub(crate) payload_json: Value,
 }
 
-pub(super) fn parse_tool_result_followup_context(
+pub(crate) fn parse_tool_result_followup_context(
     tool_result_text: &str,
 ) -> Option<ToolResultFollowupContext> {
     tool_result_text.lines().find_map(|line| {
@@ -103,15 +103,15 @@ pub(super) fn parse_tool_result_followup_context(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ToolResultContinuation {
-    pub(super) state: String,
-    pub(super) is_terminal: bool,
-    pub(super) recommended_tool: Option<String>,
-    pub(super) recommended_payload: Option<Value>,
-    pub(super) note: Option<String>,
+pub(crate) struct ToolResultContinuation {
+    pub(crate) state: String,
+    pub(crate) is_terminal: bool,
+    pub(crate) recommended_tool: Option<String>,
+    pub(crate) recommended_payload: Option<Value>,
+    pub(crate) note: Option<String>,
 }
 
-pub(super) fn parse_tool_result_continuation(
+pub(crate) fn parse_tool_result_continuation(
     payload_json: &Value,
 ) -> Option<ToolResultContinuation> {
     let continuation_value = payload_json.get("continuation")?;
