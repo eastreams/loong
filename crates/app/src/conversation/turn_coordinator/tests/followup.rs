@@ -259,3 +259,61 @@ fn build_turn_reply_followup_messages_reduces_shell_exec_payload_summary() {
         "expected compact stderr preview, got: {summary:?}"
     );
 }
+
+#[test]
+fn build_turn_reply_followup_messages_only_auto_adds_contract_for_retryable_failures() {
+    let failure_messages = build_turn_reply_followup_messages_with_warning(
+        &[serde_json::json!({
+            "role": "system",
+            "content": "sys"
+        })],
+        "preface",
+        ToolDrivenFollowupPayload::ToolFailure {
+            reason: "missing_tool_call_followup: emit the next tool call now".to_owned(),
+            retryable: true,
+        },
+        None,
+        "summarize the repository",
+        None,
+    );
+    let failure_prompt = failure_messages
+        .last()
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .expect("retryable failure prompt should exist");
+    assert!(
+        failure_prompt.contains("Structured continuation contract:"),
+        "retryable failure followup should carry a continuation contract: {failure_prompt:?}"
+    );
+    assert!(
+        failure_prompt.contains("retryable"),
+        "retryable failure followup should keep retry guidance: {failure_prompt:?}"
+    );
+
+    let tool_result_messages = build_turn_reply_followup_messages_with_warning(
+        &[serde_json::json!({
+            "role": "system",
+            "content": "sys"
+        })],
+        "preface",
+        ToolDrivenFollowupPayload::ToolResult {
+            text: r#"[ok] {"status":"ok","tool":"web","tool_call_id":"call-web","payload_summary":"{\"continuation\":{\"state\":\"insufficient_page_evidence\",\"is_terminal\":false,\"recommended_tool\":\"web\",\"recommended_payload\":{\"url\":\"https://example.com\"}}}","payload_chars":128,"payload_truncated":false}"#.to_owned(),
+        },
+        None,
+        "summarize the page",
+        None,
+    );
+    let tool_result_prompt = tool_result_messages
+        .last()
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .expect("tool result prompt should exist");
+    assert!(
+        !tool_result_prompt.contains("Structured continuation contract:"),
+        "tool-result continuation contract should stay lane-owned, not auto-added by the generic followup builder: {tool_result_prompt:?}"
+    );
+    assert!(
+        tool_result_prompt.contains("Continuation guidance:"),
+        "tool-result followup should still surface continuation guidance from the payload: {tool_result_prompt:?}"
+    );
+}
