@@ -259,7 +259,10 @@ fn reply_requests_more_evidence(reply: &str) -> bool {
         || normalized.contains("another read")
         || normalized.contains("another fetch")
         || normalized.contains("another inspect")
-        || normalized.contains("inspection step");
+        || normalized.contains("inspection step")
+        || normalized.contains("narrower browser extract")
+        || normalized.contains("narrower fetch")
+        || normalized.contains("shell-heavy navigation");
 
     mentions_more_work && requests_permission_like_followup
 }

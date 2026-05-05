@@ -1364,6 +1364,127 @@ fn ask_cli_web_summary_uses_page_metadata_and_hides_tool_markup() {
 }
 
 #[test]
+fn ask_cli_rejects_pseudo_done_browser_reply_that_still_requests_more_evidence() {
+    let fixture = LatestSelectorCliFixture::new("ask-browser-pseudo-done-followup-e2e");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind pseudo-done browser listener");
+    let address = listener
+        .local_addr()
+        .expect("pseudo-done browser local address");
+    let browser_join = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        while requests.is_empty() {
+            let (mut stream, _) = listener
+                .accept()
+                .expect("accept pseudo-done browser request");
+            let request = read_provider_request(&mut stream);
+            let body = r#"<!doctype html>
+<html>
+  <head>
+    <title>Browser Shell Heavy Fixture</title>
+    <meta name="description" content="Short profile summary for the target page.">
+  </head>
+  <body>
+    <header>Marketing Nav Pricing Docs</header>
+    <nav>Overview Repositories Projects Stars</nav>
+    <footer>Footer policies and links</footer>
+  </body>
+</html>"#;
+            let content_type = "text/html; charset=utf-8";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write pseudo-done browser fixture response");
+            requests.push(request);
+        }
+        requests
+    });
+    let browser_base_url = format!("http://{address}");
+    let pseudo_done_reply = "[followup_state:done]\nI still need a narrower browser extract because the page looks like shell-heavy navigation.";
+    let blocked_reply = "I couldn't continue because the required follow-up tool call was never issued. The turn stopped here instead of pretending the work completed.";
+    let provider_server =
+        DynamicMockProviderServer::spawn(2, move |request_index, request| match request_index {
+            0 => {
+                assert_provider_request_contains_text(
+                    request,
+                    "Open the browser fixture",
+                    "initial pseudo-done browser provider request",
+                );
+                MockProviderResponse::ok_json(openai_chat_tool_call_body(
+                    "I will open the fixture page first.",
+                    "call-browser-open-pseudo-done",
+                    "browser",
+                    json!({
+                        "url": browser_base_url,
+                    }),
+                ))
+            }
+            1 => {
+                assert_provider_request_contains_text(
+                    request,
+                    "insufficient_page_evidence",
+                    "pseudo-done browser follow-up request should include continuation state",
+                );
+                MockProviderResponse::ok_json(openai_chat_final_body(pseudo_done_reply))
+            }
+            _ => MockProviderResponse::unexpected_extra_request(),
+        });
+    let provider_base_url = provider_server.base_url().to_owned();
+    fixture.write_config_with(|config| {
+        config.provider.kind = ProviderKind::Openai;
+        config.provider.base_url = provider_base_url;
+        config.provider.model = "test-model".to_owned();
+        config.provider.wire_api = ProviderWireApi::ChatCompletions;
+        config.provider.api_key = Some(SecretRef::Inline("test-provider-key".to_owned()));
+        config.tools.browser.enabled = true;
+        config.tools.browser.max_sessions = 4;
+        config.tools.web.allow_private_hosts = true;
+    });
+
+    provider_server.arm();
+    let output = fixture.run_process(
+        &[
+            "ask",
+            "--message",
+            "Open the browser fixture and summarize what the page says without asking for confirmation.",
+        ],
+        None,
+    );
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+    let provider_requests = provider_server.finish(&stdout, &stderr);
+    let browser_requests = browser_join
+        .join()
+        .expect("join pseudo-done browser fixture");
+
+    assert!(
+        output.status.success(),
+        "ask pseudo-done browser continuation e2e should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains(blocked_reply),
+        "stdout should contain the blocked reply instead of accepting pseudo-done completion: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains(pseudo_done_reply),
+        "stdout should not stop at the pseudo-done browser reply: {stdout:?}"
+    );
+    assert_eq!(
+        provider_requests.len(),
+        2,
+        "ask should stop instead of accepting the pseudo-done browser reply: {provider_requests:#?}"
+    );
+    assert_eq!(
+        browser_requests.len(),
+        1,
+        "pseudo-done browser fixture should only receive the initial open before runtime blocks: {browser_requests:#?}"
+    );
+}
+
+#[test]
 fn ask_cli_web_summary_continues_after_shell_heavy_page_without_confirmation() {
     let fixture = LatestSelectorCliFixture::new("ask-web-summary-shell-heavy-followup-e2e");
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind shell-heavy web summary listener");
