@@ -2312,6 +2312,9 @@ fn current_control_plane_unix_timestamp() -> i64 {
 #[cfg(feature = "memory-sqlite")]
 fn control_plane_requested_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
     control_plane_tool_ids(tool_policy_payload, "requested_tool_ids")
+        .into_iter()
+        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
+        .collect()
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2332,6 +2335,9 @@ fn control_plane_visible_requested_tool_ids(tool_policy_payload: &Value) -> Vec<
 #[cfg(feature = "memory-sqlite")]
 fn control_plane_effective_tool_ids(tool_policy_payload: &Value) -> Vec<String> {
     control_plane_tool_ids(tool_policy_payload, "effective_tool_ids")
+        .into_iter()
+        .map(|tool_id| crate::tools::model_visible_tool_name(tool_id.as_str()))
+        .collect()
 }
 
 #[cfg(feature = "memory-sqlite")]

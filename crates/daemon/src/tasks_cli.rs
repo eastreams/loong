@@ -2189,8 +2189,8 @@ mod tests {
         });
         let tool_policy = if tool_narrowing_active {
             json!({
-                "base_tool_ids": ["file.read", "web.fetch"],
-                "effective_tool_ids": ["file.read"],
+                "base_tool_ids": ["read", "web.fetch"],
+                "effective_tool_ids": ["read"],
                 "effective_runtime_narrowing": {
                     "web_fetch": {
                         "allowed_domains": ["docs.example.com"],
@@ -2199,8 +2199,8 @@ mod tests {
             })
         } else {
             json!({
-                "base_tool_ids": ["file.read"],
-                "effective_tool_ids": ["file.read"],
+                "base_tool_ids": ["read"],
+                "effective_tool_ids": ["read"],
                 "effective_runtime_narrowing": Value::Null,
             })
         };
