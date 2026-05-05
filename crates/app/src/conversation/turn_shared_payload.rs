@@ -146,6 +146,13 @@ impl ToolDrivenFollowupPayload {
     pub fn requests_runtime_followup_chain(&self) -> bool {
         match self {
             Self::DiscoveryRecovery { .. } => true,
+            Self::ToolResult { .. } => self.has_nonterminal_tool_result_continuation(),
+            Self::ToolFailure { .. } => false,
+        }
+    }
+
+    pub fn has_nonterminal_tool_result_continuation(&self) -> bool {
+        match self {
             Self::ToolResult { text } => {
                 let tool_result_context = parse_tool_result_followup_context(text.as_str());
                 let continuation = tool_result_context
@@ -153,7 +160,7 @@ impl ToolDrivenFollowupPayload {
                     .and_then(|context| parse_tool_result_continuation(&context.payload_json));
                 continuation.is_some_and(|continuation| !continuation.is_terminal)
             }
-            Self::ToolFailure { .. } => false,
+            Self::ToolFailure { .. } | Self::DiscoveryRecovery { .. } => false,
         }
     }
 }

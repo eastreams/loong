@@ -7228,7 +7228,7 @@ async fn handle_turn_with_runtime_nonterminal_continuation_requests_followup_pro
 
     assert_eq!(
         reply,
-        "The delegated work is still running, so I should not report completion yet."
+        "I couldn't continue because the required follow-up tool call was never issued. The turn stopped here instead of pretending the work completed."
     );
     assert_eq!(
         *runtime

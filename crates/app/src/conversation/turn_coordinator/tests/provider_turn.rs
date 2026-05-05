@@ -452,7 +452,6 @@ fn provider_continuation_test_continue_phase_with_lane(
             provider_usage: None,
             had_tool_intents,
             provider_originated_tool_intents: true,
-            textual_tool_parse_followup_turn: false,
             tool_request_summary: None,
             discovery_search_turn: false,
             search_tool_intents: 0,
@@ -645,6 +644,110 @@ async fn provider_continuation_uses_provider_turn_followup_for_nonterminal_tool_
     assert_eq!(request_turn_messages.len(), 2);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_continuation_reprompts_when_nonterminal_tool_result_is_followed_by_plaintext_only()
+ {
+    let config = LoongConfig::default();
+    let user_input = "Open the page and keep going until you can summarize the main content.";
+    let preparation = provider_continuation_test_preparation(&config, user_input);
+    let tool_result_text = format!(
+        "[ok] {}",
+        serde_json::json!({
+            "status": "ok",
+            "tool": "browser.open",
+            "tool_call_id": "call-browser-open",
+            "payload_summary": serde_json::json!({
+                "session_id": "browser-1",
+                "title": "Example Domain",
+                "truncated": true,
+                "continuation": {
+                    "state": "truncated_page",
+                    "is_terminal": false,
+                    "recommended_tool": "browse",
+                    "recommended_payload": {
+                        "session_id": "browser-1",
+                        "mode": "page_text"
+                    }
+                }
+            })
+            .to_string(),
+            "payload_chars": 64,
+            "payload_truncated": false
+        })
+    );
+    let continue_phase = provider_continuation_test_continue_phase_with_lane(
+        &config,
+        "Opened the page.".to_owned(),
+        true,
+        true,
+        false,
+        TurnResult::FinalText(tool_result_text),
+    );
+    let runtime = MissingToolContinuationRuntime {
+        queued_turns: StdMutex::new(vec![
+            ProviderTurn {
+                assistant_text: "I think that's enough.".to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            },
+            ProviderTurn {
+                assistant_text: "Extracting the page text.".to_owned(),
+                tool_intents: vec![provider_continuation_test_intent(
+                    "session-browser",
+                    "turn-browse-extract",
+                    "call-browse-extract",
+                    "browse",
+                    json!({
+                        "session_id": "browser-1",
+                        "mode": "page_text"
+                    }),
+                )],
+                raw_meta: Value::Null,
+            },
+            ProviderTurn {
+                assistant_text: "Example Domain is a reserved documentation example page."
+                    .to_owned(),
+                tool_intents: Vec::new(),
+                raw_meta: Value::Null,
+            },
+        ]),
+        request_turn_messages: StdMutex::new(Vec::new()),
+    };
+    let turn_loop_policy = ProviderTurnLoopPolicy::from_config(&config);
+    let mut turn_loop_state = ProviderTurnLoopState::default();
+
+    let resolved = resolve_provider_turn_reply(
+        &runtime,
+        &config,
+        "session-browser",
+        &preparation,
+        &continue_phase,
+        user_input,
+        &turn_loop_policy,
+        &mut turn_loop_state,
+        4,
+        ConversationRuntimeBinding::advisory_only(),
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        resolved.reply_text(),
+        Some("Example Domain is a reserved documentation example page.")
+    );
+    let request_turn_messages = runtime
+        .request_turn_messages
+        .lock()
+        .expect("request-turn messages lock should not be poisoned");
+    assert_eq!(
+        request_turn_messages.len(),
+        3,
+        "runtime should force additional provider rounds instead of accepting plaintext-only completion"
+    );
+}
+
 #[test]
 fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape() {
     let config = LoongConfig::default();
@@ -665,7 +768,6 @@ fn provider_turn_continue_phase_checkpoint_captures_continue_branch_kernel_shape
             provider_usage: None,
             had_tool_intents: true,
             provider_originated_tool_intents: true,
-            textual_tool_parse_followup_turn: false,
             tool_request_summary: None,
             discovery_search_turn: false,
             search_tool_intents: 0,
@@ -891,7 +993,6 @@ fn provider_turn_continue_phase_checkpoint_keeps_direct_reply_without_followup()
             provider_usage: None,
             had_tool_intents: false,
             provider_originated_tool_intents: false,
-            textual_tool_parse_followup_turn: false,
             tool_request_summary: None,
             discovery_search_turn: false,
             search_tool_intents: 0,

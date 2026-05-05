@@ -25,7 +25,7 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     let malformed_parse_followup_turn =
         provider_turn_has_malformed_parse_followup_signal(&turn.raw_meta);
     let assistant_preface = turn.assistant_text.clone();
-    let textual_tool_parse_followup_turn = provider_turn_has_textual_tool_parse_followup_signal(
+    let textual_tool_parse_followup_signal = provider_turn_has_textual_tool_parse_followup_signal(
         &turn.raw_meta,
         had_tool_intents,
         assistant_preface.as_str(),
@@ -45,7 +45,6 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 provider_usage: provider_turn_usage(turn),
                 had_tool_intents,
                 provider_originated_tool_intents,
-                textual_tool_parse_followup_turn,
                 tool_request_summary,
                 discovery_search_turn,
                 search_tool_intents,
@@ -188,14 +187,13 @@ pub(super) async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         || recovery_followup_turn
         || malformed_parse_followup_turn
         || runtime_followup_turn
-        || textual_tool_parse_followup_turn;
+        || textual_tool_parse_followup_signal;
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
         provider_usage: provider_turn_usage(turn),
         had_tool_intents,
         provider_originated_tool_intents,
-        textual_tool_parse_followup_turn,
         tool_request_summary,
         discovery_search_turn,
         search_tool_intents,
