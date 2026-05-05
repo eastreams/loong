@@ -1,4 +1,5 @@
 use super::*;
+use crate::conversation::turn_shared::ToolResultContinuationKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MissingToolCallExpectation {
@@ -52,14 +53,7 @@ impl MissingToolCallExpectation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ToolResultContinuationExpectation {
     after_repair: bool,
-    continuation_state: ToolResultContinuationState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolResultContinuationState {
-    PathListing,
-    InsufficientPageEvidence,
-    Other,
+    continuation_state: ToolResultContinuationKind,
 }
 
 impl ToolResultContinuationExpectation {
@@ -76,20 +70,8 @@ impl ToolResultContinuationExpectation {
                 if payload.has_nonterminal_tool_result_continuation() =>
             {
                 let continuation_state = payload
-                    .tool_result_continuation()
-                    .map(|continuation| {
-                        match (
-                            continuation.state.as_str(),
-                            continuation.recommended_tool.as_deref(),
-                        ) {
-                            ("path_listing", _) => ToolResultContinuationState::PathListing,
-                            ("insufficient_page_evidence", Some("web" | "browse")) => {
-                                ToolResultContinuationState::InsufficientPageEvidence
-                            }
-                            _ => ToolResultContinuationState::Other,
-                        }
-                    })
-                    .unwrap_or(ToolResultContinuationState::Other);
+                    .tool_result_continuation_kind()
+                    .unwrap_or(ToolResultContinuationKind::Other);
                 Some(Self {
                     after_repair: false,
                     continuation_state,
@@ -100,7 +82,7 @@ impl ToolResultContinuationExpectation {
             {
                 Some(Self {
                     after_repair: false,
-                    continuation_state: ToolResultContinuationState::Other,
+                    continuation_state: ToolResultContinuationKind::Other,
                 })
             }
             ToolDrivenFollowupPayload::ToolFailure { .. }
@@ -290,7 +272,7 @@ fn evaluate_tool_result_continuation_expectation(
 }
 
 fn tool_result_reply_requests_more_evidence(
-    continuation_state: ToolResultContinuationState,
+    continuation_state: ToolResultContinuationKind,
     reply: &str,
 ) -> bool {
     let normalized = reply.trim().to_ascii_lowercase();
@@ -314,17 +296,17 @@ fn tool_result_reply_requests_more_evidence(
         || normalized.contains("inspection step");
 
     let matches_structured_continuation_context = match continuation_state {
-        ToolResultContinuationState::PathListing => {
+        ToolResultContinuationKind::PathListing => {
             normalized.contains("ground the summary")
                 || normalized.contains("top-level docs")
                 || normalized.contains("actual docs")
         }
-        ToolResultContinuationState::InsufficientPageEvidence => {
+        ToolResultContinuationKind::InsufficientPageEvidence => {
             normalized.contains("narrower browser extract")
                 || normalized.contains("narrower fetch")
                 || normalized.contains("shell-heavy navigation")
         }
-        ToolResultContinuationState::Other => false,
+        ToolResultContinuationKind::Other => false,
     };
 
     mentions_more_work

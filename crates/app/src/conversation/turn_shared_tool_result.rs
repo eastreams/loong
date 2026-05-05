@@ -111,6 +111,25 @@ pub(crate) struct ToolResultContinuation {
     pub(crate) note: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolResultContinuationKind {
+    PathListing,
+    InsufficientPageEvidence,
+    Other,
+}
+
+impl ToolResultContinuation {
+    pub(crate) fn kind(&self) -> ToolResultContinuationKind {
+        match (self.state.as_str(), self.recommended_tool.as_deref()) {
+            ("path_listing", _) => ToolResultContinuationKind::PathListing,
+            ("insufficient_page_evidence", Some("web" | "browse")) => {
+                ToolResultContinuationKind::InsufficientPageEvidence
+            }
+            _ => ToolResultContinuationKind::Other,
+        }
+    }
+}
+
 pub(crate) fn parse_tool_result_continuation(
     payload_json: &Value,
 ) -> Option<ToolResultContinuation> {

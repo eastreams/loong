@@ -3,8 +3,8 @@ use serde::Serialize;
 pub use super::super::tool_result_line::ToolResultLine;
 use super::super::turn_engine::{TurnFailure, TurnResult};
 use super::{
-    ToolResultContinuation, parse_tool_result_continuation, parse_tool_result_followup_context,
-    sanitize_reply_text,
+    ToolResultContinuation, ToolResultContinuationKind, parse_tool_result_continuation,
+    parse_tool_result_followup_context, sanitize_reply_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +167,11 @@ impl ToolDrivenFollowupPayload {
             }
             Self::ToolFailure { .. } | Self::DiscoveryRecovery { .. } => None,
         }
+    }
+
+    pub fn tool_result_continuation_kind(&self) -> Option<ToolResultContinuationKind> {
+        self.tool_result_continuation()
+            .map(|continuation| continuation.kind())
     }
 }
 

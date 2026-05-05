@@ -1827,6 +1827,65 @@ fn tool_result_payload_does_not_request_runtime_followup_chain_for_terminal_cont
 }
 
 #[test]
+fn tool_result_payload_exposes_structured_continuation_kind() {
+    let path_listing_payload = ToolDrivenFollowupPayload::ToolResult {
+        text: format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "read",
+                "tool_call_id": "call-read-path-listing",
+                "payload_summary": json!({
+                    "continuation": {
+                        "state": "path_listing",
+                        "is_terminal": false,
+                        "recommended_tool": "read",
+                        "recommended_payload": {
+                            "path": "ARCHITECTURE.md"
+                        }
+                    }
+                })
+                .to_string(),
+                "payload_chars": 128,
+                "payload_truncated": false
+            })
+        ),
+    };
+    assert_eq!(
+        path_listing_payload.tool_result_continuation_kind(),
+        Some(ToolResultContinuationKind::PathListing)
+    );
+
+    let insufficient_page_payload = ToolDrivenFollowupPayload::ToolResult {
+        text: format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "web",
+                "tool_call_id": "call-web-page",
+                "payload_summary": json!({
+                    "continuation": {
+                        "state": "insufficient_page_evidence",
+                        "is_terminal": false,
+                        "recommended_tool": "web",
+                        "recommended_payload": {
+                            "url": "https://example.com"
+                        }
+                    }
+                })
+                .to_string(),
+                "payload_chars": 128,
+                "payload_truncated": false
+            })
+        ),
+    };
+    assert_eq!(
+        insufficient_page_payload.tool_result_continuation_kind(),
+        Some(ToolResultContinuationKind::InsufficientPageEvidence)
+    );
+}
+
+#[test]
 fn reduce_followup_payload_for_model_preserves_shell_payload_metadata() {
     let payload = json!({
         "adapter": "core-tools",
