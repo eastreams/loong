@@ -1702,10 +1702,11 @@ fn ask_cli_rejects_pseudo_done_reply_that_still_requests_more_evidence() {
         .expect("pseudo-done web summary local address");
     let web_join = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        while requests.is_empty() {
+        while requests.len() < 2 {
             let (mut stream, _) = listener.accept().expect("accept pseudo-done web request");
             let request = read_provider_request(&mut stream);
-            let body = r#"<!doctype html>
+            let body = if requests.is_empty() {
+                r#"<!doctype html>
 <html>
   <head>
     <title>Shell Heavy Fixture</title>
@@ -1716,7 +1717,24 @@ fn ask_cli_rejects_pseudo_done_reply_that_still_requests_more_evidence() {
     <nav>Overview Repositories Projects Stars</nav>
     <footer>Footer policies and links</footer>
   </body>
-</html>"#;
+</html>"#
+            } else {
+                r#"<!doctype html>
+<html>
+  <head>
+    <title>Rich Fixture</title>
+    <meta name="description" content="Short profile summary for the target page.">
+  </head>
+  <body>
+    <header>Marketing Nav Pricing Docs</header>
+    <main>
+      <h1>Rich Fixture</h1>
+      <p>Main profile content with links and details.</p>
+    </main>
+    <footer>Footer noise</footer>
+  </body>
+</html>"#
+            };
             let content_type = "text/html; charset=utf-8";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1732,9 +1750,9 @@ fn ask_cli_rejects_pseudo_done_reply_that_still_requests_more_evidence() {
     });
     let web_base_url = format!("http://{address}");
     let pseudo_done_reply = "[followup_state:done]\nI still need a narrower fetch because the page looks like shell-heavy navigation. Please allow another fetch before I summarize it.";
-    let blocked_reply = "I couldn't continue because the required follow-up tool call was never issued. The turn stopped here instead of pretending the work completed.";
-    let provider_server =
-        DynamicMockProviderServer::spawn(2, move |request_index, request| match request_index {
+    let final_reply = "E2E PASS pseudo-done web continuation.";
+    let provider_server = DynamicMockProviderServer::spawn(4, move |request_index, request| {
+        match request_index {
             0 => {
                 assert_provider_request_contains_text(
                     request,
@@ -1758,8 +1776,39 @@ fn ask_cli_rejects_pseudo_done_reply_that_still_requests_more_evidence() {
                 );
                 MockProviderResponse::ok_json(openai_chat_final_body(pseudo_done_reply))
             }
+            2 => {
+                assert_provider_request_contains_text(
+                    request,
+                    "I still need a narrower fetch because the page looks like shell-heavy navigation.",
+                    "runtime should preserve the pseudo-done web reply text inside the repair follow-up context",
+                );
+                assert_provider_request_contains_text(
+                    request,
+                    "continue with `web`",
+                    "repair follow-up should retain the structured web continuation guidance",
+                );
+                MockProviderResponse::ok_json(openai_chat_tool_call_body(
+                    "",
+                    "call-web-refetch-after-pseudo-done",
+                    "web",
+                    json!({
+                        "url": web_base_url,
+                    }),
+                ))
+            }
+            3 => {
+                assert_provider_request_contains_text(
+                    request,
+                    "Main profile content with links and details.",
+                    "follow-up after web pseudo-done repair should include actual page content",
+                );
+                MockProviderResponse::ok_json(openai_chat_final_body(&format!(
+                    "[followup_state:done]\n{final_reply}"
+                )))
+            }
             _ => MockProviderResponse::unexpected_extra_request(),
-        });
+        }
+    });
     let provider_base_url = provider_server.base_url().to_owned();
     fixture.write_config_with(|config| {
         config.provider.kind = ProviderKind::Openai;
@@ -1791,8 +1840,8 @@ fn ask_cli_rejects_pseudo_done_reply_that_still_requests_more_evidence() {
         "ask pseudo-done web continuation e2e should succeed, stdout={stdout:?}, stderr={stderr:?}"
     );
     assert!(
-        stdout.contains(blocked_reply),
-        "stdout should contain the blocked reply instead of accepting pseudo-done completion: {stdout:?}"
+        stdout.contains(final_reply),
+        "stdout should contain the final answer after repairing the pseudo-done web reply: {stdout:?}"
     );
     assert!(
         !stdout.contains(pseudo_done_reply),
@@ -1800,13 +1849,13 @@ fn ask_cli_rejects_pseudo_done_reply_that_still_requests_more_evidence() {
     );
     assert_eq!(
         provider_requests.len(),
-        2,
-        "ask should stop instead of accepting the pseudo-done reply: {provider_requests:#?}"
+        4,
+        "ask should request one more provider round after the pseudo-done web reply: {provider_requests:#?}"
     );
     assert_eq!(
         web_requests.len(),
-        1,
-        "pseudo-done web fixture should only receive the initial fetch before runtime blocks: {web_requests:#?}"
+        2,
+        "pseudo-done web fixture should receive the initial and follow-up fetches: {web_requests:#?}"
     );
 }
 
