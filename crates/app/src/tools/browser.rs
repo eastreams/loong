@@ -550,6 +550,18 @@ fn browser_page_payload(
     clicked_link: Option<Value>,
     execution_tier: &str,
 ) -> Value {
+    let continuation = page.truncated.then(|| {
+        json!({
+            "state": "truncated_page",
+            "is_terminal": false,
+            "recommended_tool": "browse",
+            "recommended_payload": {
+                "session_id": session_id,
+                "mode": "page_text",
+            },
+            "note": "The opened page was truncated before enough evidence could be gathered. Continue with a narrower browser extract before finalizing."
+        })
+    });
     json!({
         "adapter": "core-tools",
         "tool_name": tool_name,
@@ -567,6 +579,7 @@ fn browser_page_payload(
         "truncated": page.truncated,
         "redirect_count": page.redirect_count,
         "clicked_link": clicked_link,
+        "continuation": continuation,
     })
 }
 
@@ -1048,6 +1061,20 @@ mod tests {
         .expect("oversize declared content length should truncate");
 
         assert_eq!(outcome.payload["truncated"], json!(true));
+        assert_eq!(outcome.payload["continuation"]["state"], "truncated_page");
+        assert_eq!(outcome.payload["continuation"]["is_terminal"], json!(false));
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_tool"],
+            "browse"
+        );
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["session_id"],
+            outcome.payload["session_id"]
+        );
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["mode"],
+            "page_text"
+        );
         handle.join().expect("server thread");
     }
 

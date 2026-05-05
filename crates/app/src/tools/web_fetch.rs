@@ -178,6 +178,19 @@ fn execute_web_fetch_tool_enabled(
                 }
                 RenderMode::ReadableText | RenderMode::RawText => raw_text.trim().to_owned(),
             };
+            let continuation = truncated.then(|| {
+                json!({
+                    "state": "truncated_page",
+                    "is_terminal": false,
+                    "recommended_tool": "web",
+                    "recommended_payload": {
+                        "url": current_url.as_str(),
+                        "mode": "raw_text",
+                        "max_bytes": max_bytes,
+                    },
+                    "note": "The fetched page was truncated before enough evidence could be gathered. Continue with a narrower or higher-budget web fetch before finalizing."
+                })
+            });
 
             return Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
@@ -196,6 +209,7 @@ fn execute_web_fetch_tool_enabled(
                     "bytes_downloaded": budget.consumed(),
                     "truncated": truncated,
                     "redirect_count": redirect_count,
+                    "continuation": continuation,
                 }),
             });
         }
@@ -805,6 +819,17 @@ mod tests {
             .as_str()
             .expect("content should be string");
         assert_eq!(content.len(), 32);
+        assert_eq!(outcome.payload["continuation"]["state"], "truncated_page");
+        assert_eq!(outcome.payload["continuation"]["is_terminal"], json!(false));
+        assert_eq!(outcome.payload["continuation"]["recommended_tool"], "web");
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["url"],
+            outcome.payload["final_url"]
+        );
+        assert_eq!(
+            outcome.payload["continuation"]["recommended_payload"]["mode"],
+            "raw_text"
+        );
     }
 
     #[test]
