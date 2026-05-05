@@ -93,18 +93,18 @@ jobs:
 
       - name: Initialize CodeQL
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225
+        uses: github/codeql-action/init@e46ed2cbd01164d986452f91f178727624ae40d7
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
 
       - name: Autobuild
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/autobuild@95e58e9a2cdfd71adc6e0353d5c52f41a045d225
+        uses: github/codeql-action/autobuild@e46ed2cbd01164d986452f91f178727624ae40d7
 
       - name: Analyze
         if: steps.ghas.outputs.enabled == 'true'
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225
+        uses: github/codeql-action/analyze@e46ed2cbd01164d986452f91f178727624ae40d7
         timeout-minutes: 10
 
       - name: Skip CodeQL when GHAS is unavailable
