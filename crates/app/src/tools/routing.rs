@@ -7,6 +7,23 @@ use super::{
 };
 use super::{DELEGATE_ASYNC_TOOL_NAME, DELEGATE_TOOL_NAME, config_import};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectReadRoute {
+    Path,
+    Query,
+    Pattern,
+}
+
+impl DirectReadRoute {
+    fn executor_name(self) -> &'static str {
+        match self {
+            Self::Path => "file.read",
+            Self::Query => "content.search",
+            Self::Pattern => "glob.search",
+        }
+    }
+}
+
 pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &Value) -> String {
     if canonical_name == "tool.invoke" {
         let inner_tool_id = payload.get("tool_id").and_then(Value::as_str);
@@ -27,7 +44,9 @@ pub(super) fn resolved_inner_tool_name_for_logs(canonical_name: &str, payload: &
 
     let direct_tool_name = canonical_name;
     let resolved_tool_name = if direct_tool_name == "read" {
-        classify_direct_read_executor_name(payload).ok()
+        classify_direct_read_route(payload)
+            .ok()
+            .map(DirectReadRoute::executor_name)
     } else {
         route_direct_tool_name(direct_tool_name, payload).ok()
     };
@@ -62,21 +81,22 @@ fn execute_direct_read_tool_core_with_config(
         ));
     }
 
-    let read_executor_name = classify_direct_read_executor_name(&request.payload)?;
+    let read_route = classify_direct_read_route(&request.payload)?;
     let mut payload = request.payload;
-    normalize_direct_payload_for_routed_tool("read", read_executor_name, &mut payload);
+    normalize_direct_read_payload_for_route(read_route, &mut payload);
     let direct_request = ToolCoreRequest {
         tool_name: "read".to_owned(),
         payload,
     };
 
-    match read_executor_name {
-        "file.read" => file::execute_file_read_tool_with_config(direct_request, config),
-        "content.search" => file::execute_content_search_tool_with_config(direct_request, config),
-        "glob.search" => file::execute_glob_search_tool_with_config(direct_request, config),
-        _ => Err(format!(
-            "tool_not_found: unsupported direct read executor `{read_executor_name}`"
-        )),
+    match read_route {
+        DirectReadRoute::Path => file::execute_file_read_tool_with_config(direct_request, config),
+        DirectReadRoute::Query => {
+            file::execute_content_search_tool_with_config(direct_request, config)
+        }
+        DirectReadRoute::Pattern => {
+            file::execute_glob_search_tool_with_config(direct_request, config)
+        }
     }
 }
 
@@ -85,7 +105,7 @@ fn route_direct_tool_request(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreRequest, String> {
     let tool_name = request.tool_name;
-    let mut payload = request.payload;
+    let payload = request.payload;
     let runtime_view = runtime_tool_view_for_runtime_config(config);
     let routed_tool_name =
         route_direct_tool_name_for_view(tool_name.as_str(), &payload, &runtime_view)?;
@@ -98,8 +118,6 @@ fn route_direct_tool_request(
             tool_name, routed_tool_display, unavailable_hint
         ));
     }
-
-    normalize_direct_payload_for_routed_tool(tool_name.as_str(), routed_tool_name, &mut payload);
 
     Ok(ToolCoreRequest {
         tool_name: routed_tool_name.to_owned(),
@@ -160,11 +178,11 @@ fn route_direct_bash_tool_name(payload: &Value) -> Result<&'static str, String> 
 }
 
 fn route_direct_read_tool_name(payload: &Value) -> Result<&'static str, String> {
-    classify_direct_read_executor_name(payload)?;
+    classify_direct_read_route(payload)?;
     Ok("read")
 }
 
-fn classify_direct_read_executor_name(payload: &Value) -> Result<&'static str, String> {
+fn classify_direct_read_route(payload: &Value) -> Result<DirectReadRoute, String> {
     let has_path = payload_has_non_empty_string_field(payload, "path");
     let has_query = payload_has_non_empty_string_field(payload, "query");
     let has_pattern = payload_has_non_empty_string_field(payload, "pattern")
@@ -178,14 +196,14 @@ fn classify_direct_read_executor_name(payload: &Value) -> Result<&'static str, S
     }
 
     if has_path {
-        return Ok("file.read");
+        return Ok(DirectReadRoute::Path);
     }
 
     if has_query {
-        return Ok("content.search");
+        return Ok(DirectReadRoute::Query);
     }
 
-    Ok("glob.search")
+    Ok(DirectReadRoute::Pattern)
 }
 
 fn payload_has_non_empty_string_field(payload: &Value, field_name: &str) -> bool {
@@ -724,20 +742,13 @@ pub(super) fn payload_has_non_null_field(payload: &Value, field_name: &str) -> b
         .is_some()
 }
 
-fn normalize_direct_payload_for_routed_tool(
-    original_tool_name: &str,
-    routed_tool_name: &str,
-    payload: &mut Value,
-) {
-    if original_tool_name != "read" {
-        return;
-    }
+fn normalize_direct_read_payload_for_route(route: DirectReadRoute, payload: &mut Value) {
     let Some(payload_object) = payload.as_object_mut() else {
         return;
     };
 
-    match routed_tool_name {
-        "read" | "file.read" => {
+    match route {
+        DirectReadRoute::Path => {
             payload_object.remove("query");
             payload_object.remove("pattern");
             payload_object.remove("glob");
@@ -747,14 +758,14 @@ fn normalize_direct_payload_for_routed_tool(
             payload_object.remove("case_sensitive");
             payload_object.remove("include_directories");
         }
-        "content.search" => {
+        DirectReadRoute::Query => {
             payload_object.remove("path");
             payload_object.remove("pattern");
             payload_object.remove("include_directories");
             payload_object.remove("offset");
             payload_object.remove("limit");
         }
-        "glob.search" => {
+        DirectReadRoute::Pattern => {
             let pattern_missing = payload_object
                 .get("pattern")
                 .and_then(Value::as_str)
@@ -774,7 +785,6 @@ fn normalize_direct_payload_for_routed_tool(
                 payload_object.insert("pattern".to_owned(), normalized_glob);
             }
         }
-        _ => {}
     }
 }
 
