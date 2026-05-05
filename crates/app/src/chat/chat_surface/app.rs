@@ -1405,7 +1405,8 @@ impl App {
         }
 
         let max_pending_preview_lines = max_pending_height.saturating_sub(2).max(1) as usize;
-        let live_lines = pending_live_lines(&self.live_lines, max_pending_preview_lines);
+        let live_lines =
+            pending_live_tool_activity_lines(&self.live_lines, max_pending_preview_lines);
         let raw_pending_lines = build_pending_lines(
             self.turn_start,
             &live_lines,
@@ -7382,6 +7383,35 @@ fn pending_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>, max_lines: usize)
         .unwrap_or_default()
 }
 
+fn pending_live_tool_activity_lines(
+    live_lines: &Arc<StdMutex<Vec<String>>>,
+    max_lines: usize,
+) -> Vec<String> {
+    pending_live_lines(live_lines, max_lines)
+        .into_iter()
+        .filter(|line| pending_line_is_tool_activity(line))
+        .collect()
+}
+
+fn pending_line_is_tool_activity(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('•')
+        || trimmed.starts_with("[running]")
+        || trimmed.starts_with("[pending]")
+        || trimmed.starts_with("[completed]")
+        || trimmed.starts_with("[failed]")
+        || trimmed.starts_with("[interrupted]")
+        || trimmed.starts_with("[needs_approval]")
+        || trimmed.starts_with("[denied]")
+        || trimmed.starts_with("request:")
+        || trimmed.starts_with("args:")
+        || trimmed.starts_with("stdout:")
+        || trimmed.starts_with("stderr:")
+        || trimmed.starts_with("file:")
+        || trimmed.starts_with("metrics:")
+        || trimmed.starts_with("↳ ")
+}
+
 fn pending_render_signature(app: &App) -> Option<u64> {
     if app.last_render_width == 0 || app.last_render_height == 0 {
         if !app.pending_turn {
@@ -7397,7 +7427,7 @@ fn pending_render_signature(app: &App) -> Option<u64> {
         app.pending_queue
             .iter()
             .for_each(|message| message.hash(&mut hasher));
-        for line in pending_live_lines(&app.live_lines, 6) {
+        for line in pending_live_tool_activity_lines(&app.live_lines, 6) {
             line.hash(&mut hasher);
         }
         return Some(hasher.finish());
@@ -7473,7 +7503,8 @@ fn pending_render_signature_for_geometry(
     let start = app.turn_start?;
     let max_pending_preview_lines =
         pending_signature_preview_budget_for_geometry(height, composer_height, palette_height);
-    let visible_lines = pending_live_lines(&app.live_lines, max_pending_preview_lines);
+    let visible_lines =
+        pending_live_tool_activity_lines(&app.live_lines, max_pending_preview_lines);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     focus_ring_frame(start).hash(&mut hasher);
     get_spinner_verb_with_seed(start, app.spinner_seed).hash(&mut hasher);
@@ -9023,7 +9054,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_band_grows_when_live_lines_exist() {
+    fn pending_band_hides_plain_live_reply_lines() {
         let backend = TestBackend::new(50, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -9037,7 +9068,7 @@ mod tests {
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal);
         assert!(
-            lines
+            !lines
                 .iter()
                 .any(|line| line.contains("streamed reply line"))
         );
@@ -9090,7 +9121,7 @@ mod tests {
     }
 
     #[test]
-    fn spinner_stays_adjacent_to_composer_below_pending_content() {
+    fn spinner_stays_adjacent_to_composer_when_plain_live_reply_is_hidden() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -9103,10 +9134,6 @@ mod tests {
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal);
-        let preview_row = lines
-            .iter()
-            .position(|line| line.contains("streamed reply line"))
-            .expect("preview row");
         let spinner_row = lines
             .iter()
             .position(|line| line.contains("..."))
@@ -9116,8 +9143,12 @@ mod tests {
             .position(|line| line.contains("›"))
             .expect("composer row");
 
-        assert!(preview_row < spinner_row);
-        assert_eq!(composer_row, spinner_row + 2);
+        assert!(composer_row > spinner_row);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("streamed reply line"))
+        );
     }
 
     #[test]
@@ -10471,7 +10502,7 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_band_renders_compact_live_preview_without_card_chrome() {
+    fn pending_band_hides_plain_streaming_preview_text() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10487,8 +10518,8 @@ description: "actual description"
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal).join("\n");
-        assert!(lines.contains("first streamed sentence"));
-        assert!(lines.contains("second streamed sentence"));
+        assert!(!lines.contains("first streamed sentence"));
+        assert!(!lines.contains("second streamed sentence"));
         assert!(!lines.contains("╭─"));
         assert!(!lines.contains("turn pipeline"));
     }
@@ -10678,7 +10709,7 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_preview_renders_between_transcript_and_composer() {
+    fn pending_preview_hides_plain_streaming_reply_between_transcript_and_composer() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10695,21 +10726,21 @@ description: "actual description"
             .iter()
             .position(|line| line.contains("hi"))
             .expect("user row");
-        let preview_row = lines
-            .iter()
-            .position(|line| line.contains("streamed reply line"))
-            .expect("preview row");
         let composer_row = lines
             .iter()
             .position(|line| line.contains("›"))
             .expect("composer row");
 
-        assert!(preview_row > user_row);
-        assert!(preview_row < composer_row);
+        assert!(composer_row > user_row);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("streamed reply line"))
+        );
     }
 
     #[test]
-    fn pending_preview_shows_reasoning_before_visible_reply() {
+    fn pending_preview_hides_reasoning_and_visible_reply_text() {
         let backend = TestBackend::new(70, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10721,21 +10752,13 @@ description: "actual description"
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let reasoning_row = lines
-            .iter()
-            .position(|line| line.contains("quiet reasoning"))
-            .expect("reasoning row");
-        let visible_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("visible row");
-
-        assert!(reasoning_row < visible_row);
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(!lines.contains("quiet reasoning"));
+        assert!(!lines.contains("visible reply"));
     }
 
     #[test]
-    fn pending_preview_keeps_blank_row_between_live_lines_and_spinner() {
+    fn pending_preview_no_longer_reserves_blank_row_for_plain_reply_preview() {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10752,17 +10775,17 @@ description: "actual description"
             .iter()
             .position(|line| line.contains("..."))
             .expect("spinner row");
-        let preview_row = lines
+        let composer_row = lines
             .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("preview row");
+            .position(|line| line.contains("›"))
+            .expect("composer row");
 
-        assert_eq!(spinner_row, preview_row + 2);
-        assert!(lines[preview_row + 1].trim().is_empty());
+        assert!(composer_row > spinner_row);
+        assert!(!lines.iter().any(|line| line.contains("visible reply")));
     }
 
     #[test]
-    fn pending_preview_live_lines_are_indented_like_assistant_output() {
+    fn pending_preview_does_not_render_plain_reply_lines() {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10774,16 +10797,11 @@ description: "actual description"
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let preview_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("preview row");
-
-        assert!(lines[preview_row].contains("  visible reply"));
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(!lines.contains("visible reply"));
     }
     #[test]
-    fn pending_preview_wraps_long_live_lines_on_narrow_width() {
+    fn pending_preview_does_not_wrap_hidden_plain_reply_lines() {
         let backend = TestBackend::new(28, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10795,28 +10813,13 @@ description: "actual description"
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let first_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("first wrapped preview row");
-        let second_row = lines
-            .iter()
-            .skip(first_row + 1)
-            .position(|line| line.contains("pending band"))
-            .map(|offset| first_row + 1 + offset)
-            .expect("second wrapped preview row");
-        let composer_row = lines
-            .iter()
-            .position(|line| line.contains("›"))
-            .expect("composer row");
-
-        assert_eq!(second_row, first_row + 1);
-        assert!(composer_row > second_row);
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(!lines.contains("visible reply"));
+        assert!(!lines.contains("pending band"));
     }
 
     #[test]
-    fn pending_preview_expands_beyond_legacy_cap_when_height_allows() {
+    fn pending_preview_no_longer_expands_plain_reply_text_with_extra_height() {
         let backend = TestBackend::new(18, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10834,11 +10837,11 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw");
         let rendered = buffer_lines(&terminal).join("\n");
 
-        assert!(rendered.contains("omega"));
+        assert!(!rendered.contains("omega"));
     }
 
     #[test]
-    fn pending_preview_preserves_blank_separator_between_reasoning_and_reply() {
+    fn pending_preview_hides_reasoning_reply_separator_when_plain_text_is_hidden() {
         let backend = TestBackend::new(70, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10854,22 +10857,13 @@ description: "actual description"
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let reasoning_row = lines
-            .iter()
-            .position(|line| line.contains("quiet reasoning"))
-            .expect("reasoning row");
-        let visible_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("visible row");
-
-        assert!(visible_row > reasoning_row + 1);
-        assert!(lines[reasoning_row + 1].trim().is_empty());
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(!lines.contains("quiet reasoning"));
+        assert!(!lines.contains("visible reply"));
     }
 
     #[test]
-    fn pending_preview_styles_reasoning_dim_before_visible_reply() {
+    fn pending_preview_does_not_style_hidden_reasoning_lines() {
         let backend = TestBackend::new(70, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10885,19 +10879,13 @@ description: "actual description"
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let buf = terminal.backend().buffer();
-        let reasoning_row = find_row(&terminal, "quiet reasoning").expect("reasoning row");
-        let visible_row = find_row(&terminal, "visible reply").expect("visible row");
-
-        assert_eq!(
-            buf[(2, reasoning_row)].fg,
-            crate::chat::chat_surface::utils::SURFACE_GRAY
-        );
-        assert_eq!(buf[(2, visible_row)].fg, ratatui::style::Color::White);
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(!lines.contains("quiet reasoning"));
+        assert!(!lines.contains("visible reply"));
     }
 
     #[test]
-    fn pending_preview_truncation_preserves_reasoning_and_visible_segments() {
+    fn pending_preview_truncation_ignores_hidden_plain_reply_segments() {
         let backend = TestBackend::new(70, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -10920,13 +10908,10 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw");
         let rendered = buffer_lines(&terminal).join("\n");
 
-        assert!(rendered.contains("reason-1"));
-        assert!(rendered.contains("reason-2"));
-        assert!(!rendered.contains("reason-3"));
-        assert!(!rendered.contains("reason-4"));
-        assert!(rendered.contains("reply-1"));
-        assert!(rendered.contains("reply-2"));
-        assert!(!rendered.contains("reply-3"));
+        assert!(!rendered.contains("reason-1"));
+        assert!(!rendered.contains("reason-2"));
+        assert!(!rendered.contains("reply-1"));
+        assert!(!rendered.contains("reply-2"));
     }
 
     #[test]
@@ -11288,7 +11273,7 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw off tail");
         let off_tail_lines = buffer_lines(&terminal).join("\n");
         assert!(off_tail_lines.contains("PgDn / End"));
-        assert!(off_tail_lines.contains("streamed preview line"));
+        assert!(!off_tail_lines.contains("streamed preview line"));
 
         app.message_list
             .add_assistant_message("new-tail-line after scroll".to_owned());
@@ -11296,7 +11281,7 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw resized");
         let resized_lines = buffer_lines(&terminal).join("\n");
         assert!(resized_lines.contains("PgDn / End"));
-        assert!(resized_lines.contains("streamed preview line"));
+        assert!(!resized_lines.contains("streamed preview line"));
 
         app.message_list.handle_key(crossterm::event::KeyEvent::new(
             KeyCode::End,
@@ -11306,7 +11291,7 @@ description: "actual description"
         let restored_lines = buffer_lines(&terminal).join("\n");
 
         assert!(restored_lines.contains("new-tail-line after scroll"));
-        assert!(restored_lines.contains("streamed preview line"));
+        assert!(!restored_lines.contains("streamed preview line"));
         assert!(!restored_lines.contains("PgDn / End"));
         assert_eq!(app.message_list.scroll_offset_for_test(), 0);
     }
@@ -11474,7 +11459,7 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_signature_changes_when_visible_preview_changes() {
+    fn pending_signature_ignores_plain_reply_preview_changes() {
         let mut app = blank_app();
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
@@ -11487,7 +11472,7 @@ description: "actual description"
         }
         let after = super::pending_render_signature(&app);
 
-        assert_ne!(before, after);
+        assert_eq!(before, after);
     }
 
     #[test]
@@ -11570,7 +11555,8 @@ description: "actual description"
     }
 
     #[test]
-    fn startup_overflow_with_pending_preview_keeps_user_block_and_preview_visible() {
+    fn startup_overflow_with_pending_preview_keeps_user_block_visible_without_plain_reply_preview()
+    {
         let backend = TestBackend::new(50, 16);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -11602,7 +11588,6 @@ description: "actual description"
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let user_row = find_row(&terminal, "hi").expect("user row");
-        let preview_row = find_row(&terminal, "pending reply").expect("preview row");
         let composer_row = find_row(&terminal, "›").expect("composer row");
 
         assert!(row_has_background(
@@ -11610,8 +11595,8 @@ description: "actual description"
             user_row - 1,
             SURFACE_USER_MSG_BG
         ));
-        assert!(preview_row > user_row);
-        assert!(preview_row < composer_row);
+        assert!(composer_row > user_row);
+        assert!(find_row(&terminal, "pending reply").is_none());
     }
 
     #[test]
