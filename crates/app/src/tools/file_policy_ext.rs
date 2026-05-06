@@ -89,7 +89,13 @@ impl FilePolicyExtension {
         };
 
         let effective_root = self.canon_root.as_deref().unwrap_or(root);
-        let normalized_effective_root = super::normalize_without_fs(effective_root);
+        let normalized_effective_root = if effective_root.exists() {
+            dunce::canonicalize(effective_root)
+                .map(|resolved| dunce::simplified(&resolved).to_path_buf())
+                .unwrap_or_else(|_| super::normalize_without_fs(effective_root))
+        } else {
+            super::normalize_without_fs(effective_root)
+        };
 
         let candidate = Path::new(raw_path);
         let combined = if candidate.is_absolute() {
