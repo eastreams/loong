@@ -5,27 +5,81 @@ use loong_contracts::{Capability, PolicyError};
 use loong_kernel::{PolicyExtension, PolicyExtensionContext};
 
 pub struct FilePolicyExtension {
-    file_root: Option<PathBuf>,
-    canon_root: Option<PathBuf>,
+    primary_root: Option<PathBuf>,
+    normalized_allowed_roots: Vec<PathBuf>,
+    resolution_root: Option<PathBuf>,
+    canon_resolution_root: Option<PathBuf>,
 }
 
 impl FilePolicyExtension {
-    pub fn new(file_root: Option<PathBuf>) -> Self {
-        let canon_root = file_root.as_ref().and_then(|r| r.canonicalize().ok());
-        if file_root.is_some() && canon_root.is_none() {
+    pub fn new(access_root: Option<PathBuf>) -> Self {
+        let allowed_roots = access_root.iter().cloned().collect();
+        Self::from_roots(allowed_roots, access_root.clone(), access_root)
+    }
+
+    pub fn with_resolution_root(
+        access_root: Option<PathBuf>,
+        resolution_root: Option<PathBuf>,
+    ) -> Self {
+        let allowed_roots = access_root.iter().cloned().collect();
+        let primary_root = access_root.clone();
+        let effective_resolution_root = resolution_root.or(access_root);
+        Self::from_roots(allowed_roots, primary_root, effective_resolution_root)
+    }
+
+    pub fn from_runtime_config(rt: &super::runtime_config::ToolRuntimeConfig) -> Self {
+        let mut allowed_roots = Vec::new();
+
+        if let Some(file_root) = rt.file_root.as_ref() {
+            allowed_roots.push(file_root.clone());
+        }
+
+        if let Some(workspace_root) = rt.workspace_root.as_ref() {
+            let workspace_root_is_new = allowed_roots.iter().all(|root| root != workspace_root);
+            if workspace_root_is_new {
+                allowed_roots.push(workspace_root.clone());
+            }
+        }
+
+        let primary_root = allowed_roots.first().cloned();
+        let resolution_root = rt
+            .path_resolution_root()
+            .map(Path::to_path_buf)
+            .or_else(|| primary_root.clone());
+
+        Self::from_roots(allowed_roots, primary_root, resolution_root)
+    }
+
+    fn from_roots(
+        allowed_roots: Vec<PathBuf>,
+        primary_root: Option<PathBuf>,
+        resolution_root: Option<PathBuf>,
+    ) -> Self {
+        if primary_root.is_some() && allowed_roots.is_empty() {
             #[cfg(feature = "tool-file")]
             #[allow(clippy::print_stderr)]
             {
                 eprintln!(
                     "warning: file_root {:?} could not be canonicalized; \
                      symlink-aware path checks will use raw path comparison",
-                    file_root.as_deref().unwrap_or(Path::new("")),
+                    primary_root.as_deref().unwrap_or(Path::new("")),
                 );
             }
         }
+
+        let normalized_allowed_roots = allowed_roots
+            .iter()
+            .map(|root| normalize_path_for_policy(root.as_path()))
+            .collect();
+        let canon_resolution_root = resolution_root
+            .as_deref()
+            .and_then(canonicalize_existing_path_for_policy);
+
         Self {
-            file_root,
-            canon_root,
+            primary_root,
+            normalized_allowed_roots,
+            resolution_root,
+            canon_resolution_root,
         }
     }
 
@@ -83,31 +137,31 @@ impl FilePolicyExtension {
     ///   and `b` does not exist under the target), layer 4 cannot detect the
     ///   escape. The execution layer catches this at open time.
     fn path_escapes_root(&self, raw_path: &str) -> bool {
-        let root = match self.file_root.as_deref() {
-            Some(r) => r,
-            None => return false,
-        };
+        if self.normalized_allowed_roots.is_empty() {
+            return false;
+        }
 
-        let effective_root = self.canon_root.as_deref().unwrap_or(root);
-        let normalized_effective_root = if effective_root.exists() {
-            dunce::canonicalize(effective_root)
-                .map(|resolved| dunce::simplified(&resolved).to_path_buf())
-                .unwrap_or_else(|_| super::normalize_without_fs(effective_root))
-        } else {
-            super::normalize_without_fs(effective_root)
+        let resolution_root = self
+            .resolution_root
+            .as_deref()
+            .or(self.primary_root.as_deref());
+        let effective_resolution_root = self.canon_resolution_root.as_deref().or(resolution_root);
+        let effective_resolution_root = match effective_resolution_root {
+            Some(root) => root,
+            None => return false,
         };
 
         let candidate = Path::new(raw_path);
         let combined = if candidate.is_absolute() {
             candidate.to_path_buf()
         } else {
-            effective_root.join(candidate)
+            effective_resolution_root.join(candidate)
         };
 
         // 1. Try full canonicalize (works when the path already exists).
         if let Ok(canon) = combined.canonicalize() {
             let normalized_canon = dunce::simplified(&canon).to_path_buf();
-            return !normalized_canon.starts_with(&normalized_effective_root);
+            return !self.path_is_within_allowed_roots(normalized_canon.as_path());
         }
 
         // 1.5. Path is a symlink but canonicalize failed (dangling target) —
@@ -117,21 +171,15 @@ impl FilePolicyExtension {
                 let resolved = if target.is_absolute() {
                     target
                 } else {
-                    let raw_parent = combined.parent().unwrap_or(effective_root);
-                    let symlink_parent = match raw_parent.canonicalize() {
-                        Ok(parent) => parent,
-                        Err(_) => return true,
+                    let raw_parent = combined.parent().unwrap_or(effective_resolution_root);
+                    let symlink_parent = match canonicalize_existing_path_for_policy(raw_parent) {
+                        Some(parent) => parent,
+                        None => return true,
                     };
                     symlink_parent.join(&target)
                 };
-                let normalized_target = if resolved.exists() {
-                    dunce::canonicalize(&resolved)
-                        .map(|resolved| dunce::simplified(&resolved).to_path_buf())
-                        .unwrap_or_else(|_| super::normalize_without_fs(&resolved))
-                } else {
-                    super::normalize_without_fs(&resolved)
-                };
-                return !normalized_target.starts_with(&normalized_effective_root);
+                let normalized_target = normalize_path_for_policy(resolved.as_path());
+                return !self.path_is_within_allowed_roots(normalized_target.as_path());
             }
             // Cannot read the link — conservatively deny.
             return true;
@@ -142,19 +190,19 @@ impl FilePolicyExtension {
         //    as `file.write "nested/new.txt"` and keeps `/var` vs
         //    `/private/var` aliases aligned on macOS.
         if let Some(reconstructed_path) = reconstruct_from_existing_ancestor(&combined) {
-            let normalized_reconstructed = if reconstructed_path.exists() {
-                dunce::canonicalize(&reconstructed_path)
-                    .map(|resolved| dunce::simplified(&resolved).to_path_buf())
-                    .unwrap_or_else(|_| super::normalize_without_fs(&reconstructed_path))
-            } else {
-                super::normalize_without_fs(&reconstructed_path)
-            };
-            return !normalized_reconstructed.starts_with(&normalized_effective_root);
+            let normalized_reconstructed = normalize_path_for_policy(reconstructed_path.as_path());
+            return !self.path_is_within_allowed_roots(normalized_reconstructed.as_path());
         }
 
         // 3. Neither path nor parent exists — fall back to pure normalization.
         let normalized = super::normalize_without_fs(&combined);
-        !normalized.starts_with(&normalized_effective_root)
+        !self.path_is_within_allowed_roots(normalized.as_path())
+    }
+
+    fn path_is_within_allowed_roots(&self, path: &Path) -> bool {
+        self.normalized_allowed_roots
+            .iter()
+            .any(|allowed_root| path.starts_with(allowed_root))
     }
 
     fn raw_paths_for_request<'a>(
@@ -196,7 +244,7 @@ impl FilePolicyExtension {
         tool_name: &str,
         payload: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), PolicyError> {
-        let Some(root) = self.file_root.as_deref() else {
+        let Some(root) = self.primary_root.as_deref() else {
             return Ok(());
         };
 
@@ -222,6 +270,25 @@ impl FilePolicyExtension {
     }
 }
 
+fn canonicalize_existing_path_for_policy(path: &Path) -> Option<PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+
+    dunce::canonicalize(path)
+        .ok()
+        .map(|resolved| dunce::simplified(&resolved).to_path_buf())
+}
+
+fn normalize_path_for_policy(path: &Path) -> PathBuf {
+    let canonicalized_path = canonicalize_existing_path_for_policy(path);
+    if let Some(canonicalized_path) = canonicalized_path {
+        return canonicalized_path;
+    }
+
+    super::normalize_without_fs(path)
+}
+
 fn reconstruct_from_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut suffix_components = Vec::new();
     let mut cursor = path;
@@ -232,7 +299,7 @@ fn reconstruct_from_existing_ancestor(path: &Path) -> Option<PathBuf> {
         cursor = cursor.parent()?;
     }
 
-    let mut reconstructed = cursor.canonicalize().ok()?;
+    let mut reconstructed = canonicalize_existing_path_for_policy(cursor)?;
     for component in suffix_components.iter().rev() {
         reconstructed.push(component);
     }
@@ -252,11 +319,7 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    let extension = FilePolicyExtension::new(
-        rt.filesystem_access_root()
-            .map(std::path::Path::to_path_buf)
-            .or_else(|| rt.file_root.clone()),
-    );
+    let extension = FilePolicyExtension::from_runtime_config(rt);
     extension
         .authorize_file_payload(tool_name, payload)
         .map_err(|error| format!("policy_denied: {error}"))
