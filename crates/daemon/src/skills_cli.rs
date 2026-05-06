@@ -13,24 +13,24 @@ const DEFAULT_SKILLS_RECOMMEND_LIMIT: usize = 3;
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum SkillsCommands {
-    /// List discovered external skills across managed, user, and project scopes
+    /// List discovered skills across managed, user, and project scopes
     List,
-    /// Search the external-skills inventory from a task or capability phrase
+    /// Search the skills inventory from a task or capability phrase
     Search {
         query: Vec<String>,
         #[arg(long, default_value_t = DEFAULT_SKILLS_SEARCH_LIMIT)]
         limit: usize,
     },
-    /// Recommend the best-fit external skills for an operator goal
+    /// Recommend the best-fit skills for an operator goal
     Recommend {
         query: Vec<String>,
         #[arg(long, default_value_t = DEFAULT_SKILLS_RECOMMEND_LIMIT)]
         limit: usize,
     },
-    /// Inspect one resolved external skill
+    /// Inspect one resolved skill
     #[command(visible_alias = "inspect")]
     Info { skill_id: String },
-    /// Download an external skill package and optionally sync it into the managed runtime
+    /// Download a skill package and optionally sync it into the managed runtime
     Fetch {
         url: String,
         #[arg(long)]
@@ -48,7 +48,7 @@ pub enum SkillsCommands {
         #[arg(long, default_value_t = false)]
         replace: bool,
     },
-    /// Install a managed external skill from a local directory or archive
+    /// Install a managed skill from a local directory or archive
     Install {
         path: String,
         #[arg(long)]
@@ -58,15 +58,15 @@ pub enum SkillsCommands {
         #[arg(long, default_value_t = false)]
         replace: bool,
     },
-    /// Install a first-party bundled managed external skill
+    /// Install a first-party bundled managed skill
     InstallBundled {
         skill_id: String,
         #[arg(long, default_value_t = false)]
         replace: bool,
     },
-    /// Remove an installed managed external skill
+    /// Remove an installed managed skill
     Remove { skill_id: String },
-    /// Inspect or update persisted runtime policy for external skills
+    /// Inspect or update persisted runtime policy for skills
     Policy {
         #[command(subcommand)]
         command: SkillsPolicyCommands,
@@ -75,10 +75,10 @@ pub enum SkillsCommands {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum SkillsPolicyCommands {
-    /// Show the persisted external-skills runtime policy
+    /// Show the persisted skills runtime policy
     #[command(visible_alias = "show")]
     Get,
-    /// Persist one or more external-skills runtime policy fields into config
+    /// Persist one or more skills runtime policy fields into config
     Set {
         #[arg(long)]
         enabled: Option<bool>,
@@ -132,26 +132,47 @@ pub fn run_skills_cli(options: SkillsCommandOptions) -> CliResult<()> {
 }
 
 pub fn execute_skills_command(options: SkillsCommandOptions) -> CliResult<SkillsCommandExecution> {
-    let (resolved_path, mut config) = mvp::config::load(options.config.as_deref())?;
-    let outcome = match options.command {
-        SkillsCommands::Policy { command } => {
-            execute_policy_command(&resolved_path, &mut config, command)?
-        }
-        command @ (SkillsCommands::List
-        | SkillsCommands::Search { .. }
-        | SkillsCommands::Recommend { .. }
-        | SkillsCommands::Info { .. }
-        | SkillsCommands::Fetch { .. }
-        | SkillsCommands::Install { .. }
-        | SkillsCommands::InstallBundled { .. }
-        | SkillsCommands::Remove { .. }) => {
-            execute_non_policy_skills_command(&resolved_path, &config, command)?
-        }
-    };
-    Ok(SkillsCommandExecution {
-        resolved_config_path: resolved_path.display().to_string(),
-        outcome,
+    run_skills_cli_sync(move || {
+        let (resolved_path, mut config) = mvp::config::load(options.config.as_deref())?;
+        let outcome = match options.command {
+            SkillsCommands::Policy { command } => {
+                execute_policy_command(&resolved_path, &mut config, command)?
+            }
+            command @ (SkillsCommands::List
+            | SkillsCommands::Search { .. }
+            | SkillsCommands::Recommend { .. }
+            | SkillsCommands::Info { .. }
+            | SkillsCommands::Fetch { .. }
+            | SkillsCommands::Install { .. }
+            | SkillsCommands::InstallBundled { .. }
+            | SkillsCommands::Remove { .. }) => {
+                execute_non_policy_skills_command(&resolved_path, &config, command)?
+            }
+        };
+        Ok(SkillsCommandExecution {
+            resolved_config_path: resolved_path.display().to_string(),
+            outcome,
+        })
     })
+}
+
+fn run_skills_cli_sync<F, T>(operation: F) -> CliResult<T>
+where
+    F: FnOnce() -> CliResult<T> + Send,
+    T: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(operation)
+        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(operation)
+                .join()
+                .map_err(|_panic| "skills CLI worker thread panicked".to_owned())?
+        }),
+        Err(_) => operation(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -174,12 +195,12 @@ fn execute_non_policy_skills_command(
     match command {
         SkillsCommands::List => {
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            mvp::tools::external_skills_operator_list_with_config(&tool_runtime_config)
+            mvp::tools::skills_list_with_config(&tool_runtime_config)
         }
         SkillsCommands::Search { query, limit } => {
             let normalized_query = normalize_skills_discovery_query(query, "skills search")?;
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            mvp::tools::external_skills_operator_search_with_config(
+            mvp::tools::skills_search_with_config(
                 normalized_query.as_str(),
                 limit,
                 &tool_runtime_config,
@@ -188,7 +209,7 @@ fn execute_non_policy_skills_command(
         SkillsCommands::Recommend { query, limit } => {
             let normalized_query = normalize_skills_discovery_query(query, "skills recommend")?;
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            mvp::tools::external_skills_operator_recommend_with_config(
+            mvp::tools::skills_recommend_with_config(
                 normalized_query.as_str(),
                 limit,
                 &tool_runtime_config,
@@ -199,10 +220,8 @@ fn execute_non_policy_skills_command(
             if let Some(pack) = mvp::tools::bundled_skill_pack(&skill_id) {
                 execute_bundled_pack_inspect_command(resolved_path, config, pack)
             } else {
-                let inspect_outcome = mvp::tools::external_skills_operator_inspect_with_config(
-                    &skill_id,
-                    &tool_runtime_config,
-                )?;
+                let inspect_outcome =
+                    mvp::tools::skills_inspect_with_config(&skill_id, &tool_runtime_config)?;
                 decorate_skill_info_outcome(inspect_outcome, resolved_path)
             }
         }
@@ -250,7 +269,7 @@ fn execute_non_policy_skills_command(
                     return Err("unexpected skills install command routing".to_owned());
                 }
             };
-            let install_outcome = mvp::tools::external_skills_operator_install_with_config(
+            let install_outcome = mvp::tools::skills_install_with_config(
                 Some(path.as_str()),
                 None,
                 skill_id.as_deref(),
@@ -276,10 +295,7 @@ fn execute_non_policy_skills_command(
                     return Err("unexpected skills remove command routing".to_owned());
                 }
             };
-            mvp::tools::external_skills_operator_remove_with_config(
-                skill_id.as_str(),
-                &tool_runtime_config,
-            )
+            mvp::tools::skills_remove_with_config(skill_id.as_str(), &tool_runtime_config)
         }
         SkillsCommands::Policy { .. } => {
             Err("unexpected skills CLI command routed through non-policy execution path".to_owned())
@@ -337,8 +353,7 @@ fn decorate_skill_install_outcome(
         .get("skill_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "skills install payload missing `skill_id`".to_owned())?;
-    let inspect_outcome =
-        mvp::tools::external_skills_operator_inspect_with_config(skill_id, tool_runtime_config)?;
+    let inspect_outcome = mvp::tools::skills_inspect_with_config(skill_id, tool_runtime_config)?;
     let mut guidance =
         build_skill_follow_up_guidance_from_info_payload(&inspect_outcome.payload, resolved_path)?;
     let config_path = resolved_path.display().to_string();
@@ -424,9 +439,7 @@ fn build_skill_follow_up_guidance(
     let missing_config = string_array_from_value(eligibility.get("missing_config"))
         .into_iter()
         .map(|selector| match selector.as_str() {
-            "external_skills.enabled"
-            | "tools.external_skills.enabled"
-            | "tools.skills.enabled" => "skills.enabled".to_owned(),
+            "tools.skills.enabled" => "skills.enabled".to_owned(),
             _ => selector,
         })
         .collect::<BTreeSet<_>>()
@@ -546,7 +559,7 @@ fn execute_fetch_command(
         config,
         Some(resolved_path),
     );
-    let fetch_outcome = mvp::tools::external_skills_operator_fetch_with_config(
+    let fetch_outcome = mvp::tools::skills_fetch_with_config(
         url,
         save_as,
         max_bytes,
@@ -559,9 +572,9 @@ fn execute_fetch_command(
         let saved_path = fetched
             .get("saved_path")
             .and_then(Value::as_str)
-            .ok_or_else(|| "external skills fetch payload missing `saved_path`".to_owned())?;
+            .ok_or_else(|| "skills fetch payload missing `saved_path`".to_owned())?;
         let source_skill_id = fetched.get("source_skill_id").and_then(Value::as_str);
-        Some(mvp::tools::external_skills_operator_install_with_config(
+        Some(mvp::tools::skills_install_with_config(
             Some(saved_path),
             None,
             skill_id,
@@ -622,12 +635,12 @@ fn execute_policy_command(
             approve_policy_update,
         } => {
             require_policy_update_approval(approve_policy_update)?;
-            let defaults = mvp::config::ExternalSkillsConfig::default();
-            config.external_skills.enabled = defaults.enabled;
-            config.external_skills.require_download_approval = defaults.require_download_approval;
-            config.external_skills.allowed_domains = defaults.allowed_domains;
-            config.external_skills.blocked_domains = defaults.blocked_domains;
-            config.external_skills.auto_expose_installed = defaults.auto_expose_installed;
+            let defaults = mvp::config::SkillsConfig::default();
+            config.skills.enabled = defaults.enabled;
+            config.skills.require_download_approval = defaults.require_download_approval;
+            config.skills.allowed_domains = defaults.allowed_domains;
+            config.skills.blocked_domains = defaults.blocked_domains;
+            config.skills.auto_expose_installed = defaults.auto_expose_installed;
             persist_config_update(resolved_path, config)?;
             Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
@@ -677,24 +690,24 @@ fn execute_policy_command(
             require_policy_update_approval(approve_policy_update)?;
 
             if let Some(enabled) = enabled {
-                config.external_skills.enabled = enabled;
+                config.skills.enabled = enabled;
             }
             if let Some(require_download_approval) = require_download_approval {
-                config.external_skills.require_download_approval = require_download_approval;
+                config.skills.require_download_approval = require_download_approval;
             }
             if let Some(auto_expose_installed) = auto_expose_installed {
-                config.external_skills.auto_expose_installed = auto_expose_installed;
+                config.skills.auto_expose_installed = auto_expose_installed;
             }
             if clear_allowed_domains {
-                config.external_skills.allowed_domains.clear();
+                config.skills.allowed_domains.clear();
             } else if !allowed_domains.is_empty() {
-                config.external_skills.allowed_domains =
+                config.skills.allowed_domains =
                     normalize_domain_inputs("--allow-domain", allowed_domains)?;
             }
             if clear_blocked_domains {
-                config.external_skills.blocked_domains.clear();
+                config.skills.blocked_domains.clear();
             } else if !blocked_domains.is_empty() {
-                config.external_skills.blocked_domains =
+                config.skills.blocked_domains =
                     normalize_domain_inputs("--block-domain", blocked_domains)?;
             }
 
@@ -740,7 +753,7 @@ fn execute_install_bundled_skill_command(
         config,
         Some(resolved_path),
     );
-    mvp::tools::external_skills_operator_install_with_config(
+    mvp::tools::skills_install_with_config(
         None,
         Some(skill_id),
         None,
@@ -776,7 +789,7 @@ fn execute_install_bundled_pack_command(
         config,
         Some(resolved_path),
     );
-    let existing = mvp::tools::external_skills_operator_list_with_config(&tool_runtime_config)?;
+    let existing = mvp::tools::skills_list_with_config(&tool_runtime_config)?;
     let installed_ids = existing
         .payload
         .get("skills")
@@ -807,7 +820,7 @@ fn execute_install_bundled_pack_command(
             }
             Err(error) => {
                 for installed_skill_id in newly_installed.iter().rev() {
-                    let _ = mvp::tools::external_skills_operator_remove_with_config(
+                    let _ = mvp::tools::skills_remove_with_config(
                         installed_skill_id,
                         &tool_runtime_config,
                     );
@@ -841,7 +854,7 @@ fn execute_bundled_pack_inspect_command(
         config,
         Some(resolved_path),
     );
-    let existing = mvp::tools::external_skills_operator_list_with_config(&tool_runtime_config)?;
+    let existing = mvp::tools::skills_list_with_config(&tool_runtime_config)?;
     let discovered_map = existing
         .payload
         .get("skills")
@@ -902,22 +915,22 @@ fn serialize_bundled_skill_pack(pack: &mvp::tools::BundledSkillPack) -> Value {
 
 fn persistent_policy_payload(config: &mvp::config::LoongConfig) -> Value {
     json!({
-        "enabled": config.external_skills.enabled,
-        "require_download_approval": config.external_skills.require_download_approval,
-        "allowed_domains": config.external_skills.normalized_allowed_domains(),
-        "blocked_domains": config.external_skills.normalized_blocked_domains(),
+        "enabled": config.skills.enabled,
+        "require_download_approval": config.skills.require_download_approval,
+        "allowed_domains": config.skills.normalized_allowed_domains(),
+        "blocked_domains": config.skills.normalized_blocked_domains(),
         "install_root": config
-            .external_skills
+            .skills
             .resolved_install_root()
             .map(|path| path.display().to_string()),
-        "auto_expose_installed": config.external_skills.auto_expose_installed,
+        "auto_expose_installed": config.skills.auto_expose_installed,
     })
 }
 
 fn normalize_domain_inputs(flag: &str, entries: Vec<String>) -> CliResult<Vec<String>> {
     let mut normalized = BTreeSet::new();
     for entry in entries {
-        let value = mvp::tools::normalize_external_skill_domain_rule(entry.as_str())
+        let value = mvp::tools::normalize_skill_domain_rule(entry.as_str())
             .map_err(|error| format!("invalid domain rule for {flag}: {error}"))?;
         normalized.insert(value);
     }
@@ -932,16 +945,23 @@ pub fn skills_cli_json(execution: &SkillsCommandExecution) -> Value {
     })
 }
 
+fn canonicalize_skills_tool_name(tool_name: &str) -> &str {
+    match tool_name {
+        other => other,
+    }
+}
+
 pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<String> {
     let payload = &execution.outcome.payload;
     let tool_name = payload
         .get("tool_name")
         .and_then(Value::as_str)
-        .unwrap_or("external_skills");
+        .map(canonicalize_skills_tool_name)
+        .unwrap_or("skills");
     let mut lines = vec![format!("config={}", execution.resolved_config_path)];
 
     match tool_name {
-        "external_skills.list" | "skills.list" => {
+        "skills.list" => {
             let skills = payload
                 .get("skills")
                 .and_then(Value::as_array)
@@ -1002,10 +1022,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                 }
             }
         }
-        "skills.search"
-        | "skills.recommend"
-        | "external_skills.search"
-        | "external_skills.recommend" => {
+        "skills.search" | "skills.recommend" => {
             lines.push(format!(
                 "query={}",
                 payload.get("query").and_then(Value::as_str).unwrap_or("-")
@@ -1037,8 +1054,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
             ));
-            let is_recommendation =
-                matches!(tool_name, "skills.recommend" | "external_skills.recommend");
+            let is_recommendation = matches!(tool_name, "skills.recommend");
             let results_heading = if is_recommendation {
                 "recommended skills:"
             } else {
@@ -1065,7 +1081,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                 "skills discovery payload missing `blocked_results` array",
             )?;
         }
-        "external_skills.source_search" => {
+        "skills.source_search" => {
             let results = payload
                 .get("results")
                 .and_then(Value::as_array)
@@ -1216,7 +1232,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                 }
             }
         }
-        "external_skills.inspect" | "skills.inspect" => {
+        "skills.inspect" => {
             let skill = payload
                 .get("skill")
                 .and_then(Value::as_object)
@@ -1502,7 +1518,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                 }
             }
         }
-        "external_skills.install" | "skills.install" => {
+        "skills.install" => {
             lines.push(format!(
                 "installed skill_id={}",
                 payload
@@ -1541,7 +1557,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
             render_optional_string_section(&mut lines, "next steps:", payload.get("next_steps"))?;
             render_optional_recipe_section(&mut lines, "recipes:", payload.get("recipes"))?;
         }
-        "external_skills.remove" | "skills.remove" => {
+        "skills.remove" => {
             lines.push(format!(
                 "removed skill_id={}",
                 payload
@@ -1550,7 +1566,7 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                     .unwrap_or("-")
             ));
         }
-        "external_skills.policy" | "skills.policy" => {
+        "skills.policy" => {
             let policy = payload
                 .get("policy")
                 .and_then(Value::as_object)

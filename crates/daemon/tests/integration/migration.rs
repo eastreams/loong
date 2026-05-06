@@ -368,7 +368,7 @@ fn migration_channel_registry_includes_weixin_bridge_when_enabled() {
         "weixin-managed-bridge",
         &manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_doctor_checks(&config);
     let names = checks.iter().map(|check| check.name).collect::<Vec<_>>();
@@ -1060,7 +1060,7 @@ fn channel_registry_collects_managed_bridge_preview_when_enabled_bridge_needs_re
         weixin_preview
             .candidate
             .summary
-            .contains("external_skills.install_root is not configured"),
+            .contains("skills.install_root is not configured"),
         "enabled managed bridge channels should surface discovery guidance during migration preview: {weixin_preview:#?}"
     );
 }
@@ -1085,7 +1085,7 @@ fn channel_registry_collects_ready_managed_bridge_preview_when_compatible_plugin
         "bridge-token".to_owned(),
     ));
     config.weixin.allowed_contact_ids = vec!["wx-contact".to_owned()];
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let readiness =
         loong_daemon::migration::discovery::resolve_channel_import_readiness_from_config(&config);
@@ -1135,7 +1135,7 @@ fn channel_registry_keeps_managed_bridge_preview_in_review_when_bridge_contract_
 
     std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
     write_managed_bridge_manifest(install_root.as_path(), "weixin-ready-bridge", &manifest);
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let readiness =
         loong_daemon::migration::discovery::resolve_channel_import_readiness_from_config(&config);
@@ -1172,7 +1172,7 @@ fn channel_registry_summarizes_mixed_multi_account_managed_bridge_preview_detail
     let mut config = super::mixed_account_weixin_plugin_bridge_config();
 
     super::install_ready_weixin_managed_bridge(install_root.as_path());
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let readiness =
         loong_daemon::migration::discovery::resolve_channel_import_readiness_from_config(&config);
@@ -1446,7 +1446,7 @@ fn channel_registry_warns_when_managed_bridge_install_root_is_missing_for_enable
         checks.iter().any(|check| {
             check.name == "weixin channel"
                 && check.level == loong_daemon::migration::channels::ChannelCheckLevel::Warn
-                && check.detail.contains("external_skills.install_root")
+                && check.detail.contains("skills.install_root")
         }),
         "registry preflight should surface managed bridge discovery guidance when install_root is missing: {checks:#?}"
     );
@@ -1480,7 +1480,7 @@ fn channel_registry_passes_when_single_compatible_managed_bridge_is_available_fo
         "weixin-managed-bridge",
         &manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -1528,7 +1528,7 @@ fn channel_registry_warns_when_managed_bridge_setup_is_incomplete_for_enabled_pl
 
     std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
     super::write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -1593,7 +1593,7 @@ fn channel_registry_warns_when_managed_bridge_discovery_is_ambiguous_for_enabled
         "weixin-bridge-b",
         &second_manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -1663,7 +1663,7 @@ fn channel_registry_passes_when_managed_bridge_plugin_id_selects_a_compatible_pl
         "weixin-bridge-b",
         &second_manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -1732,7 +1732,7 @@ fn channel_registry_warns_when_managed_bridge_plugin_id_does_not_match_any_plugi
         "weixin-bridge-b",
         &second_manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -1805,7 +1805,7 @@ fn channel_registry_warns_when_managed_bridge_plugin_id_matches_duplicate_packag
         "weixin-bridge-b",
         &second_manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -1842,7 +1842,7 @@ fn channel_registry_ignores_unconfigured_plugin_backed_channels_even_when_manage
         "weixin-managed-bridge",
         &manifest,
     );
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let checks = loong_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -2698,7 +2698,7 @@ fn migration_compose_recommended_candidate_keeps_ready_plugin_backed_bridge_chan
         "weixin-token".to_owned(),
     ));
     codex.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
-    codex.external_skills.install_root = Some(install_root.display().to_string());
+    codex.skills.install_root = Some(install_root.display().to_string());
 
     let existing_candidate = loong_daemon::migration::discovery::build_import_candidate(
         loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
@@ -2760,7 +2760,7 @@ fn channel_registry_apply_selected_channels_copies_plugin_bridge_install_root() 
             "bridge_access_token": "weixin-token",
             "allowed_contact_ids": ["wxid_alice"]
         },
-        "external_skills": {
+        "skills": {
             "install_root": install_root.display().to_string()
         }
     }))
@@ -2777,7 +2777,7 @@ fn channel_registry_apply_selected_channels_copies_plugin_bridge_install_root() 
         "plugin-backed channel selection should mutate the target config"
     );
     assert_eq!(
-        target.external_skills.install_root.as_deref(),
+        target.skills.install_root.as_deref(),
         Some(install_root.to_string_lossy().as_ref()),
         "plugin-backed channel selection should carry the managed bridge install root alongside the channel config"
     );
@@ -2788,7 +2788,7 @@ fn channel_registry_apply_selected_channels_skips_conflicting_plugin_bridge_inst
     let target_install_root = unique_temp_dir("managed-bridge-target-install-root");
     let source_install_root = unique_temp_dir("managed-bridge-source-install-root");
     let mut target: mvp::config::LoongConfig = serde_json::from_value(json!({
-        "external_skills": {
+        "skills": {
             "install_root": target_install_root.display().to_string()
         }
     }))
@@ -2800,7 +2800,7 @@ fn channel_registry_apply_selected_channels_skips_conflicting_plugin_bridge_inst
             "bridge_access_token": "weixin-token",
             "allowed_contact_ids": ["wxid_alice"]
         },
-        "external_skills": {
+        "skills": {
             "install_root": source_install_root.display().to_string()
         }
     }))
@@ -2821,7 +2821,7 @@ fn channel_registry_apply_selected_channels_skips_conflicting_plugin_bridge_inst
         "conflicting managed bridge install roots should leave the target channel unchanged"
     );
     assert_eq!(
-        target.external_skills.install_root.as_deref(),
+        target.skills.install_root.as_deref(),
         Some(target_install_root.to_string_lossy().as_ref()),
         "conflicting managed bridge install roots should preserve the existing managed bridge root"
     );
@@ -2856,7 +2856,7 @@ fn migration_compose_recommended_candidate_marks_plugin_bridge_install_root_conf
             "client_secret": "qqbot-secret",
             "allowed_peer_ids": ["openid-alice"]
         },
-        "external_skills": {
+        "skills": {
             "install_root": current_install_root.display().to_string()
         }
     }))
@@ -2885,7 +2885,7 @@ fn migration_compose_recommended_candidate_marks_plugin_bridge_install_root_conf
         "weixin-token".to_owned(),
     ));
     codex.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
-    codex.external_skills.install_root = Some(detected_install_root.display().to_string());
+    codex.skills.install_root = Some(detected_install_root.display().to_string());
 
     let existing_candidate = loong_daemon::migration::discovery::build_import_candidate(
         loong_daemon::migration::types::ImportSourceKind::ExistingLoongConfig,
@@ -2924,7 +2924,7 @@ fn migration_compose_recommended_candidate_marks_plugin_bridge_install_root_conf
         "recommended import should not silently merge a plugin-backed channel that depends on a conflicting managed bridge install root"
     );
     assert_eq!(
-        composed.config.external_skills.install_root.as_deref(),
+        composed.config.skills.install_root.as_deref(),
         Some(current_install_root.to_string_lossy().as_ref()),
         "recommended import should preserve the active managed bridge install root when another source conflicts"
     );
@@ -2961,7 +2961,7 @@ fn migration_compose_recommended_candidate_preserves_selected_channel_conflict_o
             "client_secret": "qqbot-secret",
             "allowed_peer_ids": ["openid-alice"]
         },
-        "external_skills": {
+        "skills": {
             "install_root": current_install_root.display().to_string()
         }
     }))
@@ -2986,7 +2986,7 @@ fn migration_compose_recommended_candidate_preserves_selected_channel_conflict_o
         "weixin-token".to_owned(),
     ));
     conflicting.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
-    conflicting.external_skills.install_root = Some(conflicting_install_root.display().to_string());
+    conflicting.skills.install_root = Some(conflicting_install_root.display().to_string());
 
     supplemental.provider.model = "openai/gpt-5.1-codex".to_owned();
     supplemental.weixin.enabled = true;

@@ -18,7 +18,7 @@ use super::super::context_engine::{
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::{
     AsyncDelegateSpawner, DefaultAsyncDelegateSpawner, DefaultConversationRuntime, LoongConfig,
-    ProviderTurn, SessionContext, ToolView, apply_active_external_skill_blocked_tools_to_tool_view,
+    ProviderTurn, SessionContext, ToolView, apply_active_skill_blocked_tools_to_tool_view,
     apply_session_tool_policy_to_tool_view, build_base_tool_view_from_snapshot,
     build_session_context_from_snapshot, load_persisted_session_context,
     load_persisted_session_snapshot, open_session_repository, provider_runtime_binding,
@@ -298,11 +298,11 @@ where
                     .as_ref()
                     .and_then(|snapshot| snapshot.session_tool_policy.as_ref()),
             );
-            Ok(apply_active_external_skill_blocked_tools_to_tool_view(
+            Ok(apply_active_skill_blocked_tools_to_tool_view(
                 tool_view,
                 snapshot
                     .as_ref()
-                    .and_then(|snapshot| snapshot.active_external_skills.as_ref()),
+                    .and_then(|snapshot| snapshot.active_skills.as_ref()),
             ))
         }
 

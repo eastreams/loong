@@ -278,7 +278,7 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_account_summary_for_mi
     let mut config = mixed_account_weixin_plugin_bridge_config();
 
     install_ready_weixin_managed_bridge(install_root.as_path());
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let inventory = mvp::channel::channel_inventory(&config);
     let payload = build_channels_cli_json_payload("/tmp/loong.toml", &inventory);

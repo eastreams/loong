@@ -14,6 +14,9 @@ use crate::{
 const DEFAULT_MODE: &str = "plan";
 pub(super) const CONFIG_IMPORT_TOOL_NAME: &str = "config.import";
 const SUPPORTED_SOURCES: &str = "auto, nanobot, openclaw, picoclaw, zeroclaw, nanoclaw";
+const MAP_SKILLS_MODE_KEY: &str = "map_skills";
+const APPLY_SKILLS_PLAN_KEY: &str = "apply_skills_plan";
+const SKILLS_MANIFEST_PATH_KEY: &str = "skills_manifest_path";
 
 pub(super) fn config_import_mode(payload: &serde_json::Map<String, Value>) -> &str {
     let raw_mode = payload.get("mode");
@@ -59,11 +62,11 @@ pub(super) fn execute_config_import_tool_with_config(
             | "plan_many"
             | "recommend_primary"
             | "merge_profiles"
-            | "map_external_skills"
+            | MAP_SKILLS_MODE_KEY
             | "rollback_last_apply"
     ) {
         return Err(format!(
-            "{CONFIG_IMPORT_TOOL_NAME} payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_external_skills`, or `rollback_last_apply`, got `{mode}`"
+            "{CONFIG_IMPORT_TOOL_NAME} payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_skills`, or `rollback_last_apply`, got `{mode}`"
         ));
     }
 
@@ -193,14 +196,14 @@ pub(super) fn execute_config_import_tool_with_config(
         });
     }
 
-    if mode == "map_external_skills" {
+    if mode == MAP_SKILLS_MODE_KEY {
         let mapping = migration::plan_external_skill_mapping(input_path.as_path());
         return Ok(ToolCoreOutcome {
             status: "ok".to_owned(),
             payload: json!({
                 "adapter": "core-tools",
                 "tool_name": request.tool_name,
-                "mode": "map_external_skills",
+                "mode": MAP_SKILLS_MODE_KEY,
                 "input_path": input_path.display().to_string(),
                 "result": external_skill_mapping_plan_payload(&mapping),
             }),
@@ -212,8 +215,8 @@ pub(super) fn execute_config_import_tool_with_config(
             migration::discover_import_sources(input_path, migration::DiscoveryOptions::default())?;
         let summary = migration::plan_import_sources(&report)?;
         let selection = parse_apply_selection_mode(payload, &summary)?;
-        let apply_external_skills_plan = payload
-            .get("apply_external_skills_plan")
+        let apply_skills_plan = payload
+            .get(APPLY_SKILLS_PLAN_KEY)
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let selected_output_path = output_path.ok_or_else(|| {
@@ -223,8 +226,8 @@ pub(super) fn execute_config_import_tool_with_config(
             discovery: report,
             output_path: selected_output_path,
             mode: selection,
-            apply_external_skills_plan,
-            external_skills_input_path: if apply_external_skills_plan {
+            apply_skills_plan,
+            skills_input_path: if apply_skills_plan {
                 Some(input_path.to_path_buf())
             } else {
                 None
@@ -238,7 +241,7 @@ pub(super) fn execute_config_import_tool_with_config(
                 "mode": "apply_selected",
                 "input_path": input_path.display().to_string(),
                 "output_path": result.output_path.display().to_string(),
-                "apply_external_skills_plan": apply_external_skills_plan,
+                APPLY_SKILLS_PLAN_KEY: apply_skills_plan,
                 "result": apply_selection_result_payload(&result),
             }),
         });
@@ -401,8 +404,8 @@ fn apply_selection_result_payload(result: &migration::ApplyImportSelectionResult
         "output_path": result.output_path.display().to_string(),
         "backup_path": result.backup_path.display().to_string(),
         "manifest_path": result.manifest_path.display().to_string(),
-        "external_skills_manifest_path": result
-            .external_skills_manifest_path
+        SKILLS_MANIFEST_PATH_KEY: result
+            .skills_manifest_path
             .as_ref()
             .map(|path| path.display().to_string()),
         "selected_primary_source_id": result.selected_primary_source_id,

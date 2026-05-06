@@ -25,6 +25,12 @@ use crate::secrets::has_configured_secret_ref;
 mod web_search_runtime;
 pub use web_search_runtime::WebSearchRuntimePolicy;
 
+pub const SKILLS_ENABLED_ENV: &str = "LOONG_SKILLS_ENABLED";
+pub const SKILLS_REQUIRE_DOWNLOAD_APPROVAL_ENV: &str = "LOONG_SKILLS_REQUIRE_DOWNLOAD_APPROVAL";
+pub const SKILLS_ALLOWED_DOMAINS_ENV: &str = "LOONG_SKILLS_ALLOWED_DOMAINS";
+pub const SKILLS_BLOCKED_DOMAINS_ENV: &str = "LOONG_SKILLS_BLOCKED_DOMAINS";
+pub const SKILLS_INSTALL_ROOT_ENV: &str = "LOONG_SKILLS_INSTALL_ROOT";
+pub const SKILLS_AUTO_EXPOSE_INSTALLED_ENV: &str = "LOONG_SKILLS_AUTO_EXPOSE_INSTALLED";
 fn bool_is_false(value: &bool) -> bool {
     !*value
 }
@@ -212,7 +218,7 @@ pub(crate) fn merge_runtime_narrowing_sources(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalSkillsRuntimePolicy {
+pub struct SkillsRuntimePolicy {
     pub enabled: bool,
     pub require_download_approval: bool,
     pub allowed_domains: BTreeSet<String>,
@@ -221,7 +227,7 @@ pub struct ExternalSkillsRuntimePolicy {
     pub auto_expose_installed: bool,
 }
 
-impl Default for ExternalSkillsRuntimePolicy {
+impl Default for SkillsRuntimePolicy {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -630,7 +636,7 @@ pub struct ToolRuntimeConfig {
     pub web_fetch: WebFetchRuntimePolicy,
     pub web_search: WebSearchRuntimePolicy,
     pub autonomy_profile: AutonomyProfile,
-    pub external_skills: ExternalSkillsRuntimePolicy,
+    pub skills: SkillsRuntimePolicy,
     pub tool_execution: ToolExecutionConfig,
     #[cfg(feature = "feishu-integration")]
     pub feishu: Option<FeishuToolRuntimeConfig>,
@@ -660,7 +666,7 @@ impl Default for ToolRuntimeConfig {
             web_fetch: WebFetchRuntimePolicy::default(),
             web_search: WebSearchRuntimePolicy::default(),
             autonomy_profile: AutonomyProfile::default(),
-            external_skills: ExternalSkillsRuntimePolicy::default(),
+            skills: SkillsRuntimePolicy::default(),
             tool_execution: ToolExecutionConfig::default(),
             #[cfg(feature = "feishu-integration")]
             feishu: None,
@@ -767,21 +773,21 @@ impl ToolRuntimeConfig {
             },
             web_search: WebSearchRuntimePolicy::from_loong_config(config),
             autonomy_profile: config.tools.autonomy_profile,
-            external_skills: ExternalSkillsRuntimePolicy {
-                enabled: config.external_skills.enabled,
-                require_download_approval: config.external_skills.require_download_approval,
+            skills: SkillsRuntimePolicy {
+                enabled: config.skills.enabled,
+                require_download_approval: config.skills.require_download_approval,
                 allowed_domains: config
-                    .external_skills
+                    .skills
                     .normalized_allowed_domains()
                     .into_iter()
                     .collect(),
                 blocked_domains: config
-                    .external_skills
+                    .skills
                     .normalized_blocked_domains()
                     .into_iter()
                     .collect(),
-                install_root: config.external_skills.resolved_install_root(),
-                auto_expose_installed: config.external_skills.auto_expose_installed,
+                install_root: config.skills.resolved_install_root(),
+                auto_expose_installed: config.skills.auto_expose_installed,
             },
             tool_execution: ToolExecutionConfig {
                 default_timeout_seconds: config.tools.tool_execution.default_timeout_seconds,
@@ -852,16 +858,14 @@ impl ToolRuntimeConfig {
         let web_fetch_max_redirects = parse_env_usize("LOONG_WEB_FETCH_MAX_REDIRECTS")
             .unwrap_or(crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS);
         let autonomy_profile = resolve_autonomy_profile_from_env();
-        let enabled = parse_env_bool("LOONG_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
+        let enabled = parse_env_bool(SKILLS_ENABLED_ENV).unwrap_or(false);
         let require_download_approval =
-            parse_env_bool("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(false);
-        let allowed_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS");
-        let blocked_domains = parse_env_domain_list("LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS");
-        let install_root = std::env::var("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT")
-            .ok()
-            .map(PathBuf::from);
+            parse_env_bool(SKILLS_REQUIRE_DOWNLOAD_APPROVAL_ENV).unwrap_or(false);
+        let allowed_domains = parse_env_domain_list(SKILLS_ALLOWED_DOMAINS_ENV);
+        let blocked_domains = parse_env_domain_list(SKILLS_BLOCKED_DOMAINS_ENV);
+        let install_root = parse_env_path(SKILLS_INSTALL_ROOT_ENV);
         let auto_expose_installed =
-            parse_env_bool("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED").unwrap_or(false);
+            parse_env_bool(SKILLS_AUTO_EXPOSE_INSTALLED_ENV).unwrap_or(false);
 
         let tool_execution_default_timeout = parse_env_u64("LOONG_TOOL_DEFAULT_TIMEOUT_SECONDS");
         let mut tool_execution_per_tool_timeout = BTreeMap::new();
@@ -926,7 +930,7 @@ impl ToolRuntimeConfig {
             tool_execution,
             ..Self::default()
         }
-        .with_external_skills_policy(ExternalSkillsRuntimePolicy {
+        .with_skills_policy(SkillsRuntimePolicy {
             enabled,
             require_download_approval,
             allowed_domains,
@@ -936,8 +940,8 @@ impl ToolRuntimeConfig {
         })
     }
 
-    fn with_external_skills_policy(mut self, external_skills: ExternalSkillsRuntimePolicy) -> Self {
-        self.external_skills = external_skills;
+    fn with_skills_policy(mut self, skills: SkillsRuntimePolicy) -> Self {
+        self.skills = skills;
         #[cfg(feature = "feishu-integration")]
         {
             self.feishu = FeishuToolRuntimeConfig::from_env();
@@ -1450,12 +1454,6 @@ mod tests {
             "FIRECRAWL_API_KEY",
             "JINA_API_KEY",
             "JINA_AUTH_TOKEN",
-            "LOONG_EXTERNAL_SKILLS_ENABLED",
-            "LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
-            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
-            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
-            "LOONG_EXTERNAL_SKILLS_INSTALL_ROOT",
-            "LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
         ] {
             env.remove(key);
         }
@@ -1514,12 +1512,12 @@ mod tests {
             config.web_search.max_results,
             crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
         );
-        assert!(config.external_skills.enabled);
-        assert!(!config.external_skills.require_download_approval);
-        assert!(config.external_skills.allowed_domains.is_empty());
-        assert!(config.external_skills.blocked_domains.is_empty());
-        assert!(config.external_skills.install_root.is_none());
-        assert!(!config.external_skills.auto_expose_installed);
+        assert!(config.skills.enabled);
+        assert!(!config.skills.require_download_approval);
+        assert!(config.skills.allowed_domains.is_empty());
+        assert!(config.skills.blocked_domains.is_empty());
+        assert!(config.skills.install_root.is_none());
+        assert!(!config.skills.auto_expose_installed);
     }
 
     #[test]
@@ -1809,7 +1807,7 @@ mod tests {
                 max_bytes: 262_144,
                 max_redirects: 1,
             },
-            external_skills: ExternalSkillsRuntimePolicy {
+            skills: SkillsRuntimePolicy {
                 enabled: true,
                 require_download_approval: false,
                 allowed_domains: BTreeSet::from(["skills.sh".to_owned()]),
@@ -1854,14 +1852,14 @@ mod tests {
         assert_eq!(config.web_fetch.timeout_seconds, 9);
         assert_eq!(config.web_fetch.max_bytes, 262_144);
         assert_eq!(config.web_fetch.max_redirects, 1);
-        assert!(config.external_skills.enabled);
-        assert!(!config.external_skills.require_download_approval);
-        assert!(config.external_skills.allowed_domains.contains("skills.sh"));
+        assert!(config.skills.enabled);
+        assert!(!config.skills.require_download_approval);
+        assert!(config.skills.allowed_domains.contains("skills.sh"));
         assert_eq!(
-            config.external_skills.install_root,
+            config.skills.install_root,
             Some(PathBuf::from("/tmp/test-root/skills"))
         );
-        assert!(!config.external_skills.auto_expose_installed);
+        assert!(!config.skills.auto_expose_installed);
     }
 
     #[test]
@@ -2172,7 +2170,7 @@ mod tests {
     }
 
     #[test]
-    fn from_env_parses_external_skills_policy() {
+    fn from_env_parses_skills_policy() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
         #[cfg(feature = "feishu-integration")]
@@ -2195,18 +2193,9 @@ mod tests {
         env.set("LOONG_WEB_FETCH_TIMEOUT_SECONDS", "9");
         env.set("LOONG_WEB_FETCH_MAX_BYTES", "262144");
         env.set("LOONG_WEB_FETCH_MAX_REDIRECTS", "1");
-        env.set("LOONG_EXTERNAL_SKILLS_ENABLED", "true");
-        env.set("LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL", "false");
-        env.set(
-            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
-            "skills.sh,clawhub.ai",
-        );
-        env.set(
-            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
-            "malicious.example,*.clawhub.io",
-        );
-        env.set("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT", "/tmp/managed-skills");
-        env.set("LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
+        env.set("LOONG_SKILLS_ENABLED", "true");
+        env.set("LOONG_SKILLS_REQUIRE_DOWNLOAD_APPROVAL", "false");
+        env.set("LOONG_SKILLS_AUTO_EXPOSE_INSTALLED", "false");
 
         let config = ToolRuntimeConfig::from_env();
         assert!(!config.sessions_enabled);
@@ -2250,32 +2239,36 @@ mod tests {
             config.web_search.max_results,
             crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS
         );
-        assert!(config.external_skills.enabled);
-        assert!(!config.external_skills.require_download_approval);
-        assert!(config.external_skills.allowed_domains.contains("skills.sh"));
-        assert!(
-            config
-                .external_skills
-                .allowed_domains
-                .contains("clawhub.ai")
-        );
-        assert!(
-            config
-                .external_skills
-                .blocked_domains
-                .contains("malicious.example")
-        );
-        assert!(
-            config
-                .external_skills
-                .blocked_domains
-                .contains("*.clawhub.io")
-        );
+        assert!(config.skills.enabled);
+        assert!(!config.skills.require_download_approval);
+        assert!(config.skills.allowed_domains.is_empty());
+        assert!(config.skills.blocked_domains.is_empty());
+        assert!(config.skills.install_root.is_none());
+        assert!(!config.skills.auto_expose_installed);
+    }
+
+    #[test]
+    fn from_env_parses_canonical_skills_env_names() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        #[cfg(feature = "feishu-integration")]
+        clear_feishu_runtime_env(&mut env);
+
+        env.set("LOONG_SKILLS_ENABLED", "true");
+        env.set("LOONG_SKILLS_REQUIRE_DOWNLOAD_APPROVAL", "false");
+        env.set("LOONG_SKILLS_INSTALL_ROOT", "/tmp/.loong/skills");
+        env.set("LOONG_SKILLS_AUTO_EXPOSE_INSTALLED", "true");
+
+        let config = ToolRuntimeConfig::from_env();
+        assert!(config.skills.enabled);
+        assert!(!config.skills.require_download_approval);
+        assert!(config.skills.allowed_domains.is_empty());
+        assert!(config.skills.blocked_domains.is_empty());
         assert_eq!(
-            config.external_skills.install_root,
-            Some(PathBuf::from("/tmp/managed-skills"))
+            config.skills.install_root,
+            Some(PathBuf::from("/tmp/.loong/skills"))
         );
-        assert!(!config.external_skills.auto_expose_installed);
+        assert!(config.skills.auto_expose_installed);
     }
 
     #[test]
@@ -2433,8 +2426,8 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_policy_struct_construction() {
-        let policy = ExternalSkillsRuntimePolicy {
+    fn skills_policy_struct_construction() {
+        let policy = SkillsRuntimePolicy {
             enabled: true,
             require_download_approval: false,
             allowed_domains: BTreeSet::from(["skills.sh".to_owned(), "clawhub.ai".to_owned()]),

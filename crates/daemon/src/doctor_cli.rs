@@ -1294,7 +1294,8 @@ fn managed_plugin_bridge_discovery_check_detail(
 
     match discovery.status {
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::NotConfigured => {
-            "managed bridge discovery is unavailable because external_skills.install_root is not configured".to_owned()
+            "managed bridge discovery is unavailable because skills.install_root is not configured"
+                .to_owned()
         }
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::ScanFailed => {
             let scan_issue = discovery
@@ -1302,8 +1303,9 @@ fn managed_plugin_bridge_discovery_check_detail(
                 .as_deref()
                 .map(crate::render_line_safe_text_value)
                 .unwrap_or_else(|| "unknown scan failure".to_owned());
-            let detail =
-                format!("managed bridge discovery failed under {managed_install_root}: {scan_issue}");
+            let detail = format!(
+                "managed bridge discovery failed under {managed_install_root}: {scan_issue}"
+            );
 
             detail
         }
@@ -1324,15 +1326,17 @@ fn managed_plugin_bridge_discovery_check_detail(
         }
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound => {
             let compatible_plugins = discovery.compatible_plugins;
-            let compatible_plugin_ids =
-                render_managed_plugin_bridge_compatible_plugin_ids(&discovery.compatible_plugin_ids);
+            let compatible_plugin_ids = render_managed_plugin_bridge_compatible_plugin_ids(
+                &discovery.compatible_plugin_ids,
+            );
             let ambiguity_status = discovery
                 .ambiguity_status
                 .map(|status| status.as_str())
                 .unwrap_or("-");
             let incomplete_plugins = discovery.incomplete_plugins;
             let incompatible_plugins = discovery.incompatible_plugins;
-            let rendered_plugins = render_managed_plugin_bridge_discovery_plugins(&discovery.plugins);
+            let rendered_plugins =
+                render_managed_plugin_bridge_discovery_plugins(&discovery.plugins);
             let mut detail = format!(
                 "managed bridge discovery root={managed_install_root} configured_plugin_id={configured_plugin_id} selected_plugin_id={selected_plugin_id} selection_status={selection_status} compatible={compatible_plugins} compatible_plugin_ids={compatible_plugin_ids} ambiguity_status={ambiguity_status} incomplete={incomplete_plugins} incompatible={incompatible_plugins} plugins={rendered_plugins}"
             );
@@ -3558,7 +3562,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-managed-bridge", &manifest);
 
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
 
@@ -3612,7 +3616,7 @@ mod tests {
             &second_manifest,
         );
 
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
 
@@ -3660,7 +3664,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-a", &first_manifest);
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-b", &second_manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
 
@@ -3702,7 +3706,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "qqbot-incomplete-bridge", &manifest);
 
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let _ = check_channel_surfaces(&config);
     }
@@ -3742,7 +3746,7 @@ mod tests {
         );
 
         write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let _ = check_channel_surfaces(&config);
     }
@@ -5553,7 +5557,7 @@ mod tests {
         );
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-guided", &manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
@@ -5598,7 +5602,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-a", &first_manifest);
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-b", &second_manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
@@ -5649,7 +5653,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-a", &first_manifest);
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-b", &second_manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
 
@@ -5693,7 +5697,7 @@ mod tests {
         .expect("deserialize weixin config");
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-managed-bridge", &manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
 
@@ -5740,7 +5744,7 @@ mod tests {
         .expect("deserialize weixin config");
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-managed-bridge", &manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let inventory = mvp::channel::channel_inventory(&config);
         let checks = collect_channel_surface_checks(&inventory);
@@ -5824,7 +5828,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-a", &first_manifest);
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-b", &second_manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
@@ -5875,7 +5879,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-a", &first_manifest);
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-b", &second_manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
         let next_steps = build_doctor_next_steps_with_path_env(
@@ -5926,7 +5930,7 @@ mod tests {
 
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-a", &first_manifest);
         write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge-b", &second_manifest);
-        config.external_skills.install_root = Some(install_root.display().to_string());
+        config.skills.install_root = Some(install_root.display().to_string());
 
         let checks = check_channel_surfaces(&config);
         let inventory = mvp::channel::channel_inventory(&config);

@@ -216,12 +216,11 @@ pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
     channel_catalog: &[ChannelCatalogEntry],
 ) -> BTreeMap<&'static str, ChannelPluginBridgeDiscovery> {
     let plugin_backed_channel_ids = plugin_backed_channel_ids(channel_catalog);
-    let scan_roots =
-        if let Some(managed_install_root) = config.external_skills.resolved_install_root() {
-            vec![managed_install_root]
-        } else {
-            config.runtime_plugins.resolved_roots()
-        };
+    let scan_roots = if let Some(managed_install_root) = config.skills.resolved_install_root() {
+        vec![managed_install_root]
+    } else {
+        config.runtime_plugins.resolved_roots()
+    };
     if scan_roots.is_empty() {
         return build_not_configured_discovery_by_id(config, &plugin_backed_channel_ids);
     }

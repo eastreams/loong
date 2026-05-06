@@ -702,13 +702,13 @@ fn resolve_preinstalled_skill_selection(
     parse_preinstalled_skill_selection(raw.as_str())
 }
 
-fn onboarding_default_external_skills_install_root(output_path: &Path) -> PathBuf {
+fn onboarding_default_skills_install_root(output_path: &Path) -> PathBuf {
     let base_dir = output_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    base_dir.join("external-skills-installed")
+    base_dir.join(".loong/skills")
 }
 
 fn apply_selected_preinstalled_skills_to_config(
@@ -719,11 +719,11 @@ fn apply_selected_preinstalled_skills_to_config(
     if selected_skill_ids.is_empty() {
         return;
     }
-    config.external_skills.enabled = true;
-    config.external_skills.auto_expose_installed = true;
-    if config.external_skills.install_root.is_none() {
-        config.external_skills.install_root = Some(
-            onboarding_default_external_skills_install_root(output_path)
+    config.skills.enabled = true;
+    config.skills.auto_expose_installed = true;
+    if config.skills.install_root.is_none() {
+        config.skills.install_root = Some(
+            onboarding_default_skills_install_root(output_path)
                 .display()
                 .to_string(),
         );
@@ -735,9 +735,9 @@ fn install_root_for_onboarded_skills(
     config_path: &Path,
 ) -> PathBuf {
     config
-        .external_skills
+        .skills
         .resolved_install_root()
-        .unwrap_or_else(|| onboarding_default_external_skills_install_root(config_path))
+        .unwrap_or_else(|| onboarding_default_skills_install_root(config_path))
 }
 
 fn install_selected_preinstalled_skills(
@@ -758,7 +758,7 @@ fn install_selected_preinstalled_skills(
         if install_root.join(skill_id).join("SKILL.md").is_file() {
             continue;
         }
-        if let Err(error) = mvp::tools::external_skills_operator_install_with_config(
+        if let Err(error) = mvp::tools::skills_install_with_config(
             None,
             Some(skill_id.as_str()),
             None,
@@ -768,10 +768,8 @@ fn install_selected_preinstalled_skills(
             &tool_runtime_config,
         ) {
             for installed_skill_id in installed_now.iter().rev() {
-                let _ = mvp::tools::external_skills_operator_remove_with_config(
-                    installed_skill_id,
-                    &tool_runtime_config,
-                );
+                let _ =
+                    mvp::tools::skills_remove_with_config(installed_skill_id, &tool_runtime_config);
             }
             return Err(format!(
                 "failed to install selected bundled skill `{skill_id}`: {error}"

@@ -40,9 +40,6 @@ mod config_import;
 pub(crate) mod delegate;
 mod direct_policy_preflight;
 pub(crate) mod download_guard;
-mod external_skills;
-mod external_skills_scan;
-mod external_skills_sources;
 #[cfg(feature = "feishu-integration")]
 mod feishu;
 mod file;
@@ -68,6 +65,9 @@ mod session_search;
 mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
+mod skills;
+mod skills_scan;
+mod skills_sources;
 mod tool_app_runtime;
 mod tool_dispatch;
 mod tool_identity;
@@ -101,9 +101,8 @@ pub use catalog::{
     delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_contract,
     delegate_child_tool_view_with_constraints, governance_profile_for_descriptor,
     governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
-    runtime_tool_view, runtime_tool_view_for_config,
-    runtime_tool_view_for_config_with_external_skills, runtime_tool_view_for_runtime_config,
-    tool_catalog,
+    runtime_tool_view, runtime_tool_view_for_config, runtime_tool_view_for_config_with_skills,
+    runtime_tool_view_for_runtime_config, tool_catalog,
 };
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
@@ -139,9 +138,8 @@ pub(crate) use tool_path::normalize_without_fs;
 pub use tool_runtime_view::runtime_tool_view_from_loong_config;
 pub(crate) use tool_runtime_view::{
     effective_runtime_visible_tool_view, full_runtime_tool_view_for_runtime_config,
-    model_visible_external_skill_context_payload_for_path,
-    model_visible_external_skill_context_payload_for_skill_id,
-    model_visible_external_skill_roots_for_runtime_config, runtime_tool_view_with_runtime_config,
+    model_visible_skill_context_payload_for_path, model_visible_skill_context_payload_for_skill_id,
+    model_visible_skill_roots_for_runtime_config, runtime_tool_view_with_runtime_config,
 };
 pub(crate) use tool_snapshot::capability_snapshot_for_direct_states_with_config;
 pub(crate) use tool_snapshot::capability_snapshot_for_view_with_config;
@@ -194,31 +192,31 @@ pub(crate) const LOONG_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visibl
 pub(crate) const LOONG_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
 pub(crate) const LOONG_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
 
-pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
-    external_skills::normalize_domain_rule(raw)
+pub fn normalize_skills_domain_rule(raw: &str) -> Result<String, String> {
+    skills::normalize_domain_rule(raw)
 }
 
-pub fn normalize_external_skill_domain_rule(raw: &str) -> Result<String, String> {
-    normalize_external_skills_domain_rule(raw)
+pub fn normalize_skill_domain_rule(raw: &str) -> Result<String, String> {
+    normalize_skills_domain_rule(raw)
 }
 
-pub fn external_skills_operator_list_with_config(
+pub fn skills_list_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_list_tool_with_config(config)
+    skills::execute_skills_list_with_config(config)
 }
 
-pub fn external_skills_operator_inspect_with_config(
+pub fn skills_inspect_with_config(
     skill_id: &str,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_inspect_tool_with_config(skill_id, config)
+    skills::execute_skills_inspect_with_config(skill_id, config)
 }
 
-pub(crate) fn model_visible_external_skill_ids_with_config(
+pub(crate) fn model_visible_skill_ids_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Vec<String> {
-    external_skills::model_visible_skill_catalog_entries_with_config(config)
+    skills::model_visible_skill_catalog_entries_with_config(config)
         .into_iter()
         .map(|entry| entry.skill_id)
         .collect()
@@ -228,46 +226,46 @@ pub(crate) fn install_bundled_preinstall_targets_for_bootstrap(
     config: &runtime_config::ToolRuntimeConfig,
     selected_target_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
-    external_skills::install_bundled_preinstall_targets_for_bootstrap(config, selected_target_ids)
+    skills::install_bundled_preinstall_targets_for_bootstrap(config, selected_target_ids)
 }
 
 pub(crate) fn remove_bundled_preinstall_targets_for_bootstrap(
     config: &runtime_config::ToolRuntimeConfig,
     selected_target_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
-    external_skills::remove_bundled_preinstall_targets_for_bootstrap(config, selected_target_ids)
+    skills::remove_bundled_preinstall_targets_for_bootstrap(config, selected_target_ids)
 }
 
 pub(crate) fn installed_managed_skill_ids_for_bootstrap(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<BTreeSet<String>, String> {
-    external_skills::installed_managed_skill_ids_for_bootstrap(config)
+    skills::installed_managed_skill_ids_for_bootstrap(config)
 }
 
-pub fn external_skills_operator_search_with_config(
+pub fn skills_search_with_config(
     query: &str,
     limit: usize,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_search_with_config(query, limit, config)
+    skills::execute_skills_search_with_config(query, limit, config)
 }
 
-pub fn external_skills_operator_recommend_with_config(
+pub fn skills_recommend_with_config(
     query: &str,
     limit: usize,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_recommend_with_config(query, limit, config)
+    skills::execute_skills_recommend_with_config(query, limit, config)
 }
 
-pub fn external_skills_operator_fetch_with_config(
+pub fn skills_fetch_with_config(
     reference: &str,
     save_as: Option<&str>,
     max_bytes: Option<usize>,
     approval_granted: bool,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_fetch_tool_with_config(
+    skills::execute_skills_fetch_with_config(
         reference,
         save_as,
         max_bytes,
@@ -276,7 +274,7 @@ pub fn external_skills_operator_fetch_with_config(
     )
 }
 
-pub fn external_skills_operator_install_with_config(
+pub fn skills_install_with_config(
     path: Option<&str>,
     bundled_skill_id: Option<&str>,
     skill_id: Option<&str>,
@@ -285,7 +283,7 @@ pub fn external_skills_operator_install_with_config(
     replace: bool,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_install_tool_with_config(
+    skills::execute_skills_install_with_config(
         path,
         bundled_skill_id,
         skill_id,
@@ -296,20 +294,20 @@ pub fn external_skills_operator_install_with_config(
     )
 }
 
-pub fn external_skills_operator_remove_with_config(
+pub fn skills_remove_with_config(
     skill_id: &str,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_remove_tool_with_config(skill_id, config)
+    skills::execute_skills_remove_with_config(skill_id, config)
 }
 
-pub fn external_skills_operator_policy_get_with_config(
+pub fn skills_policy_get_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_policy_get_with_config(config)
+    skills::execute_skills_policy_get_with_config(config)
 }
 
-pub fn external_skills_operator_policy_set_with_config(
+pub fn skills_policy_set_with_config(
     enabled: Option<bool>,
     require_download_approval: Option<bool>,
     allowed_domains: Option<BTreeSet<String>>,
@@ -317,7 +315,7 @@ pub fn external_skills_operator_policy_set_with_config(
     policy_update_approved: bool,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_policy_set_with_config(
+    skills::execute_skills_policy_set_with_config(
         enabled,
         require_download_approval,
         allowed_domains,
@@ -327,24 +325,19 @@ pub fn external_skills_operator_policy_set_with_config(
     )
 }
 
-pub fn external_skills_operator_policy_reset_with_config(
+pub fn skills_policy_reset_with_config(
     policy_update_approved: bool,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    external_skills::execute_external_skills_operator_policy_reset_with_config(
-        policy_update_approved,
-        config,
-    )
+    skills::execute_skills_policy_reset_with_config(policy_update_approved, config)
 }
 
-pub(crate) fn discover_installable_external_skill_roots(
-    root: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    external_skills::discover_installable_skill_roots(root)
+pub(crate) fn discover_installable_skill_roots(root: &Path) -> Result<Vec<PathBuf>, String> {
+    skills::discover_installable_skill_roots(root)
 }
 
-pub(crate) fn resolve_installable_external_skill_id(root: &Path) -> Result<String, String> {
-    external_skills::resolve_installable_skill_id(root)
+pub(crate) fn resolve_installable_skill_id(root: &Path) -> Result<String, String> {
+    skills::resolve_installable_skill_id(root)
 }
 
 /// Execute a tool request, routing through the kernel for

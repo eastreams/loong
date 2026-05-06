@@ -2823,9 +2823,9 @@ fn ask_cli_installed_skill_can_be_discovered_and_loaded_e2e() {
     std::fs::write(skill_source_path.as_path(), skill_source).expect("write skill source");
 
     fixture.write_config_with(|config| {
-        config.external_skills.enabled = true;
-        config.external_skills.auto_expose_installed = true;
-        config.external_skills.install_root = Some(
+        config.skills.enabled = true;
+        config.skills.auto_expose_installed = true;
+        config.skills.install_root = Some(
             fixture
                 .root_path()
                 .join("managed-skills")
@@ -2909,9 +2909,9 @@ fn ask_cli_installed_skill_can_be_discovered_and_loaded_e2e() {
         config.provider.model = "test-model".to_owned();
         config.provider.wire_api = ProviderWireApi::ChatCompletions;
         config.provider.api_key = Some(SecretRef::Inline("test-provider-key".to_owned()));
-        config.external_skills.enabled = true;
-        config.external_skills.auto_expose_installed = true;
-        config.external_skills.install_root = Some(
+        config.skills.enabled = true;
+        config.skills.auto_expose_installed = true;
+        config.skills.install_root = Some(
             fixture
                 .root_path()
                 .join("managed-skills")

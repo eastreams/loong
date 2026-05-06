@@ -102,8 +102,8 @@ impl LatestSelectorCliFixture {
             &config,
             Some(&self.config_path),
         );
-        mvp::tools::external_skills_operator_policy_reset_with_config(true, &runtime_config)
-            .expect("reset external skills policy override");
+        mvp::tools::skills_policy_reset_with_config(true, &runtime_config)
+            .expect("reset skills policy override");
         config
     }
 

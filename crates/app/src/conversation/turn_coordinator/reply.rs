@@ -547,7 +547,7 @@ fn finalize_provider_reply(
 ) -> ResolvedProviderTurn {
     #[cfg(feature = "memory-sqlite")]
     if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
-        persist_active_external_skills_from_followup_payload_if_needed(
+        persist_active_skills_from_followup_payload_if_needed(
             &continue_phase.followup_config,
             session_id,
             latest_tool_payload,
@@ -581,7 +581,7 @@ async fn handle_guard_followup_reply<R: ConversationRuntime + ?Sized>(
 ) -> ResolvedProviderTurn {
     #[cfg(feature = "memory-sqlite")]
     if let Some(latest_tool_payload) = latest_tool_payload.as_ref() {
-        persist_active_external_skills_from_followup_payload_if_needed(
+        persist_active_skills_from_followup_payload_if_needed(
             &state.current_continue_phase.followup_config,
             session_id,
             latest_tool_payload,
@@ -668,7 +668,7 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
             .provider_originated_tool_intents
             && matches!(followup, ToolDrivenFollowupPayload::ToolResult { .. }));
     #[cfg(feature = "memory-sqlite")]
-    persist_active_external_skills_from_followup_payload_if_needed(
+    persist_active_skills_from_followup_payload_if_needed(
         &current_continue_phase.followup_config,
         session_id,
         &followup,
@@ -1268,7 +1268,7 @@ pub(super) async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) fn persist_active_external_skills_from_followup_payload_if_needed(
+pub(super) fn persist_active_skills_from_followup_payload_if_needed(
     config: &LoongConfig,
     session_id: &str,
     payload: &ToolDrivenFollowupPayload,
@@ -1279,11 +1279,10 @@ pub(super) fn persist_active_external_skills_from_followup_payload_if_needed(
 
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    let updates =
-        active_external_skills::collect_active_external_skills_from_tool_result_text_with_config(
-            text,
-            &tool_runtime_config,
-        );
+    let updates = active_skills::collect_active_skills_from_tool_result_text_with_config(
+        text,
+        &tool_runtime_config,
+    );
     if updates.is_empty() {
         return;
     }
@@ -1292,13 +1291,10 @@ pub(super) fn persist_active_external_skills_from_followup_payload_if_needed(
     let Ok(repo) = SessionRepository::new(&memory_config) else {
         return;
     };
-    let Ok(existing_state) =
-        active_external_skills::load_persisted_active_external_skills(&repo, session_id)
-    else {
+    let Ok(existing_state) = active_skills::load_persisted_active_skills(&repo, session_id) else {
         return;
     };
-    let Some(merged_state) =
-        active_external_skills::merge_active_external_skills(existing_state.clone(), updates)
+    let Some(merged_state) = active_skills::merge_active_skills(existing_state.clone(), updates)
     else {
         return;
     };
@@ -1308,11 +1304,11 @@ pub(super) fn persist_active_external_skills_from_followup_payload_if_needed(
 
     let _ = repo.append_event(NewSessionEvent {
         session_id: session_id.to_owned(),
-        event_kind: active_external_skills::ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+        event_kind: active_skills::ACTIVE_SKILLS_EVENT_KIND.to_owned(),
         actor_session_id: Some(session_id.to_owned()),
         payload_json: json!({
             "source": "tool_followup",
-            "active_external_skills": merged_state,
+            "active_skills": merged_state,
         }),
     });
 }

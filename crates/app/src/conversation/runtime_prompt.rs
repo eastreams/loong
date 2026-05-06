@@ -7,7 +7,7 @@ use super::super::context_engine::ContextArtifactKind;
 use super::super::runtime_binding::ConversationRuntimeBinding;
 use super::super::subagent::DelegateBuiltinProfile;
 #[cfg(feature = "memory-sqlite")]
-use super::active_external_skills;
+use super::active_skills;
 use super::session_runtime::open_session_repository;
 use super::{
     AssembledConversationContext, PromptFragment, PromptFrameAuthority, PromptLane, SessionContext,
@@ -86,16 +86,15 @@ pub(super) fn runtime_self_continuity_prompt_summary(
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) fn active_external_skills_prompt_summary(
+pub(super) fn active_skills_prompt_summary(
     config: &LoongConfig,
     session_id: &str,
 ) -> Option<String> {
     let repo = open_session_repository(config).ok()?;
-    let active_skills =
-        active_external_skills::load_persisted_active_external_skills(&repo, session_id)
-            .ok()
-            .flatten()?;
-    active_external_skills::render_active_external_skills_section(&active_skills)
+    let active_skills = active_skills::load_persisted_active_skills(&repo, session_id)
+        .ok()
+        .flatten()?;
+    active_skills::render_active_skills_section(&active_skills)
 }
 
 pub(super) fn append_runtime_prompt_fragment(

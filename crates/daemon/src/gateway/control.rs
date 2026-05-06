@@ -313,7 +313,7 @@ impl GatewayControlAppState {
                 },
             },
             runtime_plugins: json!({}),
-            external_skills: json!({}),
+            skills: json!({}),
         };
         Self {
             runtime_dir: PathBuf::from("/tmp/test"),

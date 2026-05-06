@@ -304,7 +304,7 @@ pub struct GatewayRuntimeSnapshotReadModel {
     pub tool_runtime: Value,
     pub tools: GatewayRuntimeSnapshotToolsReadModel,
     pub runtime_plugins: Value,
-    pub external_skills: Value,
+    pub skills: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -759,7 +759,7 @@ pub fn build_runtime_snapshot_read_model(
         access,
     };
     let runtime_plugins = crate::runtime_snapshot_runtime_plugins_json(&snapshot.runtime_plugins);
-    let external_skills = crate::runtime_snapshot_external_skills_json(&snapshot.external_skills);
+    let skills = crate::runtime_snapshot_skills_json(&snapshot.skills);
 
     GatewayRuntimeSnapshotReadModel {
         config,
@@ -772,7 +772,7 @@ pub fn build_runtime_snapshot_read_model(
         tool_runtime,
         tools,
         runtime_plugins,
-        external_skills,
+        skills,
     }
 }
 
@@ -2300,7 +2300,7 @@ mod tests {
                 },
             },
             runtime_plugins: serde_json::json!({}),
-            external_skills: serde_json::json!({}),
+            skills: serde_json::json!({}),
         };
 
         let summary =
@@ -2467,7 +2467,7 @@ mod tests {
                 },
             },
             runtime_plugins: serde_json::json!({}),
-            external_skills: serde_json::json!({}),
+            skills: serde_json::json!({}),
         };
 
         let summary = build_operator_runtime_summary_read_model(&runtime_snapshot);

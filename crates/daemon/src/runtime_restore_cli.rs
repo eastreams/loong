@@ -185,7 +185,7 @@ fn build_restored_config(
     restored.memory = artifact.restore_spec.memory.clone();
     restored.acp = artifact.restore_spec.acp.clone();
     restored.tools = artifact.restore_spec.tools.clone();
-    restored.external_skills = artifact.restore_spec.external_skills.clone();
+    restored.skills = artifact.restore_spec.skills.clone();
     restored.runtime_plugins = artifact.restore_spec.runtime_plugins.clone();
     restored.providers = artifact.restore_spec.provider.profiles.clone();
     restored.active_provider = artifact.restore_spec.provider.active_provider.clone();
@@ -219,10 +219,10 @@ fn build_runtime_restore_plan(
     let current_managed_skills = collect_managed_skill_inventory(
         resolved_path,
         current_config,
-        current_config.external_skills.resolved_install_root(),
+        current_config.skills.resolved_install_root(),
     )?;
     let target_install_root = target_config
-        .external_skills
+        .skills
         .resolved_install_root()
         .map(|path| path.display().to_string());
     let managed_skill_actions = plan_managed_skill_actions(
@@ -247,8 +247,8 @@ fn build_runtime_restore_plan(
     if current_config.tools != target_config.tools {
         changed_surfaces.push("tools".to_owned());
     }
-    if current_config.external_skills != target_config.external_skills {
-        changed_surfaces.push("external_skills".to_owned());
+    if current_config.skills != target_config.skills {
+        changed_surfaces.push("skills".to_owned());
     }
     if current_config.runtime_plugins != target_config.runtime_plugins {
         changed_surfaces.push("runtime_plugins".to_owned());
@@ -262,7 +262,7 @@ fn build_runtime_restore_plan(
         && !managed_skill_actions.is_empty()
     {
         warnings.push(format!(
-            "runtime restore will switch managed external skill install root from {} to {}",
+            "runtime restore will switch managed skill install root from {} to {}",
             current_managed_skills
                 .install_root
                 .as_deref()
@@ -299,26 +299,26 @@ fn collect_managed_skill_inventory(
     install_root: Option<PathBuf>,
 ) -> CliResult<ManagedSkillInventorySnapshot> {
     let mut inventory_config = base_config.clone();
-    inventory_config.external_skills.enabled = true;
+    inventory_config.skills.enabled = true;
     if let Some(install_root) = install_root {
-        inventory_config.external_skills.install_root = Some(install_root.display().to_string());
+        inventory_config.skills.install_root = Some(install_root.display().to_string());
     }
 
     let resolved_install_root = inventory_config
-        .external_skills
+        .skills
         .resolved_install_root()
         .map(|path| path.display().to_string());
     let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &inventory_config,
         Some(resolved_path),
     );
-    let outcome = mvp::tools::external_skills_operator_list_with_config(&tool_runtime)
-        .map_err(|error| format!("list current managed external skills failed: {error}"))?;
+    let outcome = mvp::tools::skills_list_with_config(&tool_runtime)
+        .map_err(|error| format!("list current managed skills failed: {error}"))?;
     let skills = outcome
         .payload
         .get("skills")
         .and_then(Value::as_array)
-        .ok_or_else(|| "managed external skill inventory payload missing `skills`".to_owned())?;
+        .ok_or_else(|| "managed skill inventory payload missing `skills`".to_owned())?;
 
     Ok(ManagedSkillInventorySnapshot {
         install_root: resolved_install_root,
@@ -456,7 +456,7 @@ fn runtime_restore_has_blocking_warnings(warnings: &[String]) -> bool {
     warnings.iter().any(|warning| {
         warning.contains("redacted inline provider credential")
             || warning.contains("redacted inline provider header")
-            || warning.contains("restore spec could not enumerate managed external skills")
+            || warning.contains("restore spec could not enumerate managed skills")
     })
 }
 
@@ -635,7 +635,7 @@ fn apply_single_managed_skill_action(
             } else {
                 None
             };
-            mvp::tools::external_skills_operator_install_with_config(
+            mvp::tools::skills_install_with_config(
                 (action.source_kind != "bundled").then_some(action.source_path.as_str()),
                 bundled_skill_id.as_deref(),
                 None,
@@ -646,23 +646,17 @@ fn apply_single_managed_skill_action(
             )
             .map_err(|error| {
                 format!(
-                    "{} managed external skill `{}` failed: {error}",
+                    "{} managed skill `{}` failed: {error}",
                     action.action, action.skill_id
                 )
             })?;
             Ok(())
         }
         "remove" => {
-            mvp::tools::external_skills_operator_remove_with_config(
-                action.skill_id.as_str(),
-                &tool_runtime,
-            )
-            .map_err(|error| {
-                format!(
-                    "remove managed external skill `{}` failed: {error}",
-                    action.skill_id
-                )
-            })?;
+            mvp::tools::skills_remove_with_config(action.skill_id.as_str(), &tool_runtime)
+                .map_err(|error| {
+                    format!("remove managed skill `{}` failed: {error}", action.skill_id)
+                })?;
             Ok(())
         }
         other => Err(format!("unknown managed skill restore action `{other}`")),
@@ -680,9 +674,9 @@ fn build_action_tool_runtime(
     } else {
         current_config.clone()
     };
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     if let Some(install_root) = action.apply_install_root.as_ref() {
-        config.external_skills.install_root = Some(install_root.clone());
+        config.skills.install_root = Some(install_root.clone());
     }
     mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, Some(resolved_path))
 }
@@ -722,9 +716,8 @@ fn verify_runtime_restore(
     if post_snapshot.restore_spec.tools != artifact.document.restore_spec.tools {
         mismatches.push("tools".to_owned());
     }
-    if post_snapshot.restore_spec.external_skills != artifact.document.restore_spec.external_skills
-    {
-        mismatches.push("external_skills".to_owned());
+    if post_snapshot.restore_spec.skills != artifact.document.restore_spec.skills {
+        mismatches.push("skills".to_owned());
     }
     if post_snapshot.restore_spec.runtime_plugins != artifact.document.restore_spec.runtime_plugins
     {

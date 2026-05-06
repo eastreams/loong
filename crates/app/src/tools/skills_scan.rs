@@ -56,7 +56,7 @@ impl ExternalSkillSecurityScanReport {
     }
 }
 
-pub(crate) fn parse_external_skill_security_decision(
+pub(crate) fn parse_skill_security_decision(
     payload: &Map<String, Value>,
     tool_name: &str,
 ) -> Result<Option<ExternalSkillSecurityDecision>, String> {
@@ -434,13 +434,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_external_skill_security_decision_accepts_approve_once() {
+    fn parse_skill_security_decision_accepts_approve_once() {
         let payload = serde_json::json!({
             "security_decision": "approve_once"
         });
         let payload = payload.as_object().expect("payload object");
 
-        let decision = parse_external_skill_security_decision(payload, "external_skills.install")
+        let decision = parse_skill_security_decision(payload, "skills.install")
             .expect("decision should parse");
 
         assert_eq!(decision, Some(ExternalSkillSecurityDecision::ApproveOnce));

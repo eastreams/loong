@@ -55,7 +55,7 @@ fn build_turn_reply_followup_messages_promotes_external_skill_invoke_to_system_c
         })],
         "preface",
         ToolDrivenFollowupPayload::ToolResult {
-            text: r#"[ok] {"status":"ok","tool":"skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#.to_owned(),
+            text: r#"[ok] {"status":"ok","tool":"read","tool_call_id":"call-1","payload_semantics":"skill_context","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#.to_owned(),
         },
         "summarize note.md",
     );
@@ -90,7 +90,7 @@ fn build_turn_reply_followup_messages_rejects_truncated_external_skill_invoke_pa
         })],
         "preface",
         ToolDrivenFollowupPayload::ToolResult {
-            text: r#"[ok] {"status":"ok","tool":"skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":true}"#.to_owned(),
+            text: r#"[ok] {"status":"ok","tool":"read","tool_call_id":"call-1","payload_semantics":"skill_context","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":true}"#.to_owned(),
         },
         "summarize note.md",
     );

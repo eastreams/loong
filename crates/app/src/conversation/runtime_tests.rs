@@ -1,7 +1,7 @@
 use super::*;
 #[cfg(feature = "memory-sqlite")]
-use crate::conversation::active_external_skills::{
-    ACTIVE_EXTERNAL_SKILLS_EVENT_KIND, ActiveExternalSkill, ActiveExternalSkillsState,
+use crate::conversation::active_skills::{
+    ACTIVE_SKILLS_EVENT_KIND, ActiveSkill, ActiveSkillsState,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -452,7 +452,7 @@ async fn hosted_runtime_persist_turn_uses_explicit_memory_config_for_direct_bind
 }
 
 #[tokio::test]
-async fn default_runtime_build_context_rehydrates_active_external_skills() {
+async fn default_runtime_build_context_rehydrates_active_skills() {
     let runtime = DefaultConversationRuntime::default();
     let session_id = "session-active-external-skills";
     let root = unique_temp_dir("active-external-skills-runtime");
@@ -477,12 +477,12 @@ async fn default_runtime_build_context_rehydrates_active_external_skills() {
     .expect("create root session");
     repo.append_event(NewSessionEvent {
             session_id: session_id.to_owned(),
-            event_kind: ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+            event_kind: ACTIVE_SKILLS_EVENT_KIND.to_owned(),
             actor_session_id: Some(session_id.to_owned()),
             payload_json: json!({
                 "source": "test",
-                "active_external_skills": ActiveExternalSkillsState {
-                    skills: vec![ActiveExternalSkill {
+                "active_skills": ActiveSkillsState {
+                    skills: vec![ActiveSkill {
                         skill_id: "release-guard".to_owned(),
                         display_name: "Release Guard".to_owned(),
                         instructions: "<skill_content name=\"Release Guard\">protect releases</skill_content>".to_owned(),
@@ -535,7 +535,7 @@ async fn default_runtime_build_context_rehydrates_active_external_skills() {
 }
 
 #[tokio::test]
-async fn default_runtime_tool_view_excludes_active_external_skill_blocked_tools() {
+async fn default_runtime_tool_view_excludes_active_skill_blocked_tools() {
     let runtime = DefaultConversationRuntime::default();
     let session_id = "session-active-external-skill-tool-block";
     let root = unique_temp_dir("active-external-skill-tool-block");
@@ -563,12 +563,12 @@ async fn default_runtime_tool_view_excludes_active_external_skill_blocked_tools(
     .expect("create root session");
     repo.append_event(NewSessionEvent {
             session_id: session_id.to_owned(),
-            event_kind: ACTIVE_EXTERNAL_SKILLS_EVENT_KIND.to_owned(),
+            event_kind: ACTIVE_SKILLS_EVENT_KIND.to_owned(),
             actor_session_id: Some(session_id.to_owned()),
             payload_json: json!({
                 "source": "test",
-                "active_external_skills": ActiveExternalSkillsState {
-                    skills: vec![ActiveExternalSkill {
+                "active_skills": ActiveSkillsState {
+                    skills: vec![ActiveSkill {
                         skill_id: "release-guard".to_owned(),
                         display_name: "Release Guard".to_owned(),
                         instructions: "<skill_content name=\"Release Guard\">protect releases</skill_content>".to_owned(),

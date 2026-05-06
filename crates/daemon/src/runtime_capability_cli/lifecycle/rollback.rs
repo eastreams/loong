@@ -237,8 +237,8 @@ pub(crate) fn rollback_managed_skill_activation_state(
             );
         }
     };
-    config.external_skills.enabled = true;
-    config.external_skills.install_root = target_path
+    config.skills.enabled = true;
+    config.skills.install_root = target_path
         .parent()
         .map(|value| value.display().to_string());
     let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
@@ -255,7 +255,7 @@ pub(crate) fn rollback_managed_skill_activation_state(
                 staging_base_root.as_path(),
             )?;
             let staging_path = staging_root.display().to_string();
-            let install_result = mvp::tools::external_skills_operator_install_with_config(
+            let install_result = mvp::tools::skills_install_with_config(
                 Some(staging_path.as_str()),
                 None,
                 Some(artifact_id),
@@ -278,10 +278,9 @@ pub(crate) fn rollback_managed_skill_activation_state(
             })?;
         }
         None => {
-            mvp::tools::external_skills_operator_remove_with_config(artifact_id, &tool_runtime)
-                .map_err(|error| {
-                    format!("remove managed skill `{artifact_id}` during rollback failed: {error}")
-                })?;
+            mvp::tools::skills_remove_with_config(artifact_id, &tool_runtime).map_err(|error| {
+                format!("remove managed skill `{artifact_id}` during rollback failed: {error}")
+            })?;
         }
     }
     Ok(())

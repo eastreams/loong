@@ -5,8 +5,8 @@ use serde_json::json;
 fn runtime_snapshot_restore_managed_skills_keeps_entries_without_display_metadata() {
     let mut warnings = Vec::new();
     let spec = build_runtime_snapshot_restore_managed_skills_spec(
-        &RuntimeSnapshotExternalSkillsState {
-            policy: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy::default(),
+        &RuntimeSnapshotSkillsState {
+            policy: mvp::tools::runtime_config::SkillsRuntimePolicy::default(),
             override_active: false,
             inventory_status: RuntimeSnapshotInventoryStatus::Ok,
             inventory_error: None,

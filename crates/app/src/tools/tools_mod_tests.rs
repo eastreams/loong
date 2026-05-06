@@ -39,7 +39,7 @@ fn test_tool_runtime_config(root: impl AsRef<Path>) -> ToolTestRuntimeConfig {
         shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
         file_root: Some(root.as_ref().to_path_buf()),
         messages_enabled: true,
-        external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+        skills: runtime_config::SkillsRuntimePolicy {
             enabled: true,
             require_download_approval: true,
             allowed_domains: BTreeSet::new(),
@@ -212,7 +212,7 @@ fn capability_snapshot_is_deterministic() {
 }
 
 #[test]
-fn capability_snapshot_stays_compact_when_external_skills_are_installed() {
+fn capability_snapshot_stays_compact_when_skills_are_installed() {
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -292,7 +292,7 @@ fn capability_snapshot_only_lists_visible_direct_and_gateway_tools() {
     assert!(snapshot.contains("Guidelines:"));
     assert!(snapshot.contains("Use write for new files and whole-file writes."));
     assert!(!snapshot.contains("claw.migrate"));
-    assert!(!snapshot.contains("external_skills.fetch"));
+    assert!(!snapshot.contains("skills.fetch"));
     assert!(!snapshot.contains("file.read"));
     assert!(!snapshot.contains("shell.exec"));
 
@@ -528,26 +528,24 @@ fn runtime_tool_view_hides_browser_when_disabled() {
 }
 
 #[test]
-fn runtime_tool_view_respects_explicit_external_skills_toggle() {
+fn runtime_tool_view_respects_explicit_skills_toggle() {
     let config = crate::config::ToolConfig::default();
 
     let disabled_view = runtime_tool_view_for_config(&config);
     assert!(!disabled_view.contains("skills.fetch"));
-    assert!(!disabled_view.contains("skills.invoke"));
     assert!(!disabled_view.contains("skills.list"));
 
-    let enabled_view = runtime_tool_view_for_config_with_external_skills(&config, true);
+    let enabled_view = runtime_tool_view_for_config_with_skills(&config, true);
     assert!(!enabled_view.contains("skills.fetch"));
-    assert!(!enabled_view.contains("skills.invoke"));
     assert!(!enabled_view.contains("skills.list"));
 }
 
 #[test]
-fn runtime_tool_view_with_runtime_config_uses_runtime_external_skills_policy() {
+fn runtime_tool_view_with_runtime_config_uses_runtime_skills_policy() {
     let runtime_config = runtime_config::ToolRuntimeConfig {
-        external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+        skills: runtime_config::SkillsRuntimePolicy {
             enabled: true,
-            ..runtime_config::ExternalSkillsRuntimePolicy::default()
+            ..runtime_config::SkillsRuntimePolicy::default()
         },
         ..runtime_config::ToolRuntimeConfig::default()
     };
@@ -555,7 +553,6 @@ fn runtime_tool_view_with_runtime_config_uses_runtime_external_skills_policy() {
     let view = runtime_tool_view_with_runtime_config(&ToolConfig::default(), &runtime_config);
 
     assert!(!view.contains("skills.fetch"));
-    assert!(!view.contains("skills.invoke"));
     assert!(!view.contains("skills.list"));
 }
 
@@ -576,9 +573,9 @@ fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
             enabled: false,
             ..runtime_config::WebFetchRuntimePolicy::default()
         },
-        external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+        skills: runtime_config::SkillsRuntimePolicy {
             enabled: false,
-            ..runtime_config::ExternalSkillsRuntimePolicy::default()
+            ..runtime_config::SkillsRuntimePolicy::default()
         },
         ..runtime_config::ToolRuntimeConfig::default()
     };
@@ -587,7 +584,7 @@ fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
     assert!(!snapshot.contains("- browser.open:"));
     assert!(!snapshot.contains("- web.fetch:"));
     assert!(!snapshot.contains("- delegate:"));
-    assert!(!snapshot.contains("- external_skills.fetch:"));
+    assert!(!snapshot.contains("- skills.fetch:"));
 }
 
 #[test]
@@ -11970,7 +11967,7 @@ fn provider_switch_tool_updates_target_config_and_reports_active_profile() {
         shell_allow: BTreeSet::new(),
         file_root: Some(root.clone()),
         config_path: Some(config_path.clone()),
-        external_skills: Default::default(),
+        skills: Default::default(),
         ..runtime_config::ToolRuntimeConfig::default()
     };
     let outcome = execute_tool_core_with_config(
@@ -12051,7 +12048,7 @@ fn provider_switch_tool_accepts_unique_model_selector() {
         shell_allow: BTreeSet::new(),
         file_root: Some(root.clone()),
         config_path: Some(config_path.clone()),
-        external_skills: Default::default(),
+        skills: Default::default(),
         ..runtime_config::ToolRuntimeConfig::default()
     };
     let outcome = execute_tool_core_with_config(
@@ -12118,7 +12115,7 @@ fn provider_switch_without_selector_reports_current_provider_state() {
         shell_allow: BTreeSet::new(),
         file_root: Some(root.clone()),
         config_path: Some(config_path.clone()),
-        external_skills: Default::default(),
+        skills: Default::default(),
         ..runtime_config::ToolRuntimeConfig::default()
     };
     let outcome = execute_tool_core_with_config(
@@ -12549,7 +12546,7 @@ fn config_import_merge_profiles_mode_preserves_prompt_owner() {
 }
 
 #[test]
-fn config_import_map_external_skills_mode_returns_mapping_plan() {
+fn config_import_map_skills_mode_returns_mapping_plan() {
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -12585,16 +12582,16 @@ fn config_import_map_external_skills_mode_returns_mapping_plan() {
         ToolCoreRequest {
             tool_name: "config.import".to_owned(),
             payload: json!({
-                "mode": "map_external_skills",
+                "mode": "map_skills",
                 "input_path": "."
             }),
         },
         &config,
     )
-    .expect("config import map_external_skills should succeed");
+    .expect("config import map_skills should succeed");
 
     assert_eq!(outcome.status, "ok");
-    assert_eq!(outcome.payload["mode"], "map_external_skills");
+    assert_eq!(outcome.payload["mode"], "map_skills");
     assert_eq!(outcome.payload["result"]["artifact_count"], 2);
     assert_eq!(
         outcome.payload["result"]["declared_skills"][0],
@@ -12700,7 +12697,7 @@ fn config_import_apply_selected_mode_writes_manifest_and_backup() {
 }
 
 #[test]
-fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
+fn config_import_apply_selected_mode_can_apply_skills_plan() {
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -12759,12 +12756,12 @@ fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
                 "input_path": ".",
                 "output_path": "loongclaw.toml",
                 "source_id": "openclaw",
-                "apply_external_skills_plan": true
+                "apply_skills_plan": true
             }),
         },
         &config,
     )
-    .expect("config import apply_selected with external skills should succeed");
+    .expect("config import apply_selected with skills should succeed");
 
     assert_eq!(outcome.status, "ok");
     assert_eq!(
@@ -12784,10 +12781,16 @@ fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
         json!(["release-guard"])
     );
     assert!(
-        outcome.payload["result"]["external_skills_manifest_path"]
+        outcome.payload["apply_skills_plan"]
+            .as_bool()
+            .unwrap_or(false),
+        "canonical apply_skills_plan should be present"
+    );
+    assert!(
+        outcome.payload["result"]["skills_manifest_path"]
             .as_str()
             .is_some(),
-        "external skills manifest path should exist"
+        "canonical skills_manifest_path should exist"
     );
     let raw = fs::read_to_string(&output_path).expect("read output config");
     assert!(raw.contains("Imported External Skills Artifacts"));

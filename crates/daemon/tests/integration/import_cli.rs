@@ -882,7 +882,7 @@ fn import_cli_apply_summary_prefers_managed_bridge_doctor_handoff_when_preflight
         "weixin-token".to_owned(),
     ));
     resolved.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
-    resolved.external_skills.install_root = Some(install_root.display().to_string());
+    resolved.skills.install_root = Some(install_root.display().to_string());
 
     let lines = loong_daemon::import_cli::render_import_apply_summary_lines_for_width(
         std::path::Path::new("/tmp/loong-config.toml"),
@@ -2594,7 +2594,7 @@ fn import_cli_apply_candidate_rejects_conflicting_plugin_bridge_install_root() {
     let current_install_root = temp_root.join("managed-skills-current");
     let detected_install_root = temp_root.join("managed-skills-detected");
     let base: mvp::config::LoongConfig = serde_json::from_value(json!({
-        "external_skills": {
+        "skills": {
             "install_root": current_install_root.display().to_string()
         }
     }))
@@ -2606,7 +2606,7 @@ fn import_cli_apply_candidate_rejects_conflicting_plugin_bridge_install_root() {
             "bridge_access_token": "weixin-token",
             "allowed_contact_ids": ["wxid_alice"]
         },
-        "external_skills": {
+        "skills": {
             "install_root": detected_install_root.display().to_string()
         }
     }))
@@ -2659,7 +2659,7 @@ fn import_cli_apply_candidate_rejects_conflicting_plugin_bridge_install_root() {
         "rejected import should leave the conflicting plugin-backed channel disabled"
     );
     assert_eq!(
-        reloaded.external_skills.install_root.as_deref(),
+        reloaded.skills.install_root.as_deref(),
         Some(current_install_root.to_string_lossy().as_ref()),
         "rejected import should preserve the original managed bridge install root"
     );

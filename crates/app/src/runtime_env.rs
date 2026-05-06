@@ -1,6 +1,10 @@
 use std::path::Path;
 
 use crate::config::LoongConfig;
+use crate::tools::runtime_config::{
+    SKILLS_ALLOWED_DOMAINS_ENV, SKILLS_AUTO_EXPOSE_INSTALLED_ENV, SKILLS_BLOCKED_DOMAINS_ENV,
+    SKILLS_ENABLED_ENV, SKILLS_INSTALL_ROOT_ENV, SKILLS_REQUIRE_DOWNLOAD_APPROVAL_ENV,
+};
 
 /// Mirror config-backed runtime knobs into process environment and singleton
 /// runtime caches.
@@ -146,38 +150,26 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
         "LOONG_WEB_SEARCH_MAX_RESULTS",
         config.tools.web_search.max_results.to_string(),
     );
+    set_env_var(SKILLS_ENABLED_ENV, bool_env(config.skills.enabled));
     set_env_var(
-        "LOONG_EXTERNAL_SKILLS_ENABLED",
-        bool_env(config.external_skills.enabled),
+        SKILLS_REQUIRE_DOWNLOAD_APPROVAL_ENV,
+        bool_env(config.skills.require_download_approval),
     );
     set_env_var(
-        "LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
-        bool_env(config.external_skills.require_download_approval),
+        SKILLS_ALLOWED_DOMAINS_ENV,
+        config.skills.normalized_allowed_domains().join(","),
     );
     set_env_var(
-        "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
-        config
-            .external_skills
-            .normalized_allowed_domains()
-            .join(","),
+        SKILLS_BLOCKED_DOMAINS_ENV,
+        config.skills.normalized_blocked_domains().join(","),
     );
-    set_env_var(
-        "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
-        config
-            .external_skills
-            .normalized_blocked_domains()
-            .join(","),
-    );
-    match config.external_skills.resolved_install_root() {
-        Some(path) => set_env_var(
-            "LOONG_EXTERNAL_SKILLS_INSTALL_ROOT",
-            path.display().to_string(),
-        ),
-        None => remove_env_var("LOONG_EXTERNAL_SKILLS_INSTALL_ROOT"),
+    match config.skills.resolved_install_root() {
+        Some(path) => set_env_var(SKILLS_INSTALL_ROOT_ENV, path.display().to_string()),
+        None => remove_env_var(SKILLS_INSTALL_ROOT_ENV),
     }
     set_env_var(
-        "LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
-        bool_env(config.external_skills.auto_expose_installed),
+        SKILLS_AUTO_EXPOSE_INSTALLED_ENV,
+        bool_env(config.skills.auto_expose_installed),
     );
 
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
@@ -234,12 +226,12 @@ mod tests {
             "LOONG_FILE_ROOT",
             "LOONG_WORKSPACE_ROOT",
             "LOONG_TOOL_SESSIONS_ALLOW_MUTATION",
-            "LOONG_EXTERNAL_SKILLS_ENABLED",
-            "LOONG_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
-            "LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
-            "LOONG_EXTERNAL_SKILLS_BLOCKED_DOMAINS",
-            "LOONG_EXTERNAL_SKILLS_INSTALL_ROOT",
-            "LOONG_EXTERNAL_SKILLS_AUTO_EXPOSE_INSTALLED",
+            SKILLS_ENABLED_ENV,
+            SKILLS_REQUIRE_DOWNLOAD_APPROVAL_ENV,
+            SKILLS_ALLOWED_DOMAINS_ENV,
+            SKILLS_BLOCKED_DOMAINS_ENV,
+            SKILLS_INSTALL_ROOT_ENV,
+            SKILLS_AUTO_EXPOSE_INSTALLED_ENV,
             "LOONG_BROWSER_ENABLED",
             "LOONG_BROWSER_MAX_SESSIONS",
             "LOONG_BROWSER_MAX_LINKS",
@@ -285,8 +277,8 @@ mod tests {
         config.tools.web_search.default_provider = "DDG".to_owned();
         config.tools.web_search.timeout_seconds = 17;
         config.tools.web_search.max_results = 5;
-        config.external_skills.enabled = true;
-        config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
+        config.skills.enabled = true;
+        config.skills.allowed_domains = vec!["skills.sh".to_owned()];
         let config_path = PathBuf::from("/tmp/loong-runtime-env.toml");
 
         initialize_runtime_environment(&config, Some(&config_path));
@@ -330,15 +322,11 @@ mod tests {
             Some("true")
         );
         assert_eq!(
-            std::env::var("LOONG_EXTERNAL_SKILLS_ENABLED")
-                .ok()
-                .as_deref(),
+            std::env::var(SKILLS_ENABLED_ENV).ok().as_deref(),
             Some("true")
         );
         assert_eq!(
-            std::env::var("LOONG_EXTERNAL_SKILLS_ALLOWED_DOMAINS")
-                .ok()
-                .as_deref(),
+            std::env::var(SKILLS_ALLOWED_DOMAINS_ENV).ok().as_deref(),
             Some("skills.sh")
         );
         assert_eq!(

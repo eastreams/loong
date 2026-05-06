@@ -18,8 +18,8 @@ pub struct SessionContext {
     pub profile: Option<DelegateBuiltinProfile>,
     pub tool_view: ToolView,
     pub workspace_root: Option<PathBuf>,
-    pub active_external_skill_roots: Vec<PathBuf>,
-    pub visible_external_skill_roots: Vec<PathBuf>,
+    pub active_skill_roots: Vec<PathBuf>,
+    pub visible_skill_roots: Vec<PathBuf>,
     pub runtime_narrowing: Option<ToolRuntimeNarrowing>,
     pub subagent_execution: Option<ConstrainedSubagentExecution>,
     pub subagent_contract: Option<ConstrainedSubagentContractView>,
@@ -36,8 +36,8 @@ impl SessionContext {
             profile: None,
             tool_view,
             workspace_root: None,
-            active_external_skill_roots: Vec::new(),
-            visible_external_skill_roots: Vec::new(),
+            active_skill_roots: Vec::new(),
+            visible_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -60,8 +60,8 @@ impl SessionContext {
             profile: None,
             tool_view,
             workspace_root: None,
-            active_external_skill_roots: Vec::new(),
-            visible_external_skill_roots: Vec::new(),
+            active_skill_roots: Vec::new(),
+            visible_skill_roots: Vec::new(),
             runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
@@ -76,11 +76,8 @@ impl SessionContext {
     }
 
     #[must_use]
-    pub fn with_active_external_skill_roots(
-        mut self,
-        active_external_skill_roots: Vec<PathBuf>,
-    ) -> Self {
-        self.active_external_skill_roots = active_external_skill_roots
+    pub fn with_active_skill_roots(mut self, active_skill_roots: Vec<PathBuf>) -> Self {
+        self.active_skill_roots = active_skill_roots
             .into_iter()
             .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
             .collect();
@@ -88,11 +85,8 @@ impl SessionContext {
     }
 
     #[must_use]
-    pub fn with_visible_external_skill_roots(
-        mut self,
-        visible_external_skill_roots: Vec<PathBuf>,
-    ) -> Self {
-        self.visible_external_skill_roots = visible_external_skill_roots
+    pub fn with_visible_skill_roots(mut self, visible_skill_roots: Vec<PathBuf>) -> Self {
+        self.visible_skill_roots = visible_skill_roots
             .into_iter()
             .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
             .collect();
@@ -333,8 +327,8 @@ fn normalize_session_id(session_id: String) -> String {
     }
 }
 
-pub(super) fn model_visible_external_skill_roots_from_config(config: &LoongConfig) -> Vec<PathBuf> {
+pub(super) fn model_visible_skill_roots_from_config(config: &LoongConfig) -> Vec<PathBuf> {
     let tool_runtime_config =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
-    crate::tools::model_visible_external_skill_roots_for_runtime_config(&tool_runtime_config)
+    crate::tools::model_visible_skill_roots_for_runtime_config(&tool_runtime_config)
 }

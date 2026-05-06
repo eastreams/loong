@@ -409,7 +409,7 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
             source_id,
             safe_profile_merge,
             primary_source_id,
-            apply_external_skills_plan,
+            apply_skills_plan,
             force,
         } => migrate_cli::run_migrate_cli(migrate_cli::MigrateCommandOptions {
             input,
@@ -420,7 +420,7 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
             source_id,
             safe_profile_merge,
             primary_source_id,
-            apply_external_skills_plan,
+            apply_skills_plan,
             force,
         }),
         Commands::Doctor {

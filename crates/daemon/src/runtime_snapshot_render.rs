@@ -6,12 +6,11 @@ use crate::runtime_snapshot_compaction_presentation::{
     build_compaction_hygiene_json, render_runtime_snapshot_compaction_lines,
 };
 use crate::{
-    RuntimeSnapshotCliState, RuntimeSnapshotExternalSkillsState,
-    RuntimeSnapshotProviderProfileState, RuntimeSnapshotProviderState,
-    RuntimeSnapshotRuntimePluginsState, acp_backend_metadata_json, acp_control_plane_json,
-    context_engine_metadata_json, format_capability_names, memory_system_metadata_json,
-    memory_system_policy_json, mvp, push_channel_surface_managed_plugin_bridge_discovery,
-    render_string_list,
+    RuntimeSnapshotCliState, RuntimeSnapshotProviderProfileState, RuntimeSnapshotProviderState,
+    RuntimeSnapshotRuntimePluginsState, RuntimeSnapshotSkillsState, acp_backend_metadata_json,
+    acp_control_plane_json, context_engine_metadata_json, format_capability_names,
+    memory_system_metadata_json, memory_system_policy_json, mvp,
+    push_channel_surface_managed_plugin_bridge_discovery, render_string_list,
 };
 
 pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
@@ -345,30 +344,30 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
     ));
     lines.extend(render_runtime_plugins_lines(&snapshot.runtime_plugins));
     lines.push(format!(
-        "external_skills inventory_status={} override_active={} enabled={} require_download_approval={} auto_expose_installed={} install_root={} resolved_skills={} shadowed_skills={} inventory_error={}",
-        snapshot.external_skills.inventory_status.as_str(),
-        snapshot.external_skills.override_active,
-        snapshot.external_skills.policy.enabled,
-        snapshot.external_skills.policy.require_download_approval,
-        snapshot.external_skills.policy.auto_expose_installed,
+        "skills inventory_status={} override_active={} enabled={} require_download_approval={} auto_expose_installed={} install_root={} resolved_skills={} shadowed_skills={} inventory_error={}",
+        snapshot.skills.inventory_status.as_str(),
+        snapshot.skills.override_active,
+        snapshot.skills.policy.enabled,
+        snapshot.skills.policy.require_download_approval,
+        snapshot.skills.policy.auto_expose_installed,
         snapshot
-            .external_skills
+            .skills
             .policy
             .install_root
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "-".to_owned()),
-        snapshot.external_skills.resolved_skill_count,
-        snapshot.external_skills.shadowed_skill_count,
+        snapshot.skills.resolved_skill_count,
+        snapshot.skills.shadowed_skill_count,
         snapshot
-            .external_skills
+            .skills
             .inventory_error
             .as_deref()
             .unwrap_or("-")
     ));
 
     if let Some(skills) = snapshot
-        .external_skills
+        .skills
         .inventory
         .get("skills")
         .and_then(Value::as_array)
@@ -701,9 +700,7 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
     })
 }
 
-pub(crate) fn runtime_snapshot_external_skills_json(
-    snapshot: &RuntimeSnapshotExternalSkillsState,
-) -> Value {
+pub(crate) fn runtime_snapshot_skills_json(snapshot: &RuntimeSnapshotSkillsState) -> Value {
     json!({
         "policy": {
             "enabled": snapshot.policy.enabled,

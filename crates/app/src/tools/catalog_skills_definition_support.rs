@@ -26,7 +26,7 @@ pub(super) fn config_import_definition(descriptor: &ToolDescriptor) -> Value {
                             "plan_many",
                             "recommend_primary",
                             "merge_profiles",
-                            "map_external_skills",
+                            "map_skills",
                             "apply_selected",
                             "rollback_last_apply"
                         ],
@@ -57,9 +57,9 @@ pub(super) fn config_import_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "boolean",
                         "description": "Enable safe multi-source profile merge in apply_selected mode."
                     },
-                    "apply_external_skills_plan": {
+                    "apply_skills_plan": {
                         "type": "boolean",
-                        "description": "When true, apply a generated external-skills mapping addendum into profile_note during apply_selected."
+                        "description": "When true, apply a generated skills mapping addendum into profile_note during apply_selected."
                     },
                     "output_path": {
                         "type": "string",
@@ -101,12 +101,12 @@ pub(super) fn provider_switch_definition(descriptor: &ToolDescriptor) -> Value {
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_policy_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_policy_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Get, set, or reset runtime policy for external skills downloads (enabled flag, approval gate, domain allowlist/blocklist).",
+            "description": "Get, set, or reset runtime policy for skills downloads (enabled flag, approval gate, domain allowlist/blocklist).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -121,11 +121,11 @@ pub(super) fn external_skills_policy_definition(descriptor: &ToolDescriptor) -> 
                     },
                     "enabled": {
                         "type": "boolean",
-                        "description": "Whether external skills runtime/download is enabled."
+                        "description": "Whether skills runtime/download is enabled."
                     },
                     "require_download_approval": {
                         "type": "boolean",
-                        "description": "When true, every external skills download requires explicit approval_granted=true."
+                        "description": "When true, every skills download requires explicit approval_granted=true."
                     },
                     "allowed_domains": {
                         "type": "array",
@@ -146,18 +146,18 @@ pub(super) fn external_skills_policy_definition(descriptor: &ToolDescriptor) -> 
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_fetch_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_fetch_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Resolve and download an external skill artifact from a direct URL, GitHub reference, skills.sh page, clawhub.ai page, or npm package with strict domain policy checks and explicit approval gating.",
+            "description": "Resolve and download a skill artifact from a direct URL, GitHub reference, skills.sh page, clawhub.ai page, or npm package with strict domain policy checks and explicit approval gating.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "reference": {
                         "type": "string",
-                        "description": "Preferred external skill reference. Supports direct URLs, GitHub refs, skills.sh pages, clawhub.ai pages, and npm packages."
+                        "description": "Preferred skill reference. Supports direct URLs, GitHub refs, skills.sh pages, clawhub.ai pages, and npm packages."
                     },
                     "url": {
                         "type": "string",
@@ -185,18 +185,18 @@ pub(super) fn external_skills_fetch_definition(descriptor: &ToolDescriptor) -> V
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_resolve_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_resolve_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Normalize a direct URL, GitHub reference, skills.sh page, ClawHub page, or npm package into a source-aware external skill candidate.",
+            "description": "Normalize a direct URL, GitHub reference, skills.sh page, ClawHub page, or npm package into a source-aware skill candidate.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "reference": {
                         "type": "string",
-                        "description": "External skill reference to normalize."
+                        "description": "Skill reference to normalize."
                     }
                 },
                 "required": ["reference"],
@@ -207,12 +207,12 @@ pub(super) fn external_skills_resolve_definition(descriptor: &ToolDescriptor) ->
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_search_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_search_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Search the resolved external-skills inventory for active and shadowed matches.",
+            "description": "Search the resolved skills inventory for active and shadowed matches.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -235,12 +235,12 @@ pub(super) fn external_skills_search_definition(descriptor: &ToolDescriptor) -> 
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_recommend_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_recommend_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Recommend the best-fit resolved external skills for an operator goal.",
+            "description": "Recommend the best-fit resolved skills for an operator goal.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -263,18 +263,18 @@ pub(super) fn external_skills_recommend_definition(descriptor: &ToolDescriptor) 
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_source_search_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_source_search_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Search preferred external skill ecosystems and return normalized source-aware candidates ranked by source priority.",
+            "description": "Search preferred skill ecosystems and return normalized source-aware candidates ranked by source priority.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query or external skill reference."
+                        "description": "Search query or skill reference."
                     },
                     "max_results": {
                         "type": "integer",
@@ -296,18 +296,18 @@ pub(super) fn external_skills_source_search_definition(descriptor: &ToolDescript
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_inspect_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_inspect_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Read metadata and a short preview for a resolved external skill across managed, user, and project scopes.",
+            "description": "Read metadata and a short preview for a resolved skill across managed, user, and project scopes.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "skill_id": {
                         "type": "string",
-                        "description": "Resolved external skill identifier."
+                        "description": "Resolved skill identifier."
                     }
                 },
                 "required": ["skill_id"],
@@ -318,12 +318,12 @@ pub(super) fn external_skills_inspect_definition(descriptor: &ToolDescriptor) ->
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_install_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_install_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Install a managed external skill from a local directory, local .tgz/.tar.gz/.zip archive, or a first-party bundled skill id.",
+            "description": "Install a managed skill from a local directory, local .tgz/.tar.gz/.zip archive, or a first-party bundled skill id.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -360,34 +360,12 @@ pub(super) fn external_skills_install_definition(descriptor: &ToolDescriptor) ->
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_invoke_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_list_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Load a resolved external skill's SKILL.md instructions into the conversation loop across managed, user, and project scopes.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "skill_id": {
-                        "type": "string",
-                        "description": "Resolved external skill identifier."
-                    }
-                },
-                "required": ["skill_id"],
-                "additionalProperties": false
-            }
-        }
-    })
-}
-
-#[cfg(test)]
-pub(super) fn external_skills_list_definition(descriptor: &ToolDescriptor) -> Value {
-    json!({
-        "type": "function",
-        "function": {
-            "name": descriptor.provider_name,
-            "description": "List resolved external skills available for invocation across managed, user, and project scopes.",
+            "description": "List resolved skills available for invocation across managed, user, and project scopes.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -399,12 +377,12 @@ pub(super) fn external_skills_list_definition(descriptor: &ToolDescriptor) -> Va
 }
 
 #[cfg(test)]
-pub(super) fn external_skills_remove_definition(descriptor: &ToolDescriptor) -> Value {
+pub(super) fn skills_remove_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Remove an installed external skill from the managed runtime.",
+            "description": "Remove an installed skill from the managed runtime.",
             "parameters": {
                 "type": "object",
                 "properties": {

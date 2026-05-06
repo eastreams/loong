@@ -129,7 +129,7 @@ impl ConversationTurnCoordinator {
         let tool_runtime_config =
             crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
         let visible_skill_ids =
-            crate::tools::model_visible_external_skill_ids_with_config(&tool_runtime_config);
+            crate::tools::model_visible_skill_ids_with_config(&tool_runtime_config);
         let explicit_activation = parse_explicit_skill_activation_input(user_input).or_else(|| {
             parse_named_skill_activation_input(user_input, visible_skill_ids.as_slice())
         });
@@ -162,11 +162,10 @@ impl ConversationTurnCoordinator {
                 preparation.session.estimated_tokens,
             ),
         );
-        let activation_payload =
-            crate::tools::model_visible_external_skill_context_payload_for_skill_id(
-                &tool_runtime_config,
-                explicit_activation.skill_id.as_str(),
-            );
+        let activation_payload = crate::tools::model_visible_skill_context_payload_for_skill_id(
+            &tool_runtime_config,
+            explicit_activation.skill_id.as_str(),
+        );
         let activation_payload = match activation_payload {
             Ok(Some(payload)) => payload,
             Ok(None) => {
@@ -227,7 +226,7 @@ impl ConversationTurnCoordinator {
                 "tool_call_id": explicit_skill_activation_tool_call_id(
                     explicit_activation.skill_id.as_str(),
                 ),
-                "payload_semantics": "external_skill_context",
+                "payload_semantics": "skill_context",
                 "payload_summary": payload_summary,
                 "payload_chars": payload_chars,
                 "payload_truncated": false,
@@ -237,7 +236,7 @@ impl ConversationTurnCoordinator {
             text: tool_result_text,
         };
         #[cfg(feature = "memory-sqlite")]
-        persist_active_external_skills_from_followup_payload_if_needed(
+        persist_active_skills_from_followup_payload_if_needed(
             config,
             session_id,
             &followup_payload,

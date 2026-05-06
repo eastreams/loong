@@ -220,10 +220,14 @@ fn discovery_detail(discovery: &mvp::channel::ChannelPluginBridgeDiscovery) -> S
 
     match discovery.status {
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::NotConfigured => {
-            "managed bridge discovery is unavailable because external_skills.install_root is not configured".to_owned()
+            "managed bridge discovery is unavailable because skills.install_root is not configured"
+                .to_owned()
         }
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::ScanFailed => {
-            let scan_issue = discovery.scan_issue.as_deref().unwrap_or("unknown scan failure");
+            let scan_issue = discovery
+                .scan_issue
+                .as_deref()
+                .unwrap_or("unknown scan failure");
 
             format!("managed bridge discovery failed under {managed_install_root}: {scan_issue}")
         }

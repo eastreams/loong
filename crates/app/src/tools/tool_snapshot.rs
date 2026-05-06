@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::external_skills;
 use super::runtime_config;
+use super::skills;
 use super::tool_surface;
 use super::{ToolView, runtime_tool_view_for_runtime_config};
 
@@ -96,9 +96,7 @@ pub(crate) fn capability_snapshot_for_direct_states_with_config(
         hidden_surfaces.as_slice(),
     );
     lines.extend(guideline_lines);
-    if let Some(skill_catalog_section) =
-        external_skills::model_skill_catalog_section_with_config(config)
-    {
+    if let Some(skill_catalog_section) = skills::model_skill_catalog_section_with_config(config) {
         lines.push(skill_catalog_section);
     }
     lines.join("\n")

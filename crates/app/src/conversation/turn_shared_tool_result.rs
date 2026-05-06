@@ -267,19 +267,8 @@ fn render_tool_result_partial_evidence_guidance(payload_json: &Value) -> Option<
     )
 }
 
-pub(super) fn envelope_uses_external_skill_context(envelope: &Value) -> bool {
-    let uses_explicit_semantics =
-        envelope_has_payload_semantics(envelope, ToolResultPayloadSemantics::ExternalSkillContext);
-    if uses_explicit_semantics {
-        return true;
-    }
-
-    envelope_uses_legacy_external_skill_tool(envelope)
-}
-
-fn envelope_uses_legacy_external_skill_tool(envelope: &Value) -> bool {
-    let tool_name = envelope.get("tool").and_then(Value::as_str);
-    tool_name == Some("skills.invoke")
+pub(super) fn envelope_uses_skill_context(envelope: &Value) -> bool {
+    envelope_has_payload_semantics(envelope, ToolResultPayloadSemantics::SkillContext)
 }
 
 fn envelope_payload_semantics(envelope: &Value) -> Option<ToolResultPayloadSemantics> {

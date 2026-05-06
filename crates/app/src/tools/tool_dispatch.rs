@@ -256,49 +256,27 @@ fn dispatch_tool_request(
             config_import::execute_config_import_tool_with_config(request, config)
         }
         #[cfg(test)]
-        "skills.resolve" => {
-            external_skills::execute_external_skills_resolve_tool_with_config(request, config)
-        }
+        "skills.resolve" => skills::execute_skills_resolve_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.search" => {
-            external_skills::execute_external_skills_search_tool_with_config(request, config)
-        }
+        "skills.search" => skills::execute_skills_search_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.recommend" => {
-            external_skills::execute_external_skills_recommend_tool_with_config(request, config)
-        }
+        "skills.recommend" => skills::execute_skills_recommend_tool_with_config(request, config),
         #[cfg(test)]
         "skills.source_search" => {
-            external_skills::execute_external_skills_source_search_tool_with_config(request, config)
+            skills::execute_skills_source_search_tool_with_config(request, config)
         }
         #[cfg(test)]
-        "skills.inspect" => {
-            external_skills::execute_external_skills_inspect_tool_with_config(request, config)
-        }
+        "skills.inspect" => skills::execute_skills_inspect_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.install" => {
-            external_skills::execute_external_skills_install_tool_with_config(request, config)
-        }
+        "skills.install" => skills::execute_skills_install_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.invoke" => {
-            external_skills::execute_external_skills_invoke_tool_with_config(request, config)
-        }
+        "skills.list" => skills::execute_skills_list_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.list" => {
-            external_skills::execute_external_skills_list_tool_with_config(request, config)
-        }
+        "skills.policy" => skills::execute_skills_policy_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.policy" => {
-            external_skills::execute_external_skills_policy_tool_with_config(request, config)
-        }
+        "skills.fetch" => skills::execute_skills_fetch_tool_with_config(request, config),
         #[cfg(test)]
-        "skills.fetch" => {
-            external_skills::execute_external_skills_fetch_tool_with_config(request, config)
-        }
-        #[cfg(test)]
-        "skills.remove" => {
-            external_skills::execute_external_skills_remove_tool_with_config(request, config)
-        }
+        "skills.remove" => skills::execute_skills_remove_tool_with_config(request, config),
         #[cfg(feature = "tool-browser")]
         "browser.open" | "browser.extract" | "browser.click" => {
             browser::execute_browser_tool_with_config(request, config)

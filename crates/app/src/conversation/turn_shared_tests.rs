@@ -969,7 +969,7 @@ fn tool_driven_reply_phase_raw_mode_bypasses_completion_pass() {
 fn tool_result_followup_tail_promotes_external_skill_without_payload_mapping() {
     let tail = build_tool_result_followup_tail(
         "preface",
-        r#"[ok] {"status":"ok","tool":"skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+        r#"[ok] {"status":"ok","tool":"read","tool_call_id":"call-1","payload_semantics":"skill_context","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
         "summarize note.md",
         Some("warning"),
         |_, _| panic!("external skill payload should bypass payload mapper"),
@@ -1004,7 +1004,7 @@ fn tool_result_followup_tail_promotes_external_skill_without_payload_mapping() {
 fn tool_result_followup_tail_promotes_external_skill_from_semantic_envelope() {
     let tail = build_tool_result_followup_tail(
         "preface",
-        r#"[ok] {"status":"ok","tool":"file.read","tool_call_id":"call-1","payload_semantics":"external_skill_context","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+        r#"[ok] {"status":"ok","tool":"read","tool_call_id":"call-1","payload_semantics":"skill_context","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
         "summarize note.md",
         Some("warning"),
         |_, _| panic!("external skill payload should bypass payload mapper"),
@@ -2110,15 +2110,14 @@ fn parse_external_skill_invoke_context_extracts_full_instructions_from_semantic_
             "status": "ok",
             "tool": "file.read",
             "tool_call_id": "call-1",
-            "payload_semantics": "external_skill_context",
+            "payload_semantics": "skill_context",
             "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
             "payload_chars": 512,
             "payload_truncated": false
         })
     );
 
-    let parsed =
-        parse_external_skill_invoke_context(line.as_str()).expect("invoke context should parse");
+    let parsed = parse_skill_context(line.as_str()).expect("invoke context should parse");
     assert_eq!(parsed.skill_id, "demo-skill");
     assert_eq!(parsed.display_name, "Demo Skill");
     assert!(parsed.instructions.contains("suffix-marker"));
@@ -2137,7 +2136,7 @@ fn parse_external_skill_invoke_context_requires_semantics_or_legacy_tool_name() 
         "[ok] {}",
         json!({
             "status": "ok",
-            "tool": "file.read",
+            "tool": "read",
             "tool_call_id": "call-1",
             "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
             "payload_chars": 512,
@@ -2146,8 +2145,8 @@ fn parse_external_skill_invoke_context_requires_semantics_or_legacy_tool_name() 
     );
 
     assert!(
-        parse_external_skill_invoke_context(line.as_str()).is_none(),
-        "skill-shaped payloads should not activate managed skill context without semantics or the legacy tool name"
+        parse_skill_context(line.as_str()).is_none(),
+        "skill-shaped payloads should not activate managed skill context without explicit external-skill semantics"
     );
 }
 
@@ -2162,8 +2161,9 @@ fn parse_external_skill_invoke_context_rejects_truncated_payload() {
         "[ok] {}",
         json!({
             "status": "ok",
-            "tool": "skills.invoke",
+            "tool": "read",
             "tool_call_id": "call-1",
+            "payload_semantics": "skill_context",
             "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
             "payload_chars": 512,
             "payload_truncated": true
@@ -2171,7 +2171,7 @@ fn parse_external_skill_invoke_context_rejects_truncated_payload() {
     );
 
     assert!(
-        parse_external_skill_invoke_context(line.as_str()).is_none(),
+        parse_skill_context(line.as_str()).is_none(),
         "truncated external skill payload should not activate managed skill context"
     );
 }
@@ -2254,7 +2254,7 @@ fn reduce_followup_payload_for_model_preserves_empty_required_arrays() {
         "query": "install a skill",
         "results": [
             {
-                "tool_id": "external_skills.install",
+                "tool_id": "skills.install",
                 "summary": "Install a bundled skill or a local skill path.",
                 "argument_hint": "bundled_skill_id?:string,path?:string",
                 "required_fields": [],

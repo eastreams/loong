@@ -572,14 +572,11 @@ fn governance_profile_follows_descriptor_declared_policy() {
         ToolApprovalMode::PolicyDriven
     );
 
-    let external_skills_policy = governance_profile_for_tool_name("external_skills.policy");
+    let skills_policy = governance_profile_for_tool_name("skills.policy");
 
-    assert_eq!(external_skills_policy.scope, ToolGovernanceScope::Routine);
-    assert_eq!(external_skills_policy.risk_class, ToolRiskClass::High);
-    assert_eq!(
-        external_skills_policy.approval_mode,
-        ToolApprovalMode::PolicyDriven
-    );
+    assert_eq!(skills_policy.scope, ToolGovernanceScope::Routine);
+    assert_eq!(skills_policy.risk_class, ToolRiskClass::High);
+    assert_eq!(skills_policy.approval_mode, ToolApprovalMode::PolicyDriven);
 
     let unknown_policy = governance_profile_for_tool_name("unknown.tool");
 

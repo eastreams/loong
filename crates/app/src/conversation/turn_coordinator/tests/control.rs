@@ -421,7 +421,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_prefix_injects_skill
     let runtime = ExplicitSkillActivationRuntime::default();
     let coordinator = ConversationTurnCoordinator::new();
     let mut config = LoongConfig::default();
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.file_root = Some(workspace_root.display().to_string());
 
     let reply = coordinator
@@ -511,7 +511,7 @@ async fn handle_turn_with_runtime_explicit_skill_activation_preserves_observer_s
     let runtime = ExplicitSkillActivationRuntime::default();
     let coordinator = ConversationTurnCoordinator::new();
     let mut config = LoongConfig::default();
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.file_root = Some(workspace_root.display().to_string());
     config.provider.kind = crate::config::ProviderKind::Anthropic;
 

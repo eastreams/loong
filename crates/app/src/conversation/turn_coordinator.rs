@@ -120,7 +120,7 @@ use self::pending_approval::*;
 use self::reply::build_turn_reply_followup_messages;
 use self::reply::{
     build_turn_reply_followup_messages_with_warning,
-    persist_active_external_skills_from_followup_payload_if_needed, resolve_provider_turn_reply,
+    persist_active_skills_from_followup_payload_if_needed, resolve_provider_turn_reply,
 };
 use self::safe_lane_events::*;
 use self::safe_lane_execution::*;
@@ -139,7 +139,7 @@ use super::super::config::{LoongConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 #[cfg(feature = "memory-sqlite")]
-use super::active_external_skills;
+use super::active_skills;
 use super::analytics::{
     SafeLaneEventSummary, TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
     TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,

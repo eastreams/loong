@@ -693,7 +693,7 @@ fn supplement_plugin_bridge_install_root(
         return false;
     };
 
-    target.external_skills.install_root = Some(source_install_root);
+    target.skills.install_root = Some(source_install_root);
 
     true
 }
@@ -750,7 +750,7 @@ fn channel_uses_plugin_bridge_contract(channel_id: &str) -> bool {
 }
 
 fn normalized_plugin_bridge_install_root(config: &mvp::config::LoongConfig) -> Option<String> {
-    let install_root = config.external_skills.install_root.as_deref()?;
+    let install_root = config.skills.install_root.as_deref()?;
     let trimmed_install_root = install_root.trim();
 
     if trimmed_install_root.is_empty() {

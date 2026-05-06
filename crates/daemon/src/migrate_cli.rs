@@ -10,6 +10,8 @@ use loong_app as mvp;
 use loong_spec::CliResult;
 use serde_json::{Value, json};
 
+const MAP_SKILLS_MODE_KEY: &str = "map_skills";
+const APPLY_SKILLS_PLAN_KEY: &str = "apply_skills_plan";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
 pub enum MigrateMode {
@@ -19,7 +21,8 @@ pub enum MigrateMode {
     PlanMany,
     RecommendPrimary,
     MergeProfiles,
-    MapExternalSkills,
+    #[value(name = MAP_SKILLS_MODE_KEY)]
+    MapSkills,
     ApplySelected,
     RollbackLastApply,
 }
@@ -33,7 +36,7 @@ impl MigrateMode {
             Self::PlanMany => "plan_many",
             Self::RecommendPrimary => "recommend_primary",
             Self::MergeProfiles => "merge_profiles",
-            Self::MapExternalSkills => "map_external_skills",
+            Self::MapSkills => MAP_SKILLS_MODE_KEY,
             Self::ApplySelected => "apply_selected",
             Self::RollbackLastApply => "rollback_last_apply",
         }
@@ -50,7 +53,7 @@ pub struct MigrateCommandOptions {
     pub source_id: Option<String>,
     pub safe_profile_merge: bool,
     pub primary_source_id: Option<String>,
-    pub apply_external_skills_plan: bool,
+    pub apply_skills_plan: bool,
     pub force: bool,
 }
 
@@ -91,7 +94,7 @@ fn validate_migrate_cli_options(options: &MigrateCommandOptions) -> CliResult<()
         | MigrateMode::PlanMany
         | MigrateMode::RecommendPrimary
         | MigrateMode::MergeProfiles
-        | MigrateMode::MapExternalSkills => {
+        | MigrateMode::MapSkills => {
             require_flag_value(options.input.as_deref(), "input", mode)?;
         }
         MigrateMode::RollbackLastApply => {
@@ -253,8 +256,8 @@ fn build_migrate_tool_payload(options: &MigrateCommandOptions) -> Value {
     if let Some(primary_source_id) = options.primary_source_id.as_deref() {
         payload.insert("primary_source_id".to_owned(), json!(primary_source_id));
     }
-    if options.apply_external_skills_plan {
-        payload.insert("apply_external_skills_plan".to_owned(), json!(true));
+    if options.apply_skills_plan {
+        payload.insert(APPLY_SKILLS_PLAN_KEY.to_owned(), json!(true));
     }
     if options.force {
         payload.insert("force".to_owned(), json!(true));
@@ -329,7 +332,7 @@ fn render_migrate_tool_outcome(
         "discover" => render_discover_outcome(&payload),
         "plan_many" | "recommend_primary" => render_plan_many_outcome(&payload),
         "merge_profiles" => render_merge_profiles_outcome(&payload),
-        "map_external_skills" => render_external_skill_mapping_outcome(&payload, options),
+        MAP_SKILLS_MODE_KEY => render_external_skill_mapping_outcome(&payload, options),
         "apply_selected" => render_apply_selected_outcome(&payload, options, sqlite_memory_path),
         "apply" | "plan" => {
             render_apply_or_plan_outcome(mode.as_str(), &payload, sqlite_memory_path, options)
@@ -531,13 +534,13 @@ fn render_external_skill_mapping_outcome(
     let input_path = payload
         .get("input_path")
         .and_then(Value::as_str)
-        .ok_or_else(|| "map_external_skills payload missing `input_path`".to_owned())?;
+        .ok_or_else(|| format!("{MAP_SKILLS_MODE_KEY} payload missing `input_path`"))?;
     let result = payload
         .get("result")
-        .ok_or_else(|| "map_external_skills payload missing `result`".to_owned())?;
+        .ok_or_else(|| format!("{MAP_SKILLS_MODE_KEY} payload missing `result`"))?;
 
     let mut lines = vec![
-        "external skills mapping plan ready".to_owned(),
+        "skills mapping plan ready".to_owned(),
         format!("- input: {input_path}"),
         format!(
             "- detected artifacts: {}",
@@ -594,13 +597,13 @@ fn render_external_skill_mapping_outcome(
     }
     if let Some(output) = options.output.as_deref() {
         lines.push(format!(
-            "next step: {} migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
+            "next step: {} migrate --mode apply_selected --input {} --output {} --apply-skills-plan --force",
             mvp::config::active_cli_command_name(),
             input_path,
             output
         ));
     }
-    print_migrate_surface("external skills mapping", lines);
+    print_migrate_surface("skills mapping", lines);
     Ok(())
 }
 
@@ -657,21 +660,21 @@ fn render_apply_selected_outcome(
             .map_or(0, Vec::len)
     ));
     lines.push(format!(
-        "- external skill artifacts: {}",
+        "- skills artifacts: {}",
         result
             .get("external_skill_artifact_count")
             .and_then(Value::as_u64)
             .unwrap_or(0)
     ));
     lines.push(format!(
-        "- external skill entries applied: {}",
+        "- skills entries applied: {}",
         result
             .get("external_skill_entries_applied")
             .and_then(Value::as_u64)
             .unwrap_or(0)
     ));
     lines.push(format!(
-        "- managed external skills bridged: {}",
+        "- managed skills bridged: {}",
         result
             .get("external_skill_managed_install_count")
             .and_then(Value::as_u64)
@@ -689,11 +692,8 @@ fn render_apply_selected_outcome(
             lines.push(format!("- bridged skill ids: {}", bridged.join(", ")));
         }
     }
-    if let Some(manifest_path) = result
-        .get("external_skills_manifest_path")
-        .and_then(Value::as_str)
-    {
-        lines.push(format!("- external skills manifest: {manifest_path}"));
+    if let Some(manifest_path) = result.get("skills_manifest_path").and_then(Value::as_str) {
+        lines.push(format!("- skills manifest: {manifest_path}"));
     }
     if let Some(memory_path) = sqlite_memory_path.as_ref() {
         lines.push(format!("- sqlite memory: {}", memory_path.display()));

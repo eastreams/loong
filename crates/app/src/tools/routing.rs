@@ -544,7 +544,7 @@ pub(crate) fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static s
         || payload_has_non_null_field(payload, "primary_source_id")
         || payload_has_non_null_field(payload, "primary_selection_id")
         || payload_has_non_null_field(payload, "safe_profile_merge")
-        || payload_has_non_null_field(payload, "apply_external_skills_plan")
+        || payload_has_non_null_field(payload, "apply_skills_plan")
         || payload_has_non_null_field(payload, "force");
     let has_approval_status = payload_has_non_null_field(payload, "status");
     let has_query = payload_has_non_null_field(payload, "query");
@@ -725,7 +725,6 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
         "skills.source_search" => Some("source-search".to_owned()),
         "skills.inspect" => Some("inspect".to_owned()),
         "skills.install" => Some("install".to_owned()),
-        "skills.invoke" => Some("run".to_owned()),
         "skills.list" => Some("list".to_owned()),
         "skills.policy" => Some("policy".to_owned()),
         "skills.fetch" => Some("fetch".to_owned()),

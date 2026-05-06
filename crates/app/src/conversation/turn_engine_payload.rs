@@ -123,7 +123,7 @@ fn active_skill_workspace_root_for_tool_payload(
     payload: &serde_json::Value,
     session_context: &SessionContext,
 ) -> Option<std::path::PathBuf> {
-    if session_context.active_external_skill_roots.is_empty() {
+    if session_context.active_skill_roots.is_empty() {
         return None;
     }
 
@@ -140,14 +140,14 @@ fn active_skill_workspace_root_for_tool_payload(
         };
 
         return session_context
-            .active_external_skill_roots
+            .active_skill_roots
             .iter()
             .find(|root| normalized_requested_path.starts_with(root))
             .cloned();
     }
 
     resolve_active_skill_root_for_relative_path(
-        &session_context.active_external_skill_roots,
+        &session_context.active_skill_roots,
         requested_path.as_path(),
     )
 }
@@ -157,7 +157,7 @@ fn visible_skill_workspace_root_for_tool_payload(
     payload: &serde_json::Value,
     session_context: &SessionContext,
 ) -> Option<std::path::PathBuf> {
-    if session_context.visible_external_skill_roots.is_empty() {
+    if session_context.visible_skill_roots.is_empty() {
         return None;
     }
 
@@ -177,7 +177,7 @@ fn visible_skill_workspace_root_for_tool_payload(
     };
 
     session_context
-        .visible_external_skill_roots
+        .visible_skill_roots
         .iter()
         .find(|root| normalized_requested_path.starts_with(root))
         .cloned()

@@ -17,7 +17,7 @@ fn gateway_nodes_test_config(label: &str) -> (mvp::config::LoongConfig, std::pat
     let install_root = root_dir.join("managed-bridges");
     let mut config = mixed_account_weixin_plugin_bridge_config();
     config.memory.sqlite_path = sqlite_path_text;
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     (config, root_dir)
 }

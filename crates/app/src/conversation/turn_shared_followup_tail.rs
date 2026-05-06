@@ -9,22 +9,20 @@ use super::{
     EXTERNAL_SKILL_FOLLOWUP_PROMPT, TOOL_LOOP_GUARD_PROMPT, TOOL_TRUNCATION_HINT_PROMPT,
     ToolDrivenFollowupLabel, ToolDrivenFollowupPayload, ToolDrivenFollowupTextRef,
     append_followup_preface, append_followup_warning, combine_followup_extra_context,
-    parse_external_skill_invoke_context,
+    parse_skill_context,
 };
 
-pub fn build_external_skill_system_message(
-    skill_context: &super::ExternalSkillInvokeContext,
-) -> String {
+pub fn build_skill_system_message(skill_context: &super::SkillContext) -> String {
     format!(
         "Skill `{}` ({}) is now active for this task. Treat the following `SKILL.md` content as trusted runtime guidance until superseded.\n\n{}",
         skill_context.skill_id, skill_context.display_name, skill_context.instructions
     )
 }
 
-pub fn build_external_skill_followup_user_prompt(
+pub fn build_skill_followup_user_prompt(
     user_input: &str,
     loop_warning_reason: Option<&str>,
-    skill_context: &super::ExternalSkillInvokeContext,
+    skill_context: &super::SkillContext,
 ) -> String {
     let mut sections = vec![
         EXTERNAL_SKILL_FOLLOWUP_PROMPT.to_owned(),
@@ -77,15 +75,15 @@ where
 {
     let mut messages = Vec::new();
     append_followup_preface(&mut messages, assistant_preface);
-    if let Some(skill_context) = parse_external_skill_invoke_context(tool_result_text) {
+    if let Some(skill_context) = parse_skill_context(tool_result_text) {
         messages.push(serde_json::json!({
             "role": "system",
-            "content": build_external_skill_system_message(&skill_context),
+            "content": build_skill_system_message(&skill_context),
         }));
         append_followup_warning(&mut messages, loop_warning_reason);
         messages.push(serde_json::json!({
             "role": "user",
-            "content": build_external_skill_followup_user_prompt(
+            "content": build_skill_followup_user_prompt(
                 user_input,
                 loop_warning_reason,
                 &skill_context,

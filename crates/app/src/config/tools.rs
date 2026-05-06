@@ -19,7 +19,7 @@ pub const DEFAULT_BROWSER_MAX_TEXT_CHARS: usize = 6000;
 pub const DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 20_000;
 pub const DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 150_000;
 pub const DEFAULT_DELEGATE_MAX_FROZEN_BYTES: usize = 256 * 1024;
-pub const DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES: [&str; 1] = ["*.clawhub.io"];
+pub const DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES: [&str; 0] = [];
 pub(crate) const MIN_DELEGATE_MAX_FROZEN_BYTES: usize = 1;
 pub(crate) const MIN_WEB_FETCH_MAX_BYTES: usize = 1024;
 pub const MAX_WEB_FETCH_MAX_BYTES: usize = 5 * 1024 * 1024;
@@ -480,19 +480,19 @@ fn default_shell_allow() -> Vec<String> {
         .collect()
 }
 
-fn default_external_skills_blocked_domains() -> Vec<String> {
+fn default_skills_blocked_domains() -> Vec<String> {
     Vec::new()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExternalSkillsConfig {
+pub struct SkillsConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_require_download_approval")]
     pub require_download_approval: bool,
     #[serde(default)]
     pub allowed_domains: Vec<String>,
-    #[serde(default = "default_external_skills_blocked_domains")]
+    #[serde(default = "default_skills_blocked_domains")]
     pub blocked_domains: Vec<String>,
     #[serde(default)]
     pub install_root: Option<String>,
@@ -612,13 +612,13 @@ impl Default for BrowserToolConfig {
     }
 }
 
-impl Default for ExternalSkillsConfig {
+impl Default for SkillsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             require_download_approval: default_require_download_approval(),
             allowed_domains: Vec::new(),
-            blocked_domains: default_external_skills_blocked_domains(),
+            blocked_domains: default_skills_blocked_domains(),
             install_root: None,
             auto_expose_installed: default_auto_expose_installed(),
         }
@@ -993,7 +993,7 @@ pub(crate) fn web_search_provider_parameter_description() -> String {
     )
 }
 
-impl ExternalSkillsConfig {
+impl SkillsConfig {
     pub fn normalized_allowed_domains(&self) -> Vec<String> {
         normalize_domain_entries(&self.allowed_domains)
     }
@@ -2061,8 +2061,8 @@ max_text_chars = 2048
     }
 
     #[test]
-    fn external_skills_defaults_to_fail_closed_mode() {
-        let config = ExternalSkillsConfig::default();
+    fn skills_defaults_to_fail_closed_mode() {
+        let config = SkillsConfig::default();
         assert!(!config.enabled);
         assert!(config.require_download_approval);
         assert!(config.allowed_domains.is_empty());
@@ -2072,8 +2072,8 @@ max_text_chars = 2048
     }
 
     #[test]
-    fn external_skills_normalized_domains_are_lowercase_and_deduped() {
-        let config = ExternalSkillsConfig {
+    fn skills_normalized_domains_are_lowercase_and_deduped() {
+        let config = SkillsConfig {
             enabled: true,
             require_download_approval: true,
             allowed_domains: vec![
@@ -2100,10 +2100,10 @@ max_text_chars = 2048
     }
 
     #[test]
-    fn external_skills_resolved_install_root_expands_user_home() {
-        let config = ExternalSkillsConfig {
+    fn skills_resolved_install_root_expands_user_home() {
+        let config = SkillsConfig {
             install_root: Some("~/demo-skills".to_owned()),
-            ..ExternalSkillsConfig::default()
+            ..SkillsConfig::default()
         };
 
         assert!(

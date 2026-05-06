@@ -92,7 +92,7 @@ fn run_migrate_cli_writes_nativeized_config() {
         source_id: None,
         safe_profile_merge: false,
         primary_source_id: None,
-        apply_external_skills_plan: false,
+        apply_skills_plan: false,
         force: true,
     })
     .expect("migrate command should succeed");
@@ -148,7 +148,7 @@ fn run_migrate_cli_plan_mode_returns_preview_without_writing() {
         source_id: None,
         safe_profile_merge: false,
         primary_source_id: None,
-        apply_external_skills_plan: false,
+        apply_skills_plan: false,
         force: true,
     })
     .expect("plan mode should succeed");
@@ -194,7 +194,7 @@ fn run_migrate_cli_apply_selected_mode_writes_manifest_and_config() {
         source_id: Some("openclaw".to_owned()),
         safe_profile_merge: false,
         primary_source_id: None,
-        apply_external_skills_plan: false,
+        apply_skills_plan: false,
         force: true,
     })
     .expect("apply_selected mode should succeed");
@@ -257,24 +257,24 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
         source_id: Some("openclaw".to_owned()),
         safe_profile_merge: false,
         primary_source_id: None,
-        apply_external_skills_plan: true,
+        apply_skills_plan: true,
         force: true,
     })
-    .expect("apply_selected mode with external skills should succeed");
+    .expect("apply_selected mode with skills should succeed");
 
     let raw = fs::read_to_string(&output_path).expect("read generated config");
     assert!(raw.contains("Imported External Skills Artifacts"));
     assert!(raw.contains("kind=skills_catalog"));
     assert!(
         raw.contains("enabled = true"),
-        "bridged installs should enable external skills in the written config"
+        "bridged installs should enable skills in the written config"
     );
-    let external_manifest_path = output_root
+    let skills_manifest_path = output_root
         .join(".loong-migration")
         .join("selected-external.toml.external-skills.json");
     assert!(
-        external_manifest_path.exists(),
-        "apply_selected mode should write external skills manifest"
+        skills_manifest_path.exists(),
+        "apply_selected mode should write skills manifest"
     );
     assert!(
         output_root
@@ -320,7 +320,7 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
             source_id: None,
             safe_profile_merge: false,
             primary_source_id: None,
-            apply_external_skills_plan: false,
+            apply_skills_plan: false,
             force: true,
         },
     )
@@ -348,7 +348,7 @@ fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
             source_id: None,
             safe_profile_merge: false,
             primary_source_id: None,
-            apply_external_skills_plan: false,
+            apply_skills_plan: false,
             force: false,
         },
     )
@@ -376,7 +376,7 @@ fn migrate_cli_ux_discover_mode_reports_flag_level_input_requirement() {
             source_id: None,
             safe_profile_merge: false,
             primary_source_id: None,
-            apply_external_skills_plan: false,
+            apply_skills_plan: false,
             force: false,
         },
     )

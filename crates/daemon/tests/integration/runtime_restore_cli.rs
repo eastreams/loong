@@ -97,11 +97,11 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongConf
     config.memory.ingest_mode = mvp::config::MemoryIngestMode::AsyncBackground;
     config.memory.profile_note = Some("restore-target".to_owned());
 
-    config.external_skills.enabled = true;
-    config.external_skills.require_download_approval = false;
-    config.external_skills.auto_expose_installed = true;
-    config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
-    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    config.skills.enabled = true;
+    config.skills.require_download_approval = false;
+    config.skills.auto_expose_installed = true;
+    config.skills.allowed_domains = vec!["skills.sh".to_owned()];
+    config.skills.install_root = Some(root.join("managed-skills").display().to_string());
     let runtime_plugin_root = root.join("runtime-plugins");
     fs::create_dir_all(&runtime_plugin_root).expect("create runtime plugin root");
     config.runtime_plugins.enabled = true;
@@ -150,8 +150,8 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongConf
         &config,
         Some(&config_path),
     );
-    mvp::tools::external_skills_operator_policy_reset_with_config(true, &runtime_config)
-        .expect("reset runtime restore external skills policy");
+    mvp::tools::skills_policy_reset_with_config(true, &runtime_config)
+        .expect("reset runtime restore skills policy");
     (config_path, config)
 }
 
@@ -164,7 +164,7 @@ fn install_demo_skill(root: &Path, config: &mvp::config::LoongConfig, config_pat
 
     let runtime_config =
         mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(config_path));
-    mvp::tools::external_skills_operator_install_with_config(
+    mvp::tools::skills_install_with_config(
         Some("source/demo-skill"),
         None,
         None,
@@ -240,10 +240,10 @@ fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
     config.memory.ingest_mode = mvp::config::MemoryIngestMode::SyncMinimal;
     config.memory.profile_note = Some("mutated".to_owned());
 
-    config.external_skills.enabled = false;
-    config.external_skills.require_download_approval = true;
-    config.external_skills.auto_expose_installed = false;
-    config.external_skills.allowed_domains.clear();
+    config.skills.enabled = false;
+    config.skills.require_download_approval = true;
+    config.skills.auto_expose_installed = false;
+    config.skills.allowed_domains.clear();
     config.runtime_plugins.enabled = false;
     config.runtime_plugins.roots =
         vec![root.join("disabled-runtime-plugins").display().to_string()];
@@ -470,7 +470,7 @@ fn runtime_snapshot_artifact_json_warns_when_managed_skill_inventory_is_disabled
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
     let (config_path, mut config) = write_runtime_restore_config(&root);
-    config.external_skills.enabled = false;
+    config.skills.enabled = false;
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write disabled inventory fixture");
 
@@ -524,7 +524,7 @@ fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged
             .plan
             .changed_surfaces
             .iter()
-            .any(|surface| surface == "external_skills")
+            .any(|surface| surface == "skills")
     );
     assert!(
         execution
@@ -537,7 +537,7 @@ fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged
     let (_, reloaded) = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
         .expect("reload dry-run config");
     assert_eq!(reloaded.active_provider_id(), Some("openai-main"));
-    assert!(!reloaded.external_skills.enabled);
+    assert!(!reloaded.skills.enabled);
     assert_eq!(
         reloaded.memory.profile,
         mvp::config::MemoryProfile::WindowOnly
@@ -613,7 +613,7 @@ fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_cap
         ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
     ]);
     let (config_path, mut config) = write_runtime_restore_config(&root);
-    config.external_skills.enabled = false;
+    config.skills.enabled = false;
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write disabled inventory restore config");
 
@@ -624,7 +624,7 @@ fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_cap
             .expect("warnings should be an array")
             .iter()
             .filter_map(Value::as_str)
-            .any(|warning| warning.contains("could not enumerate managed external skills")),
+            .any(|warning| warning.contains("could not enumerate managed skills")),
         "fixture should capture the managed-skill inventory warning"
     );
 
@@ -644,14 +644,13 @@ fn runtime_restore_dry_run_blocks_apply_when_managed_skill_inventory_was_not_cap
             .plan
             .warnings
             .iter()
-            .any(|warning| warning.contains("could not enumerate managed external skills")),
+            .any(|warning| warning.contains("could not enumerate managed skills")),
         "dry-run should keep the managed-skill inventory warning visible"
     );
 }
 
 #[test]
-fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disables_external_skills()
- {
+fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disables_skills() {
     let root = unique_temp_dir("loong-runtime-restore-target-disabled");
     let _env = RuntimeRestoreEnvGuard::set(&[
         ("LOONG_BROWSER_COMPANION_READY", Some("true")),
@@ -662,7 +661,7 @@ fn runtime_restore_dry_run_collects_current_inventory_when_target_snapshot_disab
     install_demo_skill(&root, &config, &config_path);
     let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
 
-    payload["restore_spec"]["external_skills"]["enabled"] = Value::Bool(false);
+    payload["restore_spec"]["skills"]["enabled"] = Value::Bool(false);
     payload["restore_spec"]["managed_skills"]["skills"] = Value::Array(Vec::new());
     let disabled_artifact_path = write_snapshot_artifact_payload(
         &root,
@@ -767,7 +766,7 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
     let (_, reloaded) = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
         .expect("reload restored config");
     assert_eq!(reloaded.active_provider_id(), Some("deepseek-lab"));
-    assert!(reloaded.external_skills.enabled);
+    assert!(reloaded.skills.enabled);
     assert!(reloaded.runtime_plugins.enabled);
     assert_eq!(
         reloaded.runtime_plugins.roots,
@@ -789,7 +788,7 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
     assert_eq!(payload["provider"]["active_profile_id"], "deepseek-lab");
     assert!(
-        payload["external_skills"]["policy"]["enabled"]
+        payload["skills"]["policy"]["enabled"]
             .as_bool()
             .expect("enabled should be boolean")
     );
@@ -799,7 +798,7 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         json!([root.join("runtime-plugins").display().to_string()])
     );
     assert!(
-        payload["external_skills"]["inventory"]["skills"]
+        payload["skills"]["inventory"]["skills"]
             .as_array()
             .expect("skills should be an array")
             .iter()

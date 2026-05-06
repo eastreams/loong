@@ -144,7 +144,7 @@ fn render_channel_surfaces_text_reports_plugin_bridge_account_summary_for_mixed_
     let mut config = mixed_account_weixin_plugin_bridge_config();
 
     install_ready_weixin_managed_bridge(install_root.as_path());
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let inventory = mvp::channel::channel_inventory(&config);
     let rendered = render_channel_surfaces_text("/tmp/loong.toml", &inventory);

@@ -18,21 +18,21 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use tempfile::Builder as TempFileBuilder;
 
-use super::external_skills_scan::{
-    ExternalSkillSecurityDecision, parse_external_skill_security_decision, scan_external_skill_tree,
+use super::skills_scan::{
+    ExternalSkillSecurityDecision, parse_skill_security_decision, scan_external_skill_tree,
 };
-use super::external_skills_sources::{
+use super::skills_sources::{
     ExternalSkillSourceKind, ResolvedExternalSkillCandidate, resolve_external_skill_candidate,
 };
 #[cfg(test)]
-use super::external_skills_sources::{
+use super::skills_sources::{
     default_external_skill_search_sources, parse_external_skill_source_kind,
     search_query_for_external_skill_source,
 };
 use super::tool_search::{rank_searchable_entries, searchable_entry_from_manual_definition};
 
 const DEFAULT_DOWNLOAD_DIR_NAME: &str = "external-skills-downloads";
-const DEFAULT_INSTALL_DIR_NAME: &str = "external-skills-installed";
+const DEFAULT_INSTALL_DIR_NAME: &str = ".loong/skills";
 const DEFAULT_SKILL_FILENAME: &str = "SKILL.md";
 const DEFAULT_INDEX_FILENAME: &str = "index.json";
 const DEFAULT_MAX_DOWNLOAD_BYTES: usize = 5 * 1024 * 1024;
@@ -40,7 +40,7 @@ const HARD_MAX_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
 const DEFAULT_SKILL_RESOURCE_LIST_LIMIT: usize = 64;
 #[cfg(test)]
 const INSTALLED_SKILL_SNAPSHOT_HINT: &str =
-    "installed managed external skill; use skills.inspect or skills.invoke for details";
+    "installed managed skill; read its SKILL.md or use skills.inspect for details";
 const PROJECT_DISCOVERY_DIRS: [(&str, usize); 5] = [
     (".loong/skills", 0),
     (".agents/skills", 1),
@@ -313,7 +313,7 @@ enum SkillAudience {
 }
 
 #[derive(Debug, Clone, Default)]
-struct ExternalSkillsPolicyOverride {
+struct SkillsPolicyOverride {
     enabled: Option<bool>,
     require_download_approval: Option<bool>,
     allowed_domains: Option<BTreeSet<String>>,
@@ -338,7 +338,7 @@ trait ExternalSkillDownloadPlanHttp {
 
 struct ReqwestExternalSkillDownloadPlanHttp<'a> {
     client: &'a reqwest::blocking::Client,
-    policy: &'a super::runtime_config::ExternalSkillsRuntimePolicy,
+    policy: &'a super::runtime_config::SkillsRuntimePolicy,
 }
 
 struct ValidatedExternalSkillUrl {
@@ -349,10 +349,9 @@ struct ValidatedExternalSkillUrl {
 #[derive(Debug, Default)]
 struct ScopedDirCleanup(Option<PathBuf>);
 
-static EXTERNAL_SKILLS_POLICY_OVERRIDE: OnceLock<RwLock<ExternalSkillsPolicyOverride>> =
-    OnceLock::new();
+static SKILLS_POLICY_OVERRIDE: OnceLock<RwLock<SkillsPolicyOverride>> = OnceLock::new();
 
-pub(super) fn execute_external_skills_policy_tool_with_config(
+pub(super) fn execute_skills_policy_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -395,7 +394,7 @@ pub(super) fn execute_external_skills_policy_tool_with_config(
                 .unwrap_or(false);
             if !policy_update_approved {
                 return Err(
-                    "external skills policy update requires explicit authorization; set payload.policy_update_approved=true after user approval"
+                    "skills policy update requires explicit authorization; set payload.policy_update_approved=true after user approval"
                         .to_owned(),
                 );
             }
@@ -409,7 +408,7 @@ pub(super) fn execute_external_skills_policy_tool_with_config(
             let override_store = policy_override_store();
             let mut override_state = override_store
                 .write()
-                .map_err(|error| format!("external skills policy lock poisoned: {error}"))?;
+                .map_err(|error| format!("skills policy lock poisoned: {error}"))?;
 
             if let Some(value) = enabled {
                 override_state.enabled = Some(value);
@@ -444,7 +443,7 @@ pub(super) fn execute_external_skills_policy_tool_with_config(
                 .unwrap_or(false);
             if !policy_update_approved {
                 return Err(
-                    "external skills policy update requires explicit authorization; set payload.policy_update_approved=true after user approval"
+                    "skills policy update requires explicit authorization; set payload.policy_update_approved=true after user approval"
                         .to_owned(),
                 );
             }
@@ -452,8 +451,8 @@ pub(super) fn execute_external_skills_policy_tool_with_config(
             let override_store = policy_override_store();
             let mut override_state = override_store
                 .write()
-                .map_err(|error| format!("external skills policy lock poisoned: {error}"))?;
-            *override_state = ExternalSkillsPolicyOverride::default();
+                .map_err(|error| format!("skills policy lock poisoned: {error}"))?;
+            *override_state = SkillsPolicyOverride::default();
 
             let effective_policy = build_effective_policy(config, &override_state);
             Ok(ToolCoreOutcome {
@@ -468,11 +467,11 @@ pub(super) fn execute_external_skills_policy_tool_with_config(
                 }),
             })
         }
-        _ => Err("unreachable external skills policy action".to_owned()),
+        _ => Err("unreachable skills policy action".to_owned()),
     }
 }
 
-pub(super) fn execute_external_skills_fetch_tool_with_config(
+pub(super) fn execute_skills_fetch_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -497,7 +496,7 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
 
     if policy.require_download_approval && !approval_granted {
         return Err(
-            "external skills download requires explicit authorization; set payload.approval_granted=true after user approval"
+            "skills download requires explicit authorization; set payload.approval_granted=true after user approval"
                 .to_owned(),
         );
     }
@@ -510,9 +509,7 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
         .timeout(Duration::from_secs(30))
         .user_agent("loong-external-skills/0.1")
         .build()
-        .map_err(|error| {
-            format!("failed to build HTTP client for external skills download: {error}")
-        })?;
+        .map_err(|error| format!("failed to build HTTP client for skills download: {error}"))?;
 
     let resolution_http = ReqwestExternalSkillDownloadPlanHttp {
         client: &client,
@@ -532,7 +529,7 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
     let output_dir = resolve_download_dir(config);
     fs::create_dir_all(&output_dir).map_err(|error| {
         format!(
-            "failed to create external skills download directory {}: {error}",
+            "failed to create skills download directory {}: {error}",
             output_dir.display()
         )
     })?;
@@ -549,7 +546,7 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
         max_bytes,
         &output_dir,
         &derived_name,
-        "external skills download",
+        "skills download",
     )?;
 
     Ok(ToolCoreOutcome {
@@ -577,7 +574,7 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
 }
 
 #[cfg(test)]
-pub(super) fn execute_external_skills_resolve_tool_with_config(
+pub(super) fn execute_skills_resolve_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -602,7 +599,7 @@ pub(super) fn execute_external_skills_resolve_tool_with_config(
 }
 
 #[cfg(test)]
-pub(super) fn execute_external_skills_source_search_tool_with_config(
+pub(super) fn execute_skills_source_search_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -680,7 +677,7 @@ pub(super) fn execute_external_skills_source_search_tool_with_config(
             .collect::<Vec<_>>()
             .join("; ");
         return Err(format!(
-            "external skills search failed for all requested sources: {rendered_errors}"
+            "skills search failed for all requested sources: {rendered_errors}"
         ));
     }
 
@@ -702,7 +699,7 @@ pub(super) fn execute_external_skills_source_search_tool_with_config(
     })
 }
 
-pub(super) fn execute_external_skills_install_tool_with_config(
+pub(super) fn execute_skills_install_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -724,7 +721,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
         .get("replace")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let security_decision = parse_external_skill_security_decision(payload, "skills.install")?;
+    let security_decision = parse_skill_security_decision(payload, "skills.install")?;
     let explicit_skill_id = payload
         .get("skill_id")
         .and_then(Value::as_str)
@@ -750,7 +747,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     let install_root = resolve_install_root(config);
     fs::create_dir_all(&install_root).map_err(|error| {
         format!(
-            "failed to create external skills install root {}: {error}",
+            "failed to create skills install root {}: {error}",
             install_root.display()
         )
     })?;
@@ -767,17 +764,14 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                         .to_owned(),
                 );
             }
-            let bundled = super::bundled_skills::bundled_external_skill(bundled_skill_id)
-                .ok_or_else(|| {
+            let bundled =
+                super::bundled_skills::bundled_skill(bundled_skill_id).ok_or_else(|| {
                     format!("skills.install does not recognize bundled skill `{bundled_skill_id}`")
                 })?;
-            let bundled_markdown =
-                super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
+            let bundled_markdown = super::bundled_skills::bundled_skill_markdown(&bundled)?;
             let bundled_dir =
-                super::bundled_skills::bundled_external_skill_dir(&bundled).map_err(|error| {
-                    format!(
-                        "failed to resolve bundled external skill `{bundled_skill_id}`: {error}"
-                    )
+                super::bundled_skills::bundled_skill_dir(&bundled).map_err(|error| {
+                    format!("failed to resolve bundled skill `{bundled_skill_id}`: {error}")
                 })?;
             let skill_id = normalize_skill_id(bundled.skill_id)?;
             let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
@@ -790,7 +784,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
             let mut incoming_cleanup = ScopedDirCleanup::new(Some(incoming_root.clone()));
             fs::create_dir_all(&incoming_root).map_err(|error| {
                 format!(
-                    "failed to create bundled external skill staging directory {}: {error}",
+                    "failed to create bundled skill staging directory {}: {error}",
                     incoming_root.display()
                 )
             })?;
@@ -816,14 +810,14 @@ pub(super) fn execute_external_skills_install_tool_with_config(
             let source_path = super::file::resolve_safe_file_path_with_config(raw_path, config)?;
             let source_metadata = fs::symlink_metadata(&source_path).map_err(|error| {
                 format!(
-                    "failed to inspect external skill source {}: {error}",
+                    "failed to inspect skill source {}: {error}",
                     source_path.display()
                 )
             })?;
             let source_file_type = source_metadata.file_type();
             if source_file_type.is_symlink() {
                 return Err(format!(
-                    "external skill source {} cannot be a symlink",
+                    "skill source {} cannot be a symlink",
                     source_path.display()
                 ));
             }
@@ -837,15 +831,14 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                 (skill_root, "archive", Some(staging_root))
             } else {
                 return Err(format!(
-                    "external skill source {} must be a directory or a regular file",
+                    "skill source {} must be a directory or a regular file",
                     source_path.display()
                 ));
             };
             let _cleanup_root = ScopedDirCleanup::new(cleanup_root);
             let security_scan = scan_external_skill_tree(&skill_root)?;
-            let security_scan_payload = serde_json::to_value(&security_scan).map_err(|error| {
-                format!("serialize external skill security scan failed: {error}")
-            })?;
+            let security_scan_payload = serde_json::to_value(&security_scan)
+                .map_err(|error| format!("serialize skill security scan failed: {error}"))?;
             if security_scan.requires_approval() {
                 match security_decision {
                     Some(ExternalSkillSecurityDecision::ApproveOnce) => {
@@ -853,7 +846,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                     }
                     Some(ExternalSkillSecurityDecision::Deny) => {
                         return Err(format!(
-                            "external skill installation cancelled by payload.security_decision=deny after {} security findings",
+                            "skill installation cancelled by payload.security_decision=deny after {} security findings",
                             security_scan.findings.len()
                         ));
                     }
@@ -899,7 +892,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
             let mut incoming_cleanup = ScopedDirCleanup::new(Some(incoming_root.clone()));
             fs::create_dir_all(&incoming_root).map_err(|error| {
                 format!(
-                    "failed to create external skill destination {}: {error}",
+                    "failed to create skill destination {}: {error}",
                     incoming_root.display()
                 )
             })?;
@@ -930,7 +923,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     let previous_index = index.clone();
     if !replace && index.skills.iter().any(|entry| entry.skill_id == skill_id) {
         return Err(format!(
-            "external skill `{skill_id}` is already installed; pass payload.replace=true to replace it"
+            "skill `{skill_id}` is already installed; pass payload.replace=true to replace it"
         ));
     }
 
@@ -981,13 +974,13 @@ pub(super) fn execute_external_skills_install_tool_with_config(
             fs::rename(backup_root, &destination_root).ok();
         }
         return Err(format!(
-            "failed to activate managed external skill install {}: {error}",
+            "failed to activate managed skill install {}: {error}",
             destination_root.display()
         ));
     }
 
     if let Err(error) = persist_installed_skill_index(&install_root, &mut index) {
-        let mut rollback_notes = vec![format!("failed to update external skills index: {error}")];
+        let mut rollback_notes = vec![format!("failed to update skills index: {error}")];
 
         if destination_root.exists() {
             fs::remove_dir_all(&destination_root).map_err(|remove_error| {
@@ -1024,7 +1017,7 @@ pub(super) fn execute_external_skills_install_tool_with_config(
     if let Some(backup_root) = backup_root {
         remove_external_skill_path(&backup_root).map_err(|error| {
             format!(
-                "failed to remove replaced external skill backup {}: {error}",
+                "failed to remove replaced skill backup {}: {error}",
                 backup_root.display()
             )
         })?;
@@ -1051,16 +1044,16 @@ pub(super) fn execute_external_skills_install_tool_with_config(
 }
 
 #[cfg(test)]
-pub(super) fn execute_external_skills_list_tool_with_config(
+pub(super) fn execute_skills_list_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     require_enabled_runtime_policy(config)?;
-    execute_external_skills_list_for_audience(request.tool_name, config, SkillAudience::Model)
+    execute_skills_list_for_audience(request.tool_name, config, SkillAudience::Model)
 }
 
 #[cfg(test)]
-pub(super) fn execute_external_skills_inspect_tool_with_config(
+pub(super) fn execute_skills_inspect_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -1076,88 +1069,21 @@ pub(super) fn execute_external_skills_inspect_tool_with_config(
         .ok_or_else(|| "skills.inspect requires payload.skill_id".to_owned())?;
 
     require_enabled_runtime_policy(config)?;
-    execute_external_skills_inspect_for_audience(
-        request.tool_name,
-        config,
-        skill_id,
-        SkillAudience::Model,
-    )
+    execute_skills_inspect_for_audience(request.tool_name, config, skill_id, SkillAudience::Model)
 }
 
-#[cfg(test)]
-pub(super) fn execute_external_skills_invoke_tool_with_config(
-    request: ToolCoreRequest,
+pub(crate) fn execute_skills_list_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let payload = request
-        .payload
-        .as_object()
-        .ok_or_else(|| "skills.invoke payload must be an object".to_owned())?;
-    let skill_id = payload
-        .get("skill_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "skills.invoke requires payload.skill_id".to_owned())?;
-
-    require_enabled_runtime_policy(config)?;
-
-    let inventory = discover_skill_inventory(config)?;
-    let skill = resolve_discovered_skill(&inventory, skill_id)?;
-    ensure_skill_access_for_audience(&skill, SkillAudience::Model)?;
-    if !skill.eligibility.available {
-        return Err(format!(
-            "external skill `{skill_id}` is not eligible in the current runtime: {}",
-            skill.eligibility.issues.join("; ")
-        ));
-    }
-    if matches!(skill.invocation_policy, SkillInvocationPolicy::Manual) {
-        return Err(format!(
-            "external skill `{skill_id}` is marked invocation_policy=manual and cannot be invoked through skills.invoke"
-        ));
-    }
-    let invocation_policy_id = invocation_policy_id(skill.invocation_policy);
-    let tool_restrictions_suffix = render_tool_restrictions_suffix(
-        skill.allowed_tools.as_slice(),
-        skill.blocked_tools.as_slice(),
-    );
-    let mut payload_object = build_external_skill_context_payload(config, &skill)?
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "external skill context payload must be an object".to_owned())?;
-    payload_object.insert("adapter".to_owned(), json!("core-tools"));
-    payload_object.insert("tool_name".to_owned(), json!(request.tool_name));
-    payload_object.insert(
-        "invocation_summary".to_owned(),
-        json!(format!(
-            "Loaded external skill `{}` with invocation_policy={}. Apply the structured skill content before continuing the task{}.",
-            skill_id,
-            invocation_policy_id,
-            tool_restrictions_suffix
-        )),
-    );
-    Ok(ToolCoreOutcome {
-        status: "ok".to_owned(),
-        payload: Value::Object(payload_object),
-    })
+    execute_skills_list_for_audience("skills.list".to_owned(), config, SkillAudience::Operator)
 }
 
-pub(crate) fn execute_external_skills_operator_list_tool_with_config(
-    config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_list_for_audience(
-        "skills.list".to_owned(),
-        config,
-        SkillAudience::Operator,
-    )
-}
-
-pub(crate) fn execute_external_skills_operator_search_with_config(
+pub(crate) fn execute_skills_search_with_config(
     query: &str,
     limit: usize,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_search_tool_with_config(
+    execute_skills_search_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.search".to_owned(),
             payload: json!({
@@ -1169,12 +1095,12 @@ pub(crate) fn execute_external_skills_operator_search_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_recommend_with_config(
+pub(crate) fn execute_skills_recommend_with_config(
     query: &str,
     limit: usize,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_recommend_tool_with_config(
+    execute_skills_recommend_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.recommend".to_owned(),
             payload: json!({
@@ -1186,11 +1112,11 @@ pub(crate) fn execute_external_skills_operator_recommend_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_inspect_tool_with_config(
+pub(crate) fn execute_skills_inspect_with_config(
     skill_id: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_inspect_for_audience(
+    execute_skills_inspect_for_audience(
         "skills.inspect".to_owned(),
         config,
         skill_id,
@@ -1198,7 +1124,7 @@ pub(crate) fn execute_external_skills_operator_inspect_tool_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_fetch_tool_with_config(
+pub(crate) fn execute_skills_fetch_with_config(
     reference: &str,
     save_as: Option<&str>,
     max_bytes: Option<usize>,
@@ -1217,7 +1143,7 @@ pub(crate) fn execute_external_skills_operator_fetch_tool_with_config(
         payload.insert("approval_granted".to_owned(), json!(true));
     }
 
-    execute_external_skills_fetch_tool_with_config(
+    execute_skills_fetch_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.fetch".to_owned(),
             payload: Value::Object(payload),
@@ -1226,7 +1152,7 @@ pub(crate) fn execute_external_skills_operator_fetch_tool_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_install_tool_with_config(
+pub(crate) fn execute_skills_install_with_config(
     path: Option<&str>,
     bundled_skill_id: Option<&str>,
     skill_id: Option<&str>,
@@ -1253,7 +1179,7 @@ pub(crate) fn execute_external_skills_operator_install_tool_with_config(
     }
     payload.insert("replace".to_owned(), json!(replace));
 
-    execute_external_skills_install_tool_with_config(
+    execute_skills_install_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.install".to_owned(),
             payload: Value::Object(payload),
@@ -1262,11 +1188,11 @@ pub(crate) fn execute_external_skills_operator_install_tool_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_remove_tool_with_config(
+pub(crate) fn execute_skills_remove_with_config(
     skill_id: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_remove_tool_with_config(
+    execute_skills_remove_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.remove".to_owned(),
             payload: json!({
@@ -1277,10 +1203,10 @@ pub(crate) fn execute_external_skills_operator_remove_tool_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_policy_get_with_config(
+pub(crate) fn execute_skills_policy_get_with_config(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_policy_tool_with_config(
+    execute_skills_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.policy".to_owned(),
             payload: json!({
@@ -1291,7 +1217,7 @@ pub(crate) fn execute_external_skills_operator_policy_get_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_policy_set_with_config(
+pub(crate) fn execute_skills_policy_set_with_config(
     enabled: Option<bool>,
     require_download_approval: Option<bool>,
     allowed_domains: Option<BTreeSet<String>>,
@@ -1321,7 +1247,7 @@ pub(crate) fn execute_external_skills_operator_policy_set_with_config(
         payload.insert("blocked_domains".to_owned(), json!(blocked_domains));
     }
 
-    execute_external_skills_policy_tool_with_config(
+    execute_skills_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.policy".to_owned(),
             payload: Value::Object(payload),
@@ -1330,11 +1256,11 @@ pub(crate) fn execute_external_skills_operator_policy_set_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_policy_reset_with_config(
+pub(crate) fn execute_skills_policy_reset_with_config(
     policy_update_approved: bool,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_policy_tool_with_config(
+    execute_skills_policy_tool_with_config(
         ToolCoreRequest {
             tool_name: "skills.policy".to_owned(),
             payload: json!({
@@ -1346,25 +1272,21 @@ pub(crate) fn execute_external_skills_operator_policy_reset_with_config(
     )
 }
 
-pub(super) fn execute_external_skills_search_tool_with_config(
+pub(super) fn execute_skills_search_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_discovery_tool_with_config(request, config, SkillDiscoveryMode::Search)
+    execute_skills_discovery_tool_with_config(request, config, SkillDiscoveryMode::Search)
 }
 
-pub(super) fn execute_external_skills_recommend_tool_with_config(
+pub(super) fn execute_skills_recommend_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_discovery_tool_with_config(
-        request,
-        config,
-        SkillDiscoveryMode::Recommend,
-    )
+    execute_skills_discovery_tool_with_config(request, config, SkillDiscoveryMode::Recommend)
 }
 
-pub(super) fn execute_external_skills_remove_tool_with_config(
+pub(super) fn execute_skills_remove_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
@@ -1385,7 +1307,7 @@ pub(super) fn execute_external_skills_remove_tool_with_config(
     let mut index = load_installed_skill_index(&install_root)?;
     let removed = remove_installed_skill_from_index(&install_root, &mut index, skill_id)?;
     if !removed {
-        return Err(format!("external skill `{skill_id}` is not installed"));
+        return Err(format!("skill `{skill_id}` is not installed"));
     }
     persist_installed_skill_index(&install_root, &mut index)?;
 
@@ -1400,7 +1322,7 @@ pub(super) fn execute_external_skills_remove_tool_with_config(
     })
 }
 
-fn execute_external_skills_list_for_audience(
+fn execute_skills_list_for_audience(
     tool_name: String,
     config: &super::runtime_config::ToolRuntimeConfig,
     audience: SkillAudience,
@@ -1423,7 +1345,7 @@ fn execute_external_skills_list_for_audience(
     })
 }
 
-fn execute_external_skills_inspect_for_audience(
+fn execute_skills_inspect_for_audience(
     tool_name: String,
     config: &super::runtime_config::ToolRuntimeConfig,
     skill_id: &str,
@@ -1453,12 +1375,12 @@ fn execute_external_skills_inspect_for_audience(
     })
 }
 
-fn execute_external_skills_discovery_tool_with_config(
+fn execute_skills_discovery_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
     mode: SkillDiscoveryMode,
 ) -> Result<ToolCoreOutcome, String> {
-    let (trimmed_query, limit) = parse_external_skills_discovery_request(&request)?;
+    let (trimmed_query, limit) = parse_skills_discovery_request(&request)?;
     let tool_name = discovery_tool_name(mode);
 
     let inventory = discover_skill_inventory(config)?;
@@ -1504,9 +1426,7 @@ fn execute_external_skills_discovery_tool_with_config(
     })
 }
 
-fn parse_external_skills_discovery_request(
-    request: &ToolCoreRequest,
-) -> Result<(String, usize), String> {
+fn parse_skills_discovery_request(request: &ToolCoreRequest) -> Result<(String, usize), String> {
     let payload = request
         .payload
         .as_object()
@@ -1592,7 +1512,7 @@ fn build_ranked_blocked_skill_discovery_results(
         let required_fields = vec![skill_id.clone()];
         let required_field_groups = vec![vec![skill_id.clone()]];
         let tags = vec![
-            "external_skills".to_owned(),
+            "skills".to_owned(),
             "skill".to_owned(),
             "blocked".to_owned(),
         ];
@@ -1767,7 +1687,7 @@ fn build_skill_search_tags(
     resolution: SkillDiscoveryResolution,
 ) -> Vec<String> {
     let mut tags = BTreeSet::new();
-    tags.insert("external_skills".to_owned());
+    tags.insert("skills".to_owned());
     tags.insert("skill".to_owned());
     tags.insert(discovered_skill_scope_id(skill.scope).to_owned());
     tags.insert(skill.source_kind.clone());
@@ -1899,44 +1819,41 @@ fn skill_model_visibility_id(visibility: SkillModelVisibility) -> &'static str {
     }
 }
 
-fn policy_override_store() -> &'static RwLock<ExternalSkillsPolicyOverride> {
-    EXTERNAL_SKILLS_POLICY_OVERRIDE
-        .get_or_init(|| RwLock::new(ExternalSkillsPolicyOverride::default()))
+fn policy_override_store() -> &'static RwLock<SkillsPolicyOverride> {
+    SKILLS_POLICY_OVERRIDE.get_or_init(|| RwLock::new(SkillsPolicyOverride::default()))
 }
 
 fn policy_override_is_active() -> Result<bool, String> {
     let guard = policy_override_store()
         .read()
-        .map_err(|error| format!("external skills policy lock poisoned: {error}"))?;
+        .map_err(|error| format!("skills policy lock poisoned: {error}"))?;
     Ok(guard.has_values())
 }
 
 fn resolve_effective_policy(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<super::runtime_config::ExternalSkillsRuntimePolicy, String> {
+) -> Result<super::runtime_config::SkillsRuntimePolicy, String> {
     let override_state = policy_override_store()
         .read()
-        .map_err(|error| format!("external skills policy lock poisoned: {error}"))?;
+        .map_err(|error| format!("skills policy lock poisoned: {error}"))?;
     Ok(build_effective_policy(config, &override_state))
 }
 
 fn require_enabled_runtime_policy(
     config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<super::runtime_config::ExternalSkillsRuntimePolicy, String> {
+) -> Result<super::runtime_config::SkillsRuntimePolicy, String> {
     let policy = resolve_effective_policy(config)?;
     if !policy.enabled {
-        return Err(
-            "external skills runtime is disabled; enable `skills.enabled = true` first".to_owned(),
-        );
+        return Err("skills runtime is disabled; enable `skills.enabled = true` first".to_owned());
     }
     Ok(policy)
 }
 
 fn build_effective_policy(
     config: &super::runtime_config::ToolRuntimeConfig,
-    override_state: &ExternalSkillsPolicyOverride,
-) -> super::runtime_config::ExternalSkillsRuntimePolicy {
-    let mut effective = config.external_skills.clone();
+    override_state: &SkillsPolicyOverride,
+) -> super::runtime_config::SkillsRuntimePolicy {
+    let mut effective = config.skills.clone();
     if let Some(value) = override_state.enabled {
         effective.enabled = value;
     }
@@ -1952,7 +1869,7 @@ fn build_effective_policy(
     effective
 }
 
-impl ExternalSkillsPolicyOverride {
+impl SkillsPolicyOverride {
     fn has_values(&self) -> bool {
         self.enabled.is_some()
             || self.require_download_approval.is_some()
@@ -2078,7 +1995,7 @@ fn parse_external_skill_search_sources(
             .as_str()
             .ok_or_else(|| format!("{tool_name} payload.sources must contain only strings"))?;
         let source_kind = parse_external_skill_source_kind(raw_source)
-            .ok_or_else(|| format!("unsupported external skills search source `{raw_source}`"))?;
+            .ok_or_else(|| format!("unsupported skills search source `{raw_source}`"))?;
         if seen.insert(source_kind.as_str().to_owned()) {
             source_kinds.push(source_kind);
         }
@@ -2190,25 +2107,24 @@ impl ExternalSkillDownloadPlanHttp for ReqwestExternalSkillDownloadPlanHttp<'_> 
             validate_external_skill_network_target(url, self.policy, "source resolution")?;
         let response =
             send_external_skill_get_request(self.client, &validated_url, "source resolution")?;
-        response.text().map_err(|error| {
-            format!("failed to read external skills source response `{url}`: {error}")
-        })
+        response
+            .text()
+            .map_err(|error| format!("failed to read skills source response `{url}`: {error}"))
     }
 
     fn get_json(&self, url: &str) -> Result<Value, String> {
         let body = self.get_text(url)?;
-        serde_json::from_str::<Value>(body.as_str()).map_err(|error| {
-            format!("failed to decode external skills source JSON `{url}`: {error}")
-        })
+        serde_json::from_str::<Value>(body.as_str())
+            .map_err(|error| format!("failed to decode skills source JSON `{url}`: {error}"))
     }
 }
 
 fn ensure_external_skill_https_url(url: &str, operation: &str) -> Result<(), String> {
-    let parsed_url = reqwest::Url::parse(url)
-        .map_err(|error| format!("invalid external skills url `{url}`: {error}"))?;
+    let parsed_url =
+        reqwest::Url::parse(url).map_err(|error| format!("invalid skills url `{url}`: {error}"))?;
     if parsed_url.scheme() != "https" {
         return Err(format!(
-            "external skills {operation} requires https url, got scheme `{}`",
+            "skills {operation} requires https url, got scheme `{}`",
             parsed_url.scheme()
         ));
     }
@@ -2217,26 +2133,26 @@ fn ensure_external_skill_https_url(url: &str, operation: &str) -> Result<(), Str
 
 fn validate_external_skill_network_target(
     url: &str,
-    policy: &super::runtime_config::ExternalSkillsRuntimePolicy,
+    policy: &super::runtime_config::SkillsRuntimePolicy,
     operation: &str,
 ) -> Result<ValidatedExternalSkillUrl, String> {
-    let parsed_url = reqwest::Url::parse(url)
-        .map_err(|error| format!("invalid external skills url `{url}`: {error}"))?;
+    let parsed_url =
+        reqwest::Url::parse(url).map_err(|error| format!("invalid skills url `{url}`: {error}"))?;
     ensure_external_skill_https_url(url, operation)?;
     let host = parsed_url
         .host_str()
         .map(str::to_ascii_lowercase)
-        .ok_or_else(|| format!("external skills url `{url}` has no host"))?;
+        .ok_or_else(|| format!("skills url `{url}` has no host"))?;
     if let Some(rule) = first_matching_domain_rule(host.as_str(), &policy.blocked_domains) {
         return Err(format!(
-            "external skills {operation} blocked: host `{host}` matches blocked domain rule `{rule}`"
+            "skills {operation} blocked: host `{host}` matches blocked domain rule `{rule}`"
         ));
     }
     if !policy.allowed_domains.is_empty()
         && first_matching_domain_rule(host.as_str(), &policy.allowed_domains).is_none()
     {
         return Err(format!(
-            "external skills {operation} denied: host `{host}` is not in allowed_domains"
+            "skills {operation} denied: host `{host}` is not in allowed_domains"
         ));
     }
 
@@ -2253,21 +2169,21 @@ fn send_external_skill_get_request(
         .send()
         .map_err(|error| {
             format!(
-                "external skills {operation} request failed for `{}`: {error}",
+                "skills {operation} request failed for `{}`: {error}",
                 validated_url.parsed_url
             )
         })?;
 
     if response.status().is_redirection() {
         return Err(format!(
-            "external skills {operation} rejected redirect response {} for `{}`",
+            "skills {operation} rejected redirect response {} for `{}`",
             response.status(),
             validated_url.parsed_url
         ));
     }
     if !response.status().is_success() {
         return Err(format!(
-            "external skills {operation} returned non-success status {} for `{}`",
+            "skills {operation} returned non-success status {} for `{}`",
             response.status(),
             validated_url.parsed_url
         ));
@@ -2591,9 +2507,9 @@ fn rewrite_landing_url_for_route(
     route_base_url: &str,
 ) -> Result<String, String> {
     let base_url = reqwest::Url::parse(route_base_url)
-        .map_err(|error| format!("invalid external skills route `{route_base_url}`: {error}"))?;
+        .map_err(|error| format!("invalid skills route `{route_base_url}`: {error}"))?;
     let landing_url = reqwest::Url::parse(landing_url)
-        .map_err(|error| format!("invalid external skills landing url `{landing_url}`: {error}"))?;
+        .map_err(|error| format!("invalid skills landing url `{landing_url}`: {error}"))?;
     let mut rewritten_url = base_url;
     rewritten_url.set_path(landing_url.path());
     rewritten_url.set_query(landing_url.query());
@@ -2905,14 +2821,13 @@ fn install_bundled_skill_for_bootstrap(
     index: &mut InstalledSkillIndex,
     skill_id: &str,
 ) -> Result<bool, String> {
-    let bundled = super::bundled_skills::bundled_external_skill(skill_id).ok_or_else(|| {
+    let bundled = super::bundled_skills::bundled_skill(skill_id).ok_or_else(|| {
         format!("startup bootstrap does not recognize bundled skill `{skill_id}`")
     })?;
-    let bundled_markdown = super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
-    let bundled_dir =
-        super::bundled_skills::bundled_external_skill_dir(&bundled).map_err(|error| {
-            format!("failed to resolve bundled startup skill `{skill_id}`: {error}")
-        })?;
+    let bundled_markdown = super::bundled_skills::bundled_skill_markdown(&bundled)?;
+    let bundled_dir = super::bundled_skills::bundled_skill_dir(&bundled).map_err(|error| {
+        format!("failed to resolve bundled startup skill `{skill_id}`: {error}")
+    })?;
     let normalized_skill_id = normalize_skill_id(bundled.skill_id)?;
     let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
     let summary = derive_skill_summary(bundled_markdown);
@@ -3045,7 +2960,7 @@ fn split_stem_and_ext(filename: &str) -> (&str, &str) {
 }
 
 fn resolve_install_root(config: &super::runtime_config::ToolRuntimeConfig) -> PathBuf {
-    if let Some(path) = config.external_skills.install_root.clone() {
+    if let Some(path) = config.skills.install_root.clone() {
         return path;
     }
     let root = config
@@ -4213,13 +4128,13 @@ fn load_installed_skill_index(root: &Path) -> Result<InstalledSkillIndex, String
     }
     let raw = fs::read_to_string(&index_path).map_err(|error| {
         format!(
-            "failed to read external skills index {}: {error}",
+            "failed to read skills index {}: {error}",
             index_path.display()
         )
     })?;
     let mut index: InstalledSkillIndex = serde_json::from_str(raw.as_str()).map_err(|error| {
         format!(
-            "failed to parse external skills index {}: {error}",
+            "failed to parse skills index {}: {error}",
             index_path.display()
         )
     })?;
@@ -4243,16 +4158,16 @@ fn persist_installed_skill_index(
         .sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
     fs::create_dir_all(root).map_err(|error| {
         format!(
-            "failed to create external skills install root {}: {error}",
+            "failed to create skills install root {}: {error}",
             root.display()
         )
     })?;
     let index_path = root.join(DEFAULT_INDEX_FILENAME);
     let encoded = serde_json::to_string_pretty(index)
-        .map_err(|error| format!("failed to encode external skills index: {error}"))?;
+        .map_err(|error| format!("failed to encode skills index: {error}"))?;
     fs::write(&index_path, encoded).map_err(|error| {
         format!(
-            "failed to write external skills index {}: {error}",
+            "failed to write skills index {}: {error}",
             index_path.display()
         )
     })
@@ -4412,10 +4327,7 @@ fn runtime_config_selector_enabled(
     }
 
     match normalized_selector.as_str() {
-        "skills.enabled"
-        | "tools.skills.enabled"
-        | "external_skills.enabled"
-        | "tools.external_skills.enabled" => Some(config.external_skills.enabled),
+        "skills.enabled" | "tools.skills.enabled" => Some(config.skills.enabled),
         "browser.enabled" | "tools.browser.enabled" => Some(config.browser.enabled),
         "delegate.enabled" | "tools.delegate.enabled" => Some(config.delegate_enabled),
         "messages.enabled" | "tools.messages.enabled" => Some(config.messages_enabled),
@@ -4482,18 +4394,6 @@ fn invocation_policy_id(policy: SkillInvocationPolicy) -> &'static str {
     }
 }
 
-#[cfg(test)]
-fn render_tool_restrictions_suffix(allowed_tools: &[String], blocked_tools: &[String]) -> String {
-    let mut fragments = Vec::new();
-    if !allowed_tools.is_empty() {
-        fragments.push(format!(" allowed_tools={}", allowed_tools.join(",")));
-    }
-    if !blocked_tools.is_empty() {
-        fragments.push(format!(" blocked_tools={}", blocked_tools.join(",")));
-    }
-    fragments.concat()
-}
-
 pub(crate) fn install_bundled_preinstall_targets_for_bootstrap(
     config: &super::runtime_config::ToolRuntimeConfig,
     selected_target_ids: &BTreeSet<String>,
@@ -4505,7 +4405,7 @@ pub(crate) fn install_bundled_preinstall_targets_for_bootstrap(
     let install_root = resolve_install_root(config);
     fs::create_dir_all(&install_root).map_err(|error| {
         format!(
-            "failed to create external skills install root {}: {error}",
+            "failed to create skills install root {}: {error}",
             install_root.display()
         )
     })?;
@@ -4697,7 +4597,7 @@ pub(crate) fn model_visible_skill_roots_with_config(
     roots
 }
 
-fn build_external_skill_context_payload(
+fn build_skill_context_payload(
     config: &super::runtime_config::ToolRuntimeConfig,
     skill: &DiscoveredSkillEntry,
 ) -> Result<Value, String> {
@@ -4748,7 +4648,7 @@ pub(crate) fn model_visible_skill_context_payload_for_path(
         let skill_md_path = PathBuf::from(skill.skill_md_path.as_str());
         let normalized_skill_md_path = fs::canonicalize(&skill_md_path).unwrap_or(skill_md_path);
         if normalized_skill_md_path == normalized_requested_path {
-            return build_external_skill_context_payload(config, &skill).map(Some);
+            return build_skill_context_payload(config, &skill).map(Some);
         }
     }
 
@@ -4768,7 +4668,7 @@ pub(crate) fn model_visible_skill_context_payload_for_skill_id(
         if skill.skill_id != normalized_skill_id {
             continue;
         }
-        return build_external_skill_context_payload(config, &skill).map(Some);
+        return build_skill_context_payload(config, &skill).map(Some);
     }
 
     Ok(None)
@@ -5287,7 +5187,7 @@ fn normalize_loaded_skill_entry(
     let normalized_skill_id = normalize_skill_id(entry.skill_id.as_str())?;
     if normalized_skill_id != entry.skill_id {
         return Err(format!(
-            "external skills index contains non-normalized skill id `{}`",
+            "skills index contains non-normalized skill id `{}`",
             entry.skill_id
         ));
     }
@@ -5315,20 +5215,20 @@ fn rehydrate_installed_skill_entry(
     let install_path = managed_skill_install_path(install_root, entry.skill_id.as_str())?;
     let install_metadata = fs::symlink_metadata(&install_path).map_err(|error| {
         format!(
-            "failed to inspect managed external skill install {}: {error}",
+            "failed to inspect managed skill install {}: {error}",
             install_path.display()
         )
     })?;
     let install_file_type = install_metadata.file_type();
     if install_file_type.is_symlink() {
         return Err(format!(
-            "managed external skill install {} cannot be a symlink",
+            "managed skill install {} cannot be a symlink",
             install_path.display()
         ));
     }
     if !install_file_type.is_dir() {
         return Err(format!(
-            "managed external skill install {} must be a directory",
+            "managed skill install {} must be a directory",
             install_path.display()
         ));
     }
@@ -5351,7 +5251,7 @@ fn load_managed_skill_markdown(entry: &InstalledSkillEntry) -> Result<String, St
     let install_path = PathBuf::from(entry.install_path.as_str());
     if !contains_regular_skill_markdown(&install_path)? {
         return Err(format!(
-            "managed external skill install {} is missing `{DEFAULT_SKILL_FILENAME}`",
+            "managed skill install {} is missing `{DEFAULT_SKILL_FILENAME}`",
             install_path.display()
         ));
     }
@@ -5373,7 +5273,7 @@ fn managed_skill_install_path(install_root: &Path, skill_id: &str) -> Result<Pat
     Ok(install_root.join(skill_id))
 }
 
-fn policy_payload(policy: &super::runtime_config::ExternalSkillsRuntimePolicy) -> Value {
+fn policy_payload(policy: &super::runtime_config::SkillsRuntimePolicy) -> Value {
     json!({
         "enabled": policy.enabled,
         "require_download_approval": policy.require_download_approval,
@@ -5394,7 +5294,7 @@ mod tests {
 
     use super::*;
     use crate::config::{LoongConfig, McpServerConfig, McpServerTransportConfig};
-    use crate::tools::runtime_config::{ExternalSkillsRuntimePolicy, ToolRuntimeConfig};
+    use crate::tools::runtime_config::{SkillsRuntimePolicy, ToolRuntimeConfig};
 
     static POLICY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -5413,10 +5313,10 @@ mod tests {
     }
 
     fn reset_policy_override_for_test() {
-        if let Some(store) = EXTERNAL_SKILLS_POLICY_OVERRIDE.get()
+        if let Some(store) = SKILLS_POLICY_OVERRIDE.get()
             && let Ok(mut guard) = store.write()
         {
-            *guard = ExternalSkillsPolicyOverride::default();
+            *guard = SkillsPolicyOverride::default();
         }
     }
 
@@ -5432,7 +5332,7 @@ mod tests {
         ToolRuntimeConfig {
             file_root: Some(std::env::temp_dir().join("loong-ext-skills-tests")),
             config_path: None,
-            external_skills: ExternalSkillsRuntimePolicy {
+            skills: SkillsRuntimePolicy {
                 enabled: false,
                 require_download_approval: true,
                 allowed_domains: BTreeSet::new(),
@@ -5513,7 +5413,7 @@ mod tests {
         ToolRuntimeConfig {
             file_root: Some(root.to_path_buf()),
             config_path: None,
-            external_skills: ExternalSkillsRuntimePolicy {
+            skills: SkillsRuntimePolicy {
                 enabled: true,
                 require_download_approval: true,
                 allowed_domains: BTreeSet::new(),
@@ -5631,7 +5531,7 @@ mod tests {
             4,
             &output_dir,
             "demo.tgz",
-            "external skills download",
+            "skills download",
         )
         .expect_err("declared oversize content length should fail closed");
 
@@ -5658,7 +5558,7 @@ mod tests {
             4,
             &output_dir,
             "demo.tgz",
-            "external skills download",
+            "skills download",
         )
         .expect_err("streamed oversize body should fail closed");
 
@@ -5684,7 +5584,7 @@ mod tests {
             32,
             &output_dir,
             "demo.tgz",
-            "external skills download",
+            "skills download",
         )
         .expect("streamed download should succeed");
 
@@ -5723,7 +5623,7 @@ mod tests {
             reset_policy_override_for_test();
             let config = base_runtime_config();
 
-            let set_outcome = execute_external_skills_policy_tool_with_config(
+            let set_outcome = execute_skills_policy_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.policy".to_owned(),
                     payload: json!({
@@ -5746,7 +5646,7 @@ mod tests {
             );
             assert_eq!(set_outcome.payload["override_active"], json!(true));
 
-            let reset_outcome = execute_external_skills_policy_tool_with_config(
+            let reset_outcome = execute_skills_policy_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.policy".to_owned(),
                     payload: json!({
@@ -5769,7 +5669,7 @@ mod tests {
             reset_policy_override_for_test();
             let config = base_runtime_config();
 
-            let error = execute_external_skills_policy_tool_with_config(
+            let error = execute_skills_policy_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.policy".to_owned(),
                     payload: json!({
@@ -5791,7 +5691,7 @@ mod tests {
             reset_policy_override_for_test();
             let config = base_runtime_config();
 
-            let error = execute_external_skills_fetch_tool_with_config(
+            let error = execute_skills_fetch_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.fetch".to_owned(),
                     payload: json!({
@@ -5803,7 +5703,7 @@ mod tests {
             )
             .expect_err("disabled runtime must fail");
 
-            assert!(error.contains("external skills runtime is disabled"));
+            assert!(error.contains("skills runtime is disabled"));
         });
     }
 
@@ -5813,7 +5713,7 @@ mod tests {
             reset_policy_override_for_test();
             let config = base_runtime_config();
 
-            let error = execute_external_skills_fetch_tool_with_config(
+            let error = execute_skills_fetch_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.fetch".to_owned(),
                     payload: json!({
@@ -5835,7 +5735,7 @@ mod tests {
             reset_policy_override_for_test();
             let config = base_runtime_config();
 
-            execute_external_skills_policy_tool_with_config(
+            execute_skills_policy_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.policy".to_owned(),
                     payload: json!({
@@ -5851,7 +5751,7 @@ mod tests {
             )
             .expect("set policy should succeed");
 
-            let approval_error = execute_external_skills_fetch_tool_with_config(
+            let approval_error = execute_skills_fetch_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.fetch".to_owned(),
                     payload: json!({
@@ -5863,7 +5763,7 @@ mod tests {
             .expect_err("approval should be required");
             assert!(approval_error.contains("requires explicit authorization"));
 
-            let deny_error = execute_external_skills_fetch_tool_with_config(
+            let deny_error = execute_skills_fetch_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.fetch".to_owned(),
                     payload: json!({
@@ -5876,7 +5776,7 @@ mod tests {
             .expect_err("blocked domains should be denied");
             assert!(deny_error.contains("matches blocked domain rule"));
 
-            let allowlist_error = execute_external_skills_fetch_tool_with_config(
+            let allowlist_error = execute_skills_fetch_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.fetch".to_owned(),
                     payload: json!({
@@ -5889,7 +5789,7 @@ mod tests {
             .expect_err("non-allowlisted domain should be rejected");
             assert!(allowlist_error.contains("not in allowed_domains"));
 
-            execute_external_skills_policy_tool_with_config(
+            execute_skills_policy_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.policy".to_owned(),
                     payload: json!({
@@ -5908,9 +5808,9 @@ mod tests {
         with_policy_test_lock(|| {
             reset_policy_override_for_test();
             let mut config = base_runtime_config();
-            config.external_skills.enabled = true;
+            config.skills.enabled = true;
 
-            let error = execute_external_skills_fetch_tool_with_config(
+            let error = execute_skills_fetch_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.fetch".to_owned(),
                     payload: json!({
@@ -5932,9 +5832,9 @@ mod tests {
         with_policy_test_lock(|| {
             reset_policy_override_for_test();
             let mut config = base_runtime_config();
-            config.external_skills.enabled = true;
+            config.skills.enabled = true;
 
-            let outcome = execute_external_skills_resolve_tool_with_config(
+            let outcome = execute_skills_resolve_tool_with_config(
                 ToolCoreRequest {
                     tool_name: "skills.resolve".to_owned(),
                     payload: json!({
@@ -6000,17 +5900,15 @@ mod tests {
             assert_eq!(outcome.payload["display_name"], "Demo Skill");
             assert_eq!(outcome.payload["replaced"], false);
             assert!(
-                root.join("external-skills-installed")
-                    .join("index.json")
-                    .exists(),
-                "managed external skill index should exist"
+                root.join(".loong/skills").join("index.json").exists(),
+                "managed skill index should exist"
             );
             assert!(
-                root.join("external-skills-installed")
+                root.join(".loong/skills")
                     .join("demo-skill")
                     .join("SKILL.md")
                     .exists(),
-                "managed external skill copy should exist"
+                "managed skill copy should exist"
             );
 
             fs::remove_dir_all(&root).ok();
@@ -6040,7 +5938,7 @@ mod tests {
             assert_eq!(outcome.payload["source_kind"], "bundled");
             assert_eq!(outcome.payload["source_path"], "bundled://agent-browser");
             let installed_skill = root
-                .join("external-skills-installed")
+                .join(".loong/skills")
                 .join("agent-browser")
                 .join("SKILL.md");
             assert!(
@@ -6079,7 +5977,7 @@ mod tests {
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["skill_id"], "agent-browser");
 
-            let installed_root = root.join("external-skills-installed").join("agent-browser");
+            let installed_root = root.join(".loong/skills").join("agent-browser");
             assert!(
                 installed_root.join("SKILL.md").exists(),
                 "bundled install should keep SKILL.md"
@@ -6124,7 +6022,7 @@ mod tests {
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["skill_id"], "github-issues");
 
-            let installed_root = root.join("external-skills-installed").join("github-issues");
+            let installed_root = root.join(".loong/skills").join("github-issues");
             assert!(
                 installed_root.join("SKILL.md").exists(),
                 "bundled install should keep SKILL.md"
@@ -6169,7 +6067,7 @@ mod tests {
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["skill_id"], "lark-doc");
 
-            let installed_root = root.join("external-skills-installed").join("lark-doc");
+            let installed_root = root.join(".loong/skills").join("lark-doc");
             assert!(installed_root.join("SKILL.md").exists());
             assert!(
                 installed_root
@@ -6204,7 +6102,7 @@ mod tests {
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["skill_id"], "minimax-docx");
 
-            let installed_root = root.join("external-skills-installed").join("minimax-docx");
+            let installed_root = root.join(".loong/skills").join("minimax-docx");
             assert!(installed_root.join("SKILL.md").exists());
             assert!(
                 installed_root
@@ -6344,10 +6242,7 @@ mod tests {
                     .unwrap_or(false)
             );
             assert!(
-                !root
-                    .join("external-skills-installed")
-                    .join("risky-skill")
-                    .exists(),
+                !root.join(".loong/skills").join("risky-skill").exists(),
                 "gated install must not write the managed skill"
             );
 
@@ -6383,7 +6278,7 @@ mod tests {
             assert_eq!(outcome.payload["skill_id"], "risky-skill");
             assert_eq!(outcome.payload["security_approval_used"], true);
             assert!(
-                root.join("external-skills-installed")
+                root.join(".loong/skills")
                     .join("risky-skill")
                     .join("SKILL.md")
                     .exists(),
@@ -6405,7 +6300,7 @@ mod tests {
                 "# Demo Skill\n\nInstall should require enabled runtime.\n",
             );
             let mut config = managed_runtime_config(&root);
-            config.external_skills.enabled = false;
+            config.skills.enabled = false;
 
             let error = crate::tools::execute_tool_core_with_config(
                 ToolCoreRequest {
@@ -6418,7 +6313,7 @@ mod tests {
             )
             .expect_err("disabled runtime should block install");
 
-            assert!(error.contains("external skills runtime is disabled"));
+            assert!(error.contains("skills runtime is disabled"));
 
             fs::remove_dir_all(&root).ok();
         });
@@ -6448,7 +6343,7 @@ mod tests {
             .expect("install should succeed");
 
             let mut disabled_config = enabled_config;
-            disabled_config.external_skills.enabled = false;
+            disabled_config.skills.enabled = false;
 
             for (tool_name, payload) in [
                 ("skills.list", json!({})),
@@ -6464,236 +6359,10 @@ mod tests {
                 )
                 .expect_err("disabled runtime should block lifecycle management");
                 assert!(
-                    error.contains("external skills runtime is disabled"),
+                    error.contains("skills runtime is disabled"),
                     "unexpected error for {tool_name}: {error}"
                 );
             }
-
-            fs::remove_dir_all(&root).ok();
-        });
-    }
-
-    #[test]
-    fn list_and_invoke_installed_skill_return_managed_metadata() {
-        with_managed_runtime_test(|| {
-            let root = unique_temp_dir("loong-ext-skill-list-invoke");
-            fs::create_dir_all(&root).expect("create fixture root");
-            let _home = ScopedHomeFixture::new("loong-ext-skill-list-invoke-home");
-            write_file(
-                &root,
-                "source/demo-skill/SKILL.md",
-                "# Demo Skill\n\nPrefer explicit verification before completion.\n",
-            );
-            let config = managed_runtime_config(&root);
-
-            crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.install".to_owned(),
-                    payload: json!({
-                        "path": "source/demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect("install should succeed");
-
-            let list_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.list".to_owned(),
-                    payload: json!({}),
-                },
-                &config,
-            )
-            .expect("list should succeed");
-            assert_eq!(list_outcome.status, "ok");
-            assert!(
-                list_outcome.payload["skills"]
-                    .as_array()
-                    .expect("skills should be an array")
-                    .iter()
-                    .any(|skill| {
-                        skill["skill_id"] == "demo-skill" && skill["scope"] == "managed"
-                    }),
-                "managed install should appear in resolved skills list"
-            );
-
-            let invoke_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect("invoke should succeed");
-            assert_eq!(invoke_outcome.status, "ok");
-            assert_eq!(invoke_outcome.payload["skill_id"], "demo-skill");
-            assert!(
-                invoke_outcome.payload["instructions"]
-                    .as_str()
-                    .expect("instructions should be text")
-                    .contains("Demo Skill")
-            );
-
-            fs::remove_dir_all(&root).ok();
-        });
-    }
-
-    #[test]
-    fn inspect_and_invoke_surface_skill_metadata_contract() {
-        with_managed_runtime_test(|| {
-            let root = unique_temp_dir("loong-ext-skill-metadata-contract");
-            fs::create_dir_all(&root).expect("create fixture root");
-            let mut home = ScopedHomeFixture::new("loong-ext-skill-metadata-contract-home");
-            home.set_env("LOONG_RELEASE_GUARD_TOKEN", "present");
-            write_file(
-                &home.path,
-                ".agents/skills/release-guard/SKILL.md",
-                "---\nname: release-guard\ndescription: Guard release discipline when: tags, releases, or CI promotion are involved.\ncompatibility: Requires sh and a writable repository.\nmetadata:\n  author: example-org\n  version: \"1.0\"\ninvocation-policy: both\nrequired-env:\n- LOONG_RELEASE_GUARD_TOKEN\nrequired-bin:\n- sh\nrequired-config:\n- skills.enabled\nallowed-tools: shell.exec bash.exec\nblocked-tools: web.fetch\n---\n\n# Release Guard\n\nPrefer release checklists.\n\nSee [checklists](references/release-checklist.md).\n",
-            );
-            write_file(
-                &home.path,
-                ".agents/skills/release-guard/references/release-checklist.md",
-                "# Release Checklist\n\n- Verify notes.\n",
-            );
-            let config = managed_runtime_config(&root);
-
-            let list_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.list".to_owned(),
-                    payload: json!({}),
-                },
-                &config,
-            )
-            .expect("list should succeed");
-            let listed_skill = list_outcome.payload["skills"]
-                .as_array()
-                .expect("skills should be an array")
-                .iter()
-                .find(|skill| skill["skill_id"] == "release-guard")
-                .cloned()
-                .expect("release-guard should be listed");
-            assert!(
-                listed_skill.get("metadata").is_none(),
-                "model list should not expose operator metadata: {listed_skill:?}"
-            );
-            assert_eq!(
-                listed_skill["compatibility"],
-                "Requires sh and a writable repository."
-            );
-
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
-            let operator_skill = operator_list.payload["skills"]
-                .as_array()
-                .expect("skills should be an array")
-                .iter()
-                .find(|skill| skill["skill_id"] == "release-guard")
-                .cloned()
-                .expect("release-guard should be listed for operators");
-            assert_eq!(
-                operator_skill["compatibility"],
-                "Requires sh and a writable repository."
-            );
-            assert_eq!(
-                operator_skill["metadata"],
-                json!({
-                    "author": "example-org",
-                    "version": "1.0"
-                })
-            );
-            assert_eq!(operator_skill["invocation_policy"], "both");
-            assert_eq!(
-                operator_skill["allowed_tools"],
-                json!(["bash.exec", "shell.exec"])
-            );
-            assert_eq!(operator_skill["blocked_tools"], json!(["web.fetch"]));
-            assert_eq!(operator_skill["eligibility"]["available"], json!(true));
-            assert_eq!(operator_skill["pack_memberships"], json!([]));
-
-            let inspect_outcome =
-                execute_external_skills_operator_inspect_tool_with_config("release-guard", &config)
-                    .expect("operator inspect should succeed");
-            assert_eq!(
-                inspect_outcome.payload["skill"]["required_env"],
-                json!(["LOONG_RELEASE_GUARD_TOKEN"])
-            );
-            assert_eq!(
-                inspect_outcome.payload["skill"]["required_config"],
-                json!(["skills.enabled"])
-            );
-            assert_eq!(
-                inspect_outcome.payload["skill"]["metadata"],
-                json!({
-                    "author": "example-org",
-                    "version": "1.0"
-                })
-            );
-            assert_eq!(
-                inspect_outcome.payload["skill"]["eligibility"]["available"],
-                json!(true)
-            );
-            assert_eq!(
-                inspect_outcome.payload["skill"]["pack_memberships"],
-                json!([])
-            );
-
-            let invoke_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "release-guard"
-                    }),
-                },
-                &config,
-            )
-            .expect("invoke should succeed");
-            assert_eq!(
-                invoke_outcome.payload["metadata"]["invocation_policy"],
-                "both"
-            );
-            assert_eq!(
-                invoke_outcome.payload["metadata"]["compatibility"],
-                "Requires sh and a writable repository."
-            );
-            assert_eq!(
-                invoke_outcome.payload["metadata"]["metadata"],
-                json!({
-                    "author": "example-org",
-                    "version": "1.0"
-                })
-            );
-            assert_eq!(
-                invoke_outcome.payload["eligibility"]["available"],
-                json!(true)
-            );
-            assert_eq!(
-                invoke_outcome.payload["resource_listing"]["files"],
-                json!(["references/release-checklist.md"])
-            );
-            assert!(
-                invoke_outcome.payload["invocation_summary"]
-                    .as_str()
-                    .expect("invocation summary should be text")
-                    .contains("allowed_tools=bash.exec,shell.exec"),
-                "tool restrictions should surface in invocation summary"
-            );
-            let instructions = invoke_outcome.payload["instructions"]
-                .as_str()
-                .expect("instructions should be text");
-            assert!(
-                instructions.contains("<skill_content name=\"Release Guard\""),
-                "invoke should wrap instructions in structured skill tags: {instructions}"
-            );
-            assert!(
-                instructions.contains("<skill_resources truncated=\"false\">"),
-                "invoke should surface bundled resources: {instructions}"
-            );
-            assert!(
-                instructions.contains("Skill directory:"),
-                "invoke should surface the resolved skill directory: {instructions}"
-            );
 
             fs::remove_dir_all(&root).ok();
         });
@@ -6717,8 +6386,8 @@ mod tests {
             )
             .expect("bundled install should succeed");
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             let operator_skill = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
@@ -6735,9 +6404,8 @@ mod tests {
                 "bundled operator list should expose anthropic office pack membership"
             );
 
-            let inspect_outcome =
-                execute_external_skills_operator_inspect_tool_with_config("docx", &config)
-                    .expect("operator inspect should succeed");
+            let inspect_outcome = execute_skills_inspect_with_config("docx", &config)
+                .expect("operator inspect should succeed");
             assert!(
                 inspect_outcome.payload["skill"]["pack_memberships"]
                     .as_array()
@@ -6824,8 +6492,8 @@ Safe for model-driven activation.
                 "expected manual-only blocker in inspect error, got: {manual_inspect_error}"
             );
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             assert!(
                 operator_list.payload["skills"]
                     .as_array()
@@ -6855,11 +6523,6 @@ Safe for model-driven activation.
                 catalog.contains("<available_skills>") && catalog.contains("<location>"),
                 "catalog should include structured skill locations for read-first loading: {catalog}"
             );
-            assert!(
-                !catalog.contains("use `tool.search` to lease `skills.invoke`"),
-                "catalog should not steer routine skill loading through tool discovery leases: {catalog}"
-            );
-
             fs::remove_dir_all(&root).ok();
         });
     }
@@ -6882,8 +6545,8 @@ Safe for model-driven activation.
             );
             let config = managed_runtime_config(&root);
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             let env_gated = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
@@ -6899,34 +6562,6 @@ Safe for model-driven activation.
                     .iter()
                     .any(|issue| issue.as_str() == Some("missing env `LOONG_MISSING_TOKEN`"))
             );
-
-            let manual_error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "manual-only"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("manual-only skills should reject model invocation");
-            assert!(
-                manual_error.contains("manual-only")
-                    || manual_error.contains("not available on the provider surface"),
-                "expected manual-only provider-surface rejection, got: {manual_error}"
-            );
-
-            let env_error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "env-gated"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("missing env requirements should reject invocation");
-            assert!(env_error.contains("LOONG_MISSING_TOKEN"));
 
             fs::remove_dir_all(&root).ok();
         });
@@ -6959,8 +6594,8 @@ Safe for model-driven activation.
             );
             let config = managed_runtime_config(&root);
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             let listed_skill = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
@@ -7117,44 +6752,6 @@ Safe for model-driven activation.
                 2
             );
 
-            let user_invoke = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "user-only"
-                    }),
-                },
-                &config,
-            )
-            .expect("invoke should resolve user-only skills");
-            assert_eq!(user_invoke.payload["scope"], "user");
-            assert!(
-                user_invoke.payload["instructions"]
-                    .as_str()
-                    .expect("instructions should be text")
-                    .contains("User-only instructions"),
-                "invoke should load user-scope instructions"
-            );
-
-            let project_invoke = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "project-only"
-                    }),
-                },
-                &config,
-            )
-            .expect("invoke should resolve project-only skills");
-            assert_eq!(project_invoke.payload["scope"], "project");
-            assert!(
-                project_invoke.payload["instructions"]
-                    .as_str()
-                    .expect("instructions should be text")
-                    .contains("Project-only instructions"),
-                "invoke should load project-scope instructions"
-            );
-
             fs::remove_dir_all(&root).ok();
             fs::remove_dir_all(&home).ok();
         });
@@ -7305,48 +6902,6 @@ Safe for model-driven activation.
     }
 
     #[test]
-    fn invoke_requires_enabled_runtime() {
-        with_managed_runtime_test(|| {
-            let root = unique_temp_dir("loong-ext-skill-invoke-disabled");
-            fs::create_dir_all(&root).expect("create fixture root");
-            write_file(
-                &root,
-                "source/demo-skill/SKILL.md",
-                "# Demo Skill\n\nInvoke should require enabled runtime.\n",
-            );
-            let enabled_config = managed_runtime_config(&root);
-
-            crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.install".to_owned(),
-                    payload: json!({
-                        "path": "source/demo-skill"
-                    }),
-                },
-                &enabled_config,
-            )
-            .expect("install should succeed");
-
-            let mut disabled_config = enabled_config;
-            disabled_config.external_skills.enabled = false;
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &disabled_config,
-            )
-            .expect_err("disabled runtime should block invoke");
-
-            assert!(error.contains("external skills runtime is disabled"));
-
-            fs::remove_dir_all(&root).ok();
-        });
-    }
-
-    #[test]
     fn remove_installed_skill_clears_managed_entry() {
         with_managed_runtime_test(|| {
             let root = unique_temp_dir("loong-ext-skill-remove");
@@ -7430,7 +6985,7 @@ Safe for model-driven activation.
             )
             .expect("install should succeed");
 
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let index_path = install_root.join("index.json");
             let mut index: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
@@ -7458,21 +7013,6 @@ Safe for model-driven activation.
                     .any(|skill| skill["skill_id"] == "demo-skill"),
                 "provider surface should not fall back to lower-scope duplicates: {}",
                 list_outcome.payload
-            );
-
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("invoke should reject inactive managed winners");
-            assert!(
-                error.contains("inactive"),
-                "expected inactive winner error, got: {error}"
             );
 
             fs::remove_dir_all(&root).ok();
@@ -7573,20 +7113,6 @@ Safe for model-driven activation.
                 list_outcome.payload
             );
 
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("invoke should report the blocked higher-precedence local winner");
-            assert!(
-                error.contains("exceeds the"),
-                "expected blocked local winner error, got: {error}"
-            );
             fs::remove_dir_all(&root).ok();
             fs::remove_dir_all(&home).ok();
         });
@@ -7634,21 +7160,6 @@ Safe for model-driven activation.
                 list_outcome.payload
             );
 
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("invoke should reject model-hidden skills on the provider surface");
-            assert!(
-                error.contains("operator-only") || error.contains("model"),
-                "expected model-hidden error, got: {error}"
-            );
-
             let lines = installed_skill_snapshot_lines_with_config(&config)
                 .expect("snapshot should succeed");
             assert!(
@@ -7691,21 +7202,6 @@ Safe for model-driven activation.
                 list_outcome.payload
             );
 
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "env-guarded"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("invoke should reject skills with missing required env");
-            assert!(
-                error.contains("DEMO_SKILL_TOKEN"),
-                "expected missing env variable in error, got: {error}"
-            );
-
             fs::remove_dir_all(&root).ok();
         });
     }
@@ -7726,8 +7222,8 @@ Safe for model-driven activation.
             let mut config = managed_runtime_config(&root);
             config.config_path = Some(config_path);
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             let operator_skill = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
@@ -7818,8 +7314,8 @@ Safe for model-driven activation.
             let mut config = managed_runtime_config(&root);
             config.config_path = Some(config_path);
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             let operator_skill = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
@@ -7901,8 +7397,8 @@ Safe for model-driven activation.
                 "model list should not expose eligibility diagnostics: {model_skill:?}"
             );
 
-            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
-                .expect("operator list should succeed");
+            let operator_list =
+                execute_skills_list_with_config(&config).expect("operator list should succeed");
             let operator_skill = operator_list.payload["skills"]
                 .as_array()
                 .expect("skills should be an array")
@@ -7952,9 +7448,8 @@ Safe for model-driven activation.
                 "model inspect should not expose eligibility diagnostics: {model_inspect_skill:?}"
             );
 
-            let operator_inspect =
-                execute_external_skills_operator_inspect_tool_with_config("demo-skill", &config)
-                    .expect("operator inspect should succeed");
+            let operator_inspect = execute_skills_inspect_with_config("demo-skill", &config)
+                .expect("operator inspect should succeed");
             assert_eq!(
                 operator_inspect.payload["skill"]["required_env"],
                 json!(["DEMO_SKILL_TOKEN"])
@@ -8019,21 +7514,6 @@ Safe for model-driven activation.
                 list_outcome.payload
             );
 
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "bin-guarded"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("invoke should reject non-executable required commands");
-            assert!(
-                error.contains("demo-bin"),
-                "expected missing command in error, got: {error}"
-            );
-
             fs::remove_dir_all(&root).ok();
         });
     }
@@ -8070,7 +7550,7 @@ Safe for model-driven activation.
             )
             .expect("healthy managed install should succeed");
 
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let mut index =
                 load_installed_skill_index(&install_root).expect("load managed skill index");
             index.skills.push(InstalledSkillEntry {
@@ -8113,21 +7593,6 @@ Safe for model-driven activation.
                     .iter()
                     .all(|skill| skill["skill_id"] != "broken-skill"),
                 "broken managed skill should fail closed instead of falling back: {skills:?}"
-            );
-
-            let error = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "broken-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect_err("broken managed install should not fall back to user scope");
-            assert!(
-                error.contains("failed to inspect managed external skill install"),
-                "expected managed install error, got: {error}"
             );
 
             fs::remove_dir_all(&root).ok();
@@ -8187,25 +7652,7 @@ Safe for model-driven activation.
                 "unexpected replacement failure: {error}"
             );
 
-            let invoke_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect("previous install should remain available after failed replace");
-            assert!(
-                invoke_outcome.payload["instructions"]
-                    .as_str()
-                    .expect("instructions should be text")
-                    .contains("Stable installed skill"),
-                "failed replace must preserve previous managed install"
-            );
-
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let transient_entries = fs::read_dir(&install_root)
                 .expect("install root should exist")
                 .map(|entry| {
@@ -8249,7 +7696,7 @@ Safe for model-driven activation.
             )
             .expect("install should succeed");
 
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let index_path = install_root.join("index.json");
             let escape_root = unique_temp_dir("loong-ext-skill-index-escape");
             fs::create_dir_all(&escape_root).expect("create escape root");
@@ -8338,7 +7785,7 @@ Safe for model-driven activation.
             )
             .expect("install should succeed");
 
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let index_path = install_root.join("index.json");
             let mut index: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&index_path).expect("read index"))
@@ -8372,22 +7819,6 @@ Safe for model-driven activation.
                 "Prefer evidence over stale index metadata."
             );
             assert_ne!(demo_skill["sha256"], "forged-digest");
-
-            let invoke_outcome = crate::tools::execute_tool_core_with_config(
-                ToolCoreRequest {
-                    tool_name: "skills.invoke".to_owned(),
-                    payload: json!({
-                        "skill_id": "demo-skill"
-                    }),
-                },
-                &config,
-            )
-            .expect("invoke should succeed with rehydrated metadata");
-            assert_eq!(invoke_outcome.payload["display_name"], "Demo Skill");
-            assert_eq!(
-                invoke_outcome.payload["summary"],
-                "Prefer evidence over stale index metadata."
-            );
 
             fs::remove_dir_all(&root).ok();
         });
@@ -8427,11 +7858,8 @@ Safe for model-driven activation.
             )
             .expect("install should succeed");
 
-            fs::remove_dir_all(
-                root.join("external-skills-installed")
-                    .join("broken-managed"),
-            )
-            .expect("remove managed install to simulate broken index entry");
+            fs::remove_dir_all(root.join(".loong/skills").join("broken-managed"))
+                .expect("remove managed install to simulate broken index entry");
 
             let list_outcome = crate::tools::execute_tool_core_with_config(
                 ToolCoreRequest {
@@ -8490,7 +7918,7 @@ Safe for model-driven activation.
             )
             .expect("install should succeed");
 
-            let install_path = root.join("external-skills-installed").join("demo-skill");
+            let install_path = root.join(".loong/skills").join("demo-skill");
             fs::remove_dir_all(&install_path).expect("remove managed install");
 
             let escape_root = unique_temp_dir("loong-ext-skill-install-symlink-target");
@@ -8575,12 +8003,12 @@ Safe for model-driven activation.
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["source_kind"], "archive");
             assert!(
-                root.join("external-skills-installed")
+                root.join(".loong/skills")
                     .join("demo-skill")
                     .join("SKILL.md")
                     .exists()
             );
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let staging_entries = fs::read_dir(&install_root)
                 .expect("install root should exist")
                 .map(|entry| {
@@ -8669,17 +8097,14 @@ Safe for model-driven activation.
             assert_eq!(outcome.payload["skill_id"], "beta-skill");
             assert_eq!(outcome.payload["display_name"], "Beta Skill");
             assert!(
-                root.join("external-skills-installed")
+                root.join(".loong/skills")
                     .join("beta-skill")
                     .join("SKILL.md")
                     .exists(),
                 "selected skill root should be installed"
             );
             assert!(
-                !root
-                    .join("external-skills-installed")
-                    .join("alpha-skill")
-                    .exists(),
+                !root.join(".loong/skills").join("alpha-skill").exists(),
                 "unselected skill root must not be installed"
             );
 
@@ -8738,7 +8163,7 @@ Safe for model-driven activation.
             )
             .expect_err("archive symlink should be rejected");
             assert!(error.contains("cannot contain symlinks or hard links"));
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let staging_entries = fs::read_dir(&install_root)
                 .expect("install root should exist")
                 .map(|entry| {
@@ -8802,7 +8227,7 @@ Safe for model-driven activation.
             assert_eq!(outcome.status, "ok");
             assert_eq!(outcome.payload["source_kind"], "archive");
             assert!(
-                root.join("external-skills-installed")
+                root.join(".loong/skills")
                     .join("demo-skill")
                     .join("SKILL.md")
                     .exists()
@@ -8854,7 +8279,7 @@ Safe for model-driven activation.
             .expect_err("zip archive traversal should be rejected");
 
             assert!(error.contains("path traversal"));
-            let install_root = root.join("external-skills-installed");
+            let install_root = root.join(".loong/skills");
             let staging_entries = fs::read_dir(&install_root)
                 .expect("install root should exist")
                 .map(|entry| {
@@ -8996,7 +8421,7 @@ Safe for model-driven activation.
             .expect("install should succeed");
 
             let mut disabled_config = enabled_config;
-            disabled_config.external_skills.enabled = false;
+            disabled_config.skills.enabled = false;
 
             let lines = installed_skill_snapshot_lines_with_config(&disabled_config)
                 .expect("snapshot should succeed");

@@ -85,7 +85,7 @@ fn runtime_snapshot_fixture(
             },
         },
         runtime_plugins: serde_json::json!({}),
-        external_skills: serde_json::json!({}),
+        skills: serde_json::json!({}),
     }
 }
 
@@ -95,7 +95,7 @@ fn managed_bridge_parity_keeps_summary_aligned_across_text_json_and_operator_vie
     let mut config = mixed_account_weixin_plugin_bridge_config();
 
     install_ready_weixin_managed_bridge(install_root.as_path());
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
 
     let inventory = mvp::channel::channel_inventory(&config);
     let rendered = loong_daemon::render_channel_surfaces_text("/tmp/loong.toml", &inventory);
@@ -156,7 +156,7 @@ fn managed_bridge_parity_keeps_doctor_json_and_channels_json_account_summary_in_
     let mut config = mixed_account_weixin_plugin_bridge_config();
 
     install_ready_weixin_managed_bridge(install_root.as_path());
-    config.external_skills.install_root = Some(install_root.display().to_string());
+    config.skills.install_root = Some(install_root.display().to_string());
     mvp::config::write(
         Some(config_path.to_str().expect("utf8 config path")),
         &config,

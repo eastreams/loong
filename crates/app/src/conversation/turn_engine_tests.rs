@@ -251,11 +251,7 @@ fn discovered_delegate_async_turn(
     delegate_async_turn(session_id, turn_id, tool_call_id)
 }
 
-fn external_skills_policy_get_turn(
-    session_id: &str,
-    turn_id: &str,
-    tool_call_id: &str,
-) -> ProviderTurn {
+fn skills_policy_get_turn(session_id: &str, turn_id: &str, tool_call_id: &str) -> ProviderTurn {
     let payload = json!({
         "action": "get"
     });
@@ -266,7 +262,7 @@ fn external_skills_policy_get_turn(
         Some(turn_id),
     );
     ProviderTurn {
-        assistant_text: "reading external skills policy".to_owned(),
+        assistant_text: "reading skills policy".to_owned(),
         tool_intents: vec![ToolIntent {
             tool_name,
             args_json,
@@ -883,8 +879,7 @@ async fn autonomy_policy_preapproved_call_executes_without_persisting_request() 
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let kernel_ctx = kernel_context("turn-engine-autonomy-preapproved");
-    let turn =
-        external_skills_policy_get_turn("root-session", "turn-preapproved", "call-preapproved");
+    let turn = skills_policy_get_turn("root-session", "turn-preapproved", "call-preapproved");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -941,7 +936,7 @@ async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let kernel_ctx = kernel_context("turn-engine-autonomy-predenied");
-    let turn = external_skills_policy_get_turn("root-session", "turn-predenied", "call-predenied");
+    let turn = skills_policy_get_turn("root-session", "turn-predenied", "call-predenied");
 
     let result = TurnEngine::new(4)
         .execute_turn_in_context(
@@ -1152,7 +1147,7 @@ async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let kernel_ctx = kernel_context("turn-engine-autonomy-allowlist-prompt");
-    let turn = external_skills_policy_get_turn(
+    let turn = skills_policy_get_turn(
         "root-session",
         "turn-autonomy-allowlist-prompt",
         "call-autonomy-allowlist-prompt",
@@ -1209,7 +1204,7 @@ async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
     let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
     let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
     let kernel_ctx = kernel_context("turn-engine-autonomy-grant-prompt");
-    let turn = external_skills_policy_get_turn(
+    let turn = skills_policy_get_turn(
         "root-session",
         "turn-autonomy-grant-prompt",
         "call-autonomy-grant-prompt",
@@ -1645,7 +1640,7 @@ fn augment_tool_payload_uses_active_skill_root_for_absolute_direct_read_targets(
         crate::tools::ToolView::from_tool_names(["read"]),
     )
     .with_workspace_root(workspace_root)
-    .with_active_external_skill_roots(vec![skill_root]);
+    .with_active_skill_roots(vec![skill_root]);
     let payload = json!({
         "path": reference_path.display().to_string(),
     });
@@ -1679,7 +1674,7 @@ fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_direct_reads(
         crate::tools::ToolView::from_tool_names(["read"]),
     )
     .with_workspace_root(workspace_root)
-    .with_visible_external_skill_roots(vec![skill_root]);
+    .with_visible_skill_roots(vec![skill_root]);
     let payload = json!({
         "path": skill_path.display().to_string(),
     });
@@ -1713,7 +1708,7 @@ fn augment_tool_payload_uses_visible_skill_root_for_absolute_skill_resource_dire
         crate::tools::ToolView::from_tool_names(["read"]),
     )
     .with_workspace_root(workspace_root)
-    .with_visible_external_skill_roots(vec![skill_root]);
+    .with_visible_skill_roots(vec![skill_root]);
     let payload = json!({
         "path": reference_path.display().to_string(),
     });
@@ -1752,7 +1747,7 @@ fn augment_tool_payload_uses_unique_active_skill_root_for_relative_direct_read_t
         crate::tools::ToolView::from_tool_names(["read"]),
     )
     .with_workspace_root(workspace_root)
-    .with_active_external_skill_roots(vec![first_skill_root, second_skill_root]);
+    .with_active_skill_roots(vec![first_skill_root, second_skill_root]);
     let payload = json!({
         "path": "references/guide.md",
     });
@@ -1790,7 +1785,7 @@ fn augment_tool_payload_does_not_guess_when_relative_direct_read_matches_multipl
         crate::tools::ToolView::from_tool_names(["read"]),
     )
     .with_workspace_root(workspace_root)
-    .with_active_external_skill_roots(vec![first_skill_root, second_skill_root]);
+    .with_active_skill_roots(vec![first_skill_root, second_skill_root]);
     let payload = json!({
         "path": "references/shared.md",
     });

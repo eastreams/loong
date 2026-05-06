@@ -32,9 +32,9 @@ mod browser_definition_support;
 use browser_definition_support::{
     browser_click_definition, browser_extract_definition, browser_open_definition,
 };
-#[path = "catalog_external_skills_definition_support.rs"]
-mod external_skills_definition_support;
-use external_skills_definition_support::{config_import_definition, provider_switch_definition};
+#[path = "catalog_skills_definition_support.rs"]
+mod skills_definition_support;
+use skills_definition_support::{config_import_definition, provider_switch_definition};
 #[path = "catalog_io_definition_support.rs"]
 mod io_definition_support;
 #[cfg(feature = "tool-websearch")]
@@ -1869,12 +1869,12 @@ pub fn runtime_tool_view() -> ToolView {
 }
 
 pub fn runtime_tool_view_for_config(config: &ToolConfig) -> ToolView {
-    runtime_tool_view_for_config_with_external_skills(config, false)
+    runtime_tool_view_for_config_with_skills(config, false)
 }
 
-pub fn runtime_tool_view_for_config_with_external_skills(
+pub fn runtime_tool_view_for_config_with_skills(
     config: &ToolConfig,
-    external_skills_enabled: bool,
+    skills_enabled: bool,
 ) -> ToolView {
     let catalog = tool_catalog();
     ToolView::from_tool_names(
@@ -1886,7 +1886,7 @@ pub fn runtime_tool_view_for_config_with_external_skills(
                 tool_visibility_gate_enabled_for_runtime_view(
                     descriptor.visibility_gate,
                     config,
-                    external_skills_enabled,
+                    skills_enabled,
                 )
             })
             .map(|descriptor| descriptor.name),
@@ -2124,7 +2124,7 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
 fn tool_visibility_gate_enabled_for_runtime_view(
     gate: ToolVisibilityGate,
     config: &ToolConfig,
-    external_skills_enabled: bool,
+    skills_enabled: bool,
 ) -> bool {
     match gate {
         ToolVisibilityGate::Always => true,
@@ -2139,7 +2139,7 @@ fn tool_visibility_gate_enabled_for_runtime_view(
         ToolVisibilityGate::Delegate => config.delegate.enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BashRuntime => false,
-        ToolVisibilityGate::ExternalSkills => external_skills_enabled,
+        ToolVisibilityGate::ExternalSkills => skills_enabled,
         ToolVisibilityGate::MemorySearchCorpus => config
             .file_root
             .as_deref()
@@ -2195,7 +2195,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BashRuntime => config.bash_exec.is_discoverable(),
-        ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
+        ToolVisibilityGate::ExternalSkills => config.skills.enabled,
         ToolVisibilityGate::MemorySearchCorpus => {
             #[cfg(feature = "tool-file")]
             {

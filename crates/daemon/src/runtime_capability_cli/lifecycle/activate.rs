@@ -95,7 +95,7 @@ pub(crate) fn execute_runtime_capability_activate_managed_skill(
     let staging_root =
         write_runtime_capability_draft_files_to_staging(&payload, staging_base_root.as_path())?;
     let staging_path = staging_root.display().to_string();
-    let install_result = mvp::tools::external_skills_operator_install_with_config(
+    let install_result = mvp::tools::skills_install_with_config(
         Some(staging_path.as_str()),
         None,
         Some(artifact_id.as_str()),
@@ -158,8 +158,7 @@ pub(crate) fn execute_runtime_capability_activate_managed_skill(
     let canonical_activation_record_path =
         canonicalize_existing_path(activation_record_path.as_path())?;
 
-    let notes =
-        vec!["managed skill installed into the governed external skills runtime".to_owned()];
+    let notes = vec!["managed skill installed into the governed skills runtime".to_owned()];
     Ok(RuntimeCapabilityActivateReport {
         generated_at: now_rfc3339()?,
         artifact_path,
@@ -345,10 +344,10 @@ pub(crate) fn execute_runtime_capability_activate_profile_note_addendum(
 fn build_runtime_capability_activation_tool_runtime(
     resolved_config_path: &Path,
     config: &mvp::config::LoongConfig,
-    external_skills_enabled: bool,
+    skills_enabled: bool,
 ) -> mvp::tools::runtime_config::ToolRuntimeConfig {
     let mut adjusted_config = config.clone();
-    adjusted_config.external_skills.enabled = external_skills_enabled;
+    adjusted_config.skills.enabled = skills_enabled;
     mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &adjusted_config,
         Some(resolved_config_path),
@@ -358,7 +357,7 @@ fn build_runtime_capability_activation_tool_runtime(
 fn resolve_runtime_capability_activation_install_root(
     tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
 ) -> CliResult<PathBuf> {
-    if let Some(path) = tool_runtime.external_skills.install_root.clone() {
+    if let Some(path) = tool_runtime.skills.install_root.clone() {
         return Ok(path);
     }
 
@@ -368,5 +367,5 @@ fn resolve_runtime_capability_activation_install_root(
             format!("read current dir for managed skill activation failed: {error}")
         })?,
     };
-    Ok(file_root.join("external-skills-installed"))
+    Ok(file_root.join(".loong/skills"))
 }

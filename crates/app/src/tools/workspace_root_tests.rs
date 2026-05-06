@@ -11,7 +11,7 @@ fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig 
         shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
         file_root: Some(root),
         messages_enabled: true,
-        external_skills: runtime_config::ExternalSkillsRuntimePolicy {
+        skills: runtime_config::SkillsRuntimePolicy {
             enabled: true,
             require_download_approval: true,
             allowed_domains: BTreeSet::new(),

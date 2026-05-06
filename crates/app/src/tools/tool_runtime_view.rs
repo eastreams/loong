@@ -2,26 +2,26 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{ToolView, external_skills, runtime_config, runtime_tool_view_for_runtime_config};
+use super::{ToolView, runtime_config, runtime_tool_view_for_runtime_config, skills};
 
-pub(crate) fn model_visible_external_skill_roots_for_runtime_config(
+pub(crate) fn model_visible_skill_roots_for_runtime_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Vec<PathBuf> {
-    external_skills::model_visible_skill_roots_with_config(config)
+    skills::model_visible_skill_roots_with_config(config)
 }
 
-pub(crate) fn model_visible_external_skill_context_payload_for_path(
+pub(crate) fn model_visible_skill_context_payload_for_path(
     config: &runtime_config::ToolRuntimeConfig,
     raw_path: &Path,
 ) -> Result<Option<Value>, String> {
-    external_skills::model_visible_skill_context_payload_for_path(config, raw_path)
+    skills::model_visible_skill_context_payload_for_path(config, raw_path)
 }
 
-pub(crate) fn model_visible_external_skill_context_payload_for_skill_id(
+pub(crate) fn model_visible_skill_context_payload_for_skill_id(
     config: &runtime_config::ToolRuntimeConfig,
     skill_id: &str,
 ) -> Result<Option<Value>, String> {
-    external_skills::model_visible_skill_context_payload_for_skill_id(config, skill_id)
+    skills::model_visible_skill_context_payload_for_skill_id(config, skill_id)
 }
 
 pub fn runtime_tool_view_from_loong_config(config: &crate::config::LoongConfig) -> ToolView {

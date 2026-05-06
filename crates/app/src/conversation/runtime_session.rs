@@ -13,7 +13,7 @@ use super::super::subagent::{
 };
 use super::SessionContext;
 #[cfg(feature = "memory-sqlite")]
-use super::active_external_skills;
+use super::active_skills;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
     derive_subagent_profile_from_lineage, resolve_delegate_child_contract,
@@ -158,8 +158,8 @@ pub(super) struct PersistedSessionSnapshot {
     pub(super) delegate_runtime_narrowing: Option<ToolRuntimeNarrowing>,
     pub(super) delegate_profile: Option<DelegateBuiltinProfile>,
     pub(super) workspace_root: Option<PathBuf>,
-    pub(super) active_external_skills: Option<active_external_skills::ActiveExternalSkillsState>,
-    pub(super) active_external_skill_roots: Vec<PathBuf>,
+    pub(super) active_skills: Option<active_skills::ActiveSkillsState>,
+    pub(super) active_skill_roots: Vec<PathBuf>,
     pub(super) runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
 
@@ -209,10 +209,8 @@ pub(super) fn load_persisted_session_snapshot(
             None
         };
         let runtime_self_continuity = load_session_runtime_self_continuity(repo, session_id)?;
-        let active_external_skills =
-            load_active_external_skills_state(repo, session_id).unwrap_or_default();
-        let active_external_skill_roots =
-            active_external_skill_roots_from_state(active_external_skills.as_ref());
+        let active_skills = load_active_skills_state(repo, session_id).unwrap_or_default();
+        let active_skill_roots = active_skill_roots_from_state(active_skills.as_ref());
         let snapshot = PersistedSessionSnapshot {
             session_id: session.session_id,
             parent_session_id,
@@ -223,8 +221,8 @@ pub(super) fn load_persisted_session_snapshot(
             delegate_runtime_narrowing,
             delegate_profile,
             workspace_root,
-            active_external_skills,
-            active_external_skill_roots,
+            active_skills,
+            active_skill_roots,
             runtime_self_continuity,
         };
         return Ok(Some(snapshot));
@@ -261,10 +259,8 @@ pub(super) fn load_persisted_session_snapshot(
         None
     };
     let runtime_self_continuity = load_session_runtime_self_continuity(repo, session_id)?;
-    let active_external_skills =
-        load_active_external_skills_state(repo, session_id).unwrap_or_default();
-    let active_external_skill_roots =
-        active_external_skill_roots_from_state(active_external_skills.as_ref());
+    let active_skills = load_active_skills_state(repo, session_id).unwrap_or_default();
+    let active_skill_roots = active_skill_roots_from_state(active_skills.as_ref());
     let snapshot = PersistedSessionSnapshot {
         session_id: summary.session_id,
         parent_session_id: summary.parent_session_id,
@@ -275,24 +271,24 @@ pub(super) fn load_persisted_session_snapshot(
         delegate_runtime_narrowing,
         delegate_profile,
         workspace_root,
-        active_external_skills,
-        active_external_skill_roots,
+        active_skills,
+        active_skill_roots,
         runtime_self_continuity,
     };
     Ok(Some(snapshot))
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) fn load_active_external_skills_state(
+pub(super) fn load_active_skills_state(
     repo: &SessionRepository,
     session_id: &str,
-) -> Result<Option<active_external_skills::ActiveExternalSkillsState>, String> {
-    active_external_skills::load_persisted_active_external_skills(repo, session_id)
+) -> Result<Option<active_skills::ActiveSkillsState>, String> {
+    active_skills::load_persisted_active_skills(repo, session_id)
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) fn active_external_skill_roots_from_state(
-    active_skills: Option<&active_external_skills::ActiveExternalSkillsState>,
+pub(super) fn active_skill_roots_from_state(
+    active_skills: Option<&active_skills::ActiveSkillsState>,
 ) -> Vec<PathBuf> {
     let Some(active_skills) = active_skills else {
         return Vec::new();
@@ -316,9 +312,9 @@ pub(super) fn active_external_skill_roots_from_state(
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) fn apply_active_external_skill_blocked_tools_to_tool_view(
+pub(super) fn apply_active_skill_blocked_tools_to_tool_view(
     base_tool_view: ToolView,
-    active_skills: Option<&active_external_skills::ActiveExternalSkillsState>,
+    active_skills: Option<&active_skills::ActiveSkillsState>,
 ) -> ToolView {
     let Some(active_skills) = active_skills else {
         return base_tool_view;
@@ -400,14 +396,13 @@ pub(super) fn build_session_context_from_snapshot(
     base_tool_view: ToolView,
     snapshot: PersistedSessionSnapshot,
 ) -> CliResult<SessionContext> {
-    let visible_external_skill_roots =
-        super::model_visible_external_skill_roots_from_config(config);
-    let tool_view = apply_active_external_skill_blocked_tools_to_tool_view(
+    let visible_skill_roots = super::model_visible_skill_roots_from_config(config);
+    let tool_view = apply_active_skill_blocked_tools_to_tool_view(
         apply_session_tool_policy_to_tool_view(
             base_tool_view,
             snapshot.session_tool_policy.as_ref(),
         ),
-        snapshot.active_external_skills.as_ref(),
+        snapshot.active_skills.as_ref(),
     );
     let runtime_narrowing = merge_effective_runtime_narrowing(
         snapshot.delegate_runtime_narrowing.clone(),
@@ -427,13 +422,11 @@ pub(super) fn build_session_context_from_snapshot(
     if let Some(workspace_root) = snapshot.workspace_root {
         session_context = session_context.with_workspace_root(workspace_root);
     }
-    if !snapshot.active_external_skill_roots.is_empty() {
-        session_context =
-            session_context.with_active_external_skill_roots(snapshot.active_external_skill_roots);
+    if !snapshot.active_skill_roots.is_empty() {
+        session_context = session_context.with_active_skill_roots(snapshot.active_skill_roots);
     }
-    if !visible_external_skill_roots.is_empty() {
-        session_context =
-            session_context.with_visible_external_skill_roots(visible_external_skill_roots);
+    if !visible_skill_roots.is_empty() {
+        session_context = session_context.with_visible_skill_roots(visible_skill_roots);
     }
     if snapshot.is_delegate_child {
         if let Some(label) = snapshot.label {

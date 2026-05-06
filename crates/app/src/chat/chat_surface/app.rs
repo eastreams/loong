@@ -4764,15 +4764,15 @@ fn apply_settings_command(
         SettingsCommandAction::InstallSkillPack(target_id) => {
             let resolved_path = runtime.resolved_path.clone();
             let summary = persist_runtime_settings(runtime, app, |config| {
-                config.external_skills.enabled = true;
-                config.external_skills.auto_expose_installed = true;
-                if config.external_skills.install_root.is_none() {
+                config.skills.enabled = true;
+                config.skills.auto_expose_installed = true;
+                if config.skills.install_root.is_none() {
                     let install_root = resolved_path
                         .parent()
                         .filter(|parent| !parent.as_os_str().is_empty())
-                        .map(|parent| parent.join("external-skills-installed"))
-                        .unwrap_or_else(|| PathBuf::from("external-skills-installed"));
-                    config.external_skills.install_root = Some(install_root.display().to_string());
+                        .map(|parent| parent.join(".loong/skills"))
+                        .unwrap_or_else(|| PathBuf::from(".loong/skills"));
+                    config.skills.install_root = Some(install_root.display().to_string());
                 }
                 let runtime_config =
                     crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
@@ -5153,7 +5153,7 @@ fn build_settings_overview_entries(
                 .all(|skill_id| installed_skill_ids.contains(*skill_id))
         })
         .count();
-    let skills_state = if runtime.config.external_skills.enabled {
+    let skills_state = if runtime.config.skills.enabled {
         if installed_pack_count == 0 {
             "managed skills enabled"
         } else {

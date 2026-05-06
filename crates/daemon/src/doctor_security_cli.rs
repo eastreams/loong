@@ -251,16 +251,12 @@ async fn build_doctor_security_execution(
     let web_fetch_finding = assess_web_fetch(runtime.web_fetch.clone());
     findings.push(web_fetch_finding);
 
-    let external_skills_finding =
-        match crate::external_skills_policy_probe::resolve_effective_external_skills_policy(
-            &runtime,
-        ) {
-            Ok(policy_probe) => assess_external_skills(policy_probe),
-            Err(error) => {
-                assess_external_skills_probe_failure(runtime.external_skills.clone(), error)
-            }
-        };
-    findings.push(external_skills_finding);
+    let skills_finding = match crate::skills_policy_probe::resolve_effective_skills_policy(&runtime)
+    {
+        Ok(policy_probe) => assess_skills(policy_probe),
+        Err(error) => assess_skills_probe_failure(runtime.skills.clone(), error),
+    };
+    findings.push(skills_finding);
 
     let secret_hygiene_finding = assess_secret_hygiene(config_path, config)?;
     findings.push(secret_hygiene_finding);
@@ -573,29 +569,29 @@ fn assess_web_fetch(policy: mvp::tools::runtime_config::WebFetchRuntimePolicy) -
     )
 }
 
-fn assess_external_skills(
-    policy_probe: crate::external_skills_policy_probe::EffectiveExternalSkillsPolicyProbe,
+fn assess_skills(
+    policy_probe: crate::skills_policy_probe::EffectiveSkillsPolicyProbe,
 ) -> SecurityFinding {
     let policy = policy_probe.policy;
     let override_active = policy_probe.override_active;
     let mut evidence = Vec::new();
-    let enabled_evidence = format!("external_skills.enabled={}", policy.enabled);
+    let enabled_evidence = format!("skills.enabled={}", policy.enabled);
     evidence.push(enabled_evidence);
-    let override_active_evidence = format!("external_skills.override_active={override_active}");
+    let override_active_evidence = format!("skills.override_active={override_active}");
     evidence.push(override_active_evidence);
     let approval_evidence = format!(
-        "external_skills.require_download_approval={}",
+        "skills.require_download_approval={}",
         policy.require_download_approval
     );
     evidence.push(approval_evidence);
     let allow_count = policy.allowed_domains.len();
-    let allow_count_evidence = format!("external_skills.allowed_domains.count={allow_count}");
+    let allow_count_evidence = format!("skills.allowed_domains.count={allow_count}");
     evidence.push(allow_count_evidence);
     let block_count = policy.blocked_domains.len();
-    let block_count_evidence = format!("external_skills.blocked_domains.count={block_count}");
+    let block_count_evidence = format!("skills.blocked_domains.count={block_count}");
     evidence.push(block_count_evidence);
     let auto_expose_evidence = format!(
-        "external_skills.auto_expose_installed={}",
+        "skills.auto_expose_installed={}",
         policy.auto_expose_installed
     );
     evidence.push(auto_expose_evidence);
@@ -604,7 +600,7 @@ fn assess_external_skills(
         let summary = "External skills are disabled for this runtime.".to_owned();
         let next_steps = Vec::new();
         return build_finding(
-            "external_skills",
+            "skills",
             "External Skills",
             SecurityFindingStatus::Covered,
             SecurityFindingSeverity::Info,
@@ -619,12 +615,11 @@ fn assess_external_skills(
             "External skills are enabled with a posture that can auto-expose or download without explicit approval."
                 .to_owned();
         let next_steps = vec![
-            "Keep external_skills.require_download_approval = true.".to_owned(),
-            "Keep external_skills.auto_expose_installed = false until a review step completes."
-                .to_owned(),
+            "Keep skills.require_download_approval = true.".to_owned(),
+            "Keep skills.auto_expose_installed = false until a review step completes.".to_owned(),
         ];
         return build_finding(
-            "external_skills",
+            "skills",
             "External Skills",
             SecurityFindingStatus::Exposed,
             SecurityFindingSeverity::Critical,
@@ -639,13 +634,11 @@ fn assess_external_skills(
             .to_owned();
     let mut next_steps = Vec::new();
     if policy.allowed_domains.is_empty() {
-        next_steps.push(
-            "Pin external_skills.allowed_domains to the smallest trusted host set.".to_owned(),
-        );
+        next_steps.push("Pin skills.allowed_domains to the smallest trusted host set.".to_owned());
     }
     next_steps.push("Keep installed skills dark until operator review completes.".to_owned());
     build_finding(
-        "external_skills",
+        "skills",
         "External Skills",
         SecurityFindingStatus::Partial,
         SecurityFindingSeverity::Warn,
@@ -655,25 +648,25 @@ fn assess_external_skills(
     )
 }
 
-fn assess_external_skills_probe_failure(
-    config_projection: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
+fn assess_skills_probe_failure(
+    config_projection: mvp::tools::runtime_config::SkillsRuntimePolicy,
     error: String,
 ) -> SecurityFinding {
     let mut evidence = Vec::new();
     let error_evidence = format!("effective_policy_probe.error={error}");
     evidence.push(error_evidence);
     let enabled_evidence = format!(
-        "config_projection.external_skills.enabled={}",
+        "config_projection.skills.enabled={}",
         config_projection.enabled
     );
     evidence.push(enabled_evidence);
     let approval_evidence = format!(
-        "config_projection.external_skills.require_download_approval={}",
+        "config_projection.skills.require_download_approval={}",
         config_projection.require_download_approval
     );
     evidence.push(approval_evidence);
     let auto_expose_evidence = format!(
-        "config_projection.external_skills.auto_expose_installed={}",
+        "config_projection.skills.auto_expose_installed={}",
         config_projection.auto_expose_installed
     );
     evidence.push(auto_expose_evidence);
@@ -687,7 +680,7 @@ fn assess_external_skills_probe_failure(
         "Repair the skills.policy tool path before relying on this audit result.".to_owned(),
     ];
     build_finding(
-        "external_skills",
+        "skills",
         "External Skills",
         SecurityFindingStatus::Unknown,
         SecurityFindingSeverity::Warn,
@@ -1614,12 +1607,12 @@ mod tests {
             .unwrap_or_else(|| panic!("missing finding `{id}`"))
     }
 
-    struct ExternalSkillsPolicyResetGuard {
+    struct SkillsPolicyResetGuard {
         _lock: MutexGuard<'static, ()>,
         runtime_config: mvp::tools::runtime_config::ToolRuntimeConfig,
     }
 
-    impl ExternalSkillsPolicyResetGuard {
+    impl SkillsPolicyResetGuard {
         fn new(runtime_config: &mvp::tools::runtime_config::ToolRuntimeConfig) -> Self {
             let lock = crate::test_support::lock_daemon_test_environment();
             Self {
@@ -1629,12 +1622,9 @@ mod tests {
         }
     }
 
-    impl Drop for ExternalSkillsPolicyResetGuard {
+    impl Drop for SkillsPolicyResetGuard {
         fn drop(&mut self) {
-            let _ = mvp::tools::external_skills_operator_policy_reset_with_config(
-                true,
-                &self.runtime_config,
-            );
+            let _ = mvp::tools::skills_policy_reset_with_config(true, &self.runtime_config);
         }
     }
 
@@ -1756,35 +1746,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_skills_expose_when_auto_expose_or_approval_is_open() {
+    async fn skills_expose_when_auto_expose_or_approval_is_open() {
         let path = temp_config_path("external-skills");
         write_placeholder_config(&path);
 
         let mut config = mvp::config::LoongConfig::default();
-        config.external_skills.enabled = true;
-        config.external_skills.require_download_approval = false;
-        config.external_skills.auto_expose_installed = true;
+        config.skills.enabled = true;
+        config.skills.require_download_approval = false;
+        config.skills.auto_expose_installed = true;
 
         let execution = build_doctor_security_execution(&path, &config)
             .await
             .expect("build security execution");
-        let finding = finding_by_id(&execution.findings, "external_skills");
+        let finding = finding_by_id(&execution.findings, "skills");
 
         assert_eq!(finding.status, SecurityFindingStatus::Exposed);
         assert_eq!(finding.severity, SecurityFindingSeverity::Critical);
     }
 
     #[tokio::test]
-    async fn external_skills_audit_uses_effective_policy_override() {
+    async fn skills_audit_uses_effective_policy_override() {
         let path = temp_config_path("external-skills-override");
         write_placeholder_config(&path);
 
         let config = mvp::config::LoongConfig::default();
         let runtime_config =
             mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(&config, Some(&path));
-        let _reset_guard = ExternalSkillsPolicyResetGuard::new(&runtime_config);
+        let _reset_guard = SkillsPolicyResetGuard::new(&runtime_config);
 
-        mvp::tools::external_skills_operator_policy_set_with_config(
+        mvp::tools::skills_policy_set_with_config(
             Some(true),
             Some(false),
             Some(std::collections::BTreeSet::from([
@@ -1796,18 +1786,18 @@ mod tests {
             true,
             &runtime_config,
         )
-        .expect("override external skills policy");
+        .expect("override skills policy");
 
         let execution = build_doctor_security_execution(&path, &config)
             .await
             .expect("build security execution");
-        let finding = finding_by_id(&execution.findings, "external_skills");
+        let finding = finding_by_id(&execution.findings, "skills");
         let rendered_evidence = finding.evidence.join("\n");
 
         assert_eq!(finding.status, SecurityFindingStatus::Exposed);
-        assert!(rendered_evidence.contains("external_skills.override_active=true"));
-        assert!(rendered_evidence.contains("external_skills.enabled=true"));
-        assert!(rendered_evidence.contains("external_skills.allowed_domains.count=1"));
+        assert!(rendered_evidence.contains("skills.override_active=true"));
+        assert!(rendered_evidence.contains("skills.enabled=true"));
+        assert!(rendered_evidence.contains("skills.allowed_domains.count=1"));
     }
 
     #[tokio::test]

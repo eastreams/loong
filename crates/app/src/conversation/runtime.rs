@@ -4,7 +4,7 @@ use crate::tools::ToolView;
 
 use super::super::{config::LoongConfig, provider};
 #[cfg(feature = "memory-sqlite")]
-use super::active_external_skills;
+use super::active_skills;
 #[cfg(test)]
 use super::context_engine::ContextArtifactKind;
 use super::context_engine::{
@@ -44,9 +44,7 @@ mod runtime_turn_middleware;
 #[path = "runtime_session.rs"]
 mod session_runtime;
 pub use runtime_context::SessionContext;
-use runtime_context::{
-    model_visible_external_skill_roots_from_config, root_session_context_from_config,
-};
+use runtime_context::{model_visible_skill_roots_from_config, root_session_context_from_config};
 #[cfg(feature = "memory-sqlite")]
 use runtime_delegate::DefaultAsyncDelegateSpawner;
 #[cfg(feature = "memory-sqlite")]
@@ -60,7 +58,7 @@ pub use runtime_hosted::HostedConversationRuntime;
 #[cfg(test)]
 use runtime_prompt::normalize_turn_middleware_ids;
 use runtime_prompt::{
-    active_external_skills_prompt_summary, append_runtime_prompt_fragment,
+    active_skills_prompt_summary, append_runtime_prompt_fragment,
     delegate_child_profile_prompt_summary, delegate_child_runtime_contract_prompt_summary,
     provider_runtime_binding, runtime_self_continuity_prompt_summary,
 };
@@ -73,7 +71,7 @@ pub use runtime_selection::{
 pub use runtime_trait::ConversationRuntime;
 #[cfg(feature = "memory-sqlite")]
 use session_runtime::{
-    apply_active_external_skill_blocked_tools_to_tool_view, apply_session_tool_policy_to_tool_view,
+    apply_active_skill_blocked_tools_to_tool_view, apply_session_tool_policy_to_tool_view,
     build_base_tool_view_from_snapshot, build_session_context_from_snapshot,
     load_persisted_session_context, load_persisted_session_snapshot, open_session_repository,
 };
@@ -166,16 +164,13 @@ where
             .then(|| runtime_self_continuity_prompt_summary(effective_config, session_context))
             .flatten();
         #[cfg(feature = "memory-sqlite")]
-        let active_external_skills = include_system_prompt
+        let active_skills = include_system_prompt
             .then(|| {
-                active_external_skills_prompt_summary(
-                    effective_config,
-                    session_context.session_id.as_str(),
-                )
+                active_skills_prompt_summary(effective_config, session_context.session_id.as_str())
             })
             .flatten();
         #[cfg(not(feature = "memory-sqlite"))]
-        let active_external_skills: Option<String> = None;
+        let active_skills: Option<String> = None;
         let delegate_runtime_contract = include_system_prompt
             .then(|| {
                 delegate_child_runtime_contract_prompt_summary(effective_config, session_context)
@@ -194,8 +189,8 @@ where
         );
         append_runtime_prompt_fragment(
             &mut assembled,
-            "active-external-skills",
-            active_external_skills,
+            "active-skills",
+            active_skills,
             PromptFrameAuthority::SessionLocalRecall,
         );
         append_runtime_prompt_fragment(

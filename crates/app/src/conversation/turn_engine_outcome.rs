@@ -70,7 +70,7 @@ pub struct ToolResultEnvelope {
 #[serde(rename_all = "snake_case")]
 pub enum ToolResultPayloadSemantics {
     DiscoveryResult,
-    ExternalSkillContext,
+    SkillContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

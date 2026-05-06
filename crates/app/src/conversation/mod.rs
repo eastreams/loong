@@ -1,4 +1,4 @@
-mod active_external_skills;
+mod active_skills;
 pub mod analytics;
 mod announce;
 mod approval_resolution;

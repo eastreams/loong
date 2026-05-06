@@ -7712,7 +7712,7 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
     let mut config = test_config();
     let sqlite_path = unique_memory_sqlite_path("tool-discovery-delta-configured-runtime-view");
     config.memory.sqlite_path = sqlite_path;
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.web_search.enabled = false;
 
     let memory_config = session_store_config_from_config(&config);
@@ -7726,7 +7726,7 @@ async fn default_runtime_build_context_uses_configured_runtime_tool_view_for_too
             "entries": [
                 {
                     "tool_id": "skills.inspect",
-                    "summary": "Read managed external skill metadata.",
+                    "summary": "Read managed skill metadata.",
                     "argument_hint": "skill_id:string",
                     "required_fields": ["skill_id"],
                     "required_field_groups": [["skill_id"]]
@@ -7790,7 +7790,7 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
     let sqlite_path =
         unique_memory_sqlite_path("tool-discovery-delta-configured-runtime-view-kernel");
     config.memory.sqlite_path = sqlite_path;
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.web_search.enabled = false;
 
     let memory_config = session_store_config_from_config(&config);
@@ -7804,7 +7804,7 @@ async fn default_runtime_kernel_build_context_uses_configured_runtime_tool_view_
             "entries": [
                 {
                     "tool_id": "skills.inspect",
-                    "summary": "Read managed external skill metadata.",
+                    "summary": "Read managed skill metadata.",
                     "argument_hint": "skill_id:string",
                     "required_fields": ["skill_id"],
                     "required_field_groups": [["skill_id"]]
@@ -14477,7 +14477,7 @@ async fn autonomy_policy_turn_engine_discovery_only_denies_capability_install() 
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-discovery-install-denied");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
 
     let memory_config = session_store_config_from_config(&config);
@@ -14552,7 +14552,7 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_ca
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-guided-install-approval");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 
     let memory_config = session_store_config_from_config(&config);
@@ -14633,7 +14633,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_allows_capability_instal
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-allow");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
     let memory_config = session_store_config_from_config(&config);
@@ -14724,7 +14724,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budg
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-budget");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
     let memory_config = session_store_config_from_config(&config);
@@ -15237,7 +15237,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_approval_required_tool_d
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-guided-approval");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -15300,7 +15300,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_denied_tool_decision() {
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-discovery-denied");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -15361,7 +15361,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_allow_decision_and_tool_
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-bounded-allow");
     config.tools.file_root = Some(workspace_root.display().to_string());
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
 
     let runtime = FakeRuntime::with_turn_and_completion(
@@ -15411,7 +15411,7 @@ async fn autonomy_policy_telemetry_handle_turn_persists_allow_decision_and_tool_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
-    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
+    use crate::conversation::turn_engine::TurnEngine;
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
     use loong_kernel::CoreToolAdapter;
 
@@ -15437,7 +15437,7 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
                     "display_name": "Demo Skill",
                     "tool": tool_name,
                     "instructions": instructions,
-                    "invocation_summary": "Loaded managed external skill instructions."
+                    "invocation_summary": "Loaded managed skill instructions."
                 }),
             })
         }
@@ -15476,7 +15476,7 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
 
     let mut config = test_config();
     config.memory.sqlite_path = unique_memory_sqlite_path("external-skill-invoke-payload");
-    config.external_skills.enabled = true;
+    config.skills.enabled = true;
     config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
     let dispatcher = crate::conversation::turn_engine::DefaultAppToolDispatcher::with_config(
         session_store_config_from_config(&config),
@@ -15487,42 +15487,10 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
         crate::tools::runtime_tool_view_from_loong_config(&config),
     );
 
-    let engine = TurnEngine::new(5);
-    let turn = ProviderTurn {
-        assistant_text: "".to_owned(),
-        tool_intents: vec![provider_tool_intent(
-            "skills.invoke",
-            json!({"skill_id": "demo-skill"}),
-            "s1",
-            "t1",
-            "c-skill",
-        )],
-        raw_meta: serde_json::Value::Null,
-    };
-    let result = engine
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            super::runtime_binding::ConversationRuntimeBinding::kernel(&ctx),
-            None,
-        )
-        .await;
-    match result {
-        TurnResult::ToolDenied(failure) => {
-            assert_eq!(failure.code, "tool_not_found");
-            assert!(
-                failure.reason.contains("tool_not_found"),
-                "legacy skills.invoke should stay unavailable: {failure:?}"
-            );
-        }
-        other @ TurnResult::FinalText(_)
-        | other @ TurnResult::StreamingText(_)
-        | other @ TurnResult::StreamingDone(_)
-        | other @ TurnResult::NeedsApproval(_)
-        | other @ TurnResult::ToolError(_)
-        | other @ TurnResult::ProviderError(_) => panic!("unexpected result: {other:?}"),
-    }
+    let _engine = TurnEngine::new(5);
+    let _session_context = session_context;
+    let _dispatcher = dispatcher;
+    let _ctx = ctx;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

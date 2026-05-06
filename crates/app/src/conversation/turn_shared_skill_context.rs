@@ -2,10 +2,10 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 use super::ToolResultLine;
-use super::tool_result::envelope_uses_external_skill_context;
+use super::tool_result::envelope_uses_skill_context;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalSkillInvokeContext {
+pub struct SkillContext {
     pub skill_id: String,
     pub display_name: String,
     pub instructions: String,
@@ -14,19 +14,15 @@ pub struct ExternalSkillInvokeContext {
     pub blocked_tools: Vec<String>,
 }
 
-pub fn parse_external_skill_invoke_context(
-    tool_result_text: &str,
-) -> Option<ExternalSkillInvokeContext> {
+pub fn parse_skill_context(tool_result_text: &str) -> Option<SkillContext> {
     tool_result_text
         .trim()
         .lines()
-        .filter_map(parse_external_skill_invoke_context_line)
+        .filter_map(parse_skill_context_line)
         .next()
 }
 
-pub fn external_skill_invoke_context_from_payload_summary(
-    payload_json: &Value,
-) -> Option<ExternalSkillInvokeContext> {
+pub fn skill_context_from_payload_summary(payload_json: &Value) -> Option<SkillContext> {
     let instructions = payload_json
         .get("instructions")
         .and_then(Value::as_str)
@@ -62,7 +58,7 @@ pub fn external_skill_invoke_context_from_payload_summary(
         .and_then(|metadata| metadata.get("blocked_tools"))
         .map(parse_external_skill_tool_restrictions)
         .unwrap_or_default();
-    Some(ExternalSkillInvokeContext {
+    Some(SkillContext {
         skill_id,
         display_name,
         instructions,
@@ -72,19 +68,17 @@ pub fn external_skill_invoke_context_from_payload_summary(
     })
 }
 
-fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillInvokeContext> {
+fn parse_skill_context_line(line: &str) -> Option<SkillContext> {
     let tool_result_line = ToolResultLine::parse(line)?;
     let envelope = serde_json::to_value(tool_result_line.envelope()).ok()?;
-    let uses_external_skill_context = envelope_uses_external_skill_context(&envelope);
-    let uses_legacy_carrier = tool_result_line.tool_name() == "skills.invoke";
-    if !uses_legacy_carrier && !uses_external_skill_context {
+    if !envelope_uses_skill_context(&envelope) {
         return None;
     }
     if tool_result_line.payload_truncated() {
         return None;
     }
     let payload_json = tool_result_line.payload_summary_json()?;
-    external_skill_invoke_context_from_payload_summary(&payload_json)
+    skill_context_from_payload_summary(&payload_json)
 }
 
 fn parse_external_skill_tool_restrictions(value: &Value) -> Vec<String> {

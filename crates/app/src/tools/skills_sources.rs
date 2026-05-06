@@ -54,7 +54,7 @@ pub(crate) fn detect_external_skill_source_kind(
 ) -> Result<ExternalSkillSourceKind, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("external skill reference must not be empty".to_owned());
+        return Err("skill reference must not be empty".to_owned());
     }
 
     let parsed_url = Url::parse(trimmed);
@@ -71,7 +71,7 @@ pub(crate) fn detect_external_skill_source_kind(
     }
 
     Err(format!(
-        "unsupported external skill reference `{trimmed}`; expected a supported URL, GitHub repo shorthand, or npm package name"
+        "unsupported skill reference `{trimmed}`; expected a supported URL, GitHub repo shorthand, or npm package name"
     ))
 }
 
@@ -99,7 +99,7 @@ pub(crate) fn resolve_external_skill_candidate(
         ExternalSkillSourceKind::DirectUrl
         | ExternalSkillSourceKind::SkillsSh
         | ExternalSkillSourceKind::Clawhub => Err(format!(
-            "unsupported external skill reference `{trimmed}`; expected a supported URL, GitHub repo shorthand, or npm package name"
+            "unsupported skill reference `{trimmed}`; expected a supported URL, GitHub repo shorthand, or npm package name"
         )),
     }
 }
@@ -155,18 +155,18 @@ fn detect_source_kind_from_url(url: &Url) -> Result<ExternalSkillSourceKind, Str
     let scheme = url.scheme();
     if scheme != "https" {
         return Err(format!(
-            "external skill references must use https URLs when a URL is provided, got `{scheme}`"
+            "skill references must use https URLs when a URL is provided, got `{scheme}`"
         ));
     }
 
     let host = url
         .host_str()
         .map(str::to_ascii_lowercase)
-        .ok_or_else(|| "external skill URL is missing a host".to_owned())?;
+        .ok_or_else(|| "skill URL is missing a host".to_owned())?;
 
     if host == "clawhub.io" || host.ends_with(".clawhub.io") {
         return Err(format!(
-            "external skill source `{host}` is blocked because `clawhub.io` is not a supported ClawHub domain"
+            "skill source `{host}` is blocked because `clawhub.io` is not a supported ClawHub domain"
         ));
     }
 
@@ -416,7 +416,7 @@ fn required_path_segment<'a>(
     let segment = path_segments
         .get(index)
         .map(String::as_str)
-        .ok_or_else(|| format!("{label} is missing from external skill reference"))?;
+        .ok_or_else(|| format!("{label} is missing from skill reference"))?;
     Ok(segment)
 }
 
@@ -577,7 +577,7 @@ mod tests {
     };
 
     #[test]
-    fn external_skills_source_kind_recognizes_github_reference() {
+    fn skills_source_kind_recognizes_github_reference() {
         let raw = "https://github.com/vercel-labs/agent-skills";
         let source_kind =
             detect_external_skill_source_kind(raw).expect("github reference should parse");
@@ -585,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_source_kind_recognizes_skills_sh_reference() {
+    fn skills_source_kind_recognizes_skills_sh_reference() {
         let raw = "https://skills.sh/github/awesome-copilot/refactor-plan";
         let source_kind =
             detect_external_skill_source_kind(raw).expect("skills.sh reference should parse");
@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_source_kind_recognizes_clawhub_reference() {
+    fn skills_source_kind_recognizes_clawhub_reference() {
         let raw = "https://clawhub.ai/skills/hybrid-deep-search";
         let source_kind =
             detect_external_skill_source_kind(raw).expect("clawhub reference should parse");
@@ -601,18 +601,18 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_source_kind_recognizes_npm_package_name() {
+    fn skills_source_kind_recognizes_npm_package_name() {
         let raw = "@scope/skill-pack";
         let source_kind = detect_external_skill_source_kind(raw).expect("npm package should parse");
         assert_eq!(source_kind, ExternalSkillSourceKind::Npm);
     }
 
     #[test]
-    fn external_skills_source_kind_rejects_unsupported_reference() {
+    fn skills_source_kind_rejects_unsupported_reference() {
         let raw = "find me a cool skill";
         let error =
             detect_external_skill_source_kind(raw).expect_err("unsupported reference should fail");
-        assert!(error.contains("unsupported external skill reference"));
+        assert!(error.contains("unsupported skill reference"));
     }
 
     #[test]
@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_resolver_normalizes_github_repo_candidate() {
+    fn skills_resolver_normalizes_github_repo_candidate() {
         let raw = "vercel-labs/agent-skills";
         let candidate =
             resolve_external_skill_candidate(raw).expect("github shorthand should resolve");
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_resolver_normalizes_github_tree_candidate() {
+    fn skills_resolver_normalizes_github_tree_candidate() {
         let raw = "https://github.com/vercel-labs/agent-skills/tree/main/skills/refactor";
         let candidate = resolve_external_skill_candidate(raw).expect("github tree should resolve");
         assert_eq!(candidate.source_kind, ExternalSkillSourceKind::Github);
@@ -664,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_resolver_normalizes_skills_sh_candidate() {
+    fn skills_resolver_normalizes_skills_sh_candidate() {
         let raw = "https://skills.sh/github/awesome-copilot/refactor-plan";
         let candidate =
             resolve_external_skill_candidate(raw).expect("skills.sh reference should resolve");
@@ -678,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_resolver_normalizes_clawhub_candidate() {
+    fn skills_resolver_normalizes_clawhub_candidate() {
         let raw = "https://clawhub.ai/skills/hybrid-deep-search";
         let candidate =
             resolve_external_skill_candidate(raw).expect("clawhub reference should resolve");
@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_resolver_normalizes_npm_candidate() {
+    fn skills_resolver_normalizes_npm_candidate() {
         let raw = "@scope/skill-pack";
         let candidate = resolve_external_skill_candidate(raw).expect("npm package should resolve");
         assert_eq!(candidate.source_kind, ExternalSkillSourceKind::Npm);
@@ -708,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn external_skills_resolver_rejects_clawhub_io_reference() {
+    fn skills_resolver_rejects_clawhub_io_reference() {
         let raw = "https://clawhub.io/skills/fake";
         let error =
             resolve_external_skill_candidate(raw).expect_err("clawhub.io should be rejected");

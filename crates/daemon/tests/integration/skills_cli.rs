@@ -36,28 +36,28 @@ fn write_file(root: &Path, relative: &str, content: &str) {
     fs::write(path, content).expect("write fixture");
 }
 
-fn write_external_skills_config_with_cli(root: &Path, enabled: bool, cli_enabled: bool) -> PathBuf {
+fn write_skills_config_with_cli(root: &Path, enabled: bool, cli_enabled: bool) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
     let config_path = root.join("loong.toml");
     let mut config = mvp::config::LoongConfig::default();
     config.cli.enabled = cli_enabled;
     config.tools.file_root = Some(root.display().to_string());
-    config.external_skills.enabled = enabled;
-    config.external_skills.auto_expose_installed = enabled;
-    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    config.skills.enabled = enabled;
+    config.skills.auto_expose_installed = enabled;
+    config.skills.install_root = Some(root.join("managed-skills").display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
         &config,
         Some(&config_path),
     );
-    mvp::tools::external_skills_operator_policy_reset_with_config(true, &runtime_config)
-        .expect("reset skills cli external skills policy");
+    mvp::tools::skills_policy_reset_with_config(true, &runtime_config)
+        .expect("reset skills cli policy");
     config_path
 }
 
-fn write_external_skills_config(root: &Path, enabled: bool) -> PathBuf {
-    write_external_skills_config_with_cli(root, enabled, true)
+fn write_skills_config(root: &Path, enabled: bool) -> PathBuf {
+    write_skills_config_with_cli(root, enabled, true)
 }
 
 fn shell_quote(value: &str) -> String {
@@ -428,7 +428,7 @@ fn skills_fetch_cli_parses_install_flags_after_subcommand() {
 fn execute_skills_command_fetch_rejects_install_options_without_install_flag() {
     let root = unique_temp_dir("loong-skills-cli-fetch-validate");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
 
     let error = loong_daemon::skills_cli::execute_skills_command(
         loong_daemon::skills_cli::SkillsCommandOptions {
@@ -457,10 +457,10 @@ fn execute_skills_command_fetch_rejects_install_options_without_install_flag() {
 fn execute_skills_command_fetch_propagates_runtime_policy_errors() {
     let root = unique_temp_dir("loong-skills-cli-fetch-policy");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     let (resolved_path, mut config) =
         mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
-    config.external_skills.require_download_approval = true;
+    config.skills.require_download_approval = true;
     mvp::config::write(
         Some(resolved_path.to_string_lossy().as_ref()),
         &config,
@@ -491,11 +491,43 @@ fn execute_skills_command_fetch_propagates_runtime_policy_errors() {
     fs::remove_dir_all(&root).ok();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_skills_command_fetch_install_does_not_panic_in_async_context() {
+    let root = unique_temp_dir("loong-skills-cli-fetch-install-async");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
+    let config_path = write_skills_config(&root, true);
+
+    let error = loong_daemon::skills_cli::execute_skills_command(
+        loong_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loong_daemon::skills_cli::SkillsCommands::Fetch {
+                url: "https://example.com/skill.zip".to_owned(),
+                save_as: None,
+                max_bytes: None,
+                approve_download: true,
+                install: true,
+                skill_id: None,
+                approve_security_once: false,
+                replace: false,
+            },
+        },
+    )
+    .expect_err("fetch+install should return a normal error in async context");
+
+    assert!(
+        !error.contains("Cannot drop a runtime"),
+        "skills fetch should surface a normal error instead of tokio runtime panic: {error}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
 #[test]
 fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
     let root = unique_temp_dir("loong-skills-cli-install");
     let home = unique_temp_dir("loong-skills-cli-install-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
     write_file(
@@ -613,7 +645,7 @@ fn execute_skills_command_installs_lists_inspects_and_removes_skill() {
 fn execute_skills_command_install_returns_needs_approval_for_security_findings() {
     let root = unique_temp_dir("loong-skills-cli-install-security-stop");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     write_file(
         &root,
         "source/risky-skill/SKILL.md",
@@ -652,7 +684,7 @@ fn execute_skills_command_install_returns_needs_approval_for_security_findings()
 fn execute_skills_command_install_allows_approve_security_once() {
     let root = unique_temp_dir("loong-skills-cli-install-security-approve");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     write_file(
         &root,
         "source/risky-skill/SKILL.md",
@@ -691,7 +723,7 @@ fn execute_skills_command_install_allows_approve_security_once() {
 fn execute_skills_command_list_reports_scopes_and_shadowed_skills() {
     let root = unique_temp_dir("loong-skills-cli-scopes");
     let home = unique_temp_dir("loong-skills-cli-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -759,8 +791,8 @@ fn execute_skills_command_list_anchors_project_scope_to_config_directory_when_fi
 
     let config_path = root.join("loong.toml");
     let mut config = mvp::config::LoongConfig::default();
-    config.external_skills.enabled = true;
-    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    config.skills.enabled = true;
+    config.skills.install_root = Some(root.join("managed-skills").display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
 
@@ -816,8 +848,8 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
 
     let config_path = root.join("loong.toml");
     let mut config = mvp::config::LoongConfig::default();
-    config.external_skills.enabled = true;
-    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    config.skills.enabled = true;
+    config.skills.install_root = Some(root.join("managed-skills").display().to_string());
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
 
@@ -881,7 +913,7 @@ fn execute_skills_command_list_prefers_nearest_project_ancestor_for_duplicate_sk
 fn execute_skills_command_list_shows_operator_only_and_ineligible_skill_metadata() {
     let root = unique_temp_dir("loong-skills-cli-manifest");
     let home = unique_temp_dir("loong-skills-cli-manifest-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -964,7 +996,7 @@ fn execute_skills_command_list_shows_operator_only_and_ineligible_skill_metadata
 fn execute_skills_command_list_keeps_inactive_managed_winner_visible_to_operator() {
     let root = unique_temp_dir("loong-skills-cli-inactive-winner");
     let home = unique_temp_dir("loong-skills-cli-inactive-winner-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -1049,7 +1081,7 @@ fn execute_skills_command_list_keeps_inactive_managed_winner_visible_to_operator
 fn execute_skills_command_operator_inspection_still_works_when_runtime_is_disabled() {
     let root = unique_temp_dir("loong-skills-cli-runtime-disabled");
     let home = unique_temp_dir("loong-skills-cli-runtime-disabled-home");
-    let config_path = write_external_skills_config(&root, false);
+    let config_path = write_skills_config(&root, false);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -1100,7 +1132,7 @@ fn execute_skills_command_operator_inspection_still_works_when_runtime_is_disabl
 fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() {
     let root = unique_temp_dir("loong-skills-cli-search");
     let home = unique_temp_dir("loong-skills-cli-search-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -1200,7 +1232,7 @@ fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() 
 fn execute_skills_command_recommend_surfaces_manual_only_limitations() {
     let root = unique_temp_dir("loong-skills-cli-recommend");
     let home = unique_temp_dir("loong-skills-cli-recommend-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -1251,12 +1283,12 @@ fn execute_skills_command_recommend_surfaces_manual_only_limitations() {
 fn execute_skills_command_install_and_info_surface_first_use_guidance() {
     let root = unique_temp_dir("loong-skills-cli-follow-up");
     let home = unique_temp_dir("loong-skills-cli-follow-up-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
         "source/demo-skill/SKILL.md",
-        "---\nname: demo-skill\ndescription: Demo release helper.\ninvocation_policy: both\nrequired_config:\n- external_skills.enabled\n---\n\n# Demo Skill\n\nHelp with release preparation.\n",
+        "---\nname: demo-skill\ndescription: Demo release helper.\ninvocation_policy: both\nrequired_config:\n- skills.enabled\n---\n\n# Demo Skill\n\nHelp with release preparation.\n",
     );
     let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
 
@@ -1354,7 +1386,7 @@ fn execute_skills_command_install_and_info_surface_first_use_guidance() {
 fn execute_skills_command_info_guidance_avoids_false_success_for_manual_or_hidden_skill() {
     let root = unique_temp_dir("loong-skills-cli-manual-guidance");
     let home = unique_temp_dir("loong-skills-cli-manual-guidance-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -1402,7 +1434,7 @@ fn execute_skills_command_info_guidance_avoids_false_success_for_manual_or_hidde
 fn execute_skills_command_info_guidance_avoids_false_success_for_inactive_skill() {
     let root = unique_temp_dir("loong-skills-cli-inactive-guidance");
     let home = unique_temp_dir("loong-skills-cli-inactive-guidance-home");
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
     fs::create_dir_all(&home).expect("create home root");
     write_file(
         &root,
@@ -1477,7 +1509,7 @@ fn execute_skills_command_info_guidance_avoids_false_success_for_inactive_skill(
 fn execute_skills_command_installs_bundled_byted_web_search() {
     let root = unique_temp_dir("loong-skills-cli-byted-web-search-install");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
 
     let install = loong_daemon::skills_cli::execute_skills_command(
         loong_daemon::skills_cli::SkillsCommandOptions {
@@ -1540,7 +1572,7 @@ fn execute_skills_command_installs_bundled_byted_web_search() {
 fn execute_skills_command_installs_bundled_pack_members() {
     let root = unique_temp_dir("loong-skills-cli-bundled-pack-install");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
-    let config_path = write_external_skills_config(&root, true);
+    let config_path = write_skills_config(&root, true);
 
     let install = loong_daemon::skills_cli::execute_skills_command(
         loong_daemon::skills_cli::SkillsCommandOptions {
@@ -1601,7 +1633,7 @@ fn execute_skills_command_installs_bundled_pack_members() {
 #[test]
 fn execute_skills_command_policy_round_trips_persisted_config() {
     let root = unique_temp_dir("loong-skills-cli-policy");
-    let config_path = write_external_skills_config(&root, false);
+    let config_path = write_skills_config(&root, false);
     let config_string = config_path.display().to_string();
     let install_root = root.join("managed-skills").display().to_string();
 
@@ -1676,21 +1708,21 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
 
     let (_, reloaded) =
         mvp::config::load(Some(config_string.as_str())).expect("reload updated config");
-    assert!(reloaded.external_skills.enabled);
-    assert!(!reloaded.external_skills.require_download_approval);
+    assert!(reloaded.skills.enabled);
+    assert!(!reloaded.skills.require_download_approval);
     assert_eq!(
-        reloaded.external_skills.allowed_domains,
+        reloaded.skills.allowed_domains,
         vec!["clawhub.ai".to_owned(), "skills.sh".to_owned()]
     );
     assert_eq!(
-        reloaded.external_skills.blocked_domains,
+        reloaded.skills.blocked_domains,
         vec!["*.evil.example".to_owned()]
     );
     assert_eq!(
-        reloaded.external_skills.install_root.as_deref(),
+        reloaded.skills.install_root.as_deref(),
         Some(install_root.as_str())
     );
-    assert!(reloaded.external_skills.auto_expose_installed);
+    assert!(reloaded.skills.auto_expose_installed);
 
     let reset = loong_daemon::skills_cli::execute_skills_command(
         loong_daemon::skills_cli::SkillsCommandOptions {
@@ -1746,29 +1778,15 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
 
     let (_, reloaded_after_reset) = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
         .expect("reload reset config");
-    assert!(!reloaded_after_reset.external_skills.enabled);
-    assert!(
-        reloaded_after_reset
-            .external_skills
-            .require_download_approval
-    );
-    assert!(
-        reloaded_after_reset
-            .external_skills
-            .allowed_domains
-            .is_empty()
-    );
-    assert!(
-        reloaded_after_reset
-            .external_skills
-            .blocked_domains
-            .is_empty()
-    );
+    assert!(!reloaded_after_reset.skills.enabled);
+    assert!(reloaded_after_reset.skills.require_download_approval);
+    assert!(reloaded_after_reset.skills.allowed_domains.is_empty());
+    assert!(reloaded_after_reset.skills.blocked_domains.is_empty());
     assert_eq!(
-        reloaded_after_reset.external_skills.install_root.as_deref(),
+        reloaded_after_reset.skills.install_root.as_deref(),
         Some(install_root.as_str())
     );
-    assert!(!reloaded_after_reset.external_skills.auto_expose_installed);
+    assert!(!reloaded_after_reset.skills.auto_expose_installed);
 
     fs::remove_dir_all(&root).ok();
 }
@@ -1776,7 +1794,7 @@ fn execute_skills_command_policy_round_trips_persisted_config() {
 #[test]
 fn execute_skills_command_policy_set_normalizes_domain_rules_for_persistence() {
     let root = unique_temp_dir("loong-skills-cli-policy-domain-rules");
-    let config_path = write_external_skills_config(&root, false);
+    let config_path = write_skills_config(&root, false);
     let config_string = config_path.display().to_string();
 
     let set = loong_daemon::skills_cli::execute_skills_command(
@@ -1811,11 +1829,11 @@ fn execute_skills_command_policy_set_normalizes_domain_rules_for_persistence() {
     let (_, reloaded) =
         mvp::config::load(Some(config_string.as_str())).expect("reload normalized config");
     assert_eq!(
-        reloaded.external_skills.allowed_domains,
+        reloaded.skills.allowed_domains,
         vec!["skills.sh".to_owned()]
     );
     assert_eq!(
-        reloaded.external_skills.blocked_domains,
+        reloaded.skills.blocked_domains,
         vec!["evil.example".to_owned()]
     );
 
@@ -1825,7 +1843,7 @@ fn execute_skills_command_policy_set_normalizes_domain_rules_for_persistence() {
 #[test]
 fn execute_skills_command_policy_set_requires_explicit_approval() {
     let root = unique_temp_dir("loong-skills-cli-policy-approval");
-    let config_path = write_external_skills_config(&root, false);
+    let config_path = write_skills_config(&root, false);
     let config_string = config_path.display().to_string();
 
     let error = loong_daemon::skills_cli::execute_skills_command(
@@ -1854,10 +1872,10 @@ fn execute_skills_command_policy_set_requires_explicit_approval() {
 
     let (_, reloaded) =
         mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
-    assert!(!reloaded.external_skills.enabled);
-    assert!(reloaded.external_skills.require_download_approval);
-    assert!(reloaded.external_skills.allowed_domains.is_empty());
-    assert!(reloaded.external_skills.blocked_domains.is_empty());
+    assert!(!reloaded.skills.enabled);
+    assert!(reloaded.skills.require_download_approval);
+    assert!(reloaded.skills.allowed_domains.is_empty());
+    assert!(reloaded.skills.blocked_domains.is_empty());
 
     fs::remove_dir_all(&root).ok();
 }
@@ -1865,7 +1883,7 @@ fn execute_skills_command_policy_set_requires_explicit_approval() {
 #[test]
 fn execute_skills_command_policy_set_rejects_invalid_domain_rules() {
     let root = unique_temp_dir("loong-skills-cli-policy-invalid-domains");
-    let config_path = write_external_skills_config(&root, false);
+    let config_path = write_skills_config(&root, false);
     let config_string = config_path.display().to_string();
 
     let error = loong_daemon::skills_cli::execute_skills_command(
@@ -1894,9 +1912,9 @@ fn execute_skills_command_policy_set_rejects_invalid_domain_rules() {
 
     let (_, reloaded) =
         mvp::config::load(Some(config_string.as_str())).expect("reload unchanged config");
-    assert!(!reloaded.external_skills.enabled);
-    assert!(reloaded.external_skills.allowed_domains.is_empty());
-    assert!(reloaded.external_skills.blocked_domains.is_empty());
+    assert!(!reloaded.skills.enabled);
+    assert!(reloaded.skills.allowed_domains.is_empty());
+    assert!(reloaded.skills.blocked_domains.is_empty());
 
     fs::remove_dir_all(&root).ok();
 }
@@ -1923,7 +1941,7 @@ fn render_skills_cli_text_surfaces_skill_contract_details() {
                         "required_env": ["LOONG_RELEASE_GUARD_TOKEN"],
                         "required_bin": ["sh"],
                         "required_paths": [],
-                        "required_config": ["external_skills.enabled"],
+                        "required_config": ["skills.enabled"],
                         "allowed_tools": ["shell.exec"],
                         "blocked_tools": ["web.fetch"],
                         "eligibility": {

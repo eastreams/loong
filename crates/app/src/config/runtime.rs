@@ -38,7 +38,7 @@ use super::{
         format_config_validation_issues,
     },
     tools::{
-        DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, RuntimePluginsConfig, ToolConfig,
+        DEFAULT_WEB_SEARCH_PROVIDER, RuntimePluginsConfig, SkillsConfig, ToolConfig,
         WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
         WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV,
         WEB_SEARCH_PERPLEXITY_API_KEY_ENV, WEB_SEARCH_PROVIDER_VALID_VALUES,
@@ -179,7 +179,7 @@ pub struct LoongConfig {
     #[serde(default)]
     pub tools: ToolConfig,
     #[serde(default)]
-    pub external_skills: ExternalSkillsConfig,
+    pub skills: SkillsConfig,
     #[serde(default)]
     pub runtime_plugins: RuntimePluginsConfig,
     #[serde(default)]
@@ -3812,16 +3812,16 @@ model = "gpt-5"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_default_config_keeps_external_skills_defaults() {
+    fn write_default_config_keeps_skills_defaults() {
         let path = unique_config_path("loong-config-runtime-external-skills");
         let path_string = path.display().to_string();
-        let defaults = crate::config::ExternalSkillsConfig::default();
+        let defaults = crate::config::SkillsConfig::default();
 
         write(Some(&path_string), &LoongConfig::default(), true)
             .expect("default config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
-        assert!(raw.contains("[external_skills]"));
+        assert!(raw.contains("[skills]"));
         assert!(raw.contains(&format!("enabled = {}", defaults.enabled)));
         assert!(raw.contains(&format!(
             "require_download_approval = {}",
@@ -3833,22 +3833,16 @@ model = "gpt-5"
         )));
 
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
-        assert_eq!(loaded.external_skills.enabled, defaults.enabled);
+        assert_eq!(loaded.skills.enabled, defaults.enabled);
         assert_eq!(
-            loaded.external_skills.require_download_approval,
+            loaded.skills.require_download_approval,
             defaults.require_download_approval
         );
+        assert_eq!(loaded.skills.allowed_domains, defaults.allowed_domains);
+        assert_eq!(loaded.skills.blocked_domains, defaults.blocked_domains);
+        assert_eq!(loaded.skills.install_root, defaults.install_root);
         assert_eq!(
-            loaded.external_skills.allowed_domains,
-            defaults.allowed_domains
-        );
-        assert_eq!(
-            loaded.external_skills.blocked_domains,
-            defaults.blocked_domains
-        );
-        assert_eq!(loaded.external_skills.install_root, defaults.install_root);
-        assert_eq!(
-            loaded.external_skills.auto_expose_installed,
+            loaded.skills.auto_expose_installed,
             defaults.auto_expose_installed
         );
 

@@ -1,16 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 use super::tool_result_line::ToolResultLine;
-use super::turn_shared::{
-    external_skill_invoke_context_from_payload_summary, parse_external_skill_invoke_context,
-};
+use super::turn_shared::{parse_skill_context, skill_context_from_payload_summary};
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
-pub(crate) const ACTIVE_EXTERNAL_SKILLS_EVENT_KIND: &str = "active_external_skills_refreshed";
-const ACTIVE_EXTERNAL_SKILLS_MARKER: &str = "[active_skills]";
+pub(crate) const ACTIVE_SKILLS_EVENT_KIND: &str = "active_skills_refreshed";
+const ACTIVE_SKILLS_MARKER: &str = "[active_skills]";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ActiveExternalSkill {
+pub(crate) struct ActiveSkill {
     pub skill_id: String,
     pub display_name: String,
     pub instructions: String,
@@ -22,30 +20,30 @@ pub(crate) struct ActiveExternalSkill {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ActiveExternalSkillsState {
-    pub skills: Vec<ActiveExternalSkill>,
+pub(crate) struct ActiveSkillsState {
+    pub skills: Vec<ActiveSkill>,
 }
 
-impl ActiveExternalSkillsState {
+impl ActiveSkillsState {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.skills.is_empty()
     }
 }
 
-pub(crate) fn collect_active_external_skills_from_tool_result_text(
+pub(crate) fn collect_active_skills_from_tool_result_text(
     tool_result_text: &str,
-) -> Vec<ActiveExternalSkill> {
+) -> Vec<ActiveSkill> {
     let mut active_skills = Vec::new();
 
     for line in tool_result_text.lines() {
-        let Some(skill_context) = parse_external_skill_invoke_context(line) else {
+        let Some(skill_context) = parse_skill_context(line) else {
             continue;
         };
 
-        upsert_active_external_skill(
+        upsert_active_skill(
             &mut active_skills,
-            ActiveExternalSkill {
+            ActiveSkill {
                 skill_id: skill_context.skill_id,
                 display_name: skill_context.display_name,
                 instructions: skill_context.instructions,
@@ -61,11 +59,11 @@ pub(crate) fn collect_active_external_skills_from_tool_result_text(
     active_skills
 }
 
-pub(crate) fn collect_active_external_skills_from_tool_result_text_with_config(
+pub(crate) fn collect_active_skills_from_tool_result_text_with_config(
     tool_result_text: &str,
     config: &ToolRuntimeConfig,
-) -> Vec<ActiveExternalSkill> {
-    let mut active_skills = collect_active_external_skills_from_tool_result_text(tool_result_text);
+) -> Vec<ActiveSkill> {
+    let mut active_skills = collect_active_skills_from_tool_result_text(tool_result_text);
 
     for line in tool_result_text.lines() {
         let Some(tool_result_line) = ToolResultLine::parse(line) else {
@@ -85,23 +83,19 @@ pub(crate) fn collect_active_external_skills_from_tool_result_text_with_config(
         else {
             continue;
         };
-        let Ok(Some(skill_payload)) =
-            crate::tools::model_visible_external_skill_context_payload_for_path(
-                config,
-                std::path::Path::new(path),
-            )
-        else {
+        let Ok(Some(skill_payload)) = crate::tools::model_visible_skill_context_payload_for_path(
+            config,
+            std::path::Path::new(path),
+        ) else {
             continue;
         };
-        let Some(skill_context) =
-            external_skill_invoke_context_from_payload_summary(&skill_payload)
-        else {
+        let Some(skill_context) = skill_context_from_payload_summary(&skill_payload) else {
             continue;
         };
 
-        upsert_active_external_skill(
+        upsert_active_skill(
             &mut active_skills,
-            ActiveExternalSkill {
+            ActiveSkill {
                 skill_id: skill_context.skill_id,
                 display_name: skill_context.display_name,
                 instructions: skill_context.instructions,
@@ -117,28 +111,26 @@ pub(crate) fn collect_active_external_skills_from_tool_result_text_with_config(
     active_skills
 }
 
-pub(crate) fn merge_active_external_skills(
-    existing: Option<ActiveExternalSkillsState>,
-    updates: Vec<ActiveExternalSkill>,
-) -> Option<ActiveExternalSkillsState> {
+pub(crate) fn merge_active_skills(
+    existing: Option<ActiveSkillsState>,
+    updates: Vec<ActiveSkill>,
+) -> Option<ActiveSkillsState> {
     let mut merged = existing.unwrap_or_default();
 
     for update in updates {
-        upsert_active_external_skill(&mut merged.skills, update);
+        upsert_active_skill(&mut merged.skills, update);
     }
 
     (!merged.is_empty()).then_some(merged)
 }
 
-pub(crate) fn render_active_external_skills_section(
-    active_skills: &ActiveExternalSkillsState,
-) -> Option<String> {
+pub(crate) fn render_active_skills_section(active_skills: &ActiveSkillsState) -> Option<String> {
     if active_skills.skills.is_empty() {
         return None;
     }
 
     let mut sections = vec![
-        ACTIVE_EXTERNAL_SKILLS_MARKER.to_owned(),
+        ACTIVE_SKILLS_MARKER.to_owned(),
         "The following skills are already active for this session. Continue following them until superseded or the session ends.".to_owned(),
         "Do not re-activate a listed skill unless you need refreshed instructions.".to_owned(),
     ];
@@ -164,29 +156,25 @@ pub(crate) fn render_active_external_skills_section(
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) fn active_external_skills_from_event_payload(
+pub(crate) fn active_skills_from_event_payload(
     payload: &serde_json::Value,
-) -> Option<ActiveExternalSkillsState> {
-    let active_skills = payload.get("active_external_skills")?.clone();
+) -> Option<ActiveSkillsState> {
+    let active_skills = payload.get("active_skills")?.clone();
     serde_json::from_value(active_skills).ok()
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) fn load_persisted_active_external_skills(
+pub(crate) fn load_persisted_active_skills(
     repo: &crate::session::repository::SessionRepository,
     session_id: &str,
-) -> Result<Option<ActiveExternalSkillsState>, String> {
-    let latest_event =
-        repo.load_latest_event_by_kind(session_id, ACTIVE_EXTERNAL_SKILLS_EVENT_KIND)?;
+) -> Result<Option<ActiveSkillsState>, String> {
+    let latest_event = repo.load_latest_event_by_kind(session_id, ACTIVE_SKILLS_EVENT_KIND)?;
     Ok(latest_event
         .as_ref()
-        .and_then(|event| active_external_skills_from_event_payload(&event.payload_json)))
+        .and_then(|event| active_skills_from_event_payload(&event.payload_json)))
 }
 
-fn upsert_active_external_skill(
-    active_skills: &mut Vec<ActiveExternalSkill>,
-    update: ActiveExternalSkill,
-) {
+fn upsert_active_skill(active_skills: &mut Vec<ActiveSkill>, update: ActiveSkill) {
     let existing_index = active_skills
         .iter()
         .position(|skill| skill.skill_id == update.skill_id);
@@ -208,19 +196,19 @@ fn upsert_active_external_skill(
 mod tests {
     use super::*;
     use crate::test_support::unique_temp_dir;
-    use crate::tools::runtime_config::{ExternalSkillsRuntimePolicy, ToolRuntimeConfig};
+    use crate::tools::runtime_config::{SkillsRuntimePolicy, ToolRuntimeConfig};
     use std::collections::BTreeSet;
     use std::fs;
 
     #[test]
-    fn collect_active_external_skills_from_tool_result_text_deduplicates_by_skill_id() {
+    fn collect_active_skills_from_tool_result_text_deduplicates_by_skill_id() {
         let first = format!(
             "[ok] {}",
             serde_json::json!({
                 "status": "ok",
                 "tool": "file.read",
                 "tool_call_id": "call-1",
-                "payload_semantics": "external_skill_context",
+                "payload_semantics": "skill_context",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
                     "skill_id": "demo-skill",
                     "display_name": "Demo Skill",
@@ -237,7 +225,7 @@ mod tests {
                 "status": "ok",
                 "tool": "file.read",
                 "tool_call_id": "call-2",
-                "payload_semantics": "external_skill_context",
+                "payload_semantics": "skill_context",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
                     "skill_id": "demo-skill",
                     "display_name": "Demo Skill",
@@ -257,7 +245,7 @@ mod tests {
                 "status": "ok",
                 "tool": "file.read",
                 "tool_call_id": "call-3",
-                "payload_semantics": "external_skill_context",
+                "payload_semantics": "skill_context",
                 "payload_summary": serde_json::to_string(&serde_json::json!({
                     "skill_id": "other-skill",
                     "display_name": "Other Skill",
@@ -270,8 +258,7 @@ mod tests {
         );
         let tool_result_text = [first, second, third].join("\n");
 
-        let active_skills =
-            collect_active_external_skills_from_tool_result_text(tool_result_text.as_str());
+        let active_skills = collect_active_skills_from_tool_result_text(tool_result_text.as_str());
 
         assert_eq!(active_skills.len(), 2);
         assert_eq!(active_skills[0].skill_id, "demo-skill");
@@ -281,9 +268,9 @@ mod tests {
     }
 
     #[test]
-    fn render_active_external_skills_section_lists_loaded_skills() {
-        let rendered = render_active_external_skills_section(&ActiveExternalSkillsState {
-            skills: vec![ActiveExternalSkill {
+    fn render_active_skills_section_lists_loaded_skills() {
+        let rendered = render_active_skills_section(&ActiveSkillsState {
+            skills: vec![ActiveSkill {
                 skill_id: "demo-skill".to_owned(),
                 display_name: "Demo Skill".to_owned(),
                 instructions: "<skill_content name=\"Demo Skill\">demo</skill_content>".to_owned(),
@@ -294,7 +281,7 @@ mod tests {
         })
         .expect("render active skills");
 
-        assert!(rendered.contains(ACTIVE_EXTERNAL_SKILLS_MARKER));
+        assert!(rendered.contains(ACTIVE_SKILLS_MARKER));
         assert!(rendered.contains("demo-skill"));
         assert!(rendered.contains("Demo Skill"));
         assert!(rendered.contains("Skill directory: /tmp/demo-skill"));
@@ -304,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_active_external_skills_from_skill_file_read_activates_visible_skill() {
+    fn collect_active_skills_from_skill_file_read_activates_visible_skill() {
         let root = unique_temp_dir("loong-active-skill-file-read");
         fs::create_dir_all(root.join(".loong/skills/demo-skill")).expect("create skill root");
         let skill_path = root.join(".loong/skills/demo-skill/SKILL.md");
@@ -316,7 +303,7 @@ mod tests {
 
         let config = ToolRuntimeConfig {
             file_root: Some(root.clone()),
-            external_skills: ExternalSkillsRuntimePolicy {
+            skills: SkillsRuntimePolicy {
                 enabled: true,
                 require_download_approval: true,
                 allowed_domains: BTreeSet::new(),
@@ -342,7 +329,7 @@ mod tests {
             })
         );
 
-        let active_skills = collect_active_external_skills_from_tool_result_text_with_config(
+        let active_skills = collect_active_skills_from_tool_result_text_with_config(
             tool_result_text.as_str(),
             &config,
         );
@@ -369,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_active_external_skills_from_truncated_skill_file_read_activates_visible_skill() {
+    fn collect_active_skills_from_truncated_skill_file_read_activates_visible_skill() {
         let root = unique_temp_dir("loong-active-skill-file-read-truncated");
         fs::create_dir_all(root.join(".loong/skills/demo-skill")).expect("create skill root");
         let skill_path = root.join(".loong/skills/demo-skill/SKILL.md");
@@ -381,7 +368,7 @@ mod tests {
 
         let config = ToolRuntimeConfig {
             file_root: Some(root.clone()),
-            external_skills: ExternalSkillsRuntimePolicy {
+            skills: SkillsRuntimePolicy {
                 enabled: true,
                 require_download_approval: true,
                 allowed_domains: BTreeSet::new(),
@@ -411,7 +398,7 @@ mod tests {
             })
         );
 
-        let active_skills = collect_active_external_skills_from_tool_result_text_with_config(
+        let active_skills = collect_active_skills_from_tool_result_text_with_config(
             tool_result_text.as_str(),
             &config,
         );

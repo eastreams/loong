@@ -565,7 +565,7 @@ fn migrate_cli_parses_apply_selected_flags() {
             source_id,
             safe_profile_merge,
             primary_source_id,
-            apply_external_skills_plan,
+            apply_skills_plan,
             force,
             ..
         }) => {
@@ -575,9 +575,61 @@ fn migrate_cli_parses_apply_selected_flags() {
             assert_eq!(source_id.as_deref(), Some("openclaw"));
             assert_eq!(primary_source_id.as_deref(), Some("openclaw"));
             assert!(safe_profile_merge);
-            assert!(apply_external_skills_plan);
+            assert!(apply_skills_plan);
             assert!(json);
             assert!(force);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn migrate_cli_parses_canonical_apply_skills_plan_flag() {
+    let cli = try_parse_cli([
+        "loong",
+        "migrate",
+        "--mode",
+        "apply_selected",
+        "--input",
+        "/tmp/discovery-root",
+        "--output",
+        "/tmp/loong.toml",
+        "--apply-skills-plan",
+    ])
+    .expect("`migrate --apply-skills-plan` should parse");
+
+    match cli.command {
+        Some(Commands::Migrate {
+            mode,
+            input,
+            output,
+            apply_skills_plan,
+            ..
+        }) => {
+            assert_eq!(mode, loong_daemon::migrate_cli::MigrateMode::ApplySelected);
+            assert_eq!(input.as_deref(), Some("/tmp/discovery-root"));
+            assert_eq!(output.as_deref(), Some("/tmp/loong.toml"));
+            assert!(apply_skills_plan);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+fn migrate_cli_parses_canonical_map_skills_mode() {
+    let cli = try_parse_cli([
+        "loong",
+        "migrate",
+        "--mode",
+        "map_skills",
+        "--input",
+        "/tmp/discovery-root",
+    ])
+    .expect("`migrate --mode map_skills` should parse");
+
+    match cli.command {
+        Some(Commands::Migrate { mode, input, .. }) => {
+            assert_eq!(mode, loong_daemon::migrate_cli::MigrateMode::MapSkills);
+            assert_eq!(input.as_deref(), Some("/tmp/discovery-root"));
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }

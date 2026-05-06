@@ -1172,11 +1172,7 @@ fn snapshot_capability_snapshot_sha256(
 }
 
 fn snapshot_external_skill_ids(snapshot: &RuntimeSnapshotArtifactDocument) -> Vec<String> {
-    json_object_array_string_field_path(
-        &snapshot.external_skills,
-        &["inventory", "skills"],
-        "skill_id",
-    )
+    json_object_array_string_field_path(&snapshot.skills, &["inventory", "skills"], "skill_id")
 }
 
 fn json_value_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {

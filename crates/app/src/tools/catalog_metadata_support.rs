@@ -135,7 +135,7 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         }
         "memory" => "query?:string,max_results?:integer,path?:string,from?:integer,lines?:integer",
         "config.import" => {
-            "input_path?:string,output_path?:string,mode?:string,source?:string,source_id?:string,primary_source_id?:string,safe_profile_merge?:boolean,apply_external_skills_plan?:boolean,force?:boolean"
+            "input_path?:string,output_path?:string,mode?:string,source?:string,source_id?:string,primary_source_id?:string,safe_profile_merge?:boolean,apply_skills_plan?:boolean,force?:boolean"
         }
         "skills.fetch" => {
             "reference?:string,url?:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
@@ -148,7 +148,6 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "skills.install" => {
             "path?:string,bundled_skill_id?:string,skill_id?:string,source_skill_id?:string,security_decision?:string,replace?:boolean"
         }
-        "skills.invoke" => "skill_id:string",
         "skills.list" => "",
         "skills.policy" => {
             "action?:string,enabled?:boolean,allowed_domains?:string[],blocked_domains?:string[]"
@@ -539,7 +538,7 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("source_id", "string"),
             ("primary_source_id", "string"),
             ("safe_profile_merge", "boolean"),
-            ("apply_external_skills_plan", "boolean"),
+            ("apply_skills_plan", "boolean"),
             ("force", "boolean"),
         ],
         "skills.fetch" => &[
@@ -557,7 +556,7 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("max_results", "integer"),
             ("sources", "array"),
         ],
-        "skills.inspect" | "skills.invoke" | "skills.remove" => &[("skill_id", "string")],
+        "skills.inspect" | "skills.remove" => &[("skill_id", "string")],
         "skills.install" => &[
             ("path", "string"),
             ("bundled_skill_id", "string"),
@@ -754,7 +753,7 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "skills.search" => &["query", "limit"],
         "skills.recommend" => &["query", "limit"],
         "skills.source_search" => &["query"],
-        "skills.inspect" | "skills.invoke" | "skills.remove" => &["skill_id"],
+        "skills.inspect" | "skills.remove" => &["skill_id"],
         // Grouped requirements are the source of truth for this tool's anyOf shape.
         "skills.install" => &[],
         "browser.open" => &["url"],
@@ -846,7 +845,6 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "skills.source_search" => &["skills", "search", "discover", "external"],
         "skills.inspect" => &["skills", "inspect", "metadata"],
         "skills.install" => &["skills", "install", "package"],
-        "skills.invoke" => &["skills", "invoke", "instructions"],
         "skills.list" => &["skills", "list", "discover"],
         "skills.policy" => &["skills", "policy", "security"],
         "skills.remove" => &["skills", "remove", "uninstall"],

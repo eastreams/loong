@@ -139,8 +139,8 @@ fn detect_tool_result_payload_semantics(
     if payload_looks_like_discovery_result(payload) {
         return Some(ToolResultPayloadSemantics::DiscoveryResult);
     }
-    if payload_looks_like_external_skill_context(payload) {
-        return Some(ToolResultPayloadSemantics::ExternalSkillContext);
+    if payload_looks_like_skill_context(payload) {
+        return Some(ToolResultPayloadSemantics::SkillContext);
     }
     None
 }
@@ -175,7 +175,7 @@ fn payload_looks_like_discovery_result(payload: &serde_json::Value) -> bool {
     })
 }
 
-fn payload_looks_like_external_skill_context(payload: &serde_json::Value) -> bool {
+fn payload_looks_like_skill_context(payload: &serde_json::Value) -> bool {
     let Some(payload_object) = payload.as_object() else {
         return false;
     };

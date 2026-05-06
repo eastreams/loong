@@ -204,7 +204,7 @@ fn metadata_only_channel_bridge_manifest_is_discovery_ready_without_runtime_meta
 
     write_plugin_package_manifest(install_root.path(), "weixin-metadata-only", &manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory
@@ -480,7 +480,7 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         &incompatible_manifest,
     );
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory
@@ -546,7 +546,7 @@ fn channel_inventory_reports_managed_bridge_scan_failures() {
 
     let _ = fs::remove_dir_all(&missing_install_root);
 
-    config.external_skills.install_root = Some(expected_install_root.clone());
+    config.skills.install_root = Some(expected_install_root.clone());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory
@@ -595,7 +595,7 @@ fn channel_inventory_reports_managed_bridge_ambiguity_and_setup_guidance() {
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory
@@ -652,7 +652,7 @@ fn channel_inventory_reports_duplicate_compatible_plugin_ids_as_distinct_ambigui
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory
@@ -710,7 +710,7 @@ fn channel_inventory_reports_duplicate_configured_plugin_id_selection_failure() 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
     config.weixin.managed_bridge_plugin_id = Some("weixin-bridge-shared".to_owned());
 
     let inventory = channel_inventory(&config);
@@ -764,7 +764,7 @@ fn channel_inventory_resolves_managed_bridge_selection_from_configured_plugin_id
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
     config.weixin.managed_bridge_plugin_id = Some("weixin-bridge-b".to_owned());
 
     let inventory = channel_inventory(&config);
@@ -821,7 +821,7 @@ fn channel_inventory_reports_missing_configured_managed_bridge_plugin_id() {
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
     config.weixin.managed_bridge_plugin_id = Some("missing-plugin".to_owned());
 
     let inventory = channel_inventory(&config);
@@ -864,7 +864,7 @@ fn channel_inventory_marks_single_compatible_plugin_without_explicit_selection()
 
     write_plugin_package_manifest(install_root.path(), "weixin-bridge-only", &manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory
@@ -906,7 +906,7 @@ fn channel_inventory_reports_runtime_contract_metadata_for_discovered_plugin_bri
 
     write_plugin_package_manifest(install_root.path(), "weixin-runtime", &manifest);
 
-    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.skills.install_root = Some(install_root.path().display().to_string());
 
     let inventory = channel_inventory(&config);
     let weixin = inventory

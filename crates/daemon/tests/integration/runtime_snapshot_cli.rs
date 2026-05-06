@@ -84,10 +84,7 @@ impl RuntimeSnapshotPolicyResetGuard {
 
 impl Drop for RuntimeSnapshotPolicyResetGuard {
     fn drop(&mut self) {
-        let _ = mvp::tools::external_skills_operator_policy_reset_with_config(
-            true,
-            &self.runtime_config,
-        );
+        let _ = mvp::tools::skills_policy_reset_with_config(true, &self.runtime_config);
     }
 }
 
@@ -107,11 +104,11 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCon
     config.tools.web.enabled = true;
     config.tools.web.allowed_domains = vec!["docs.example.com".to_owned()];
     config.tools.web.blocked_domains = vec!["internal.example".to_owned()];
-    config.external_skills.enabled = true;
-    config.external_skills.require_download_approval = false;
-    config.external_skills.auto_expose_installed = true;
-    config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
-    config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    config.skills.enabled = true;
+    config.skills.require_download_approval = false;
+    config.skills.auto_expose_installed = true;
+    config.skills.allowed_domains = vec!["skills.sh".to_owned()];
+    config.skills.install_root = Some(root.join("managed-skills").display().to_string());
     config.acp.enabled = true;
     config.acp.dispatch.enabled = true;
     config.acp.default_agent = Some("codex".to_owned());
@@ -167,8 +164,8 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCon
         &config,
         Some(&config_path),
     );
-    mvp::tools::external_skills_operator_policy_reset_with_config(true, &runtime_config)
-        .expect("reset runtime snapshot external skills policy");
+    mvp::tools::skills_policy_reset_with_config(true, &runtime_config)
+        .expect("reset runtime snapshot skills policy");
     (config_path, config)
 }
 
@@ -181,9 +178,9 @@ fn install_demo_skill(root: &Path, config: &mvp::config::LoongConfig, config_pat
 
     let runtime_config =
         mvp::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, Some(config_path));
-    mvp::tools::external_skills_operator_policy_reset_with_config(true, &runtime_config)
+    mvp::tools::skills_policy_reset_with_config(true, &runtime_config)
         .expect("reset runtime skills policy");
-    mvp::tools::external_skills_operator_install_with_config(
+    mvp::tools::skills_install_with_config(
         Some("source/demo-skill"),
         None,
         None,
@@ -315,10 +312,6 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
     assert!(payload["provider"]["transport_runtime"]["failover_by_provider"].is_object());
     assert!(!array_contains_string(
         &payload["tools"]["visible_tool_names"],
-        "external_skills.list"
-    ));
-    assert!(!array_contains_string(
-        &payload["tools"]["visible_tool_names"],
         "skills.list"
     ));
     assert_eq!(payload["tool_runtime"]["approval"]["mode"], "disabled");
@@ -335,9 +328,9 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         payload["tool_runtime"]["access"]["managed_browser_session_ready"],
         false
     );
-    assert_eq!(payload["external_skills"]["policy"]["enabled"], true);
+    assert_eq!(payload["skills"]["policy"]["enabled"], true);
     assert!(array_contains_object_field(
-        &payload["external_skills"]["inventory"]["skills"],
+        &payload["skills"]["inventory"]["skills"],
         "skill_id",
         "demo-skill"
     ));
@@ -486,7 +479,7 @@ fn runtime_snapshot_json_payload_preserves_auth_optional_provider_descriptor_con
 }
 
 #[test]
-fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_override() {
+fn runtime_snapshot_json_payload_reflects_effective_skills_policy_override() {
     let root = unique_temp_dir("loong-runtime-snapshot-policy-override");
     let _env = RuntimeSnapshotEnvGuard::set(&[
         ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
@@ -504,10 +497,6 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
     let enabled_digest = enabled_payload["tools"]["capability_snapshot_sha256"].clone();
     assert!(!array_contains_string(
         &enabled_payload["tools"]["visible_tool_names"],
-        "external_skills.list"
-    ));
-    assert!(!array_contains_string(
-        &enabled_payload["tools"]["visible_tool_names"],
         "skills.list"
     ));
 
@@ -516,7 +505,7 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
         Some(config_path.as_path()),
     );
     let _policy_reset = RuntimeSnapshotPolicyResetGuard::new(&runtime_config);
-    mvp::tools::external_skills_operator_policy_set_with_config(
+    mvp::tools::skills_policy_set_with_config(
         Some(false),
         Some(true),
         Some(std::collections::BTreeSet::from([
@@ -528,7 +517,7 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
         true,
         &runtime_config,
     )
-    .expect("override runtime external skills policy");
+    .expect("override runtime skills policy");
 
     let snapshot = collect_runtime_snapshot_cli_state(Some(
         config_path.to_str().expect("config path should be utf-8"),
@@ -537,50 +526,41 @@ fn runtime_snapshot_json_payload_reflects_effective_external_skills_policy_overr
     let payload =
         build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
 
-    assert!(!snapshot.tool_runtime.external_skills.enabled);
+    assert!(!snapshot.tool_runtime.skills.enabled);
+    assert!(snapshot.tool_runtime.skills.require_download_approval);
     assert!(
         snapshot
             .tool_runtime
-            .external_skills
-            .require_download_approval
-    );
-    assert!(
-        snapshot
-            .tool_runtime
-            .external_skills
+            .skills
             .allowed_domains
             .contains("override.example")
     );
     assert!(
         snapshot
             .tool_runtime
-            .external_skills
+            .skills
             .blocked_domains
             .contains("blocked.example")
     );
-    assert_eq!(payload["external_skills"]["policy"]["enabled"], false);
+    assert_eq!(payload["skills"]["policy"]["enabled"], false);
     assert_eq!(
-        payload["external_skills"]["policy"]["require_download_approval"],
+        payload["skills"]["policy"]["require_download_approval"],
         true
     );
     assert!(array_contains_string(
-        &payload["external_skills"]["policy"]["allowed_domains"],
+        &payload["skills"]["policy"]["allowed_domains"],
         "override.example"
     ));
     assert!(array_contains_string(
-        &payload["external_skills"]["policy"]["blocked_domains"],
+        &payload["skills"]["policy"]["blocked_domains"],
         "blocked.example"
     ));
-    assert_eq!(payload["external_skills"]["override_active"], true);
-    assert_eq!(payload["external_skills"]["inventory_status"], "disabled");
-    assert_eq!(payload["external_skills"]["resolved_skill_count"], 0);
+    assert_eq!(payload["skills"]["override_active"], true);
+    assert_eq!(payload["skills"]["inventory_status"], "disabled");
+    assert_eq!(payload["skills"]["resolved_skill_count"], 0);
     assert!(!array_contains_string(
         &payload["tools"]["visible_tool_names"],
-        "external_skills.list"
-    ));
-    assert!(!array_contains_string(
-        &payload["tools"]["visible_tool_names"],
-        "external_skills.policy"
+        "skills.list"
     ));
     assert!(!array_contains_string(
         &payload["tools"]["visible_tool_names"],
@@ -700,7 +680,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("setup_mode=metadata_only"));
     assert!(rendered.contains("setup_surface=web_search"));
     assert!(rendered.contains("missing_env_vars=RUNTIME_PLUGIN_DEMO_KEY"));
-    assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
+    assert!(rendered.contains("skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));
 
     fs::remove_dir_all(&root).ok();

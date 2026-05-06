@@ -22,8 +22,6 @@ use crate::tools::ToolView;
 mod approval;
 #[path = "turn_shared_control.rs"]
 mod control;
-#[path = "turn_shared_external_skill.rs"]
-mod external_skill;
 #[path = "turn_shared_followup_tail.rs"]
 mod followup_tail;
 #[path = "turn_shared_payload.rs"]
@@ -36,6 +34,8 @@ mod reply;
 mod request;
 #[path = "turn_shared_runtime.rs"]
 mod runtime_support;
+#[path = "turn_shared_skill_context.rs"]
+mod skill_context;
 #[path = "turn_shared_tool_result.rs"]
 mod tool_result;
 pub use approval::{
@@ -54,10 +54,6 @@ pub use control::{
 };
 pub(crate) use control::{
     ToolDrivenFollowupContractMode, render_tool_followup_continuation_contract,
-};
-pub use external_skill::{
-    ExternalSkillInvokeContext, external_skill_invoke_context_from_payload_summary,
-    parse_external_skill_invoke_context,
 };
 pub(crate) use followup_tail::build_tool_driven_followup_tail_with_request_summary_and_contract;
 pub use followup_tail::build_tool_loop_guard_tail;
@@ -99,6 +95,7 @@ pub use runtime_support::{
     ProviderTurnRequestAction, decide_provider_turn_request_action,
     request_completion_with_raw_fallback, request_completion_with_raw_fallback_detailed,
 };
+pub use skill_context::{SkillContext, parse_skill_context, skill_context_from_payload_summary};
 pub(crate) use tool_result::ToolResultContinuation;
 pub(crate) use tool_result::{parse_tool_result_continuation, parse_tool_result_followup_context};
 pub use tool_result::{reduce_followup_payload_for_model, tool_result_contains_truncation_signal};
