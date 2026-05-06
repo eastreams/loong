@@ -2010,7 +2010,9 @@ fn render_cli_chat_live_surface_lines_show_pipeline_status_and_preview() {
 
 #[test]
 fn cli_chat_live_surface_observer_emits_phase_and_stream_preview_batches() {
-    let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+    let captured_batches = Arc::new(StdMutex::new(Vec::<
+        crate::chat::CliChatLiveSurfaceRenderPayload,
+    >::new()));
     let render_sink: CliChatLiveSurfaceSink = {
         let captured_batches = Arc::clone(&captured_batches);
         Arc::new(move |lines| {
@@ -2048,23 +2050,34 @@ fn cli_chat_live_surface_observer_emits_phase_and_stream_preview_batches() {
 
     let preview_batch = batches
         .iter()
-        .find(|lines| lines.iter().any(|line| line.contains("draft preview")))
+        .find(|payload| {
+            payload
+                .lines
+                .iter()
+                .any(|line| line.contains("draft preview"))
+        })
         .expect("preview batch");
     assert!(
         preview_batch
+            .lines
             .iter()
             .any(|line| line.contains("Draft response")),
         "preview batch should include the streamed text: {preview_batch:#?}"
     );
     assert!(
-        preview_batch.iter().any(|line| line.contains("ttft 42ms")),
+        preview_batch
+            .lines
+            .iter()
+            .any(|line| line.contains("ttft 42ms")),
         "preview batch should include the first-token latency in the title: {preview_batch:#?}"
     );
 }
 
 #[test]
 fn cli_chat_live_surface_observer_renders_tool_lifecycle_updates() {
-    let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+    let captured_batches = Arc::new(StdMutex::new(Vec::<
+        crate::chat::CliChatLiveSurfaceRenderPayload,
+    >::new()));
     let render_sink: CliChatLiveSurfaceSink = {
         let captured_batches = Arc::clone(&captured_batches);
         Arc::new(move |lines| {
@@ -2118,16 +2131,27 @@ fn cli_chat_live_surface_observer_renders_tool_lifecycle_updates() {
         .expect("captured batches lock should not be poisoned");
     let running_batch = batches
         .iter()
-        .find(|lines| lines.iter().any(|line| line.contains("tool activity")))
+        .find(|payload| {
+            payload
+                .lines
+                .iter()
+                .any(|line| line.contains("tool activity"))
+        })
         .expect("running tool batch");
     let completed_batch = batches
         .iter()
         .rev()
-        .find(|lines| lines.iter().any(|line| line.contains("• Closed read · ok")))
+        .find(|payload| {
+            payload
+                .lines
+                .iter()
+                .any(|line| line.contains("• Closed read · ok"))
+        })
         .expect("completed tool batch");
 
     assert!(
         running_batch
+            .lines
             .iter()
             .any(|line| line.contains("• Called read")),
         "tool batch should surface the running tool state: {running_batch:#?}"
@@ -2135,15 +2159,18 @@ fn cli_chat_live_surface_observer_renders_tool_lifecycle_updates() {
 
     assert!(
         completed_batch
+            .lines
             .iter()
             .any(|line| line.contains("• Closed read · ok")),
         "tool batch should surface the completed tool state: {completed_batch:#?}"
     );
     assert!(
         completed_batch
+            .lines
             .iter()
             .any(|line| line.contains("request path=README.md"))
             || completed_batch
+                .lines
                 .iter()
                 .any(|line| line.contains("args path=README.md")),
         "tool batch should preserve streamed tool args: {completed_batch:#?}"
@@ -2152,7 +2179,9 @@ fn cli_chat_live_surface_observer_renders_tool_lifecycle_updates() {
 
 #[test]
 fn cli_chat_live_surface_observer_renders_runtime_output_and_file_change_updates() {
-    let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+    let captured_batches = Arc::new(StdMutex::new(Vec::<
+        crate::chat::CliChatLiveSurfaceRenderPayload,
+    >::new()));
     let render_sink: CliChatLiveSurfaceSink = {
         let captured_batches = Arc::clone(&captured_batches);
         Arc::new(move |lines| {
@@ -2213,28 +2242,35 @@ fn cli_chat_live_surface_observer_renders_runtime_output_and_file_change_updates
 
     assert!(
         final_batch
+            .lines
             .iter()
             .any(|line| line.contains("• Closed exec · ok")),
         "runtime output should surface the visible tool name: {final_batch:#?}"
     );
     assert!(
         final_batch
+            .lines
             .iter()
             .any(|line| line.contains("stdout 2 lines · 22 bytes")),
         "runtime output should surface stdout counters: {final_batch:#?}"
     );
     assert!(
-        final_batch.iter().any(|line| line.contains("first line")),
+        final_batch
+            .lines
+            .iter()
+            .any(|line| line.contains("first line")),
         "runtime output should retain stdout preview lines: {final_batch:#?}"
     );
     assert!(
         final_batch
+            .lines
             .iter()
             .any(|line| line.contains("file edit src/lib.rs (+2 / -1)")),
         "runtime output should surface file change summaries: {final_batch:#?}"
     );
     assert!(
         final_batch
+            .lines
             .iter()
             .any(|line| line.contains("metrics 42ms · exit=0")),
         "runtime output should surface command metrics: {final_batch:#?}"
@@ -2323,7 +2359,9 @@ fn parse_markdown_heading_follows_commonmark_atx_rules() {
 
 #[test]
 fn cli_chat_live_surface_observer_resets_request_scoped_buffers_between_rounds() {
-    let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+    let captured_batches = Arc::new(StdMutex::new(Vec::<
+        crate::chat::CliChatLiveSurfaceRenderPayload,
+    >::new()));
     let render_sink: CliChatLiveSurfaceSink = {
         let captured_batches = Arc::clone(&captured_batches);
         Arc::new(move |lines| {
@@ -2376,19 +2414,29 @@ fn cli_chat_live_surface_observer_resets_request_scoped_buffers_between_rounds()
     let last_batch = batches.last().expect("follow-up request batch");
 
     assert!(
-        !last_batch.iter().any(|line| line.contains("draft preview")),
+        !last_batch
+            .lines
+            .iter()
+            .any(|line| line.contains("draft preview")),
         "follow-up provider requests should reset the previous draft preview: {last_batch:#?}"
     );
     assert!(
-        !last_batch.iter().any(|line| line.contains("tool activity")),
+        !last_batch
+            .lines
+            .iter()
+            .any(|line| line.contains("tool activity")),
         "follow-up provider requests should not reuse prior tool activity lines: {last_batch:#?}"
     );
     assert!(
-        !last_batch.iter().any(|line| line.contains("ttft 55ms")),
+        !last_batch
+            .lines
+            .iter()
+            .any(|line| line.contains("ttft 55ms")),
         "follow-up provider requests should reset prior first-token latency: {last_batch:#?}"
     );
     assert!(
         !last_batch
+            .lines
             .iter()
             .any(|line| line.contains("Draft response")),
         "follow-up provider requests should not carry the previous request preview text: {last_batch:#?}"
@@ -2397,7 +2445,9 @@ fn cli_chat_live_surface_observer_resets_request_scoped_buffers_between_rounds()
 
 #[test]
 fn cli_chat_live_surface_observer_waits_for_tools_phase_before_rendering_tool_activity() {
-    let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+    let captured_batches = Arc::new(StdMutex::new(Vec::<
+        crate::chat::CliChatLiveSurfaceRenderPayload,
+    >::new()));
     let render_sink: CliChatLiveSurfaceSink = {
         let captured_batches = Arc::clone(&captured_batches);
         Arc::new(move |lines| {
@@ -2455,11 +2505,15 @@ fn cli_chat_live_surface_observer_waits_for_tools_phase_before_rendering_tool_ac
     let last_batch = batches.last().expect("running-tools batch");
 
     assert!(
-        last_batch.iter().any(|line| line.contains("tool activity")),
+        last_batch
+            .lines
+            .iter()
+            .any(|line| line.contains("tool activity")),
         "the tools phase should render the accumulated tool activity: {last_batch:#?}"
     );
     assert!(
         last_batch
+            .lines
             .iter()
             .any(|line| line.contains("• Called search")),
         "the tools phase should surface the streamed tool metadata: {last_batch:#?}"

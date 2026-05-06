@@ -79,6 +79,12 @@ struct PendingRenderCache {
     lines: Vec<Line<'static>>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct LiveTranscriptState {
+    draft_preview: Option<String>,
+    tool_activity_lines: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartupOnboardingStage {
     Language,
@@ -903,7 +909,7 @@ pub struct App {
     pub focus: Focus,
     pub pending_turn: bool,
     pub turn_start: Option<std::time::Instant>,
-    pub live_lines: Arc<StdMutex<Vec<String>>>,
+    live_transcript: Arc<StdMutex<LiveTranscriptState>>,
     pub pending_task: Option<JoinHandle<CliResult<String>>>,
     pub pending_steers: VecDeque<String>,
     pub pending_queue: VecDeque<String>,
@@ -914,6 +920,7 @@ pub struct App {
     pub live_rerender: Option<super::super::CliChatLiveSurfaceRerender>,
     pub spinner_seed: u64,
     pub last_pending_signature: Option<u64>,
+    last_live_transcript_signature: Option<u64>,
     pending_render_cache: Option<PendingRenderCache>,
     inline_skill_popup_active: bool,
     pub last_render_width: u16,
@@ -948,7 +955,7 @@ impl App {
             focus: Focus::Composer,
             pending_turn: false,
             turn_start: None,
-            live_lines: Arc::new(StdMutex::new(Vec::new())),
+            live_transcript: Arc::new(StdMutex::new(LiveTranscriptState::default())),
             pending_task: None,
             pending_steers: VecDeque::new(),
             pending_queue: VecDeque::new(),
@@ -959,6 +966,7 @@ impl App {
             live_rerender: None,
             spinner_seed: spinner_seed(),
             last_pending_signature: None,
+            last_live_transcript_signature: None,
             pending_render_cache: None,
             inline_skill_popup_active: false,
             last_render_width: render_width as u16,
@@ -1007,7 +1015,13 @@ impl App {
         let interstitial_lines =
             self.interstitial_lines_for(size.width, size.height, composer_height, palette_height);
         let interstitial_height = interstitial_lines.len() as u16;
-        let transcript_line_count = self.message_list.rendered_line_count(size.width) as u16;
+        let provisional_assistant_text = provisional_assistant_text(&self.live_transcript);
+        let transcript_line_count = self
+            .message_list
+            .rendered_line_count_with_provisional_assistant(
+                size.width,
+                provisional_assistant_text.as_deref(),
+            ) as u16;
         let bottom_band_height = interstitial_height
             + 1
             + composer_height
@@ -1065,7 +1079,11 @@ impl App {
             Rect::default()
         };
 
-        self.message_list.render(f, *transcript_area);
+        self.message_list.render_with_provisional_assistant(
+            f,
+            *transcript_area,
+            provisional_assistant_text.as_deref(),
+        );
 
         if interstitial_height > 0 {
             f.render_widget(Paragraph::new(interstitial_lines), *pending_area);
@@ -1406,7 +1424,7 @@ impl App {
 
         let max_pending_preview_lines = max_pending_height.saturating_sub(2).max(1) as usize;
         let live_lines =
-            pending_live_tool_activity_lines(&self.live_lines, max_pending_preview_lines);
+            pending_live_tool_activity_lines(&self.live_transcript, max_pending_preview_lines);
         let raw_pending_lines = build_pending_lines(
             self.turn_start,
             &live_lines,
@@ -1465,8 +1483,14 @@ pub async fn run_app<B: Backend>(
                 app.last_pending_signature = signature;
                 dirty = true;
             }
+            let live_transcript_signature = transcript_preview_signature(&app);
+            if live_transcript_signature != app.last_live_transcript_signature {
+                app.last_live_transcript_signature = live_transcript_signature;
+                dirty = true;
+            }
         } else {
             app.last_pending_signature = None;
+            app.last_live_transcript_signature = None;
         }
 
         if resize_live_rerender_ready(
@@ -1494,7 +1518,7 @@ pub async fn run_app<B: Backend>(
         let poll_timeout = if pending_live_resize_rerender {
             Duration::from_millis(16)
         } else if app.pending_turn {
-            Duration::from_millis(80)
+            Duration::from_millis(40)
         } else if app.message_list.startup_animation_active() {
             Duration::from_millis(70)
         } else {
@@ -5789,19 +5813,22 @@ async fn start_turn<B: Backend>(
     app.pending_turn = true;
     app.turn_start = Some(std::time::Instant::now());
     app.focus = Focus::Composer;
-    clear_live_lines(&app.live_lines);
+    clear_live_transcript(&app.live_transcript);
 
     terminal
         .draw(|f| app.render(f))
         .map_err(|e| format!("draw error: {}", e))?;
 
     let sink = {
-        let live_lines = Arc::clone(&app.live_lines);
-        Arc::new(move |lines: Vec<String>| {
-            if let Ok(mut state) = live_lines.lock() {
-                *state = lines;
-            }
-        })
+        let live_transcript = Arc::clone(&app.live_transcript);
+        Arc::new(
+            move |payload: super::super::CliChatLiveSurfaceRenderPayload| {
+                if let Ok(mut state) = live_transcript.lock() {
+                    state.draft_preview = payload.draft_preview;
+                    state.tool_activity_lines = payload.tool_activity_lines;
+                }
+            },
+        )
     };
     let (observer, rerender) = super::super::build_cli_chat_live_compact_observer_controller(
         Arc::clone(&app.live_render_width),
@@ -7260,7 +7287,7 @@ async fn maybe_finalize_pending_turn<B: Backend>(
     app.turn_start = None;
     app.live_rerender = None;
     app.composer_follow_up_intent = false;
-    clear_live_lines(&app.live_lines);
+    clear_live_transcript(&app.live_transcript);
     app.focus = Focus::Composer;
     if super::super::build_cli_chat_approval_screen_spec(&assistant_text).is_some() {
         app.message_list.add_rendered_lines(
@@ -7319,17 +7346,21 @@ fn spawn_pending_turn(
     })
 }
 
-fn clear_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>) {
-    if let Ok(mut state) = live_lines.lock() {
-        state.clear();
+fn clear_live_transcript(live_transcript: &Arc<StdMutex<LiveTranscriptState>>) {
+    if let Ok(mut state) = live_transcript.lock() {
+        *state = LiveTranscriptState::default();
     }
 }
 
-fn pending_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>, max_lines: usize) -> Vec<String> {
+fn pending_live_lines(
+    live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
+    max_lines: usize,
+) -> Vec<String> {
     let max_lines = max_lines.max(1);
-    live_lines
+    live_transcript
         .lock()
         .map(|state| {
+            let state = &state.tool_activity_lines;
             let normalize = |mut lines: Vec<String>| {
                 while lines.first().is_some_and(|line| line.trim().is_empty()) {
                     lines.remove(0);
@@ -7384,13 +7415,23 @@ fn pending_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>, max_lines: usize)
 }
 
 fn pending_live_tool_activity_lines(
-    live_lines: &Arc<StdMutex<Vec<String>>>,
+    live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
     max_lines: usize,
 ) -> Vec<String> {
-    pending_live_lines(live_lines, max_lines)
+    pending_live_lines(live_transcript, max_lines)
         .into_iter()
         .filter(|line| pending_line_is_tool_activity(line))
         .collect()
+}
+
+fn provisional_assistant_text(
+    live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
+) -> Option<String> {
+    live_transcript
+        .lock()
+        .ok()
+        .and_then(|state| state.draft_preview.clone())
+        .filter(|text| !text.trim().is_empty())
 }
 
 fn pending_line_is_tool_activity(line: &str) -> bool {
@@ -7427,7 +7468,7 @@ fn pending_render_signature(app: &App) -> Option<u64> {
         app.pending_queue
             .iter()
             .for_each(|message| message.hash(&mut hasher));
-        for line in pending_live_tool_activity_lines(&app.live_lines, 6) {
+        for line in pending_live_tool_activity_lines(&app.live_transcript, 6) {
             line.hash(&mut hasher);
         }
         return Some(hasher.finish());
@@ -7446,6 +7487,14 @@ fn pending_render_signature(app: &App) -> Option<u64> {
         composer_height,
         palette_height,
     )
+}
+
+fn transcript_preview_signature(app: &App) -> Option<u64> {
+    let preview = provisional_assistant_text(&app.live_transcript)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    app.last_render_width.hash(&mut hasher);
+    preview.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -7504,7 +7553,7 @@ fn pending_render_signature_for_geometry(
     let max_pending_preview_lines =
         pending_signature_preview_budget_for_geometry(height, composer_height, palette_height);
     let visible_lines =
-        pending_live_tool_activity_lines(&app.live_lines, max_pending_preview_lines);
+        pending_live_tool_activity_lines(&app.live_transcript, max_pending_preview_lines);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     focus_ring_frame(start).hash(&mut hasher);
     get_spinner_verb_with_seed(start, app.spinner_seed).hash(&mut hasher);
@@ -8511,7 +8560,7 @@ fn resize_live_rerender_ready(
 #[cfg(test)]
 mod tests {
     use super::{
-        App, Focus, StartupBootstrapCapture, StartupOnboardingAction,
+        App, Focus, LiveTranscriptState, StartupBootstrapCapture, StartupOnboardingAction,
         StartupOnboardingInteractionKind, StartupOnboardingStage, StartupOnboardingState,
         StartupPersonalizationPreset, StartupProviderOption, StartupSetupPathChoice,
         StartupSkillOption, persist_startup_personalization, startup_eye_animation_for_state,
@@ -8548,7 +8597,7 @@ mod tests {
             focus: Focus::Composer,
             pending_turn: false,
             turn_start: None,
-            live_lines: Arc::new(StdMutex::new(Vec::new())),
+            live_transcript: Arc::new(StdMutex::new(LiveTranscriptState::default())),
             pending_task: None,
             pending_steers: Default::default(),
             pending_queue: Default::default(),
@@ -8559,6 +8608,7 @@ mod tests {
             live_rerender: None,
             spinner_seed: 1,
             last_pending_signature: None,
+            last_live_transcript_signature: None,
             pending_render_cache: None,
             inline_skill_popup_active: false,
             last_render_width: 0,
@@ -9061,29 +9111,33 @@ mod tests {
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal);
-        assert!(
-            !lines
-                .iter()
-                .any(|line| line.contains("streamed reply line"))
-        );
+        let transcript_row = lines
+            .iter()
+            .position(|line| line.contains("streamed reply line"))
+            .expect("provisional transcript row");
+        let composer_row = lines
+            .iter()
+            .position(|line| line.contains("›"))
+            .expect("composer row");
+        assert!(transcript_row < composer_row);
     }
 
     #[test]
-    fn composer_and_footer_do_not_jump_up_after_pending_turn_finishes() {
+    fn composer_and_footer_only_reclaim_pending_preview_rows_after_turn_finishes() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw pending");
@@ -9099,8 +9153,8 @@ mod tests {
 
         app.pending_turn = false;
         app.turn_start = None;
-        if let Ok(mut lines) = app.live_lines.lock() {
-            lines.clear();
+        if let Ok(mut live) = app.live_transcript.lock() {
+            *live = LiveTranscriptState::default();
         }
         app.message_list
             .add_assistant_message("streamed reply line".to_owned());
@@ -9116,8 +9170,17 @@ mod tests {
             .position(|line| line.contains("/tmp/example"))
             .expect("settled footer row");
 
-        assert!(settled_composer_row >= pending_composer_row);
-        assert!(settled_footer_row >= pending_footer_row);
+        let composer_reclaimed_rows = pending_composer_row.saturating_sub(settled_composer_row);
+        let footer_reclaimed_rows = pending_footer_row.saturating_sub(settled_footer_row);
+
+        assert!(
+            composer_reclaimed_rows <= 2,
+            "composer should only reclaim the pending preview rows, got pending={pending_composer_row} settled={settled_composer_row}"
+        );
+        assert!(
+            footer_reclaimed_rows <= 2,
+            "footer should only reclaim the pending preview rows, got pending={pending_footer_row} settled={settled_footer_row}"
+        );
     }
 
     #[test]
@@ -9128,8 +9191,8 @@ mod tests {
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -9142,13 +9205,13 @@ mod tests {
             .iter()
             .position(|line| line.contains("›"))
             .expect("composer row");
+        let preview_row = lines
+            .iter()
+            .position(|line| line.contains("streamed reply line"))
+            .expect("preview row");
 
         assert!(composer_row > spinner_row);
-        assert!(
-            !lines
-                .iter()
-                .any(|line| line.contains("streamed reply line"))
-        );
+        assert!(preview_row < composer_row);
     }
 
     #[test]
@@ -10509,19 +10572,29 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "first streamed sentence".to_owned(),
-                "second streamed sentence".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview =
+                Some("first streamed sentence\nsecond streamed sentence".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal).join("\n");
-        assert!(!lines.contains("first streamed sentence"));
-        assert!(!lines.contains("second streamed sentence"));
-        assert!(!lines.contains("╭─"));
-        assert!(!lines.contains("turn pipeline"));
+        let lines = buffer_lines(&terminal);
+        let first_row = lines
+            .iter()
+            .position(|line| line.contains("first streamed sentence"))
+            .expect("first preview row");
+        let second_row = lines
+            .iter()
+            .position(|line| line.contains("second streamed sentence"))
+            .expect("second preview row");
+        let composer_row = lines
+            .iter()
+            .position(|line| line.contains("›"))
+            .expect("composer row");
+        assert!(first_row < composer_row);
+        assert!(second_row < composer_row);
+        assert!(!lines.iter().any(|line| line.contains("╭─")));
+        assert!(!lines.iter().any(|line| line.contains("turn pipeline")));
     }
 
     #[test]
@@ -10716,8 +10789,8 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -10732,11 +10805,12 @@ description: "actual description"
             .expect("composer row");
 
         assert!(composer_row > user_row);
-        assert!(
-            !lines
-                .iter()
-                .any(|line| line.contains("streamed reply line"))
-        );
+        let preview_row = lines
+            .iter()
+            .position(|line| line.contains("streamed reply line"))
+            .expect("preview row");
+        assert!(preview_row > user_row);
+        assert!(preview_row < composer_row);
     }
 
     #[test]
@@ -10747,14 +10821,51 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["quiet reasoning".to_owned(), "visible reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("quiet reasoning\nvisible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal).join("\n");
-        assert!(!lines.contains("quiet reasoning"));
-        assert!(!lines.contains("visible reply"));
+        assert!(lines.contains("quiet reasoning"));
+        assert!(lines.contains("visible reply"));
+    }
+
+    #[test]
+    fn pending_preview_keeps_plain_reply_with_tool_like_prefix_out_of_pending_band() {
+        let backend = TestBackend::new(70, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut app = blank_app();
+        app.message_list.add_user_message("hi".to_owned());
+        app.pending_turn = true;
+        app.turn_start = Some(std::time::Instant::now());
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("• not a tool call\nrequest: still plain prose".to_owned());
+        }
+
+        terminal.draw(|f| app.render(f)).expect("draw");
+        let lines = buffer_lines(&terminal);
+        let composer_row = lines
+            .iter()
+            .position(|line| line.contains("›"))
+            .expect("composer row");
+        let bullet_row = lines
+            .iter()
+            .position(|line| line.contains("• not a tool call"))
+            .expect("bullet reply row");
+        let request_row = lines
+            .iter()
+            .position(|line| line.contains("request: still plain prose"))
+            .expect("request reply row");
+
+        assert!(bullet_row < composer_row);
+        assert!(request_row < composer_row);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Called not a tool call")),
+            "plain transcript preview should not be restyled as pending tool activity"
+        );
     }
 
     #[test]
@@ -10765,8 +10876,8 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["visible reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("visible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -10779,9 +10890,13 @@ description: "actual description"
             .iter()
             .position(|line| line.contains("›"))
             .expect("composer row");
+        let preview_row = lines
+            .iter()
+            .position(|line| line.contains("visible reply"))
+            .expect("preview row");
 
         assert!(composer_row > spinner_row);
-        assert!(!lines.iter().any(|line| line.contains("visible reply")));
+        assert!(preview_row < composer_row);
     }
 
     #[test]
@@ -10792,13 +10907,13 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["visible reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("visible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal).join("\n");
-        assert!(!lines.contains("visible reply"));
+        assert!(lines.contains("visible reply"));
     }
     #[test]
     fn pending_preview_does_not_wrap_hidden_plain_reply_lines() {
@@ -10808,14 +10923,14 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["visible reply wraps across the pending band".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("visible reply wraps across the pending band".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal).join("\n");
-        assert!(!lines.contains("visible reply"));
-        assert!(!lines.contains("pending band"));
+        assert!(lines.contains("visible reply"));
+        assert!(lines.contains("pending band"));
     }
 
     #[test]
@@ -10826,18 +10941,17 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines =
-                vec![(
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some(
                 "a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 omega"
-            )
-                .to_owned()];
+                    .to_owned(),
+            );
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let rendered = buffer_lines(&terminal).join("\n");
 
-        assert!(!rendered.contains("omega"));
+        assert!(rendered.contains("omega"));
     }
 
     #[test]
@@ -10848,18 +10962,14 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "quiet reasoning".to_owned(),
-                String::new(),
-                "visible reply".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("quiet reasoning\n\nvisible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal).join("\n");
-        assert!(!lines.contains("quiet reasoning"));
-        assert!(!lines.contains("visible reply"));
+        assert!(lines.contains("quiet reasoning"));
+        assert!(lines.contains("visible reply"));
     }
 
     #[test]
@@ -10870,18 +10980,14 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "quiet reasoning".to_owned(),
-                String::new(),
-                "visible reply".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("quiet reasoning\n\nvisible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal).join("\n");
-        assert!(!lines.contains("quiet reasoning"));
-        assert!(!lines.contains("visible reply"));
+        assert!(lines.contains("quiet reasoning"));
+        assert!(lines.contains("visible reply"));
     }
 
     #[test]
@@ -10892,40 +10998,36 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "reason-1".to_owned(),
-                "reason-2".to_owned(),
-                "reason-3".to_owned(),
-                "reason-4".to_owned(),
-                String::new(),
-                "reply-1".to_owned(),
-                "reply-2".to_owned(),
-                "reply-3".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some(
+                "reason-1\nreason-2\nreason-3\nreason-4\n\nreply-1\nreply-2\nreply-3".to_owned(),
+            );
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let rendered = buffer_lines(&terminal).join("\n");
 
-        assert!(!rendered.contains("reason-1"));
-        assert!(!rendered.contains("reason-2"));
-        assert!(!rendered.contains("reply-1"));
-        assert!(!rendered.contains("reply-2"));
+        assert!(rendered.contains("reason-1"));
+        assert!(rendered.contains("reason-2"));
+        assert!(rendered.contains("reply-1"));
+        assert!(rendered.contains("reply-2"));
     }
 
     #[test]
     fn pending_live_lines_trim_outer_blank_lines_and_collapse_repeats() {
-        let lines = Arc::new(StdMutex::new(vec![
-            String::new(),
-            String::new(),
-            "reasoning".to_owned(),
-            String::new(),
-            String::new(),
-            "reply".to_owned(),
-            String::new(),
-            String::new(),
-        ]));
+        let lines = Arc::new(StdMutex::new(LiveTranscriptState {
+            tool_activity_lines: vec![
+                String::new(),
+                String::new(),
+                "reasoning".to_owned(),
+                String::new(),
+                String::new(),
+                "reply".to_owned(),
+                String::new(),
+                String::new(),
+            ],
+            draft_preview: None,
+        }));
 
         let normalized = super::pending_live_lines(&lines, 6);
         assert_eq!(
@@ -10936,16 +11038,19 @@ description: "actual description"
 
     #[test]
     fn pending_live_lines_expand_with_larger_preview_budget() {
-        let lines = Arc::new(StdMutex::new(vec![
-            "reason-1".to_owned(),
-            "reason-2".to_owned(),
-            "reason-3".to_owned(),
-            String::new(),
-            "reply-1".to_owned(),
-            "reply-2".to_owned(),
-            "reply-3".to_owned(),
-            "reply-4".to_owned(),
-        ]));
+        let lines = Arc::new(StdMutex::new(LiveTranscriptState {
+            tool_activity_lines: vec![
+                "reason-1".to_owned(),
+                "reason-2".to_owned(),
+                "reason-3".to_owned(),
+                String::new(),
+                "reply-1".to_owned(),
+                "reply-2".to_owned(),
+                "reply-3".to_owned(),
+                "reply-4".to_owned(),
+            ],
+            draft_preview: None,
+        }));
 
         let compact = super::pending_live_lines(&lines, 4);
         let expanded = super::pending_live_lines(&lines, 7);
@@ -11266,14 +11371,13 @@ description: "actual description"
         ));
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed preview line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed preview line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw off tail");
         let off_tail_lines = buffer_lines(&terminal).join("\n");
         assert!(off_tail_lines.contains("PgDn / End"));
-        assert!(!off_tail_lines.contains("streamed preview line"));
 
         app.message_list
             .add_assistant_message("new-tail-line after scroll".to_owned());
@@ -11281,7 +11385,6 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw resized");
         let resized_lines = buffer_lines(&terminal).join("\n");
         assert!(resized_lines.contains("PgDn / End"));
-        assert!(!resized_lines.contains("streamed preview line"));
 
         app.message_list.handle_key(crossterm::event::KeyEvent::new(
             KeyCode::End,
@@ -11291,7 +11394,6 @@ description: "actual description"
         let restored_lines = buffer_lines(&terminal).join("\n");
 
         assert!(restored_lines.contains("new-tail-line after scroll"));
-        assert!(!restored_lines.contains("streamed preview line"));
         assert!(!restored_lines.contains("PgDn / End"));
         assert_eq!(app.message_list.scroll_offset_for_test(), 0);
     }
@@ -11415,8 +11517,8 @@ description: "actual description"
         let mut app = blank_app();
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines = vec![
                 "reason-1".to_owned(),
                 "reason-2".to_owned(),
                 "reason-3".to_owned(),
@@ -11427,8 +11529,8 @@ description: "actual description"
             ];
         }
         let before = super::pending_render_signature(&app);
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines = vec![
                 "reason-1".to_owned(),
                 "reason-2".to_owned(),
                 "reason-3".to_owned(),
@@ -11463,16 +11565,35 @@ description: "actual description"
         let mut app = blank_app();
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["reason-1".to_owned(), String::new(), "reply-1".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines =
+                vec!["reason-1".to_owned(), String::new(), "reply-1".to_owned()];
         }
         let before = super::pending_render_signature(&app);
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["reason-1".to_owned(), String::new(), "reply-2".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines =
+                vec!["reason-1".to_owned(), String::new(), "reply-2".to_owned()];
         }
         let after = super::pending_render_signature(&app);
 
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn transcript_preview_signature_changes_when_plain_preview_changes() {
+        let mut app = blank_app();
+        app.pending_turn = true;
+        app.last_render_width = 72;
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("first preview".to_owned());
+        }
+        let before = super::transcript_preview_signature(&app);
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("second preview".to_owned());
+        }
+        let after = super::transcript_preview_signature(&app);
+
+        assert_ne!(before, after);
     }
 
     #[test]
@@ -11555,8 +11676,7 @@ description: "actual description"
     }
 
     #[test]
-    fn startup_overflow_with_pending_preview_keeps_user_block_visible_without_plain_reply_preview()
-    {
+    fn startup_overflow_with_pending_preview_keeps_user_block_visible_with_transcript_preview() {
         let backend = TestBackend::new(50, 16);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -11582,12 +11702,13 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["pending reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("pending reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let user_row = find_row(&terminal, "hi").expect("user row");
+        let preview_row = find_row(&terminal, "pending reply").expect("preview row");
         let composer_row = find_row(&terminal, "›").expect("composer row");
 
         assert!(row_has_background(
@@ -11595,8 +11716,9 @@ description: "actual description"
             user_row - 1,
             SURFACE_USER_MSG_BG
         ));
+        assert!(preview_row > user_row);
+        assert!(preview_row < composer_row);
         assert!(composer_row > user_row);
-        assert!(find_row(&terminal, "pending reply").is_none());
     }
 
     #[test]

@@ -441,6 +441,18 @@ impl MessageList {
         self.ensure_render_cache(width).len()
     }
 
+    pub fn rendered_line_count_with_provisional_assistant(
+        &mut self,
+        width: u16,
+        provisional_assistant_text: Option<&str>,
+    ) -> usize {
+        if provisional_assistant_text.is_none_or(|text| text.trim().is_empty()) {
+            return self.rendered_line_count(width);
+        }
+        self.rendered_lines_with_provisional_assistant(width, provisional_assistant_text)
+            .len()
+    }
+
     fn ensure_render_cache(&mut self, width: u16) -> &Vec<Line<'static>> {
         let needs_rebuild = self
             .render_cache
@@ -669,6 +681,102 @@ impl MessageList {
             .apply_rendered_scroll_start(max_scroll_start, scroll_start);
 
         let visible_lines = self.viewport_lines(area.width, area.height, scroll_start, top_padding);
+        let paragraph = Paragraph::new(Text::from(visible_lines));
+
+        f.render_widget(paragraph, area);
+    }
+
+    pub fn render_with_provisional_assistant(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        provisional_assistant_text: Option<&str>,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if provisional_assistant_text.is_none_or(|text| text.trim().is_empty()) {
+            self.render(f, area);
+            return;
+        }
+
+        let rendered_lines =
+            self.rendered_lines_with_provisional_assistant(area.width, provisional_assistant_text);
+        self.render_explicit_lines(f, area, rendered_lines, self.startup_mode_active());
+    }
+
+    fn rendered_lines_with_provisional_assistant(
+        &mut self,
+        width: u16,
+        provisional_assistant_text: Option<&str>,
+    ) -> Vec<Line<'static>> {
+        let mut rendered_lines = self.get_rendered_lines(width);
+        let Some(text) = provisional_assistant_text.map(str::trim) else {
+            return rendered_lines;
+        };
+        if text.is_empty() {
+            return rendered_lines;
+        }
+        rendered_lines.extend(render_provisional_assistant_message_lines(text, width));
+        rendered_lines
+    }
+
+    fn render_explicit_lines(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        rendered_lines: Vec<Line<'static>>,
+        startup_mode: bool,
+    ) {
+        self.page_step = page_step_for_height(area.height);
+        self.mouse_step = mouse_step_for_height(area.height);
+        let top_padding = if startup_mode {
+            startup_top_padding(rendered_lines.len(), area.height)
+        } else {
+            0
+        };
+
+        let total_lines = rendered_lines.len().saturating_add(top_padding);
+        if total_lines == 0 {
+            self.last_render_height = area.height;
+            self.scroll_state.reset_for_empty_render();
+            f.render_widget(
+                Paragraph::new(Text::from(Vec::<Line<'static>>::new())),
+                area,
+            );
+            return;
+        }
+        let max_scroll_start = total_lines.saturating_sub(area.height as usize);
+        let raw_scroll_val = self.scroll_state.raw_scroll_start(max_scroll_start);
+        let mut scroll_start = if self.scroll_state.follow_tail() {
+            raw_scroll_val
+        } else if !self.scroll_state.snap_on_next_render() {
+            self.scroll_state.last_scroll_start().min(max_scroll_start)
+        } else {
+            let centered_lines = if startup_mode {
+                vertically_center_startup_lines(rendered_lines.clone(), area.height)
+            } else {
+                rendered_lines.clone()
+            };
+            adjust_scroll_start_for_message_boundary(&centered_lines, raw_scroll_val)
+        };
+        scroll_start = scroll_start.min(max_scroll_start);
+        self.last_render_height = area.height;
+        self.scroll_state
+            .apply_rendered_scroll_start(max_scroll_start, scroll_start);
+
+        let visible_end = scroll_start.saturating_add(area.height as usize);
+        let visible_lines = (scroll_start..visible_end)
+            .filter_map(|visual_index| {
+                if visual_index < top_padding {
+                    Some(Line::from(""))
+                } else {
+                    rendered_lines
+                        .get(visual_index.saturating_sub(top_padding))
+                        .cloned()
+                }
+            })
+            .collect::<Vec<_>>();
         let paragraph = Paragraph::new(Text::from(visible_lines));
 
         f.render_widget(paragraph, area);
@@ -1042,6 +1150,12 @@ fn normalize_rendered_system_line(line: &str) -> Option<String> {
     }
 
     Some(trimmed.to_owned())
+}
+
+fn render_provisional_assistant_message_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+    let mut list = MessageList::new();
+    list.add_assistant_message(text.to_owned());
+    list.get_rendered_lines(width)
 }
 
 fn render_rendered_system_line(line: &str, width: u16) -> Vec<Line<'static>> {
