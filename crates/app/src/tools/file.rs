@@ -1371,10 +1371,8 @@ fn resolve_search_root(
     match root {
         Some(path) => resolve_safe_file_path_with_config(path, config),
         None => config
-            .file_root
-            .clone()
-            .map(canonicalize_or_fallback)
-            .transpose()?
+            .path_resolution_root()
+            .map(Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())
             .map(|path| canonicalize_or_fallback(path).unwrap_or_else(|_| PathBuf::from(".")))
             .ok_or_else(|| format!("{tool_name} could not determine a workspace root")),
@@ -1565,20 +1563,25 @@ pub(super) fn resolve_safe_file_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<PathBuf, String> {
-    let root = config
-        .file_root
-        .clone()
+    let access_root = config
+        .filesystem_access_root()
+        .map(Path::to_path_buf)
+        .or_else(|| config.file_root.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let root = canonicalize_or_fallback(root)?;
+    let access_root = canonicalize_or_fallback(access_root)?;
+    let resolution_root = config
+        .path_resolution_root()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| access_root.clone());
 
     let candidate = Path::new(raw);
     let combined = if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
-        root.join(candidate)
+        resolution_root.join(candidate)
     };
     let normalized = super::normalize_without_fs(&combined);
-    resolve_path_within_root(&root, &normalized)
+    resolve_path_within_root(&access_root, &normalized)
 }
 
 pub(super) fn resolve_safe_directory_path_with_config(
@@ -1628,8 +1631,6 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
         return Ok(canonical);
     }
 
-    ensure_path_within_root(root, normalized)?;
-
     let (ancestor, suffix) = split_existing_ancestor(normalized)?;
     let canonical_ancestor = dunce::canonicalize(&ancestor).map_err(|error| {
         format!(
@@ -1649,9 +1650,15 @@ fn resolve_path_within_root(root: &Path, normalized: &Path) -> Result<PathBuf, S
 }
 
 fn ensure_path_within_root(root: &Path, path: &Path) -> Result<(), String> {
-    let normalized_root = dunce::simplified(root);
+    let normalized_root = if root.exists() {
+        dunce::canonicalize(root)
+            .map(|resolved| dunce::simplified(&resolved).to_path_buf())
+            .unwrap_or_else(|_| dunce::simplified(root).to_path_buf())
+    } else {
+        dunce::simplified(root).to_path_buf()
+    };
     let normalized_path = dunce::simplified(path);
-    if normalized_path.starts_with(normalized_root) {
+    if normalized_path.starts_with(&normalized_root) {
         return Ok(());
     }
     Err(format!(
@@ -1875,6 +1882,35 @@ mod tests {
 
         let written = fs::read_to_string(root.join("safe/note.txt")).expect("read written file");
         assert_eq!(written, "hello");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn resolve_safe_file_path_accepts_private_var_alias_inside_root() {
+        let base = unique_temp_dir("loong-file-private-var-alias");
+        let root = base.join("root");
+        fs::create_dir_all(&root).expect("create root");
+        let child = root.join("nested.txt");
+        fs::write(&child, "ok").expect("write child");
+
+        let config = ToolRuntimeConfig {
+            file_root: Some(root),
+            ..ToolRuntimeConfig::default()
+        };
+        let raw = child.display().to_string();
+        let normalized_raw = if raw.starts_with("/private/var/") {
+            raw.replacen("/private/var/", "/var/", 1)
+        } else {
+            raw
+        };
+
+        let resolved = resolve_safe_file_path_with_config(&normalized_raw, &config)
+            .expect("alias path under root should resolve");
+
+        assert_eq!(
+            resolved,
+            dunce::canonicalize(&child).expect("canonicalize child path")
+        );
         let _ = fs::remove_dir_all(base);
     }
 

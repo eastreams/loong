@@ -242,6 +242,34 @@ mod tests {
     }
 
     #[test]
+    fn shell_exec_defaults_cwd_to_runtime_workspace_root_without_shrinking_file_root() {
+        let root = unique_temp_dir("loong-shell-default-cwd-root");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace root");
+        let mut config = shell_test_config(&root);
+        config.workspace_root = Some(workspace.clone());
+        let request = ToolCoreRequest {
+            tool_name: "shell.exec".to_owned(),
+            payload: json!({
+                "command": "pwd"
+            }),
+        };
+
+        let outcome = execute_shell_tool_for_subprocess_test(request, &config)
+            .expect("shell.exec should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["cwd"], workspace.display().to_string());
+        let stdout = outcome.payload["stdout"]
+            .as_str()
+            .expect("stdout should be text");
+        assert!(
+            stdout.ends_with(workspace.display().to_string().as_str()),
+            "expected pwd output to resolve inside runtime workspace root, got: {stdout}"
+        );
+    }
+
+    #[test]
     fn shell_exec_rejects_cwd_that_escapes_configured_file_root() {
         let root = unique_temp_dir("loong-shell-cwd-root");
         let outside = unique_temp_dir("loong-shell-cwd-outside");
