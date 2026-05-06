@@ -914,7 +914,9 @@ pub(super) fn parse_telegram_updates(
             chat_id.to_string(),
         );
         if let Some(ref tid) = thread_id {
-            session.thread_id = Some(tid.clone());
+            session = session
+                .with_thread_id(tid.clone())
+                .with_identity_thread_scoped(true);
         }
 
         inbox.push(ChannelInboundMessage {

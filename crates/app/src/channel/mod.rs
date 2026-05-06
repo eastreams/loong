@@ -871,14 +871,11 @@ mod tests {
         feature = "channel-matrix"
     ))]
     #[test]
-    fn channel_session_key_includes_participant_id_when_present() {
+    fn channel_session_key_excludes_participant_id_by_default() {
         let session =
             ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
                 .with_participant_id("ou_sender_1");
-        assert_eq!(
-            session.session_key(),
-            "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1"
-        );
+        assert_eq!(session.session_key(), "feishu:lark_cli_a1b2c3:oc_123");
     }
 
     #[cfg(any(
@@ -906,11 +903,27 @@ mod tests {
         feature = "channel-matrix"
     ))]
     #[test]
-    fn channel_session_key_includes_account_participant_and_thread_when_present() {
+    fn channel_session_key_excludes_account_participant_and_thread_by_default() {
         let session =
             ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
                 .with_participant_id("ou_sender_1")
                 .with_thread_id("om_root_1");
+        assert_eq!(session.session_key(), "feishu:lark_cli_a1b2c3:oc_123");
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[test]
+    fn channel_session_key_can_opt_into_participant_and_thread_identity() {
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_participant_id("ou_sender_1")
+                .with_thread_id("om_root_1")
+                .with_identity_participant_scoped(true)
+                .with_identity_thread_scoped(true);
         assert_eq!(
             session.session_key(),
             "feishu:lark_cli_a1b2c3:oc_123:ou_sender_1:om_root_1"
@@ -1639,7 +1652,9 @@ mod tests {
             "!ops:example.org",
         )
         .with_participant_id("@alice:example.org")
-        .with_thread_id("$event:example.org");
+        .with_thread_id("$event:example.org")
+        .with_identity_participant_scoped(true)
+        .with_identity_thread_scoped(true);
 
         assert_eq!(
             session.session_key(),

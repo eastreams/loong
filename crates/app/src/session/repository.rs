@@ -124,6 +124,14 @@ pub struct SessionHeadRecord {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRouteBindingRecord {
+    pub route_session_id: String,
+    pub active_session_id: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionArtifactKind {
     Checkpoint,
@@ -673,6 +681,63 @@ impl SessionRepository {
                 .ok_or_else(|| format!("session `{session_id}` missing after concurrent insert")),
             Err(error) => Err(error),
         }
+    }
+
+    pub fn load_session_route_binding(
+        &self,
+        route_session_id: &str,
+    ) -> Result<Option<SessionRouteBindingRecord>, String> {
+        let route_session_id = normalize_required_text(route_session_id, "route_session_id")?;
+        let conn = self.open_connection()?;
+        conn.query_row(
+            "SELECT route_session_id, active_session_id, created_at, updated_at
+             FROM session_route_bindings
+             WHERE route_session_id = ?1",
+            params![route_session_id],
+            |row| {
+                Ok(SessionRouteBindingRecord {
+                    route_session_id: row.get(0)?,
+                    active_session_id: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("load session route binding failed: {error}"))
+    }
+
+    pub fn upsert_session_route_binding(
+        &self,
+        route_session_id: &str,
+        active_session_id: &str,
+    ) -> Result<SessionRouteBindingRecord, String> {
+        let route_session_id = normalize_required_text(route_session_id, "route_session_id")?;
+        let active_session_id = normalize_required_text(active_session_id, "active_session_id")?;
+        let ts = unix_ts_now();
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session route binding transaction failed: {error}"))?;
+        tx.execute(
+            "INSERT INTO session_route_bindings(
+                route_session_id,
+                active_session_id,
+                created_at,
+                updated_at
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(route_session_id) DO UPDATE SET
+                active_session_id = excluded.active_session_id,
+                updated_at = excluded.updated_at",
+            params![route_session_id, active_session_id, ts, ts],
+        )
+        .map_err(|error| format!("upsert session route binding failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit session route binding transaction failed: {error}"))?;
+        self.load_session_route_binding(route_session_id.as_str())?
+            .ok_or_else(|| {
+                format!("session route binding `{route_session_id}` disappeared after upsert")
+            })
     }
 
     pub fn create_session_with_event(
@@ -7532,5 +7597,30 @@ mod tests {
             pending_root_requests[0].approval_request_id,
             "apr-root-pending"
         );
+    }
+
+    #[test]
+    fn session_route_binding_upsert_and_reload_round_trip() {
+        let config = isolated_memory_config("session-route-binding");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        let created = repo
+            .upsert_session_route_binding("feishu:lark_cli_a1b2c3:oc_123", "im:session:1")
+            .expect("create route binding");
+        assert_eq!(created.route_session_id, "feishu:lark_cli_a1b2c3:oc_123");
+        assert_eq!(created.active_session_id, "im:session:1");
+
+        let updated = repo
+            .upsert_session_route_binding("feishu:lark_cli_a1b2c3:oc_123", "im:session:2")
+            .expect("update route binding");
+        assert_eq!(updated.route_session_id, "feishu:lark_cli_a1b2c3:oc_123");
+        assert_eq!(updated.active_session_id, "im:session:2");
+        assert!(updated.updated_at >= updated.created_at);
+
+        let loaded = repo
+            .load_session_route_binding("feishu:lark_cli_a1b2c3:oc_123")
+            .expect("load route binding")
+            .expect("route binding exists");
+        assert_eq!(loaded, updated);
     }
 }

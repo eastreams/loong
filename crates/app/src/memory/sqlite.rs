@@ -2772,6 +2772,14 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         );
         CREATE INDEX IF NOT EXISTS idx_session_events_session_id
           ON session_events(session_id, id);
+        CREATE TABLE IF NOT EXISTS session_route_bindings(
+          route_session_id TEXT PRIMARY KEY,
+          active_session_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_route_bindings_active_session_id
+          ON session_route_bindings(active_session_id, updated_at, route_session_id);
         ",
     )
     .map_err(|error| format!("backfill session turn index metadata failed: {error}"))?;

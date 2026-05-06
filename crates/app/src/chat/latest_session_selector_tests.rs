@@ -195,6 +195,35 @@ fn cli_runtime_keeps_explicit_literal_session_id() {
 }
 
 #[test]
+fn cli_runtime_reopens_explicit_im_local_session_id() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("im-local-session");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+
+    create_root_session(&repo, "feishu:cfg=work:lark_cli_a1b2c3:oc_123");
+    append_session_turn(
+        "feishu:cfg=work:lark_cli_a1b2c3:oc_123",
+        "user",
+        "hello from im",
+        &memory_config,
+    );
+
+    let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        PathBuf::from("/tmp/loong.toml"),
+        config,
+        Some("feishu:cfg=work:lark_cli_a1b2c3:oc_123"),
+        &CliChatOptions::default(),
+        "cli-chat-im-local-session-test",
+        CliSessionRequirement::AllowImplicitDefault,
+        false,
+    )
+    .expect("explicit IM local session runtime");
+
+    assert_eq!(runtime.session_id, "feishu:cfg=work:lark_cli_a1b2c3:oc_123");
+
+    cleanup_chat_test_memory(&sqlite_path);
+}
+
+#[test]
 fn concurrent_cli_runtime_keeps_latest_literal_when_explicit_session_is_required() {
     let (config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-latest");
     let runtime = initialize_cli_turn_runtime_with_loaded_config(

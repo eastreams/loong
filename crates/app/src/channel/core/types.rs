@@ -153,6 +153,10 @@ pub struct ChannelSession {
     pub conversation_id: String,
     pub participant_id: Option<String>,
     pub thread_id: Option<String>,
+    #[serde(default)]
+    pub identity_participant_scoped: bool,
+    #[serde(default)]
+    pub identity_thread_scoped: bool,
 }
 
 impl ChannelSession {
@@ -164,6 +168,8 @@ impl ChannelSession {
             conversation_id: conversation_id.into(),
             participant_id: None,
             thread_id: None,
+            identity_participant_scoped: false,
+            identity_thread_scoped: false,
         }
     }
 
@@ -179,6 +185,8 @@ impl ChannelSession {
             conversation_id: conversation_id.into(),
             participant_id: None,
             thread_id: None,
+            identity_participant_scoped: false,
+            identity_thread_scoped: false,
         }
     }
 
@@ -194,6 +202,8 @@ impl ChannelSession {
             conversation_id: conversation_id.into(),
             participant_id: None,
             thread_id: Some(thread_id.into()),
+            identity_participant_scoped: true,
+            identity_thread_scoped: true,
         }
     }
 
@@ -210,6 +220,8 @@ impl ChannelSession {
             conversation_id: conversation_id.into(),
             participant_id: None,
             thread_id: Some(thread_id.into()),
+            identity_participant_scoped: true,
+            identity_thread_scoped: true,
         }
     }
 
@@ -225,6 +237,16 @@ impl ChannelSession {
 
     pub fn with_thread_id(mut self, thread_id: impl Into<String>) -> Self {
         self.thread_id = Some(thread_id.into());
+        self
+    }
+
+    pub fn with_identity_participant_scoped(mut self, scoped: bool) -> Self {
+        self.identity_participant_scoped = scoped;
+        self
+    }
+
+    pub fn with_identity_thread_scoped(mut self, scoped: bool) -> Self {
+        self.identity_thread_scoped = scoped;
         self
     }
 
@@ -261,10 +283,14 @@ impl ChannelSession {
             parts.push(encode_route_session_segment(account_id));
         }
         parts.push(encode_route_session_segment(conversation_id));
-        if let Some(participant_id) = participant_id {
+        if self.identity_participant_scoped
+            && let Some(participant_id) = participant_id
+        {
             parts.push(encode_route_session_segment(participant_id));
         }
-        if let Some(thread_id) = thread_id {
+        if self.identity_thread_scoped
+            && let Some(thread_id) = thread_id
+        {
             parts.push(encode_route_session_segment(thread_id));
         }
         parts.join(":")
@@ -276,10 +302,14 @@ impl ChannelSession {
         if let Some(account_id) = self.account_id.as_deref() {
             address = address.with_account_id(account_id);
         }
-        if let Some(participant_id) = self.participant_id.as_deref() {
+        if self.identity_participant_scoped
+            && let Some(participant_id) = self.participant_id.as_deref()
+        {
             address = address.with_participant_id(participant_id);
         }
-        if let Some(thread_id) = self.thread_id.as_deref() {
+        if self.identity_thread_scoped
+            && let Some(thread_id) = self.thread_id.as_deref()
+        {
             address = address.with_thread_id(thread_id);
         }
         address

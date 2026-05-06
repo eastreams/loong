@@ -149,7 +149,7 @@ fn feishu_message_event_parses_text_payload() {
     assert_eq!(event.session.configured_account_id.as_deref(), Some("work"));
     assert_eq!(
         event.session.session_key(),
-        "feishu:cfg=work:feishu_cli_a1b2c3:oc_123:ou_sender_1:om_root_1"
+        "feishu:cfg=work:feishu_cli_a1b2c3:oc_123"
     );
     assert_eq!(
         event.reply_target,
@@ -306,10 +306,7 @@ fn feishu_message_event_uses_thread_id_and_sender_open_id_when_present() {
 
     let event = expect_inbound(action);
 
-    assert_eq!(
-        event.session.session_key(),
-        "feishu:feishu_main:oc_123:ou_123:omt_456"
-    );
+    assert_eq!(event.session.session_key(), "feishu:feishu_main:oc_123");
     assert_eq!(event.session.thread_id.as_deref(), Some("omt_456"));
     assert_eq!(event.reply_target.feishu_reply_chat_id(), Some("oc_123"));
     assert_eq!(event.reply_target.feishu_reply_in_thread(), Some(true));
@@ -425,10 +422,7 @@ fn feishu_card_callback_v2_payload_is_not_ignored() {
         Some("om_callback_1")
     );
     assert_eq!(event.context.open_chat_id.as_deref(), Some("oc_123"));
-    assert_eq!(
-        event.session.session_key(),
-        "feishu:feishu_main:oc_123:ou_operator_1:om_callback_1"
-    );
+    assert_eq!(event.session.session_key(), "feishu:feishu_main:oc_123");
     assert_eq!(
         event.principal.as_ref().map(|value| value.open_id.as_str()),
         Some("ou_operator_1")
@@ -554,10 +548,7 @@ fn feishu_card_callback_v1_payload_is_not_ignored() {
         Some("om_callback_legacy")
     );
     assert_eq!(event.context.open_chat_id.as_deref(), Some("oc_123"));
-    assert_eq!(
-        event.session.session_key(),
-        "feishu:feishu_main:oc_123:ou_operator_legacy:om_callback_legacy"
-    );
+    assert_eq!(event.session.session_key(), "feishu:feishu_main:oc_123");
     assert_eq!(
         event
             .principal
@@ -1674,7 +1665,7 @@ fn feishu_encrypted_payload_parses_with_encrypt_key() {
     assert_eq!(event.event_id, "evt_encrypted_1");
     assert_eq!(
         event.session.session_key(),
-        "feishu:feishu_cli_a1b2c3:oc_encrypt:ou_sender_encrypt:om_thread_encrypt"
+        "feishu:feishu_cli_a1b2c3:oc_encrypt"
     );
     assert_eq!(
         event.reply_target,

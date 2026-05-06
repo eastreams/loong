@@ -10,6 +10,8 @@ use crate::{
         ConversationIngressPrivateContext, ConversationRuntime, ConversationRuntimeBinding,
         ConversationSessionAddress, ConversationTurnCoordinator, ProviderErrorMode,
     },
+    session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState},
+    session::store::SessionStoreConfig,
 };
 
 use super::{
@@ -32,7 +34,7 @@ fn prepare_channel_inbound_turn(
     message: &ChannelInboundMessage,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<PreparedChannelInboundTurn> {
-    let address = message.session.conversation_address();
+    let address = resolve_channel_conversation_address(config, &message.session)?;
     let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
     let ingress = channel_message_ingress_context(message);
     let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
@@ -43,6 +45,50 @@ fn prepare_channel_inbound_turn(
         ingress,
         feedback_capture,
     })
+}
+
+fn resolve_channel_conversation_address(
+    config: &LoongConfig,
+    session: &ChannelSession,
+) -> CliResult<ConversationSessionAddress> {
+    let route_address = session.conversation_address();
+    let route_session_id = route_address.session_id.trim();
+    if route_session_id.is_empty() {
+        return Err("channel conversation route requires a non-empty session id".to_owned());
+    }
+
+    let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let active_session_id = match repo.load_session_route_binding(route_session_id)? {
+        Some(binding) => binding.active_session_id,
+        None => {
+            let active_session_id = route_session_id.to_owned();
+            let _ = repo.ensure_session(NewSessionRecord {
+                session_id: active_session_id.clone(),
+                kind: SessionKind::Root,
+                parent_session_id: None,
+                label: Some(route_session_id.to_owned()),
+                state: SessionState::Ready,
+            })?;
+            let _ =
+                repo.upsert_session_route_binding(route_session_id, active_session_id.as_str())?;
+            active_session_id
+        }
+    };
+
+    let mut effective = ConversationSessionAddress::from_session_id(active_session_id)
+        .with_channel_scope(session.platform.as_str(), session.conversation_id.clone());
+    if let Some(account_id) = session.account_id.as_deref() {
+        effective = effective.with_account_id(account_id);
+    }
+    Ok(effective)
+}
+
+fn unix_time_ms_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -195,6 +241,10 @@ pub async fn process_inbound_with_provider_and_error_mode(
     error_mode: ProviderErrorMode,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
 ) -> CliResult<String> {
+    if let Some(reply) = maybe_reset_channel_session(config, message).await? {
+        return Ok(reply);
+    }
+
     let started_at = std::time::Instant::now();
     let result = match reload_channel_turn_config(config, resolved_path) {
         Ok(turn_config) => {
@@ -308,6 +358,86 @@ pub async fn process_inbound_with_provider_and_error_mode(
         }
     }
     result
+}
+
+async fn maybe_reset_channel_session(
+    config: &LoongConfig,
+    message: &ChannelInboundMessage,
+) -> CliResult<Option<String>> {
+    if !is_channel_session_reset_command(message.text.as_str()) {
+        return Ok(None);
+    }
+
+    let route_address = message.session.conversation_address();
+    let route_session_id = route_address.session_id.trim();
+    if route_session_id.is_empty() {
+        return Err("channel session reset requires a stable route session id".to_owned());
+    }
+
+    let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config)?;
+    let prior_binding = repo.load_session_route_binding(route_session_id)?;
+
+    if config.acp.enabled
+        && config.acp.dispatch_enabled()
+        && let Some(binding) = prior_binding.as_ref()
+    {
+        let manager = crate::acp::shared_acp_session_manager(config)?;
+        let mut active_address =
+            ConversationSessionAddress::from_session_id(binding.active_session_id.clone())
+                .with_channel_scope(
+                    message.session.platform.as_str(),
+                    message.session.conversation_id.clone(),
+                );
+        if let Some(account_id) = message.session.account_id.as_deref() {
+            active_address = active_address.with_account_id(account_id);
+        }
+        if let Ok(route) =
+            crate::acp::derive_acp_conversation_route_for_address(config, &active_address)
+        {
+            let _ = manager.close(config, route.session_key.as_str()).await;
+        }
+    }
+
+    let next_session_id = fresh_local_session_id(route_session_id);
+    let _ = repo.ensure_session(NewSessionRecord {
+        session_id: next_session_id.clone(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some(route_session_id.to_owned()),
+        state: SessionState::Ready,
+    })?;
+    let _ = repo.upsert_session_route_binding(route_session_id, next_session_id.as_str())?;
+
+    Ok(Some(format!(
+        "Started a new session for this conversation. Session ID: {}",
+        next_session_id
+    )))
+}
+
+fn is_channel_session_reset_command(input: &str) -> bool {
+    let trimmed = input.trim();
+    let command = trimmed.split_whitespace().next().unwrap_or_default().trim();
+    if command != trimmed {
+        return false;
+    }
+    let normalized = command
+        .split_once('@')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(command);
+    matches!(normalized, "/new" | ":new" | "/reset" | ":reset")
+}
+
+fn fresh_local_session_id(route_session_id: &str) -> String {
+    let mut sanitized = String::with_capacity(route_session_id.len());
+    for ch in route_session_id.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    format!("{sanitized}__new__{}", unix_time_ms_now())
 }
 
 pub(super) fn reload_channel_turn_config(
@@ -482,4 +612,135 @@ fn normalized_feishu_callback_context(
         return None;
     }
     Some(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{maybe_reset_channel_session, resolve_channel_conversation_address};
+    use crate::channel::{ChannelPlatform, ChannelSession};
+    use crate::config::LoongConfig;
+    use crate::session::repository::SessionRepository;
+    use crate::session::store::SessionStoreConfig;
+
+    fn isolated_config(test_name: &str) -> LoongConfig {
+        let sqlite_path = std::env::temp_dir().join(format!(
+            "loong-im-route-binding-{test_name}-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&sqlite_path);
+        let mut config = LoongConfig::default();
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+        config
+    }
+
+    #[test]
+    fn resolve_channel_conversation_address_reuses_existing_route_binding() {
+        let config = isolated_config("reuse");
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_configured_account_id("work")
+                .with_participant_id("ou_sender_1")
+                .with_thread_id("om_thread_1");
+
+        let first = resolve_channel_conversation_address(&config, &session)
+            .expect("resolve first route address");
+        let second = resolve_channel_conversation_address(&config, &session)
+            .expect("resolve second route address");
+
+        assert_eq!(first.session_id, second.session_id);
+        assert_eq!(first.session_id, "feishu:cfg=work:lark_cli_a1b2c3:oc_123");
+        assert_eq!(first.channel_id.as_deref(), Some("feishu"));
+        assert_eq!(first.account_id.as_deref(), Some("lark_cli_a1b2c3"));
+        assert_eq!(first.conversation_id.as_deref(), Some("oc_123"));
+        assert!(first.participant_id.is_none());
+        assert!(first.thread_id.is_none());
+
+        let repo = SessionRepository::new(&SessionStoreConfig::from_memory_config(&config.memory))
+            .expect("session repository");
+        let binding = repo
+            .load_session_route_binding("feishu:cfg=work:lark_cli_a1b2c3:oc_123")
+            .expect("load route binding")
+            .expect("route binding exists");
+        assert_eq!(binding.active_session_id, first.session_id);
+    }
+
+    #[tokio::test]
+    async fn reset_command_rotates_route_binding_to_new_local_session() {
+        let config = isolated_config("reset");
+        let session =
+            ChannelSession::with_account(ChannelPlatform::Feishu, "lark_cli_a1b2c3", "oc_123")
+                .with_configured_account_id("work");
+        let message = crate::channel::ChannelInboundMessage {
+            session: session.clone(),
+            reply_target: crate::channel::ChannelOutboundTarget::feishu_receive_id("oc_123"),
+            text: "/new".to_owned(),
+            delivery: crate::channel::ChannelDelivery::default(),
+        };
+
+        let before = resolve_channel_conversation_address(&config, &session)
+            .expect("resolve initial route address");
+        let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+        crate::session::store::append_session_turn_direct(
+            before.session_id.as_str(),
+            "user",
+            "before reset",
+            &memory_config,
+        )
+        .expect("seed prior session history");
+        let reply = maybe_reset_channel_session(&config, &message)
+            .await
+            .expect("reset channel session")
+            .expect("reset reply");
+        let after = resolve_channel_conversation_address(&config, &session)
+            .expect("resolve route address after reset");
+
+        assert!(reply.contains("Started a new session"));
+        assert_ne!(before.session_id, after.session_id);
+        assert!(!after.session_id.contains(':'));
+
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        let binding = repo
+            .load_session_route_binding("feishu:cfg=work:lark_cli_a1b2c3:oc_123")
+            .expect("load route binding")
+            .expect("route binding exists");
+        assert_eq!(binding.active_session_id, after.session_id);
+        assert!(
+            repo.load_session(before.session_id.as_str())
+                .expect("load prior session")
+                .is_some()
+        );
+
+        let resumed = crate::chat::initialize_cli_turn_runtime_with_loaded_config(
+            std::path::PathBuf::from("/tmp/loong.toml"),
+            config.clone(),
+            Some(after.session_id.as_str()),
+            &crate::chat::CliChatOptions::default(),
+            "cli-chat-im-reset-resume-test",
+            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            false,
+        )
+        .expect("reopen rotated IM local session");
+        assert_eq!(resumed.session_id, after.session_id);
+
+        let prior_resumed = crate::chat::initialize_cli_turn_runtime_with_loaded_config(
+            std::path::PathBuf::from("/tmp/loong.toml"),
+            config.clone(),
+            Some(before.session_id.as_str()),
+            &crate::chat::CliChatOptions::default(),
+            "cli-chat-im-prior-session-test",
+            crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            false,
+        )
+        .expect("reopen prior IM local session");
+        assert_eq!(prior_resumed.session_id, before.session_id);
+    }
+
+    #[test]
+    fn reset_command_parser_accepts_exact_commands_and_optional_mentions_only() {
+        assert!(super::is_channel_session_reset_command("/new"));
+        assert!(super::is_channel_session_reset_command("/new@LoongBot"));
+        assert!(super::is_channel_session_reset_command("/reset"));
+        assert!(!super::is_channel_session_reset_command("/new please"));
+        assert!(!super::is_channel_session_reset_command("please /new"));
+    }
 }
