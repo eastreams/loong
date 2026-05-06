@@ -1299,7 +1299,7 @@ mod tests {
             path: PathBuf::from("/tmp/demo/skills"),
         });
         assert!(warning.contains("apply_selected"));
-        assert!(warning.contains("apply-external-skills-plan"));
+        assert!(warning.contains("--apply-skills-plan"));
         assert!(warning.contains("fetch"));
         assert!(warning.contains("install"));
         assert!(warning.contains("invoke"));

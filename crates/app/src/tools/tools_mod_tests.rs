@@ -262,7 +262,8 @@ fn capability_snapshot_stays_compact_when_skills_are_installed() {
     assert!(snapshot.contains("Use the read tool to load a listed skill's SKILL.md file"));
     assert!(snapshot.contains("<available_skills>"));
     let expected_skill_md_path = root
-        .join("external-skills-installed")
+        .join(crate::config::HOME_DIR_NAME)
+        .join("skills")
         .join("demo-skill")
         .join("SKILL.md")
         .display()
@@ -12795,7 +12796,8 @@ fn config_import_apply_selected_mode_can_apply_skills_plan() {
     let raw = fs::read_to_string(&output_path).expect("read output config");
     assert!(raw.contains("Imported External Skills Artifacts"));
     assert!(
-        root.join("external-skills-installed")
+        root.join(crate::config::HOME_DIR_NAME)
+            .join("skills")
             .join("release-guard")
             .join("SKILL.md")
             .exists(),

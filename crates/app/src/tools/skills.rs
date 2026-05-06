@@ -5822,8 +5822,8 @@ mod tests {
             )
             .expect_err("blocked clawhub.io domain should fail closed");
 
-            assert!(error.contains("matches blocked domain rule"));
-            assert!(error.contains("*.clawhub.io"));
+            assert!(error.contains("not a supported ClawHub domain"));
+            assert!(error.contains("clawhub.io"));
         });
     }
 

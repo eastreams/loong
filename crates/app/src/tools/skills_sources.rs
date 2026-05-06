@@ -712,7 +712,7 @@ mod tests {
         let raw = "https://clawhub.io/skills/fake";
         let error =
             resolve_external_skill_candidate(raw).expect_err("clawhub.io should be rejected");
-        assert!(error.contains("not a supported ClawHub domain"));
+        assert!(error.contains("blocked because `clawhub.io` is not a supported ClawHub domain"));
     }
 
     #[test]
