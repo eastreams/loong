@@ -129,8 +129,7 @@ fn parse_optional_process_cwd<'a>(
 
 #[cfg(feature = "tool-shell")]
 fn default_process_cwd_with_config(config: &super::runtime_config::ToolRuntimeConfig) -> PathBuf {
-    let configured_root = config.file_root.clone();
-    if let Some(configured_root) = configured_root {
+    if let Some(configured_root) = config.path_resolution_root().map(Path::to_path_buf) {
         return configured_root;
     }
 
@@ -147,7 +146,7 @@ fn resolve_process_cwd_override(
     config: &super::runtime_config::ToolRuntimeConfig,
     tool_name: &str,
 ) -> Result<PathBuf, String> {
-    if config.file_root.is_some() {
+    if config.filesystem_access_root().is_some() {
         return super::file::resolve_safe_directory_path_with_config(raw_cwd, config);
     }
 

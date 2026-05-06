@@ -926,10 +926,12 @@ pub fn execute_tool_core_with_config(
     let mut effective_config = config
         .workspace_root
         .clone()
-        .map(|workspace_root| config.with_file_root_override(workspace_root))
+        .map(|workspace_root| config.with_workspace_root_override(workspace_root))
         .unwrap_or_else(|| config.clone());
     if let Some(workspace_root) = workspace_root {
-        effective_config = effective_config.with_file_root_override(workspace_root);
+        effective_config = effective_config
+            .with_workspace_root_override(workspace_root.clone())
+            .with_file_root_override(workspace_root);
     }
     if let Some(runtime_narrowing) = runtime_narrowing {
         effective_config = effective_config.narrowed(&runtime_narrowing);

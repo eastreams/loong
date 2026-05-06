@@ -100,7 +100,8 @@ impl FilePolicyExtension {
 
         // 1. Try full canonicalize (works when the path already exists).
         if let Ok(canon) = combined.canonicalize() {
-            return !canon.starts_with(&normalized_effective_root);
+            let normalized_canon = dunce::simplified(&canon).to_path_buf();
+            return !normalized_canon.starts_with(&normalized_effective_root);
         }
 
         // 1.5. Path is a symlink but canonicalize failed (dangling target) —
@@ -117,7 +118,13 @@ impl FilePolicyExtension {
                     };
                     symlink_parent.join(&target)
                 };
-                let normalized_target = super::normalize_without_fs(&resolved);
+                let normalized_target = if resolved.exists() {
+                    dunce::canonicalize(&resolved)
+                        .map(|resolved| dunce::simplified(&resolved).to_path_buf())
+                        .unwrap_or_else(|_| super::normalize_without_fs(&resolved))
+                } else {
+                    super::normalize_without_fs(&resolved)
+                };
                 return !normalized_target.starts_with(&normalized_effective_root);
             }
             // Cannot read the link — conservatively deny.
@@ -129,7 +136,13 @@ impl FilePolicyExtension {
         //    as `file.write "nested/new.txt"` and keeps `/var` vs
         //    `/private/var` aliases aligned on macOS.
         if let Some(reconstructed_path) = reconstruct_from_existing_ancestor(&combined) {
-            let normalized_reconstructed = super::normalize_without_fs(&reconstructed_path);
+            let normalized_reconstructed = if reconstructed_path.exists() {
+                dunce::canonicalize(&reconstructed_path)
+                    .map(|resolved| dunce::simplified(&resolved).to_path_buf())
+                    .unwrap_or_else(|_| super::normalize_without_fs(&reconstructed_path))
+            } else {
+                super::normalize_without_fs(&reconstructed_path)
+            };
             return !normalized_reconstructed.starts_with(&normalized_effective_root);
         }
 
@@ -233,7 +246,11 @@ pub(crate) fn authorize_direct_file_payload(
     payload: &serde_json::Map<String, serde_json::Value>,
     rt: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<(), String> {
-    let extension = FilePolicyExtension::new(rt.file_root.clone());
+    let extension = FilePolicyExtension::new(
+        rt.filesystem_access_root()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| rt.file_root.clone()),
+    );
     extension
         .authorize_file_payload(tool_name, payload)
         .map_err(|error| format!("policy_denied: {error}"))
