@@ -693,10 +693,25 @@ impl ToolRuntimeConfig {
         configured_workspace_root.or(fallback_file_root)
     }
 
+    pub fn path_resolution_root(&self) -> Option<&Path> {
+        self.workspace_root.as_deref().or(self.file_root.as_deref())
+    }
+
+    pub fn filesystem_access_root(&self) -> Option<&Path> {
+        match (self.file_root.as_deref(), self.workspace_root.as_deref()) {
+            (Some(file_root), Some(workspace_root)) if workspace_root.starts_with(file_root) => {
+                Some(file_root)
+            }
+            (_, Some(workspace_root)) => Some(workspace_root),
+            (Some(file_root), None) => Some(file_root),
+            (None, None) => None,
+        }
+    }
+
     pub fn default_working_directory(&self) -> PathBuf {
-        let configured_root = self.file_root.clone();
-        let fallback_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        configured_root.unwrap_or(fallback_root)
+        self.path_resolution_root()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     }
 
     pub fn from_loong_config(config: &LoongConfig, config_path: Option<&Path>) -> Self {

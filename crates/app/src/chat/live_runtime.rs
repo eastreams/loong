@@ -9,7 +9,7 @@ use super::*;
 use serde_json::Value;
 
 const CLI_CHAT_LIVE_PREVIEW_MIN_EMIT_CHARS: usize = 8;
-const CLI_CHAT_LIVE_PREVIEW_MAX_EMIT_CHARS: usize = 48;
+const CLI_CHAT_LIVE_PREVIEW_MAX_EMIT_CHARS: usize = 24;
 const CLI_CHAT_LIVE_PREVIEW_INITIAL_EMIT_CHARS: usize = 4;
 const CLI_CHAT_LIVE_PREVIEW_MAX_BUFFER_CHARS: usize = 4096;
 const CLI_CHAT_LIVE_TOOL_ARGS_MAX_BUFFER_CHARS: usize = 1024;
@@ -20,7 +20,15 @@ const CLI_CHAT_LIVE_PREVIEW_CATCH_UP_ENTER_VISUAL_LINE_GROWTH: usize = 2;
 const CLI_CHAT_LIVE_PREVIEW_CATCH_UP_ENTER_MIN_VISUAL_LINES: usize = 4;
 const CLI_CHAT_LIVE_PREVIEW_SMOOTH_MIN_INTERVAL_MS: u64 = 40;
 const CLI_CHAT_LIVE_PREVIEW_CATCH_UP_MIN_INTERVAL_MS: u64 = 16;
-pub(super) type CliChatLiveSurfaceSink = Arc<dyn Fn(Vec<String>) + Send + Sync>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CliChatLiveSurfaceRenderPayload {
+    pub lines: Vec<String>,
+    pub draft_preview: Option<String>,
+    pub tool_activity_lines: Vec<String>,
+}
+
+pub(super) type CliChatLiveSurfaceSink = Arc<dyn Fn(CliChatLiveSurfaceRenderPayload) + Send + Sync>;
 pub(super) type CliChatLiveSurfaceRerender = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,8 +163,8 @@ pub(super) struct CliChatLiveSurfaceObserver {
 pub(super) fn build_cli_chat_live_surface_observer(
     render_width: usize,
 ) -> ConversationTurnObserverHandle {
-    let render_sink: CliChatLiveSurfaceSink = Arc::new(|lines| {
-        print_rendered_cli_chat_lines(&lines);
+    let render_sink: CliChatLiveSurfaceSink = Arc::new(|payload| {
+        print_rendered_cli_chat_lines(&payload.lines);
     });
     build_cli_chat_live_surface_observer_with_sink(render_width, render_sink)
 }
@@ -282,13 +290,27 @@ impl CliChatLiveSurfaceObserver {
                         );
                     state.last_emitted_snapshot = Some(snapshot);
                     state.last_emitted_lines = Some(lines.clone());
-                    Some(lines)
+                    Some(CliChatLiveSurfaceRenderPayload {
+                        lines,
+                        draft_preview: state
+                            .last_emitted_snapshot
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.draft_preview.clone())
+                            .filter(|text| !text.trim().is_empty()),
+                        tool_activity_lines: state
+                            .last_emitted_snapshot
+                            .as_ref()
+                            .map(|snapshot| {
+                                format_cli_chat_live_tool_activity_lines(snapshot.tools.as_slice())
+                            })
+                            .unwrap_or_default(),
+                    })
                 })
             }
         };
 
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
+        if let Some(payload) = lines_to_render {
+            (self.render_sink)(payload);
         }
     }
 
@@ -314,8 +336,8 @@ impl CliChatLiveSurfaceObserver {
             }
         };
 
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
+        if let Some(payload) = lines_to_render {
+            (self.render_sink)(payload);
         }
     }
 
@@ -335,8 +357,8 @@ impl CliChatLiveSurfaceObserver {
             }
         };
 
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
+        if let Some(payload) = lines_to_render {
+            (self.render_sink)(payload);
         }
     }
 
@@ -356,8 +378,8 @@ impl CliChatLiveSurfaceObserver {
             }
         };
 
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
+        if let Some(payload) = lines_to_render {
+            (self.render_sink)(payload);
         }
     }
 
@@ -423,15 +445,15 @@ impl CliChatLiveSurfaceObserver {
             }
         };
 
-        if let Some(lines) = lines_to_render {
-            (self.render_sink)(lines);
+        if let Some(payload) = lines_to_render {
+            (self.render_sink)(payload);
         }
     }
 
     fn prepare_live_surface_lines(
         &self,
         state: &mut CliChatLiveSurfaceState,
-    ) -> Option<Vec<String>> {
+    ) -> Option<CliChatLiveSurfaceRenderPayload> {
         let snapshot = build_cli_chat_live_surface_snapshot(state)?;
         if state.last_emitted_snapshot.as_ref() == Some(&snapshot) {
             return None;
@@ -445,6 +467,8 @@ impl CliChatLiveSurfaceObserver {
                 render_cli_chat_live_compact_lines_with_width(&snapshot, self.render_width())
             }
         };
+        let tool_activity_lines =
+            format_cli_chat_live_tool_activity_lines(snapshot.tools.as_slice());
         state.last_preview_emit_chars_seen = state.total_text_chars_seen;
         state.last_preview_emit_visual_line_count = cli_chat_live_preview_visual_line_count(
             snapshot.draft_preview.as_deref(),
@@ -455,7 +479,15 @@ impl CliChatLiveSurfaceObserver {
             return None;
         }
         state.last_emitted_lines = Some(lines.clone());
-        Some(lines)
+        Some(CliChatLiveSurfaceRenderPayload {
+            lines,
+            draft_preview: state
+                .last_emitted_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.draft_preview.clone())
+                .filter(|text| !text.trim().is_empty()),
+            tool_activity_lines,
+        })
     }
 }
 
@@ -2437,8 +2469,8 @@ fn build_cli_chat_live_tool_section(
 #[cfg(test)]
 mod tests {
     use super::{
-        CliChatLiveFileChangeView, CliChatLiveOutputView, CliChatLiveSurfaceSink,
-        CliChatLiveSurfaceSnapshot, CliChatLiveToolSnapshot,
+        CliChatLiveFileChangeView, CliChatLiveOutputView, CliChatLiveSurfaceRenderPayload,
+        CliChatLiveSurfaceSink, CliChatLiveSurfaceSnapshot, CliChatLiveToolSnapshot,
         build_cli_chat_live_compact_observer_controller,
         render_cli_chat_live_compact_lines_with_width,
         render_cli_chat_live_surface_lines_with_width, render_live_preview_segment_lines,
@@ -3204,7 +3236,7 @@ mod tests {
         assert!(!super::should_emit_cli_chat_live_preview(
             &state,
             80,
-            Some(120)
+            Some(110)
         ));
         assert!(super::should_emit_cli_chat_live_preview(
             &state,
@@ -3231,6 +3263,24 @@ mod tests {
     }
 
     #[test]
+    fn preview_emit_on_wide_widths_no_longer_waits_for_huge_stable_bursts() {
+        let state = super::CliChatLiveSurfaceState {
+            draft_preview: "hello world this is a stable chunk ".to_owned(),
+            last_preview_emit_chars_seen: 8,
+            last_preview_emit_visual_line_count: 1,
+            last_preview_emit_elapsed_ms: Some(100),
+            total_text_chars_seen: 32,
+            ..Default::default()
+        };
+
+        assert!(super::should_emit_cli_chat_live_preview(
+            &state,
+            80,
+            Some(140)
+        ));
+    }
+
+    #[test]
     fn delta_commit_boundary_detects_newline_and_structural_tokens() {
         assert!(super::cli_chat_live_delta_has_commit_boundary(
             "line done\n"
@@ -3245,7 +3295,8 @@ mod tests {
 
     #[test]
     fn compact_observer_rerenders_preview_when_width_changes() {
-        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let captured_batches =
+            Arc::new(StdMutex::new(Vec::<CliChatLiveSurfaceRenderPayload>::new()));
         let render_sink: CliChatLiveSurfaceSink = {
             let captured_batches = Arc::clone(&captured_batches);
             Arc::new(move |lines| {
@@ -3281,13 +3332,19 @@ mod tests {
             .lock()
             .expect("captured batches lock should not be poisoned");
         let last_batch = batches.last().expect("rerender batch");
-        assert!(last_batch.len() > 1);
-        assert!(last_batch.iter().any(|line| line.contains("alpha beta")));
+        assert!(last_batch.lines.len() > 1);
+        assert!(
+            last_batch
+                .lines
+                .iter()
+                .any(|line| line.contains("alpha beta"))
+        );
     }
 
     #[test]
     fn compact_observer_commits_preview_immediately_on_newline_boundary() {
-        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let captured_batches =
+            Arc::new(StdMutex::new(Vec::<CliChatLiveSurfaceRenderPayload>::new()));
         let render_sink: CliChatLiveSurfaceSink = {
             let captured_batches = Arc::clone(&captured_batches);
             Arc::new(move |lines| {
@@ -3320,12 +3377,13 @@ mod tests {
             .lock()
             .expect("captured batches lock should not be poisoned");
         let last_batch = batches.last().expect("newline-triggered batch");
-        assert!(last_batch.iter().any(|line| line.contains("ok")));
+        assert!(last_batch.lines.iter().any(|line| line.contains("ok")));
     }
 
     #[test]
     fn compact_observer_skips_rerender_when_width_change_keeps_same_lines() {
-        let captured_batches = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
+        let captured_batches =
+            Arc::new(StdMutex::new(Vec::<CliChatLiveSurfaceRenderPayload>::new()));
         let render_sink: CliChatLiveSurfaceSink = {
             let captured_batches = Arc::clone(&captured_batches);
             Arc::new(move |lines| {
@@ -3484,7 +3542,7 @@ mod tests {
         assert_eq!(super::cli_chat_live_preview_emit_stride(4), 8);
         assert_eq!(super::cli_chat_live_preview_emit_stride(12), 12);
         assert_eq!(super::cli_chat_live_preview_emit_stride(20), 20);
-        assert_eq!(super::cli_chat_live_preview_emit_stride(80), 48);
+        assert_eq!(super::cli_chat_live_preview_emit_stride(80), 24);
     }
 
     #[test]
