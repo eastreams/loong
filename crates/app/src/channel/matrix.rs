@@ -647,7 +647,11 @@ mod tests {
         assert_eq!(inbox.len(), 1);
         assert_eq!(
             inbox[0].session.session_key(),
-            "matrix:ops-bot:~b64~IW9wczpleGFtcGxlLm9yZw:~b64~QGFsaWNlOmV4YW1wbGUub3Jn"
+            "matrix:ops-bot:~b64~IW9wczpleGFtcGxlLm9yZw"
+        );
+        assert_eq!(
+            inbox[0].session.participant_id.as_deref(),
+            Some("@alice:example.org")
         );
         assert_eq!(inbox[0].text, "hello matrix");
         assert_eq!(inbox[0].reply_target.id, "!ops:example.org");
