@@ -76,12 +76,32 @@ fn resolve_channel_conversation_address(
         }
     };
 
-    let mut effective = ConversationSessionAddress::from_session_id(active_session_id)
+    Ok(build_effective_channel_conversation_address(
+        active_session_id.as_str(),
+        session,
+    ))
+}
+
+fn build_effective_channel_conversation_address(
+    session_id: &str,
+    session: &ChannelSession,
+) -> ConversationSessionAddress {
+    let mut effective = ConversationSessionAddress::from_session_id(session_id)
         .with_channel_scope(session.platform.as_str(), session.conversation_id.clone());
     if let Some(account_id) = session.account_id.as_deref() {
         effective = effective.with_account_id(account_id);
     }
-    Ok(effective)
+    if session.identity_participant_scoped
+        && let Some(participant_id) = session.participant_id.as_deref()
+    {
+        effective = effective.with_participant_id(participant_id);
+    }
+    if session.identity_thread_scoped
+        && let Some(thread_id) = session.thread_id.as_deref()
+    {
+        effective = effective.with_thread_id(thread_id);
+    }
+    effective
 }
 
 fn unix_time_ms_now() -> i64 {
@@ -383,15 +403,10 @@ async fn maybe_reset_channel_session(
         && let Some(binding) = prior_binding.as_ref()
     {
         let manager = crate::acp::shared_acp_session_manager(config)?;
-        let mut active_address =
-            ConversationSessionAddress::from_session_id(binding.active_session_id.clone())
-                .with_channel_scope(
-                    message.session.platform.as_str(),
-                    message.session.conversation_id.clone(),
-                );
-        if let Some(account_id) = message.session.account_id.as_deref() {
-            active_address = active_address.with_account_id(account_id);
-        }
+        let active_address = build_effective_channel_conversation_address(
+            binding.active_session_id.as_str(),
+            &message.session,
+        );
         if let Ok(route) =
             crate::acp::derive_acp_conversation_route_for_address(config, &active_address)
         {
@@ -662,6 +677,32 @@ mod tests {
             .expect("load route binding")
             .expect("route binding exists");
         assert_eq!(binding.active_session_id, first.session_id);
+    }
+
+    #[test]
+    fn resolve_channel_conversation_address_preserves_opt_in_thread_scope() {
+        let config = isolated_config("thread-scope");
+        let session = ChannelSession::with_account(ChannelPlatform::Telegram, "bot_123456", "42")
+            .with_thread_id("7")
+            .with_identity_thread_scoped(true);
+
+        let address = resolve_channel_conversation_address(&config, &session)
+            .expect("resolve thread-scoped route address");
+
+        assert_eq!(address.session_id, "telegram:bot_123456:42:7");
+        assert_eq!(address.channel_id.as_deref(), Some("telegram"));
+        assert_eq!(address.account_id.as_deref(), Some("bot_123456"));
+        assert_eq!(address.conversation_id.as_deref(), Some("42"));
+        assert_eq!(address.thread_id.as_deref(), Some("7"));
+        assert!(address.participant_id.is_none());
+
+        let repo = SessionRepository::new(&SessionStoreConfig::from_memory_config(&config.memory))
+            .expect("session repository");
+        let binding = repo
+            .load_session_route_binding("telegram:bot_123456:42:7")
+            .expect("load route binding")
+            .expect("route binding exists");
+        assert_eq!(binding.active_session_id, address.session_id);
     }
 
     #[tokio::test]
