@@ -452,7 +452,9 @@ fn fresh_local_session_id(route_session_id: &str) -> String {
             sanitized.push('_');
         }
     }
-    format!("{sanitized}__new__{}", unix_time_ms_now())
+    let timestamp_ms = unix_time_ms_now();
+    let random_suffix = rand::random::<u64>();
+    format!("{sanitized}__new__{timestamp_ms}_{random_suffix:016x}")
 }
 
 pub(super) fn reload_channel_turn_config(
