@@ -946,9 +946,7 @@ pub fn skills_cli_json(execution: &SkillsCommandExecution) -> Value {
 }
 
 fn canonicalize_skills_tool_name(tool_name: &str) -> &str {
-    match tool_name {
-        other => other,
-    }
+    tool_name
 }
 
 pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<String> {

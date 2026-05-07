@@ -278,7 +278,8 @@ fn run_migrate_cli_apply_selected_mode_can_apply_external_skill_plan() {
     );
     assert!(
         output_root
-            .join("external-skills-installed")
+            .join(mvp::config::HOME_DIR_NAME)
+            .join("skills")
             .join("release-guard")
             .join("SKILL.md")
             .exists(),
