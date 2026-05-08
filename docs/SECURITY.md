@@ -234,7 +234,7 @@ Provider runtime binding:
 
 - `loong doctor security` is the operator-facing exposure audit for the current local runtime
 - It reports `covered`, `partial`, `exposed`, and `unknown` findings instead of collapsing everything into pass/fail
-- Current audit categories include durable audit retention, shell posture, tool file-root confinement, web-fetch egress, external-skills posture, secret hygiene, and browser automation surfaces
+- Current audit categories include durable audit retention, shell posture, tool file-root confinement, web-fetch egress, skills posture, secret hygiene, and browser automation surfaces
 - `loong doctor security --json` provides a stable machine-readable report for local automation and support workflows
 
 ### Web HTTP SSRF Guardrails

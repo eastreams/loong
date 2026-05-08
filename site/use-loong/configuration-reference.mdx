@@ -37,7 +37,7 @@ loong validate-config --config /path/to/custom-config.toml
 - [memory](#memory) - Memory and conversation history
 - [conversation](#conversation) - Conversation runtime behavior
 - [acp](#acp) - Agent Control Plane settings
-- [external_skills](#external_skills) - External skill management
+- [skills](#skills) - External skill management
 - [audit](#audit) - Audit logging
 - [channels](#channels) - Channel-specific settings
 - [feishu_integration](#feishu_integration) - Feishu OAuth integration settings
@@ -592,13 +592,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]
 
 ---
 
-## external_skills
+## skills
 
-Configuration for external skill management.
+Configuration for skills.
 
 | Field | Type | Default | Valid Values | Description |
 |-------|------|---------|--------------|-------------|
-| `enabled` | boolean | `false` | `true`, `false` | Enable external skills |
+| `enabled` | boolean | `false` | `true`, `false` | Enable skills |
 | `require_download_approval` | boolean | `true` | `true`, `false` | Require approval for downloads |
 | `allowed_domains` | string[] | `[]` | Domain names | Allowed download domains |
 | `blocked_domains` | string[] | `[]` | Domain names | Blocked download domains |
@@ -608,7 +608,7 @@ Configuration for external skill management.
 ### Example
 
 ```toml
-[external_skills]
+[skills]
 enabled = true
 require_download_approval = true
 allowed_domains = ["github.com", "gist.github.com"]

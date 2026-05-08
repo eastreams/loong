@@ -23,7 +23,7 @@ guides, channel guides, rollout recipes, or the deeper
 | one service-channel account that should own a reply loop | [Single-Account Channel Shape](#single-account-channel-shape) |
 | several channel accounts with stable selector ids | [Multi-Account Channel Shape](#multi-account-channel-shape) |
 | `gateway run` or `gateway run` selectors | [Gateway Selector Rule](#gateway-selector-rule) |
-| managed skill install, exposure, and persisted download policy | [Managed Skills](/use-loong/managed-skills) |
+| skill install, exposure, and persisted download policy | [Skills](/use-loong/skills) |
 | built-in web or browser private-host and domain rules | [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) |
 | outbound sends to a private bridge or self-hosted HTTP endpoint | [Outbound HTTP Trust Toggle](#outbound-http-trust-toggle) |
 | the current public memory shape | [Memory Profile Shape](#memory-profile-shape) |
@@ -36,10 +36,10 @@ Loong keeps the top-level operator config explicit:
 - `providers.<id>` stores reviewed provider profiles
 - channel families such as `feishu`, `telegram`, or `wecom` keep their own
   account-aware config blocks
-- `external_skills` keeps managed skill enablement and download policy explicit
+- `skills` keeps skill enablement and download policy explicit
 - `tools.browser` and `tools.web` keep bounded page browsing, session limits,
   and trust boundaries explicit, while richer browser automation stays an
-  installable managed skill instead of a hidden sidecar lane
+  installable skill instead of a hidden sidecar lane
 - `memory.profile` stays operator-visible as the continuity choice instead of exposing multiple public memory forms or hiding behind prompt logic
 - top-level runtime toggles such as `outbound_http` stay explicit
 
@@ -77,19 +77,19 @@ Secret reference note:
 
 Other governed operator-facing config families live alongside that core shape:
 
-- [Managed Skills](/use-loong/managed-skills) covers `[external_skills]`
-  enablement, install policy, and `agent-browser` setup.
+- [Skills](/use-loong/skills) covers `[skills]`
+  enablement, install policy, and browser automation setup.
 - [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries)
   covers `[tools.browser]`, `[tools.web]`, and
   when `[outbound_http] allow_private_hosts = true` is the right owner.
 
 ## Skills And Browser Boundary Shape
 
-When the `config.toml` question is really about managed skills, browser
+When the `config.toml` question is really about skills, browser
 enablement, or domain restrictions, the public shape looks like this:
 
 ```toml
-[external_skills]
+[skills]
 enabled = false
 require_download_approval = true
 auto_expose_installed = false
@@ -112,18 +112,18 @@ allow_private_hosts = false
 
 Read that block with these owner rules:
 
-- `[external_skills]` governs managed skill discovery, download approval,
+- `[skills]` governs skill discovery, download approval,
   install location, and runtime exposure policy
 - `[tools.browser]` governs built-in bounded page browsing and local session,
   link, and text limits
 - `[tools.web]` governs built-in web fetch and built-in browser host and domain
   trust
-- richer browser automation is exposed through managed skills such as
-  `agent-browser`, not a separate config block
+- richer browser automation is exposed through skills, not a separate config
+  block
 - `[outbound_http]` governs HTTP-backed outbound delivery, not the built-in
   browser
 
-Continue to [Managed Skills](/use-loong/managed-skills) when the blocker is
+Continue to [Skills](/use-loong/skills) when the blocker is
 install or exposure policy. Continue to
 [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) when
 the blocker is private hosts, domains, or browser automation runtime
@@ -335,7 +335,7 @@ continuity model and progression rules.
 | choose the provider lane first | [Providers And Models](/use-loong/providers-and-models) |
 | follow provider-specific config walkthroughs | [Provider Guides](/use-loong/provider-guides/index) and [Provider Recipes](/use-loong/provider-recipes) |
 | understand the delivery-surface model first | [Channels](/use-loong/channels) |
-| manage skill install and exposure policy | [Managed Skills](/use-loong/managed-skills) |
+| manage skill install and exposure policy | [Skills](/use-loong/skills) |
 | debug private-host, domain, or browser runtime gates | [Browser And Web Boundaries](/use-loong/browser-and-web-boundaries) |
 | follow channel setup and smoke-test paths | [Channel Guides](/use-loong/channel-guides/index), [Channel Recipes](/use-loong/channel-recipes), and [Channel Setup](/use-loong/channel-setup) |
 | choose between foreground serve loops and gateway ownership | [Gateway And Supervision](/use-loong/gateway-and-supervision) |

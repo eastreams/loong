@@ -32,7 +32,7 @@
           "use-loong/common-setups",
           "use-loong/configuration-patterns",
           "use-loong/configuration-reference",
-          "use-loong/managed-skills",
+          "use-loong/skills",
           "use-loong/browser-and-web-boundaries",
           "use-loong/volcengine-feishu-lark-playbook",
           "use-loong/wecom-rollout-playbook",

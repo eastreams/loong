@@ -672,7 +672,7 @@ fn assess_skills_probe_failure(
     evidence.push(auto_expose_evidence);
 
     let summary =
-        "The effective external-skills runtime policy could not be resolved through the policy surface, so the live posture is unknown."
+        "The effective skills runtime policy could not be resolved through the policy surface, so the live posture is unknown."
             .to_owned();
     let cli = mvp::config::active_cli_command_name();
     let next_steps = vec![

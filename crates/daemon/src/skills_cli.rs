@@ -97,7 +97,7 @@ pub enum SkillsPolicyCommands {
         #[arg(long, default_value_t = false)]
         approve_policy_update: bool,
     },
-    /// Reset persisted external-skills policy fields back to config defaults
+    /// Reset persisted skills policy fields back to config defaults
     Reset {
         #[arg(long, default_value_t = false)]
         approve_policy_update: bool,

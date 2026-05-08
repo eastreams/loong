@@ -1,16 +1,16 @@
 ---
-title: Managed Skills
-description: Install, expose, and troubleshoot managed external skills without guessing.
+title: Skills
+description: Install, expose, and troubleshoot skills without guessing.
 ---
 
-# Managed Skills
+# Skills
 
 Use this page when the question is no longer "does Loong support skills?"
 and is now "how do I discover, install, expose, and troubleshoot them on
 purpose?"
 
 `loong skills` is the public operator surface for discovery, install, removal,
-and persisted policy updates around managed external skills.
+and persisted policy updates around skills.
 
 ## Start Here
 
@@ -26,10 +26,10 @@ and persisted policy updates around managed external skills.
 
 ## Default Public Posture
 
-Managed external skills start from a fail-closed default:
+Skills start from a fail-closed default:
 
 ```toml
-[external_skills]
+[skills]
 enabled = false
 require_download_approval = true
 allowed_domains = []
@@ -39,27 +39,27 @@ auto_expose_installed = false
 
 Rules that matter:
 
-- `enabled = false` keeps the managed runtime fail-closed rather than silently
+- `enabled = false` keeps the skills runtime fail-closed rather than silently
   widening capability.
 - `require_download_approval = true` means remote skill downloads require an
   explicit operator approval step.
 - `auto_expose_installed = false` means installation and runtime visibility are
   kept separate until you turn that gate on.
-- `install_root` is optional and is the right place to pin a stable managed
-  skill location when the default runtime-owned path is not enough.
+- `install_root` is optional and is the right place to pin a stable skill
+  location when the default runtime-owned path is not enough.
 
 If you want the broader config map before this page gets operational, start with
 [Configuration Patterns](/use-loong/configuration-patterns).
 
 ## Operator Mental Model
 
-Managed external skills have four separate states:
+Skills have four separate states:
 
 1. discovery: `loong skills list`, `search`, `recommend`, and `info` tell you
    what the runtime can resolve; they do not install anything
 2. installation: `loong skills install` or `fetch --install` copies a skill
-   into the managed install root
-3. exposure: `external_skills.enabled` and `auto_expose_installed` decide
+   into the install root
+3. exposure: `skills.enabled` and `auto_expose_installed` decide
    whether installed skills become part of the usable runtime surface
 4. runtime readiness: some skills, especially browser automation helpers such
    as `agent-browser`, still depend on shell policy or an external runtime
@@ -110,7 +110,7 @@ Operational notes:
   rules, and `auto_expose_installed`, but `install_root` still belongs in
   config.
 - `skills install-bundled <skill_id>` also exists for first-party packaged
-  managed skills, including `agent-browser`.
+  skills, including `agent-browser`.
 
 ## Local Install vs Remote Fetch
 
@@ -134,7 +134,7 @@ Choose deliberately:
 - `install` is best for local archives, unpacked directories, or reviewed build
   artifacts you already trust.
 - `fetch --install` is best when you want one operator command that both
-  downloads and installs under the governed external-skills policy.
+  downloads and installs under the governed skills policy.
 - domain allow/block rules apply to `fetch` and belong in persisted policy
   rather than being hidden in ad-hoc shell aliases.
 
@@ -165,7 +165,7 @@ When you want the config to be explicit instead of relying only on CLI
 mutations, this is the public shape to keep in mind:
 
 ```toml
-[external_skills]
+[skills]
 enabled = true
 require_download_approval = true
 allowed_domains = ["skills.sh"]
@@ -188,7 +188,7 @@ Use this when:
 | --- | --- | --- |
 | `skills fetch` is rejected before download starts | download approval or domain policy is blocking it | run `loong skills policy get`, then retry with `--approve-download` or update policy deliberately |
 | a skill installed but does not show up as usable | install succeeded, but the runtime exposure gate is still closed | set `auto_expose_installed = true` through `skills policy set` |
-| you do not know where managed skills should live | the runtime default is acceptable until you need a reviewed location | set `external_skills.install_root` in config when you need a stable explicit path |
+| you do not know where skills should live | the runtime default is acceptable until you need a reviewed location | set `skills.install_root` in config when you need a stable explicit path |
 | `agent-browser` still does not run after install | shell policy or the runtime binary is still missing | remove `agent-browser` from `shell_deny`, verify `agent-browser open example.com`, then rerun `loong doctor` |
 
 ## Continue Reading
