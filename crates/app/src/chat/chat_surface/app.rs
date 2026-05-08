@@ -11084,7 +11084,8 @@ description: "actual description"
             .collect::<Vec<_>>()
             .join("\n");
 
-        std::thread::sleep(Duration::from_millis(100));
+        app.message_list
+            .rewind_startup_animation_for_test(Duration::from_millis(100));
         assert!(app.message_list.refresh_startup_animation());
 
         terminal.draw(|f| app.render(f)).expect("draw");

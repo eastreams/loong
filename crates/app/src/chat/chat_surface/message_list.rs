@@ -914,6 +914,11 @@ impl MessageList {
         self.scroll_state.set_snap_on_next_render_for_test(value);
     }
 
+    #[cfg(test)]
+    pub(crate) fn rewind_startup_animation_for_test(&mut self, duration: Duration) {
+        self.startup_animation_started_at = Instant::now() - duration;
+    }
+
     pub fn refresh_startup_animation(&mut self) -> bool {
         if reduced_motion_enabled() {
             self.last_startup_animation_signature = None;
@@ -7820,7 +7825,7 @@ cargo test -p loong-app --lib
 
         assert!(list.startup_animation_active());
         list.last_startup_animation_signature = None;
-        std::thread::sleep(Duration::from_millis(
+        list.rewind_startup_animation_for_test(Duration::from_millis(
             STARTUP_LOGO_EYE_FRAME_MS.saturating_add(10),
         ));
         assert!(
