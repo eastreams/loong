@@ -35,6 +35,10 @@ impl I18nService {
         Self { current_lang: lang }
     }
 
+    pub fn language(&self) -> Language {
+        self.current_lang
+    }
+
     pub fn text(&self, key: SurfaceCopy) -> &'static str {
         text_for(self.current_lang, key)
     }

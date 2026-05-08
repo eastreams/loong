@@ -1,6 +1,7 @@
 use crossterm::event::{
     self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use crossterm::terminal::SetTitle;
 use ratatui::{
     Frame, Terminal,
     backend::Backend,
@@ -13,7 +14,7 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -54,6 +55,10 @@ pub enum Focus {
 
 const FOOTER_BOTTOM_BREATHING_HEIGHT: u16 = 1;
 const FOOTER_HORIZONTAL_INDENT: u16 = 2;
+const MAX_TERMINAL_TITLE_CHARS: usize = 180;
+const TERMINAL_TITLE_BRAILLE_FRAMES: [&str; 10] =
+    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const TERMINAL_TITLE_BRAILLE_INTERVAL_MS: u64 = 100;
 const PENDING_TOOL_ANIMATION_FRAME_MS: u64 = 90;
 const PENDING_TOOL_LABEL_COLORS: [Color; 6] = [
     SURFACE_DIM_GRAY,
@@ -83,6 +88,15 @@ struct PendingRenderCache {
 struct LiveTranscriptState {
     draft_preview: Option<String>,
     tool_activity_lines: Vec<String>,
+}
+
+impl LiveTranscriptState {
+    fn has_needs_approval(&self) -> bool {
+        self.tool_activity_lines.iter().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("[needs_approval]") || trimmed.contains("[needs_approval]")
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -935,6 +949,9 @@ pub struct App {
     pub cwd: String,
     pub model: String,
     pub title: Option<String>,
+    last_terminal_title: Option<String>,
+    title_attention_required: bool,
+    title_pending_approval_count: usize,
     pub i18n: I18nService,
 }
 
@@ -981,6 +998,9 @@ impl App {
             cwd: format_cwd(runtime),
             model: runtime.config.provider.model.clone(),
             title: None,
+            last_terminal_title: None,
+            title_attention_required: false,
+            title_pending_approval_count: 0,
             i18n: I18nService::new(language),
         };
 
@@ -1443,6 +1463,203 @@ impl App {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoongTerminalActivity {
+    Idle,
+    Working,
+    AttentionRequired,
+}
+
+fn loong_terminal_title_prefix(activity: LoongTerminalActivity) -> &'static str {
+    match activity {
+        LoongTerminalActivity::Idle => "🐉",
+        LoongTerminalActivity::Working => "⠋",
+        LoongTerminalActivity::AttentionRequired => "[ ! ] Action Required",
+    }
+}
+
+fn compact_path_label(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return "~".to_owned();
+    }
+
+    let normalized = trimmed.trim_end_matches(['/', '\\']);
+    if normalized.is_empty() {
+        return trimmed.to_owned();
+    }
+
+    Path::new(normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| normalized.to_owned())
+}
+
+fn terminal_title_braille_frame(start: Option<std::time::Instant>) -> &'static str {
+    let elapsed_ms = start
+        .map(|value| value.elapsed().as_millis() as u64)
+        .unwrap_or_default();
+    let frame_index = ((elapsed_ms / TERMINAL_TITLE_BRAILLE_INTERVAL_MS.max(1)) as usize)
+        % TERMINAL_TITLE_BRAILLE_FRAMES.len();
+    TERMINAL_TITLE_BRAILLE_FRAMES
+        .get(frame_index)
+        .copied()
+        .unwrap_or(TERMINAL_TITLE_BRAILLE_FRAMES[0])
+}
+
+fn build_loong_terminal_title(
+    cwd: &str,
+    activity: LoongTerminalActivity,
+    turn_start: Option<std::time::Instant>,
+) -> String {
+    let prefix = match activity {
+        LoongTerminalActivity::Idle => loong_terminal_title_prefix(activity),
+        LoongTerminalActivity::Working => terminal_title_braille_frame(turn_start),
+        LoongTerminalActivity::AttentionRequired => loong_terminal_title_prefix(activity),
+    };
+    format!("{} - {}", prefix, compact_path_label(cwd))
+}
+
+fn refresh_app_cwd(app: &mut App, runtime: &CliTurnRuntime) {
+    app.cwd = format_cwd(runtime);
+}
+
+fn refresh_app_cwd_dependent_state(app: &mut App, runtime: &CliTurnRuntime) {
+    let preserved_skill_query = app
+        .command_palette
+        .is_skills_mode()
+        .then(|| app.command_palette.query_text().to_owned());
+    refresh_app_cwd(app, runtime);
+    app.detected_skills = detect_available_skills(runtime.effective_working_directory.as_deref());
+    let language = app.i18n.language();
+    app.command_palette = CommandPalette::new(language, app.detected_skills.clone());
+    if let Some(query) = preserved_skill_query.as_deref() {
+        app.command_palette.show_skills(query);
+    }
+    app.title_pending_approval_count = current_pending_approval_count(runtime).unwrap_or(0);
+    app.sync_inline_skill_popup();
+}
+
+fn current_pending_approval_count(runtime: &CliTurnRuntime) -> CliResult<usize> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
+        let approvals = store.approval_queue(&runtime.session_id, 256)?;
+        Ok(approvals.len())
+    }
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = runtime;
+        Ok(0)
+    }
+}
+
+fn app_terminal_title_requires_attention(app: &App) -> bool {
+    app.title_attention_required
+        || app.awaiting_first_turn_bootstrap_reply
+        || app.title_pending_approval_count > 0
+        || app
+            .live_transcript
+            .lock()
+            .ok()
+            .is_some_and(|state| state.has_needs_approval())
+}
+
+fn app_terminal_title_activity(app: &App) -> LoongTerminalActivity {
+    if app.pending_turn {
+        LoongTerminalActivity::Working
+    } else if app_terminal_title_requires_attention(app) {
+        LoongTerminalActivity::AttentionRequired
+    } else {
+        LoongTerminalActivity::Idle
+    }
+}
+
+fn sanitize_terminal_title(title: &str) -> String {
+    let mut sanitized = String::new();
+    let mut chars_written = 0usize;
+    let mut pending_space = false;
+
+    for ch in title.chars() {
+        if ch.is_whitespace() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+
+        if is_disallowed_terminal_title_char(ch) {
+            continue;
+        }
+
+        if pending_space && chars_written < MAX_TERMINAL_TITLE_CHARS.saturating_sub(1) {
+            sanitized.push(' ');
+            chars_written += 1;
+            pending_space = false;
+        }
+
+        if chars_written >= MAX_TERMINAL_TITLE_CHARS {
+            break;
+        }
+
+        sanitized.push(ch);
+        chars_written += 1;
+    }
+
+    sanitized
+}
+
+fn is_disallowed_terminal_title_char(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{00AD}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{E0100}'..='\u{E01EF}'
+        )
+}
+
+fn write_terminal_title(title: &str) -> std::io::Result<()> {
+    if !std::io::stdout().is_terminal() {
+        return Ok(());
+    }
+
+    crossterm::execute!(std::io::stdout(), SetTitle(title))
+}
+
+fn sync_app_terminal_title(app: &mut App) {
+    let title = sanitize_terminal_title(
+        build_loong_terminal_title(&app.cwd, app_terminal_title_activity(app), app.turn_start)
+            .as_str(),
+    );
+    if title.is_empty() || app.last_terminal_title.as_deref() == Some(title.as_str()) {
+        return;
+    }
+
+    if write_terminal_title(title.as_str()).is_ok() {
+        app.last_terminal_title = Some(title);
+    }
+}
+
+fn clear_app_terminal_title(app: &mut App) {
+    let stable_title = sanitize_terminal_title(
+        build_loong_terminal_title(&app.cwd, LoongTerminalActivity::Idle, None).as_str(),
+    );
+    if stable_title.is_empty() || app.last_terminal_title.as_deref() == Some(stable_title.as_str())
+    {
+        return;
+    }
+
+    if write_terminal_title(stable_title.as_str()).is_ok() {
+        app.last_terminal_title = Some(stable_title);
+    }
+}
+
 pub async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     runtime: CliTurnRuntime,
@@ -1454,6 +1671,8 @@ pub async fn run_app<B: Backend>(
         .map_err(|e| format!("failed to query terminal size: {e}"))?;
     let render_width = last_known_size.width as usize;
     let mut app = App::new(&runtime, &options, render_width)?;
+    refresh_app_cwd_dependent_state(&mut app, &runtime);
+    sync_app_terminal_title(&mut app);
     let mut startup_release_task = Some(tokio::spawn(load_startup_release_lines(render_width)));
     let mut dirty = true;
     let mut last_resize_at: Option<std::time::Instant> = None;
@@ -1506,6 +1725,7 @@ pub async fn run_app<B: Backend>(
         }
 
         if dirty {
+            sync_app_terminal_title(&mut app);
             terminal
                 .draw(|f| app.render(f))
                 .map_err(|e| format!("draw error: {}", e))?;
@@ -1533,6 +1753,7 @@ pub async fn run_app<B: Backend>(
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
+                        clear_app_terminal_title(&mut app);
                         break;
                     }
 
@@ -1632,6 +1853,7 @@ pub async fn run_app<B: Backend>(
                         }
                         if let Some(msg) = pending_submission {
                             if msg == "/exit" {
+                                clear_app_terminal_title(&mut app);
                                 break;
                             }
                             let trimmed_msg = msg.trim();
@@ -1653,6 +1875,7 @@ pub async fn run_app<B: Backend>(
                         }
                         if let Some(command) = pending_command {
                             if command == "/exit" {
+                                clear_app_terminal_title(&mut app);
                                 break;
                             }
                             run_surface_command(
@@ -1755,6 +1978,7 @@ pub async fn run_app<B: Backend>(
 
                     if let Some(msg) = submitted_message {
                         if msg == "/exit" {
+                            clear_app_terminal_title(&mut app);
                             break;
                         }
 
@@ -1780,6 +2004,7 @@ pub async fn run_app<B: Backend>(
 
                     if let Some(command) = command_to_run {
                         if command == "/exit" {
+                            clear_app_terminal_title(&mut app);
                             break;
                         }
 
@@ -1791,6 +2016,7 @@ pub async fn run_app<B: Backend>(
                 Event::Mouse(mouse_event) => {
                     if let Some(command) = app.handle_mouse_event(mouse_event) {
                         if command == "/exit" {
+                            clear_app_terminal_title(&mut app);
                             break;
                         }
                         run_surface_command(terminal, &mut app, &mut runtime, &options, &command)
@@ -1833,6 +2059,7 @@ pub async fn run_app<B: Backend>(
             }
         }
     }
+    clear_app_terminal_title(&mut app);
     Ok(())
 }
 
@@ -4522,6 +4749,7 @@ async fn run_surface_command<B: Backend>(
     options: &CliChatOptions,
     input: &str,
 ) -> CliResult<()> {
+    refresh_app_cwd_dependent_state(app, runtime);
     let trimmed = input.trim();
     let (command, args) = split_surface_command(trimmed);
     let width = current_render_width(terminal)?;
@@ -4579,6 +4807,22 @@ async fn run_surface_command<B: Backend>(
                 let result = import_context_into_composer(app, cwd.as_path(), args);
                 app.message_list
                     .add_rendered_lines(render_import_command_lines_with_width(result, width));
+            }
+            app.focus = Focus::Composer;
+            Ok(())
+        }
+        "/cwd" => {
+            if args.trim().is_empty() {
+                let lines = render_cwd_command_lines_with_width(runtime, width);
+                app.message_list.add_rendered_lines(lines);
+            } else {
+                let result = resolve_cwd_change_path(runtime, args).map(|path| {
+                    runtime.effective_working_directory = Some(path.clone());
+                    refresh_app_cwd_dependent_state(app, runtime);
+                    path
+                });
+                app.message_list
+                    .add_rendered_lines(render_cwd_change_command_lines_with_width(result, width));
             }
             app.focus = Focus::Composer;
             Ok(())
@@ -5642,6 +5886,70 @@ fn resolve_import_path(cwd: &Path, input: &str) -> PathBuf {
     }
 }
 
+fn resolve_cwd_change_path(runtime: &CliTurnRuntime, input: &str) -> Result<PathBuf, String> {
+    let trimmed = input.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return Err("Usage: /cwd <path>".to_owned());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        current_working_directory(runtime).join(candidate)
+    };
+
+    let normalized = if resolved.exists() {
+        dunce::canonicalize(&resolved)
+            .map_err(|error| format!("failed to resolve {}: {error}", resolved.display()))?
+    } else {
+        return Err(format!(
+            "working directory does not exist: {}",
+            resolved.display()
+        ));
+    };
+
+    if !normalized.is_dir() {
+        return Err(format!(
+            "working directory is not a directory: {}",
+            normalized.display()
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn render_cwd_change_command_lines_with_width(
+    result: Result<PathBuf, String>,
+    width: usize,
+) -> Vec<String> {
+    let (tone, title, lines) = match result {
+        Ok(path) => (
+            TuiCalloutTone::Info,
+            "cwd updated".to_owned(),
+            vec![format!("Working directory set to {}.", path.display())],
+        ),
+        Err(error) => (
+            TuiCalloutTone::Warning,
+            "cwd unchanged".to_owned(),
+            vec![error],
+        ),
+    };
+    let message_spec = TuiMessageSpec {
+        role: "cwd".to_owned(),
+        caption: Some("working directory".to_owned()),
+        sections: vec![TuiSectionSpec::Callout {
+            tone,
+            title: Some(title),
+            lines,
+        }],
+        footer_lines: vec![
+            "Use /cwd with no arguments to inspect the current working directory.".to_owned(),
+        ],
+    };
+    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
 fn import_context_into_composer(app: &mut App, cwd: &Path, args: &str) -> Result<PathBuf, String> {
     let path = resolve_import_path(cwd, args);
     let content = fs::read_to_string(path.as_path())
@@ -5801,6 +6109,7 @@ async fn start_turn<B: Backend>(
     input: String,
     echo_user_message: bool,
 ) -> CliResult<()> {
+    refresh_app_cwd_dependent_state(app, runtime);
     maybe_capture_and_persist_first_turn_bootstrap_reply(app, runtime, input.as_str())?;
     let width = current_render_width(terminal)?;
     app.live_render_width.store(width.max(1), Ordering::Relaxed);
@@ -5812,6 +6121,7 @@ async fn start_turn<B: Backend>(
     app.last_pending_signature = None;
     app.pending_turn = true;
     app.turn_start = Some(std::time::Instant::now());
+    app.title_attention_required = false;
     app.focus = Focus::Composer;
     clear_live_transcript(&app.live_transcript);
 
@@ -7287,9 +7597,13 @@ async fn maybe_finalize_pending_turn<B: Backend>(
     app.turn_start = None;
     app.live_rerender = None;
     app.composer_follow_up_intent = false;
+    refresh_app_cwd_dependent_state(app, runtime);
     clear_live_transcript(&app.live_transcript);
     app.focus = Focus::Composer;
-    if super::super::build_cli_chat_approval_screen_spec(&assistant_text).is_some() {
+    let produced_approval_screen =
+        super::super::build_cli_chat_approval_screen_spec(&assistant_text).is_some();
+    app.title_attention_required = produced_approval_screen;
+    if produced_approval_screen {
         app.message_list.add_rendered_lines(
             super::super::render_cli_chat_assistant_lines_with_width(&assistant_text, width),
         );
@@ -8623,6 +8937,9 @@ mod tests {
             cwd: "/tmp/example".to_owned(),
             model: "gpt-test".to_owned(),
             title: None,
+            last_terminal_title: None,
+            title_attention_required: false,
+            title_pending_approval_count: 0,
             i18n: I18nService::new(Language::En),
         }
     }
@@ -8921,6 +9238,224 @@ mod tests {
         assert_eq!(truncated.chars().next(), path.chars().next());
         assert!(truncated.ends_with("session"));
         assert_eq!(crate::presentation::display_width(&truncated), 20);
+    }
+
+    #[test]
+    fn compact_path_label_prefers_last_path_component() {
+        assert_eq!(
+            super::compact_path_label("/tmp/workspace/project-x"),
+            "project-x"
+        );
+        assert_eq!(super::compact_path_label("/"), "/");
+        assert_eq!(super::compact_path_label(""), "~");
+    }
+
+    #[test]
+    fn build_loong_terminal_title_switches_prefix_by_activity() {
+        assert_eq!(
+            super::build_loong_terminal_title(
+                "/tmp/workspace/project-x",
+                super::LoongTerminalActivity::Idle,
+                None
+            ),
+            "🐉 - project-x"
+        );
+        let working = super::build_loong_terminal_title(
+            "/tmp/workspace/project-x",
+            super::LoongTerminalActivity::Working,
+            Some(std::time::Instant::now()),
+        );
+        assert!(working.ends_with(" - project-x"));
+        let prefix = working.split(" - ").next().expect("title prefix");
+        assert!(super::TERMINAL_TITLE_BRAILLE_FRAMES.contains(&prefix));
+    }
+
+    #[test]
+    fn terminal_title_braille_frame_uses_known_frames() {
+        let frame = super::terminal_title_braille_frame(Some(std::time::Instant::now()));
+        assert!(super::TERMINAL_TITLE_BRAILLE_FRAMES.contains(&frame));
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_bootstrap_reply() {
+        let mut app = blank_app();
+        app.awaiting_first_turn_bootstrap_reply = true;
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_approval_latch() {
+        let mut app = blank_app();
+        app.title_attention_required = true;
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_pending_approval_count() {
+        let mut app = blank_app();
+        app.title_pending_approval_count = 2;
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_live_needs_approval() {
+        let app = blank_app();
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines =
+                vec!["[needs_approval] shell.exec - operator confirmation required".to_owned()];
+        }
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn refresh_app_cwd_uses_runtime_working_directory() {
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(PathBuf::from("/tmp/workspace/actual-project"));
+        let mut app = blank_app();
+        app.cwd = "/tmp/example".to_owned();
+
+        super::refresh_app_cwd(&mut app, &runtime);
+
+        assert_eq!(app.cwd, "/tmp/workspace/actual-project");
+    }
+
+    #[test]
+    fn resolve_cwd_change_path_supports_relative_paths_from_runtime_cwd() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-change");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested cwd");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-change.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(base.clone());
+
+        let resolved = super::resolve_cwd_change_path(&runtime, "nested").expect("resolve cwd");
+
+        assert_eq!(
+            resolved,
+            dunce::canonicalize(nested).expect("canonical nested")
+        );
+    }
+
+    #[test]
+    fn cwd_command_updates_runtime_and_app_cwd() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-command");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested cwd");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-command.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(base.clone());
+        let mut app = blank_app();
+        app.cwd = base.display().to_string();
+        let backend = TestBackend::new(72, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(super::run_surface_command(
+                &mut terminal,
+                &mut app,
+                &mut runtime,
+                &CliChatOptions::default(),
+                "/cwd nested",
+            ))
+            .expect("run cwd command");
+
+        assert_eq!(
+            runtime.effective_working_directory,
+            Some(dunce::canonicalize(&nested).expect("canonical nested"))
+        );
+        assert_eq!(
+            PathBuf::from(&app.cwd),
+            dunce::canonicalize(&nested).expect("canonical nested")
+        );
+    }
+
+    #[test]
+    fn refresh_app_cwd_dependent_state_reloads_skills_from_new_cwd() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-skills-base");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(nested.join("skills/demo-skill")).expect("create skills");
+        std::fs::write(
+            nested.join("skills/demo-skill/SKILL.md"),
+            "---\nname: demo-skill\ndescription: nested skill\n---\n",
+        )
+        .expect("write skill");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-skills.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(nested.clone());
+        let mut app = blank_app();
+        app.detected_skills.clear();
+        app.command_palette = CommandPalette::new(Language::En, Vec::new());
+
+        super::refresh_app_cwd_dependent_state(&mut app, &runtime);
+
+        assert_eq!(
+            dunce::canonicalize(PathBuf::from(&app.cwd)).expect("canonical app cwd"),
+            dunce::canonicalize(&nested).expect("canonical nested")
+        );
+        assert!(
+            app.detected_skills
+                .iter()
+                .any(|skill| skill.name == "demo-skill")
+        );
+    }
+
+    #[test]
+    fn refresh_app_cwd_dependent_state_preserves_skill_query() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-skill-query");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(nested.join("skills/demo-skill")).expect("create skills");
+        std::fs::write(
+            nested.join("skills/demo-skill/SKILL.md"),
+            "---\nname: demo-skill\ndescription: nested skill\n---\n",
+        )
+        .expect("write skill");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-query.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(nested.clone());
+        let mut app = blank_app();
+        app.command_palette = CommandPalette::new(Language::En, Vec::new());
+        app.command_palette.show_skills("demo");
+
+        super::refresh_app_cwd_dependent_state(&mut app, &runtime);
+
+        assert!(app.command_palette.is_skills_mode());
+        assert_eq!(app.command_palette.query_text(), "demo");
+        assert!(
+            app.detected_skills
+                .iter()
+                .any(|skill| skill.name == "demo-skill")
+        );
+    }
+
+    #[test]
+    fn sanitize_terminal_title_collapses_whitespace_and_controls() {
+        let sanitized = super::sanitize_terminal_title("  🐉 \n\t loong \u{202E} project  ");
+        assert_eq!(sanitized, "🐉 loong project");
+    }
+
+    #[test]
+    fn sanitize_terminal_title_truncates_to_max_chars() {
+        let title = "a".repeat(super::MAX_TERMINAL_TITLE_CHARS + 24);
+        let sanitized = super::sanitize_terminal_title(&title);
+        assert_eq!(sanitized.chars().count(), super::MAX_TERMINAL_TITLE_CHARS);
     }
 
     #[test]

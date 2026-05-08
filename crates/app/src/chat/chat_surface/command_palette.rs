@@ -373,6 +373,10 @@ impl CommandPalette {
         !self.skills.is_empty()
     }
 
+    pub fn is_skills_mode(&self) -> bool {
+        self.mode == PaletteMode::Skills
+    }
+
     pub fn is_commands_mode(&self) -> bool {
         self.mode == PaletteMode::Commands
     }
