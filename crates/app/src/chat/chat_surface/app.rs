@@ -4816,11 +4816,11 @@ async fn run_surface_command<B: Backend>(
                 let lines = render_cwd_command_lines_with_width(runtime, width);
                 app.message_list.add_rendered_lines(lines);
             } else {
-                let result = resolve_cwd_change_path(runtime, args).map(|path| {
+                let result = resolve_cwd_change_path(runtime, args);
+                if let Ok(path) = result.as_ref() {
                     runtime.effective_working_directory = Some(path.clone());
                     refresh_app_cwd_dependent_state(app, runtime);
-                    path
-                });
+                }
                 app.message_list
                     .add_rendered_lines(render_cwd_change_command_lines_with_width(result, width));
             }
@@ -5620,6 +5620,11 @@ fn current_working_directory(runtime: &CliTurnRuntime) -> PathBuf {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn current_working_directory_display(runtime: &CliTurnRuntime) -> String {
+    let current_directory = current_working_directory(runtime);
+    current_directory.display().to_string()
 }
 
 fn render_new_conversation_lines_with_width(width: usize) -> Vec<String> {
@@ -7095,12 +7100,7 @@ fn render_themes_command_lines_with_width(width: usize) -> Vec<String> {
 }
 
 fn render_cwd_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -> Vec<String> {
-    let cwd = runtime
-        .effective_working_directory
-        .as_deref()
-        .unwrap_or(runtime.resolved_path.as_path())
-        .display()
-        .to_string();
+    let cwd = current_working_directory_display(runtime);
     let message_spec = TuiMessageSpec {
         role: "cwd".to_owned(),
         caption: Some("working directory".to_owned()),
@@ -8436,13 +8436,7 @@ fn compact_pending_lines_for_height(
 }
 
 fn format_cwd(runtime: &CliTurnRuntime) -> String {
-    if let Some(path) = runtime.effective_working_directory.as_ref() {
-        return path.display().to_string();
-    }
-
-    std::env::current_dir()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "~".to_owned())
+    current_working_directory_display(runtime)
 }
 
 fn build_chat_startup_content(
@@ -9343,7 +9337,7 @@ mod tests {
         std::fs::create_dir_all(&nested).expect("create nested cwd");
         let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-change.toml");
         let mut runtime = test_runtime_with_path(config_path);
-        runtime.effective_working_directory = Some(base.clone());
+        runtime.effective_working_directory = Some(base);
 
         let resolved = super::resolve_cwd_change_path(&runtime, "nested").expect("resolve cwd");
 
@@ -9429,7 +9423,7 @@ mod tests {
         .expect("write skill");
         let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-query.toml");
         let mut runtime = test_runtime_with_path(config_path);
-        runtime.effective_working_directory = Some(nested.clone());
+        runtime.effective_working_directory = Some(nested);
         let mut app = blank_app();
         app.command_palette = CommandPalette::new(Language::En, Vec::new());
         app.command_palette.show_skills("demo");
@@ -9443,6 +9437,18 @@ mod tests {
                 .iter()
                 .any(|skill| skill.name == "demo-skill")
         );
+    }
+
+    #[test]
+    fn render_cwd_command_uses_runtime_working_directory_fallback() {
+        let runtime = test_runtime_with_path(PathBuf::from("/tmp/loong-config.toml"));
+
+        let lines = super::render_cwd_command_lines_with_width(&runtime, 80);
+        let rendered = lines.join("\n");
+
+        let expected_display = super::current_working_directory_display(&runtime);
+        assert!(rendered.contains(expected_display.as_str()));
+        assert!(!rendered.contains(runtime.resolved_path.display().to_string().as_str()));
     }
 
     #[test]
