@@ -40,12 +40,16 @@ like a primary reader-facing product doc.
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
 |---|---:|---|---|
-| loong-vX.Y.Z[-suffix]-x86_64-unknown-linux-gnu.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
-| loong.bash | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.bash) |
-| _loong | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/_loong) |
-| loong.fish | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.fish) |
-| loong.ps1 | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.ps1) |
-| loong.elv | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/loong.elv) |
+| loong-vX.Y.Z[-suffix]-macos-arm64.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-macos-x64.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-linux-x64-gnu.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-linux-x64-musl.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-linux-arm64-gnu.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-android-arm64.tar.gz | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-windows-x64.zip | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| loong-vX.Y.Z[-suffix]-SHA256SUMS.txt | 0 | n/a | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/<asset>) |
+| install.sh | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/install.sh) |
+| install.ps1 | 0 | <sha256> | [link](https://github.com/eastreams/loong/releases/download/vX.Y.Z[-suffix]/install.ps1) |
 
 ## Verification
 | Check | Result | Evidence |

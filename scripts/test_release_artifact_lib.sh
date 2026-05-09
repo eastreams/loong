@@ -48,28 +48,28 @@ EOF
     "$(release_doc_backticked_field "$tmp_dir/v0.1.2.md" "Trace path")"
   assert_equals ".docs/releases/v0.1.2-debug.md" "$(release_debug_doc_relpath "v0.1.2")"
   assert_equals \
-    "loong-v0.1.2-x86_64-unknown-linux-gnu.tar.gz" \
+    "loong-v0.1.2-linux-x64-gnu.tar.gz" \
     "$(release_archive_name "loong" "v0.1.2" "x86_64-unknown-linux-gnu")"
   assert_equals \
-    "loong-v0.1.2-aarch64-apple-darwin.tar.gz" \
+    "loong-v0.1.2-macos-arm64.tar.gz" \
     "$(release_archive_name "loong" "v0.1.2" "aarch64-apple-darwin")"
   assert_equals \
-    "loong-v0.1.2-aarch64-unknown-linux-gnu.tar.gz" \
+    "loong-v0.1.2-linux-arm64-gnu.tar.gz" \
     "$(release_archive_name "loong" "v0.1.2" "aarch64-unknown-linux-gnu")"
   assert_equals \
-    "loong-v0.1.2-aarch64-linux-android.tar.gz" \
+    "loong-v0.1.2-android-arm64.tar.gz" \
     "$(release_archive_name "loong" "v0.1.2" "aarch64-linux-android")"
   assert_equals \
-    "loong-v0.1.2-x86_64-unknown-linux-musl.tar.gz" \
+    "loong-v0.1.2-linux-x64-musl.tar.gz" \
     "$(release_archive_name "loong" "v0.1.2" "x86_64-unknown-linux-musl")"
   assert_equals \
-    "loong-v0.1.2-x86_64-pc-windows-msvc.zip" \
+    "loong-v0.1.2-windows-x64.zip" \
     "$(release_archive_name "loong" "v0.1.2" "x86_64-pc-windows-msvc")"
   assert_equals \
-    "loong-v0.1.2-x86_64-pc-windows-msvc.zip.sha256" \
+    "loong-v0.1.2-SHA256SUMS.txt" \
     "$(release_archive_checksum_name "loong" "v0.1.2" "x86_64-pc-windows-msvc")"
   assert_equals \
-    "loong-v0.1.2-x86_64-unknown-linux-musl.tar.gz.sha256" \
+    "loong-v0.1.2-SHA256SUMS.txt" \
     "$(release_archive_checksum_name "loong" "v0.1.2" "x86_64-unknown-linux-musl")"
   assert_equals \
     "x86_64-unknown-linux-gnu" \

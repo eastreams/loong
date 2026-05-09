@@ -46,7 +46,7 @@ else
     local package_name="${1:?package_name is required}"
     local tag="${2:?tag is required}"
     local target="${3:?target is required}"
-    printf '%s.sha256\n' "$(release_archive_name "$package_name" "$tag" "$target")"
+    printf 'loong-%s-SHA256SUMS.txt\n' "$tag"
   }
 
   release_binary_name_for_target() {
@@ -845,9 +845,9 @@ install_from_release() {
   curl -fsSL --retry 3 --retry-delay 1 -o "${archive_path}" "${archive_url}"
   curl -fsSL --retry 3 --retry-delay 1 -o "${checksum_path}" "${checksum_url}"
 
-  expected_sha="$(awk '{print $1}' "${checksum_path}" | head -n 1)"
+  expected_sha="$(awk -v archive_name="${archive_name}" '$2 == archive_name { print $1 }' "${checksum_path}" | head -n 1)"
   if [[ -z "${expected_sha}" ]]; then
-    echo "error: checksum file ${checksum_name} did not contain a SHA256 value" >&2
+    echo "error: checksum manifest ${checksum_name} did not contain an entry for ${archive_name}" >&2
     exit 1
   fi
   actual_sha="$(sha256_file "${archive_path}")"

@@ -88,11 +88,23 @@ function Resolve-ReleaseTarget([string]$Platform, [string]$Arch) {
 }
 
 function Get-ReleaseArchiveName([string]$PackageName, [string]$Tag, [string]$Target) {
-    return "$PackageName-$Tag-$Target.zip"
+    $targetLabel = switch ($Target) {
+        "aarch64-apple-darwin" { "macos-arm64"; break }
+        "x86_64-apple-darwin" { "macos-x64"; break }
+        "aarch64-linux-android" { "android-arm64"; break }
+        "aarch64-unknown-linux-gnu" { "linux-arm64-gnu"; break }
+        "x86_64-unknown-linux-gnu" { "linux-x64-gnu"; break }
+        "x86_64-unknown-linux-musl" { "linux-x64-musl"; break }
+        "x86_64-pc-windows-msvc" { "windows-x64"; break }
+        default { throw "unsupported release target label for $Target" }
+    }
+
+    $extension = if ($Target -like "*-pc-windows-*") { "zip" } else { "tar.gz" }
+    return "$PackageName-$Tag-$targetLabel.$extension"
 }
 
 function Get-ReleaseChecksumName([string]$PackageName, [string]$Tag, [string]$Target) {
-    return "$(Get-ReleaseArchiveName -PackageName $PackageName -Tag $Tag -Target $Target).sha256"
+    return "loong-$Tag-SHA256SUMS.txt"
 }
 
 function Install-Binary([string]$SourceBinary) {
@@ -178,11 +190,14 @@ function Install-FromRelease {
         Invoke-WebRequest -Headers @{ "User-Agent" = "Loong-Install" } -Uri $archiveUrl -OutFile $archivePath
         Invoke-WebRequest -Headers @{ "User-Agent" = "Loong-Install" } -Uri $checksumUrl -OutFile $checksumPath
 
-        $checksumText = (Get-Content -Raw -Path $checksumPath).Trim()
-        if ([string]::IsNullOrWhiteSpace($checksumText)) {
-            throw "checksum file $checksumName did not contain a SHA256 value"
+        $checksumText = Get-Content -Raw -Path $checksumPath
+        $checksumEntry = $checksumText -split "`r?`n" | Where-Object {
+            $_ -match "^[0-9a-fA-F]+\s+$([regex]::Escape($archiveName))$"
+        } | Select-Object -First 1
+        if ([string]::IsNullOrWhiteSpace($checksumEntry)) {
+            throw "checksum manifest $checksumName did not contain an entry for $archiveName"
         }
-        $expectedSha = $checksumText.Split([char[]]" `t`r`n", [System.StringSplitOptions]::RemoveEmptyEntries)[0].ToLowerInvariant()
+        $expectedSha = $checksumEntry.Split([char[]]" `t", [System.StringSplitOptions]::RemoveEmptyEntries)[0].ToLowerInvariant()
         $actualSha = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLowerInvariant()
         if ($expectedSha -ne $actualSha) {
             throw "checksum verification failed for $archiveName"
