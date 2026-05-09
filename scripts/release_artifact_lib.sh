@@ -19,20 +19,44 @@ release_archive_extension_for_target() {
   esac
 }
 
+release_asset_target_label() {
+  local target="${1:?target is required}"
+  case "$target" in
+    aarch64-apple-darwin) printf 'macos-arm64\n' ;;
+    x86_64-apple-darwin) printf 'macos-x64\n' ;;
+    aarch64-linux-android) printf 'android-arm64\n' ;;
+    aarch64-unknown-linux-gnu) printf 'linux-arm64-gnu\n' ;;
+    x86_64-unknown-linux-gnu) printf 'linux-x64-gnu\n' ;;
+    x86_64-unknown-linux-musl) printf 'linux-x64-musl\n' ;;
+    x86_64-pc-windows-msvc) printf 'windows-x64\n' ;;
+    *)
+      echo "unsupported release asset target label for ${target}" >&2
+      return 1
+      ;;
+  esac
+}
+
 release_archive_name() {
   local package_name="${1:?package_name is required}"
   local tag="${2:?tag is required}"
   local target="${3:?target is required}"
   local archive_ext
+  local target_label
   archive_ext="$(release_archive_extension_for_target "$target")"
-  printf '%s-%s-%s.%s\n' "$package_name" "$tag" "$target" "$archive_ext"
+  target_label="$(release_asset_target_label "$target")"
+  printf '%s-%s-%s.%s\n' "$package_name" "$tag" "$target_label" "$archive_ext"
 }
 
 release_archive_checksum_name() {
   local package_name="${1:?package_name is required}"
   local tag="${2:?tag is required}"
   local target="${3:?target is required}"
-  printf '%s.sha256\n' "$(release_archive_name "$package_name" "$tag" "$target")"
+  printf '%s\n' "$(release_archive_manifest_name "$tag")"
+}
+
+release_archive_manifest_name() {
+  local tag="${1:?tag is required}"
+  printf 'loong-%s-SHA256SUMS.txt\n' "$tag"
 }
 
 release_binary_name_for_target() {

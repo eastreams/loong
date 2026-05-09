@@ -214,8 +214,18 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           archive="${PACKAGE_NAME}-${RELEASE_TAG}-${{ matrix.target }}.tar.gz"
-          tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${BIN_NAME}${{ matrix.ext }}"
-          cd dist && shasum -a 256 "${archive}" > "${archive}.sha256"
+          staging_dir="dist/package-${{ matrix.target }}"
+          mkdir -p "${staging_dir}"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}" "${staging_dir}/${BIN_NAME}${{ matrix.ext }}"
+          if [[ "${{ matrix.target }}" == *-pc-windows-* ]]; then
+            :
+          else
+            "target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}" completions bash > "${staging_dir}/loong.bash"
+            "target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}" completions zsh > "${staging_dir}/_loong"
+            "target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}" completions fish > "${staging_dir}/loong.fish"
+            "target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.ext }}" completions elvish > "${staging_dir}/loong.elv"
+          fi
+          tar -C "${staging_dir}" -czf "dist/${archive}" .
 
       - name: Package archive (Windows)
         if: matrix.archive == 'zip'
@@ -225,9 +235,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $archive = "${env:PACKAGE_NAME}-${env:RELEASE_TAG}-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}" -DestinationPath "dist/$archive" -Force
-          $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
-          Set-Content -Path "dist/$archive.sha256" -Value "$hash  $archive"
+          $stagingDir = Join-Path "dist" "package-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}" (Join-Path $stagingDir "${env:BIN_NAME}${{ matrix.ext }}") -Force
+          "target/${{ matrix.target }}/release/${env:BIN_NAME}${{ matrix.ext }}" completions powershell | Out-File -Encoding utf8 (Join-Path $stagingDir "loong.ps1")
+          Compress-Archive -Path (Join-Path $stagingDir '*') -DestinationPath "dist/$archive" -Force
 
       - name: Verify glibc floor (Linux GNU targets)
         if: endsWith(matrix.target, '-unknown-linux-gnu')
@@ -269,17 +281,22 @@ jobs:
           cp scripts/install.sh dist/install.sh
           cp scripts/install.ps1 dist/install.ps1
 
-      - name: Generate shell completions
+      - name: Generate SHA256 manifest
+        shell: bash
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          tar -xzf "dist/loong-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz" -C /tmp loong
-          /tmp/loong completions bash        > dist/loong.bash
-          /tmp/loong completions zsh         > dist/_loong
-          /tmp/loong completions fish        > dist/loong.fish
-          /tmp/loong completions powershell  > dist/loong.ps1
-          /tmp/loong completions elvish      > dist/loong.elv
+          . ./scripts/release_artifact_lib.sh
+          manifest_name="$(release_archive_manifest_name "${RELEASE_TAG}")"
+          (
+            cd dist
+            shasum -a 256 \
+              loong-*.tar.gz \
+              loong-*.zip \
+              install.sh \
+              install.ps1 > "${manifest_name}"
+          )
 
       - name: Resolve release channel
         id: release_meta

@@ -124,7 +124,7 @@ EOF
   esac
 
   checksum_path="$release_dir/$checksum_name"
-  printf '%s  %s\n' "$(sha256_file "$archive_path")" "$archive_name" >"$checksum_path"
+  printf '%s  %s\n' "$(sha256_file "$archive_path")" "$archive_name" >>"$checksum_path"
 }
 
 make_linux_dual_libc_fixture() {
@@ -1064,7 +1064,7 @@ run_release_override_install_and_onboard_preserves_signal_source_when_multiple_c
 }
 
 run_checksum_mismatch_fails_test() {
-  local fixture install_dir output_file tag target checksum_name
+  local fixture install_dir output_file tag target checksum_name archive_name
   fixture="$(make_release_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -1072,7 +1072,8 @@ run_checksum_mismatch_fails_test() {
   tag="v0.1.2"
   target="$(host_target)"
   checksum_name="$(release_archive_checksum_name "$PACKAGE_NAME" "$tag" "$target")"
-  printf 'deadbeef  wrong-archive\n' >"$fixture/releases/download/$tag/$checksum_name"
+  archive_name="$(release_archive_name "$PACKAGE_NAME" "$tag" "$target")"
+  printf 'deadbeef  %s\n' "$archive_name" >"$fixture/releases/download/$tag/$checksum_name"
 
   if (
     cd "$REPO_ROOT"
