@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Write};
 
 use opentelemetry::trace::{Span, Tracer, TracerProvider};
 use opentelemetry::{KeyValue, global};
-use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::{OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, SpanExporter};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde_json::{Map, Value};
@@ -352,11 +352,22 @@ impl Drop for OtelGuard {
     }
 }
 
+fn otel_traces_export_is_enabled() -> bool {
+    let generic_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let traces_endpoint = std::env::var(OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).ok();
+
+    endpoint_env_is_present(generic_endpoint.as_deref())
+        || endpoint_env_is_present(traces_endpoint.as_deref())
+}
+
+fn endpoint_env_is_present(value: Option<&str>) -> bool {
+    value.is_some_and(|entry| !entry.trim().is_empty())
+}
+
 pub fn init_otel() -> OtelGuard {
-    let endpoint = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-        Ok(v) if !v.trim().is_empty() => v,
-        _ => return OtelGuard { provider: None },
-    };
+    if !otel_traces_export_is_enabled() {
+        return OtelGuard { provider: None };
+    }
 
     let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "loong".to_owned());
 
@@ -364,10 +375,7 @@ pub fn init_otel() -> OtelGuard {
         Ok(e) => e,
         Err(e) => {
             let mut stderr = io::stderr();
-            let _ = writeln!(
-                stderr,
-                "loong.daemon otel exporter init failed (endpoint={endpoint}): {e}"
-            );
+            let _ = writeln!(stderr, "loong.daemon otel exporter init failed: {e}");
             return OtelGuard { provider: None };
         }
     };
@@ -512,6 +520,16 @@ mod tests {
         let filter = build_env_filter("[broken");
         let rendered = filter.to_string();
         assert_eq!(rendered, "warn");
+    }
+
+    #[test]
+    fn endpoint_env_is_present_rejects_empty_values() {
+        assert!(super::endpoint_env_is_present(Some(
+            "http://localhost:4318"
+        )));
+        assert!(!super::endpoint_env_is_present(Some("")));
+        assert!(!super::endpoint_env_is_present(Some("   ")));
+        assert!(!super::endpoint_env_is_present(None));
     }
 
     #[test]

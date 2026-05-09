@@ -26,13 +26,14 @@ pub fn execute_tool_core_with_config(
         ])
         .start(&otel_tracer);
     let otel_context = Context::current().with_span(otel_span);
+    let span_context = otel_context.clone();
     let _otel_guard = otel_context.attach();
     let payload = request.payload;
-    let capture_content =
-        std::env::var("LOONG_OTEL_CAPTURE_CONTENT").is_ok_and(|value| value == "1" || value == "true");
+    let capture_content = std::env::var("LOONG_OTEL_CAPTURE_CONTENT")
+        .is_ok_and(|value| value == "1" || value == "true");
     if capture_content && let Ok(payload_string) = serde_json::to_string(&payload) {
         let truncated_payload = truncate_tool_payload_for_otel(payload_string.as_str());
-        let span = otel_context.span();
+        let span = span_context.span();
         span.set_attribute(KeyValue::new("tool.payload", truncated_payload));
     }
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
@@ -89,7 +90,7 @@ pub fn execute_tool_core_with_config(
     };
     let result = execute_request();
     let duration_ms = started_at.elapsed().as_millis();
-    let span = otel_context.span();
+    let span = span_context.span();
     span.set_attribute(KeyValue::new("tool.duration_ms", duration_ms as i64));
     match &result {
         Ok(outcome) => {

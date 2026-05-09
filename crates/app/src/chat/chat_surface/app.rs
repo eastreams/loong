@@ -1,6 +1,7 @@
 use crossterm::event::{
     self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use crossterm::terminal::SetTitle;
 use opentelemetry::context::FutureExt;
 use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer, TracerProvider};
 use opentelemetry::{Context, KeyValue, global};
@@ -16,7 +17,7 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -57,6 +58,10 @@ pub enum Focus {
 
 const FOOTER_BOTTOM_BREATHING_HEIGHT: u16 = 1;
 const FOOTER_HORIZONTAL_INDENT: u16 = 2;
+const MAX_TERMINAL_TITLE_CHARS: usize = 180;
+const TERMINAL_TITLE_BRAILLE_FRAMES: [&str; 10] =
+    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const TERMINAL_TITLE_BRAILLE_INTERVAL_MS: u64 = 100;
 const PENDING_TOOL_ANIMATION_FRAME_MS: u64 = 90;
 const PENDING_TOOL_LABEL_COLORS: [Color; 6] = [
     SURFACE_DIM_GRAY,
@@ -80,6 +85,21 @@ struct PendingRenderCache {
     signature: u64,
     max_pending_height: u16,
     lines: Vec<Line<'static>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct LiveTranscriptState {
+    draft_preview: Option<String>,
+    tool_activity_lines: Vec<String>,
+}
+
+impl LiveTranscriptState {
+    fn has_needs_approval(&self) -> bool {
+        self.tool_activity_lines.iter().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("[needs_approval]") || trimmed.contains("[needs_approval]")
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -906,7 +926,7 @@ pub struct App {
     pub focus: Focus,
     pub pending_turn: bool,
     pub turn_start: Option<std::time::Instant>,
-    pub live_lines: Arc<StdMutex<Vec<String>>>,
+    live_transcript: Arc<StdMutex<LiveTranscriptState>>,
     pub pending_task: Option<JoinHandle<CliResult<String>>>,
     pub pending_steers: VecDeque<String>,
     pub pending_queue: VecDeque<String>,
@@ -917,6 +937,7 @@ pub struct App {
     pub live_rerender: Option<super::super::CliChatLiveSurfaceRerender>,
     pub spinner_seed: u64,
     pub last_pending_signature: Option<u64>,
+    last_live_transcript_signature: Option<u64>,
     pending_render_cache: Option<PendingRenderCache>,
     inline_skill_popup_active: bool,
     pub last_render_width: u16,
@@ -931,6 +952,9 @@ pub struct App {
     pub cwd: String,
     pub model: String,
     pub title: Option<String>,
+    last_terminal_title: Option<String>,
+    title_attention_required: bool,
+    title_pending_approval_count: usize,
     pub i18n: I18nService,
 }
 
@@ -951,7 +975,7 @@ impl App {
             focus: Focus::Composer,
             pending_turn: false,
             turn_start: None,
-            live_lines: Arc::new(StdMutex::new(Vec::new())),
+            live_transcript: Arc::new(StdMutex::new(LiveTranscriptState::default())),
             pending_task: None,
             pending_steers: VecDeque::new(),
             pending_queue: VecDeque::new(),
@@ -962,6 +986,7 @@ impl App {
             live_rerender: None,
             spinner_seed: spinner_seed(),
             last_pending_signature: None,
+            last_live_transcript_signature: None,
             pending_render_cache: None,
             inline_skill_popup_active: false,
             last_render_width: render_width as u16,
@@ -976,6 +1001,9 @@ impl App {
             cwd: format_cwd(runtime),
             model: runtime.config.provider.model.clone(),
             title: None,
+            last_terminal_title: None,
+            title_attention_required: false,
+            title_pending_approval_count: 0,
             i18n: I18nService::new(language),
         };
 
@@ -1010,7 +1038,13 @@ impl App {
         let interstitial_lines =
             self.interstitial_lines_for(size.width, size.height, composer_height, palette_height);
         let interstitial_height = interstitial_lines.len() as u16;
-        let transcript_line_count = self.message_list.rendered_line_count(size.width) as u16;
+        let provisional_assistant_text = provisional_assistant_text(&self.live_transcript);
+        let transcript_line_count = self
+            .message_list
+            .rendered_line_count_with_provisional_assistant(
+                size.width,
+                provisional_assistant_text.as_deref(),
+            ) as u16;
         let bottom_band_height = interstitial_height
             + 1
             + composer_height
@@ -1068,7 +1102,11 @@ impl App {
             Rect::default()
         };
 
-        self.message_list.render(f, *transcript_area);
+        self.message_list.render_with_provisional_assistant(
+            f,
+            *transcript_area,
+            provisional_assistant_text.as_deref(),
+        );
 
         if interstitial_height > 0 {
             f.render_widget(Paragraph::new(interstitial_lines), *pending_area);
@@ -1408,7 +1446,8 @@ impl App {
         }
 
         let max_pending_preview_lines = max_pending_height.saturating_sub(2).max(1) as usize;
-        let live_lines = pending_live_lines(&self.live_lines, max_pending_preview_lines);
+        let live_lines =
+            pending_live_tool_activity_lines(&self.live_transcript, max_pending_preview_lines);
         let raw_pending_lines = build_pending_lines(
             self.turn_start,
             &live_lines,
@@ -1427,6 +1466,203 @@ impl App {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoongTerminalActivity {
+    Idle,
+    Working,
+    AttentionRequired,
+}
+
+fn loong_terminal_title_prefix(activity: LoongTerminalActivity) -> &'static str {
+    match activity {
+        LoongTerminalActivity::Idle => "🐉",
+        LoongTerminalActivity::Working => "⠋",
+        LoongTerminalActivity::AttentionRequired => "[ ! ] Action Required",
+    }
+}
+
+fn compact_path_label(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return "~".to_owned();
+    }
+
+    let normalized = trimmed.trim_end_matches(['/', '\\']);
+    if normalized.is_empty() {
+        return trimmed.to_owned();
+    }
+
+    Path::new(normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| normalized.to_owned())
+}
+
+fn terminal_title_braille_frame(start: Option<std::time::Instant>) -> &'static str {
+    let elapsed_ms = start
+        .map(|value| value.elapsed().as_millis() as u64)
+        .unwrap_or_default();
+    let frame_index = ((elapsed_ms / TERMINAL_TITLE_BRAILLE_INTERVAL_MS.max(1)) as usize)
+        % TERMINAL_TITLE_BRAILLE_FRAMES.len();
+    TERMINAL_TITLE_BRAILLE_FRAMES
+        .get(frame_index)
+        .copied()
+        .unwrap_or(TERMINAL_TITLE_BRAILLE_FRAMES[0])
+}
+
+fn build_loong_terminal_title(
+    cwd: &str,
+    activity: LoongTerminalActivity,
+    turn_start: Option<std::time::Instant>,
+) -> String {
+    let prefix = match activity {
+        LoongTerminalActivity::Idle => loong_terminal_title_prefix(activity),
+        LoongTerminalActivity::Working => terminal_title_braille_frame(turn_start),
+        LoongTerminalActivity::AttentionRequired => loong_terminal_title_prefix(activity),
+    };
+    format!("{} - {}", prefix, compact_path_label(cwd))
+}
+
+fn refresh_app_cwd(app: &mut App, runtime: &CliTurnRuntime) {
+    app.cwd = format_cwd(runtime);
+}
+
+fn refresh_app_cwd_dependent_state(app: &mut App, runtime: &CliTurnRuntime) {
+    let preserved_skill_query = app
+        .command_palette
+        .is_skills_mode()
+        .then(|| app.command_palette.query_text().to_owned());
+    refresh_app_cwd(app, runtime);
+    app.detected_skills = detect_available_skills(runtime.effective_working_directory.as_deref());
+    let language = app.i18n.language();
+    app.command_palette = CommandPalette::new(language, app.detected_skills.clone());
+    if let Some(query) = preserved_skill_query.as_deref() {
+        app.command_palette.show_skills(query);
+    }
+    app.title_pending_approval_count = current_pending_approval_count(runtime).unwrap_or(0);
+    app.sync_inline_skill_popup();
+}
+
+fn current_pending_approval_count(runtime: &CliTurnRuntime) -> CliResult<usize> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
+        let approvals = store.approval_queue(&runtime.session_id, 256)?;
+        Ok(approvals.len())
+    }
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = runtime;
+        Ok(0)
+    }
+}
+
+fn app_terminal_title_requires_attention(app: &App) -> bool {
+    app.title_attention_required
+        || app.awaiting_first_turn_bootstrap_reply
+        || app.title_pending_approval_count > 0
+        || app
+            .live_transcript
+            .lock()
+            .ok()
+            .is_some_and(|state| state.has_needs_approval())
+}
+
+fn app_terminal_title_activity(app: &App) -> LoongTerminalActivity {
+    if app.pending_turn {
+        LoongTerminalActivity::Working
+    } else if app_terminal_title_requires_attention(app) {
+        LoongTerminalActivity::AttentionRequired
+    } else {
+        LoongTerminalActivity::Idle
+    }
+}
+
+fn sanitize_terminal_title(title: &str) -> String {
+    let mut sanitized = String::new();
+    let mut chars_written = 0usize;
+    let mut pending_space = false;
+
+    for ch in title.chars() {
+        if ch.is_whitespace() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+
+        if is_disallowed_terminal_title_char(ch) {
+            continue;
+        }
+
+        if pending_space && chars_written < MAX_TERMINAL_TITLE_CHARS.saturating_sub(1) {
+            sanitized.push(' ');
+            chars_written += 1;
+            pending_space = false;
+        }
+
+        if chars_written >= MAX_TERMINAL_TITLE_CHARS {
+            break;
+        }
+
+        sanitized.push(ch);
+        chars_written += 1;
+    }
+
+    sanitized
+}
+
+fn is_disallowed_terminal_title_char(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{00AD}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{E0100}'..='\u{E01EF}'
+        )
+}
+
+fn write_terminal_title(title: &str) -> std::io::Result<()> {
+    if !std::io::stdout().is_terminal() {
+        return Ok(());
+    }
+
+    crossterm::execute!(std::io::stdout(), SetTitle(title))
+}
+
+fn sync_app_terminal_title(app: &mut App) {
+    let title = sanitize_terminal_title(
+        build_loong_terminal_title(&app.cwd, app_terminal_title_activity(app), app.turn_start)
+            .as_str(),
+    );
+    if title.is_empty() || app.last_terminal_title.as_deref() == Some(title.as_str()) {
+        return;
+    }
+
+    if write_terminal_title(title.as_str()).is_ok() {
+        app.last_terminal_title = Some(title);
+    }
+}
+
+fn clear_app_terminal_title(app: &mut App) {
+    let stable_title = sanitize_terminal_title(
+        build_loong_terminal_title(&app.cwd, LoongTerminalActivity::Idle, None).as_str(),
+    );
+    if stable_title.is_empty() || app.last_terminal_title.as_deref() == Some(stable_title.as_str())
+    {
+        return;
+    }
+
+    if write_terminal_title(stable_title.as_str()).is_ok() {
+        app.last_terminal_title = Some(stable_title);
+    }
+}
+
 pub async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     runtime: CliTurnRuntime,
@@ -1438,6 +1674,8 @@ pub async fn run_app<B: Backend>(
         .map_err(|e| format!("failed to query terminal size: {e}"))?;
     let render_width = last_known_size.width as usize;
     let mut app = App::new(&runtime, &options, render_width)?;
+    refresh_app_cwd_dependent_state(&mut app, &runtime);
+    sync_app_terminal_title(&mut app);
     let mut startup_release_task = Some(tokio::spawn(load_startup_release_lines(render_width)));
     let mut dirty = true;
     let mut last_resize_at: Option<std::time::Instant> = None;
@@ -1467,8 +1705,14 @@ pub async fn run_app<B: Backend>(
                 app.last_pending_signature = signature;
                 dirty = true;
             }
+            let live_transcript_signature = transcript_preview_signature(&app);
+            if live_transcript_signature != app.last_live_transcript_signature {
+                app.last_live_transcript_signature = live_transcript_signature;
+                dirty = true;
+            }
         } else {
             app.last_pending_signature = None;
+            app.last_live_transcript_signature = None;
         }
 
         if resize_live_rerender_ready(
@@ -1484,6 +1728,7 @@ pub async fn run_app<B: Backend>(
         }
 
         if dirty {
+            sync_app_terminal_title(&mut app);
             terminal
                 .draw(|f| app.render(f))
                 .map_err(|e| format!("draw error: {}", e))?;
@@ -1496,7 +1741,7 @@ pub async fn run_app<B: Backend>(
         let poll_timeout = if pending_live_resize_rerender {
             Duration::from_millis(16)
         } else if app.pending_turn {
-            Duration::from_millis(80)
+            Duration::from_millis(40)
         } else if app.message_list.startup_animation_active() {
             Duration::from_millis(70)
         } else {
@@ -1511,6 +1756,7 @@ pub async fn run_app<B: Backend>(
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
+                        clear_app_terminal_title(&mut app);
                         break;
                     }
 
@@ -1610,6 +1856,7 @@ pub async fn run_app<B: Backend>(
                         }
                         if let Some(msg) = pending_submission {
                             if msg == "/exit" {
+                                clear_app_terminal_title(&mut app);
                                 break;
                             }
                             let trimmed_msg = msg.trim();
@@ -1631,6 +1878,7 @@ pub async fn run_app<B: Backend>(
                         }
                         if let Some(command) = pending_command {
                             if command == "/exit" {
+                                clear_app_terminal_title(&mut app);
                                 break;
                             }
                             run_surface_command(
@@ -1733,6 +1981,7 @@ pub async fn run_app<B: Backend>(
 
                     if let Some(msg) = submitted_message {
                         if msg == "/exit" {
+                            clear_app_terminal_title(&mut app);
                             break;
                         }
 
@@ -1758,6 +2007,7 @@ pub async fn run_app<B: Backend>(
 
                     if let Some(command) = command_to_run {
                         if command == "/exit" {
+                            clear_app_terminal_title(&mut app);
                             break;
                         }
 
@@ -1769,6 +2019,7 @@ pub async fn run_app<B: Backend>(
                 Event::Mouse(mouse_event) => {
                     if let Some(command) = app.handle_mouse_event(mouse_event) {
                         if command == "/exit" {
+                            clear_app_terminal_title(&mut app);
                             break;
                         }
                         run_surface_command(terminal, &mut app, &mut runtime, &options, &command)
@@ -1811,6 +2062,7 @@ pub async fn run_app<B: Backend>(
             }
         }
     }
+    clear_app_terminal_title(&mut app);
     Ok(())
 }
 
@@ -4500,6 +4752,7 @@ async fn run_surface_command<B: Backend>(
     options: &CliChatOptions,
     input: &str,
 ) -> CliResult<()> {
+    refresh_app_cwd_dependent_state(app, runtime);
     let trimmed = input.trim();
     let (command, args) = split_surface_command(trimmed);
     let width = current_render_width(terminal)?;
@@ -4557,6 +4810,22 @@ async fn run_surface_command<B: Backend>(
                 let result = import_context_into_composer(app, cwd.as_path(), args);
                 app.message_list
                     .add_rendered_lines(render_import_command_lines_with_width(result, width));
+            }
+            app.focus = Focus::Composer;
+            Ok(())
+        }
+        "/cwd" => {
+            if args.trim().is_empty() {
+                let lines = render_cwd_command_lines_with_width(runtime, width);
+                app.message_list.add_rendered_lines(lines);
+            } else {
+                let result = resolve_cwd_change_path(runtime, args);
+                if let Ok(path) = result.as_ref() {
+                    runtime.effective_working_directory = Some(path.clone());
+                    refresh_app_cwd_dependent_state(app, runtime);
+                }
+                app.message_list
+                    .add_rendered_lines(render_cwd_change_command_lines_with_width(result, width));
             }
             app.focus = Focus::Composer;
             Ok(())
@@ -4767,15 +5036,15 @@ fn apply_settings_command(
         SettingsCommandAction::InstallSkillPack(target_id) => {
             let resolved_path = runtime.resolved_path.clone();
             let summary = persist_runtime_settings(runtime, app, |config| {
-                config.external_skills.enabled = true;
-                config.external_skills.auto_expose_installed = true;
-                if config.external_skills.install_root.is_none() {
+                config.skills.enabled = true;
+                config.skills.auto_expose_installed = true;
+                if config.skills.install_root.is_none() {
                     let install_root = resolved_path
                         .parent()
                         .filter(|parent| !parent.as_os_str().is_empty())
-                        .map(|parent| parent.join("external-skills-installed"))
-                        .unwrap_or_else(|| PathBuf::from("external-skills-installed"));
-                    config.external_skills.install_root = Some(install_root.display().to_string());
+                        .map(|parent| parent.join(".loong/skills"))
+                        .unwrap_or_else(|| PathBuf::from(".loong/skills"));
+                    config.skills.install_root = Some(install_root.display().to_string());
                 }
                 let runtime_config =
                     crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(
@@ -5156,7 +5425,7 @@ fn build_settings_overview_entries(
                 .all(|skill_id| installed_skill_ids.contains(*skill_id))
         })
         .count();
-    let skills_state = if runtime.config.external_skills.enabled {
+    let skills_state = if runtime.config.skills.enabled {
         if installed_pack_count == 0 {
             "managed skills enabled"
         } else {
@@ -5354,6 +5623,11 @@ fn current_working_directory(runtime: &CliTurnRuntime) -> PathBuf {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn current_working_directory_display(runtime: &CliTurnRuntime) -> String {
+    let current_directory = current_working_directory(runtime);
+    current_directory.display().to_string()
 }
 
 fn render_new_conversation_lines_with_width(width: usize) -> Vec<String> {
@@ -5620,6 +5894,70 @@ fn resolve_import_path(cwd: &Path, input: &str) -> PathBuf {
     }
 }
 
+fn resolve_cwd_change_path(runtime: &CliTurnRuntime, input: &str) -> Result<PathBuf, String> {
+    let trimmed = input.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return Err("Usage: /cwd <path>".to_owned());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        current_working_directory(runtime).join(candidate)
+    };
+
+    let normalized = if resolved.exists() {
+        dunce::canonicalize(&resolved)
+            .map_err(|error| format!("failed to resolve {}: {error}", resolved.display()))?
+    } else {
+        return Err(format!(
+            "working directory does not exist: {}",
+            resolved.display()
+        ));
+    };
+
+    if !normalized.is_dir() {
+        return Err(format!(
+            "working directory is not a directory: {}",
+            normalized.display()
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn render_cwd_change_command_lines_with_width(
+    result: Result<PathBuf, String>,
+    width: usize,
+) -> Vec<String> {
+    let (tone, title, lines) = match result {
+        Ok(path) => (
+            TuiCalloutTone::Info,
+            "cwd updated".to_owned(),
+            vec![format!("Working directory set to {}.", path.display())],
+        ),
+        Err(error) => (
+            TuiCalloutTone::Warning,
+            "cwd unchanged".to_owned(),
+            vec![error],
+        ),
+    };
+    let message_spec = TuiMessageSpec {
+        role: "cwd".to_owned(),
+        caption: Some("working directory".to_owned()),
+        sections: vec![TuiSectionSpec::Callout {
+            tone,
+            title: Some(title),
+            lines,
+        }],
+        footer_lines: vec![
+            "Use /cwd with no arguments to inspect the current working directory.".to_owned(),
+        ],
+    };
+    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
 fn import_context_into_composer(app: &mut App, cwd: &Path, args: &str) -> Result<PathBuf, String> {
     let path = resolve_import_path(cwd, args);
     let content = fs::read_to_string(path.as_path())
@@ -5779,6 +6117,7 @@ async fn start_turn<B: Backend>(
     input: String,
     echo_user_message: bool,
 ) -> CliResult<()> {
+    refresh_app_cwd_dependent_state(app, runtime);
     maybe_capture_and_persist_first_turn_bootstrap_reply(app, runtime, input.as_str())?;
     let width = current_render_width(terminal)?;
     app.live_render_width.store(width.max(1), Ordering::Relaxed);
@@ -5790,20 +6129,24 @@ async fn start_turn<B: Backend>(
     app.last_pending_signature = None;
     app.pending_turn = true;
     app.turn_start = Some(std::time::Instant::now());
+    app.title_attention_required = false;
     app.focus = Focus::Composer;
-    clear_live_lines(&app.live_lines);
+    clear_live_transcript(&app.live_transcript);
 
     terminal
         .draw(|f| app.render(f))
         .map_err(|e| format!("draw error: {}", e))?;
 
     let sink = {
-        let live_lines = Arc::clone(&app.live_lines);
-        Arc::new(move |lines: Vec<String>| {
-            if let Ok(mut state) = live_lines.lock() {
-                *state = lines;
-            }
-        })
+        let live_transcript = Arc::clone(&app.live_transcript);
+        Arc::new(
+            move |payload: super::super::CliChatLiveSurfaceRenderPayload| {
+                if let Ok(mut state) = live_transcript.lock() {
+                    state.draft_preview = payload.draft_preview;
+                    state.tool_activity_lines = payload.tool_activity_lines;
+                }
+            },
+        )
     };
     let (observer, rerender) = super::super::build_cli_chat_live_compact_observer_controller(
         Arc::clone(&app.live_render_width),
@@ -6760,12 +7103,7 @@ fn render_themes_command_lines_with_width(width: usize) -> Vec<String> {
 }
 
 fn render_cwd_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -> Vec<String> {
-    let cwd = runtime
-        .effective_working_directory
-        .as_deref()
-        .unwrap_or(runtime.resolved_path.as_path())
-        .display()
-        .to_string();
+    let cwd = current_working_directory_display(runtime);
     let message_spec = TuiMessageSpec {
         role: "cwd".to_owned(),
         caption: Some("working directory".to_owned()),
@@ -7262,9 +7600,13 @@ async fn maybe_finalize_pending_turn<B: Backend>(
     app.turn_start = None;
     app.live_rerender = None;
     app.composer_follow_up_intent = false;
-    clear_live_lines(&app.live_lines);
+    refresh_app_cwd_dependent_state(app, runtime);
+    clear_live_transcript(&app.live_transcript);
     app.focus = Focus::Composer;
-    if super::super::build_cli_chat_approval_screen_spec(&assistant_text).is_some() {
+    let produced_approval_screen =
+        super::super::build_cli_chat_approval_screen_spec(&assistant_text).is_some();
+    app.title_attention_required = produced_approval_screen;
+    if produced_approval_screen {
         app.message_list.add_rendered_lines(
             super::super::render_cli_chat_assistant_lines_with_width(&assistant_text, width),
         );
@@ -7302,8 +7644,8 @@ fn spawn_pending_turn(
             KeyValue::new("gen_ai.conversation.id", session_id),
         ])
         .start(&otel_tracer);
-    let otel_cx = Context::current().with_span(otel_span);
-    let otel_cx_inner = otel_cx.clone();
+    let otel_context = Context::current().with_span(otel_span);
+    let task_context = otel_context.clone();
 
     tokio::spawn(
         async move {
@@ -7333,44 +7675,48 @@ fn spawn_pending_turn(
                 )
                 .await;
 
-            let span_ref = otel_cx_inner.span();
+            let span = task_context.span();
             match &result {
                 Ok(turn_result) => {
                     if let Some(stop_reason) = &turn_result.stop_reason {
-                        span_ref.set_attribute(KeyValue::new(
+                        let finish_reason = format!("[\"{stop_reason}\"]");
+                        span.set_attribute(KeyValue::new(
                             "gen_ai.response.finish_reasons",
-                            format!("[\"{stop_reason}\"]"),
+                            finish_reason,
                         ));
                     }
-                    span_ref.set_attribute(KeyValue::new(
-                        "agent.event_count",
-                        turn_result.event_count as i64,
-                    ));
+
+                    let event_count = turn_result.event_count as i64;
+                    span.set_attribute(KeyValue::new("agent.event_count", event_count));
                 }
                 Err(error) => {
-                    span_ref.set_attribute(KeyValue::new("error.type", "agent_turn_error"));
-                    span_ref.set_attribute(KeyValue::new("error.message", error.clone()));
+                    span.set_attribute(KeyValue::new("error.type", "agent_turn_error"));
+                    span.set_attribute(KeyValue::new("error.message", error.clone()));
                 }
             }
-            span_ref.end();
+            span.end();
 
-            result.map(|r| r.output_text)
+            result.map(|turn_result| turn_result.output_text)
         }
-        .with_context(otel_cx),
+        .with_context(otel_context),
     )
 }
 
-fn clear_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>) {
-    if let Ok(mut state) = live_lines.lock() {
-        state.clear();
+fn clear_live_transcript(live_transcript: &Arc<StdMutex<LiveTranscriptState>>) {
+    if let Ok(mut state) = live_transcript.lock() {
+        *state = LiveTranscriptState::default();
     }
 }
 
-fn pending_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>, max_lines: usize) -> Vec<String> {
+fn pending_live_lines(
+    live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
+    max_lines: usize,
+) -> Vec<String> {
     let max_lines = max_lines.max(1);
-    live_lines
+    live_transcript
         .lock()
         .map(|state| {
+            let state = &state.tool_activity_lines;
             let normalize = |mut lines: Vec<String>| {
                 while lines.first().is_some_and(|line| line.trim().is_empty()) {
                     lines.remove(0);
@@ -7424,6 +7770,45 @@ fn pending_live_lines(live_lines: &Arc<StdMutex<Vec<String>>>, max_lines: usize)
         .unwrap_or_default()
 }
 
+fn pending_live_tool_activity_lines(
+    live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
+    max_lines: usize,
+) -> Vec<String> {
+    pending_live_lines(live_transcript, max_lines)
+        .into_iter()
+        .filter(|line| pending_line_is_tool_activity(line))
+        .collect()
+}
+
+fn provisional_assistant_text(
+    live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
+) -> Option<String> {
+    live_transcript
+        .lock()
+        .ok()
+        .and_then(|state| state.draft_preview.clone())
+        .filter(|text| !text.trim().is_empty())
+}
+
+fn pending_line_is_tool_activity(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('•')
+        || trimmed.starts_with("[running]")
+        || trimmed.starts_with("[pending]")
+        || trimmed.starts_with("[completed]")
+        || trimmed.starts_with("[failed]")
+        || trimmed.starts_with("[interrupted]")
+        || trimmed.starts_with("[needs_approval]")
+        || trimmed.starts_with("[denied]")
+        || trimmed.starts_with("request:")
+        || trimmed.starts_with("args:")
+        || trimmed.starts_with("stdout:")
+        || trimmed.starts_with("stderr:")
+        || trimmed.starts_with("file:")
+        || trimmed.starts_with("metrics:")
+        || trimmed.starts_with("↳ ")
+}
+
 fn pending_render_signature(app: &App) -> Option<u64> {
     if app.last_render_width == 0 || app.last_render_height == 0 {
         if !app.pending_turn {
@@ -7439,7 +7824,7 @@ fn pending_render_signature(app: &App) -> Option<u64> {
         app.pending_queue
             .iter()
             .for_each(|message| message.hash(&mut hasher));
-        for line in pending_live_lines(&app.live_lines, 6) {
+        for line in pending_live_tool_activity_lines(&app.live_transcript, 6) {
             line.hash(&mut hasher);
         }
         return Some(hasher.finish());
@@ -7458,6 +7843,14 @@ fn pending_render_signature(app: &App) -> Option<u64> {
         composer_height,
         palette_height,
     )
+}
+
+fn transcript_preview_signature(app: &App) -> Option<u64> {
+    let preview = provisional_assistant_text(&app.live_transcript)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    app.last_render_width.hash(&mut hasher);
+    preview.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -7515,7 +7908,8 @@ fn pending_render_signature_for_geometry(
     let start = app.turn_start?;
     let max_pending_preview_lines =
         pending_signature_preview_budget_for_geometry(height, composer_height, palette_height);
-    let visible_lines = pending_live_lines(&app.live_lines, max_pending_preview_lines);
+    let visible_lines =
+        pending_live_tool_activity_lines(&app.live_transcript, max_pending_preview_lines);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     focus_ring_frame(start).hash(&mut hasher);
     get_spinner_verb_with_seed(start, app.spinner_seed).hash(&mut hasher);
@@ -8084,13 +8478,7 @@ fn compact_pending_lines_for_height(
 }
 
 fn format_cwd(runtime: &CliTurnRuntime) -> String {
-    if let Some(path) = runtime.effective_working_directory.as_ref() {
-        return path.display().to_string();
-    }
-
-    std::env::current_dir()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "~".to_owned())
+    current_working_directory_display(runtime)
 }
 
 fn build_chat_startup_content(
@@ -8522,7 +8910,7 @@ fn resize_live_rerender_ready(
 #[cfg(test)]
 mod tests {
     use super::{
-        App, Focus, StartupBootstrapCapture, StartupOnboardingAction,
+        App, Focus, LiveTranscriptState, StartupBootstrapCapture, StartupOnboardingAction,
         StartupOnboardingInteractionKind, StartupOnboardingStage, StartupOnboardingState,
         StartupPersonalizationPreset, StartupProviderOption, StartupSetupPathChoice,
         StartupSkillOption, persist_startup_personalization, startup_eye_animation_for_state,
@@ -8559,7 +8947,7 @@ mod tests {
             focus: Focus::Composer,
             pending_turn: false,
             turn_start: None,
-            live_lines: Arc::new(StdMutex::new(Vec::new())),
+            live_transcript: Arc::new(StdMutex::new(LiveTranscriptState::default())),
             pending_task: None,
             pending_steers: Default::default(),
             pending_queue: Default::default(),
@@ -8570,6 +8958,7 @@ mod tests {
             live_rerender: None,
             spinner_seed: 1,
             last_pending_signature: None,
+            last_live_transcript_signature: None,
             pending_render_cache: None,
             inline_skill_popup_active: false,
             last_render_width: 0,
@@ -8584,6 +8973,9 @@ mod tests {
             cwd: "/tmp/example".to_owned(),
             model: "gpt-test".to_owned(),
             title: None,
+            last_terminal_title: None,
+            title_attention_required: false,
+            title_pending_approval_count: 0,
             i18n: I18nService::new(Language::En),
         }
     }
@@ -8885,6 +9277,236 @@ mod tests {
     }
 
     #[test]
+    fn compact_path_label_prefers_last_path_component() {
+        assert_eq!(
+            super::compact_path_label("/tmp/workspace/project-x"),
+            "project-x"
+        );
+        assert_eq!(super::compact_path_label("/"), "/");
+        assert_eq!(super::compact_path_label(""), "~");
+    }
+
+    #[test]
+    fn build_loong_terminal_title_switches_prefix_by_activity() {
+        assert_eq!(
+            super::build_loong_terminal_title(
+                "/tmp/workspace/project-x",
+                super::LoongTerminalActivity::Idle,
+                None
+            ),
+            "🐉 - project-x"
+        );
+        let working = super::build_loong_terminal_title(
+            "/tmp/workspace/project-x",
+            super::LoongTerminalActivity::Working,
+            Some(std::time::Instant::now()),
+        );
+        assert!(working.ends_with(" - project-x"));
+        let prefix = working.split(" - ").next().expect("title prefix");
+        assert!(super::TERMINAL_TITLE_BRAILLE_FRAMES.contains(&prefix));
+    }
+
+    #[test]
+    fn terminal_title_braille_frame_uses_known_frames() {
+        let frame = super::terminal_title_braille_frame(Some(std::time::Instant::now()));
+        assert!(super::TERMINAL_TITLE_BRAILLE_FRAMES.contains(&frame));
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_bootstrap_reply() {
+        let mut app = blank_app();
+        app.awaiting_first_turn_bootstrap_reply = true;
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_approval_latch() {
+        let mut app = blank_app();
+        app.title_attention_required = true;
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_pending_approval_count() {
+        let mut app = blank_app();
+        app.title_pending_approval_count = 2;
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn terminal_title_activity_requires_attention_for_live_needs_approval() {
+        let app = blank_app();
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines =
+                vec!["[needs_approval] shell.exec - operator confirmation required".to_owned()];
+        }
+
+        assert_eq!(
+            super::app_terminal_title_activity(&app),
+            super::LoongTerminalActivity::AttentionRequired
+        );
+    }
+
+    #[test]
+    fn refresh_app_cwd_uses_runtime_working_directory() {
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(PathBuf::from("/tmp/workspace/actual-project"));
+        let mut app = blank_app();
+        app.cwd = "/tmp/example".to_owned();
+
+        super::refresh_app_cwd(&mut app, &runtime);
+
+        assert_eq!(app.cwd, "/tmp/workspace/actual-project");
+    }
+
+    #[test]
+    fn resolve_cwd_change_path_supports_relative_paths_from_runtime_cwd() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-change");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested cwd");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-change.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(base);
+
+        let resolved = super::resolve_cwd_change_path(&runtime, "nested").expect("resolve cwd");
+
+        assert_eq!(
+            resolved,
+            dunce::canonicalize(nested).expect("canonical nested")
+        );
+    }
+
+    #[test]
+    fn cwd_command_updates_runtime_and_app_cwd() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-command");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested cwd");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-command.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(base.clone());
+        let mut app = blank_app();
+        app.cwd = base.display().to_string();
+        let backend = TestBackend::new(72, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(super::run_surface_command(
+                &mut terminal,
+                &mut app,
+                &mut runtime,
+                &CliChatOptions::default(),
+                "/cwd nested",
+            ))
+            .expect("run cwd command");
+
+        assert_eq!(
+            runtime.effective_working_directory,
+            Some(dunce::canonicalize(&nested).expect("canonical nested"))
+        );
+        assert_eq!(
+            PathBuf::from(&app.cwd),
+            dunce::canonicalize(&nested).expect("canonical nested")
+        );
+    }
+
+    #[test]
+    fn refresh_app_cwd_dependent_state_reloads_skills_from_new_cwd() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-skills-base");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(nested.join("skills/demo-skill")).expect("create skills");
+        std::fs::write(
+            nested.join("skills/demo-skill/SKILL.md"),
+            "---\nname: demo-skill\ndescription: nested skill\n---\n",
+        )
+        .expect("write skill");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-skills.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(nested.clone());
+        let mut app = blank_app();
+        app.detected_skills.clear();
+        app.command_palette = CommandPalette::new(Language::En, Vec::new());
+
+        super::refresh_app_cwd_dependent_state(&mut app, &runtime);
+
+        assert_eq!(
+            dunce::canonicalize(PathBuf::from(&app.cwd)).expect("canonical app cwd"),
+            dunce::canonicalize(&nested).expect("canonical nested")
+        );
+        assert!(
+            app.detected_skills
+                .iter()
+                .any(|skill| skill.name == "demo-skill")
+        );
+    }
+
+    #[test]
+    fn refresh_app_cwd_dependent_state_preserves_skill_query() {
+        let base = unique_temp_dir("loong-chat-surface-cwd-skill-query");
+        let nested = base.join("nested");
+        std::fs::create_dir_all(nested.join("skills/demo-skill")).expect("create skills");
+        std::fs::write(
+            nested.join("skills/demo-skill/SKILL.md"),
+            "---\nname: demo-skill\ndescription: nested skill\n---\n",
+        )
+        .expect("write skill");
+        let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-query.toml");
+        let mut runtime = test_runtime_with_path(config_path);
+        runtime.effective_working_directory = Some(nested);
+        let mut app = blank_app();
+        app.command_palette = CommandPalette::new(Language::En, Vec::new());
+        app.command_palette.show_skills("demo");
+
+        super::refresh_app_cwd_dependent_state(&mut app, &runtime);
+
+        assert!(app.command_palette.is_skills_mode());
+        assert_eq!(app.command_palette.query_text(), "demo");
+        assert!(
+            app.detected_skills
+                .iter()
+                .any(|skill| skill.name == "demo-skill")
+        );
+    }
+
+    #[test]
+    fn render_cwd_command_uses_runtime_working_directory_fallback() {
+        let runtime = test_runtime_with_path(PathBuf::from("/tmp/loong-config.toml"));
+
+        let lines = super::render_cwd_command_lines_with_width(&runtime, 80);
+        let rendered = lines.join("\n");
+
+        let expected_display = super::current_working_directory_display(&runtime);
+        assert!(rendered.contains(expected_display.as_str()));
+        assert!(!rendered.contains(runtime.resolved_path.display().to_string().as_str()));
+    }
+
+    #[test]
+    fn sanitize_terminal_title_collapses_whitespace_and_controls() {
+        let sanitized = super::sanitize_terminal_title("  🐉 \n\t loong \u{202E} project  ");
+        assert_eq!(sanitized, "🐉 loong project");
+    }
+
+    #[test]
+    fn sanitize_terminal_title_truncates_to_max_chars() {
+        let title = "a".repeat(super::MAX_TERMINAL_TITLE_CHARS + 24);
+        let sanitized = super::sanitize_terminal_title(&title);
+        assert_eq!(sanitized.chars().count(), super::MAX_TERMINAL_TITLE_CHARS);
+    }
+
+    #[test]
     fn startup_release_lines_wrap_to_requested_width() {
         let release = sample_release();
         let lines =
@@ -9065,36 +9687,40 @@ mod tests {
     }
 
     #[test]
-    fn pending_band_grows_when_live_lines_exist() {
+    fn pending_band_hides_plain_live_reply_lines() {
         let backend = TestBackend::new(50, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("streamed reply line"))
-        );
+        let transcript_row = lines
+            .iter()
+            .position(|line| line.contains("streamed reply line"))
+            .expect("provisional transcript row");
+        let composer_row = lines
+            .iter()
+            .position(|line| line.contains("›"))
+            .expect("composer row");
+        assert!(transcript_row < composer_row);
     }
 
     #[test]
-    fn composer_and_footer_do_not_jump_up_after_pending_turn_finishes() {
+    fn composer_and_footer_only_reclaim_pending_preview_rows_after_turn_finishes() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw pending");
@@ -9110,8 +9736,8 @@ mod tests {
 
         app.pending_turn = false;
         app.turn_start = None;
-        if let Ok(mut lines) = app.live_lines.lock() {
-            lines.clear();
+        if let Ok(mut live) = app.live_transcript.lock() {
+            *live = LiveTranscriptState::default();
         }
         app.message_list
             .add_assistant_message("streamed reply line".to_owned());
@@ -9127,28 +9753,33 @@ mod tests {
             .position(|line| line.contains("/tmp/example"))
             .expect("settled footer row");
 
-        assert!(settled_composer_row >= pending_composer_row);
-        assert!(settled_footer_row >= pending_footer_row);
+        let composer_reclaimed_rows = pending_composer_row.saturating_sub(settled_composer_row);
+        let footer_reclaimed_rows = pending_footer_row.saturating_sub(settled_footer_row);
+
+        assert!(
+            composer_reclaimed_rows <= 2,
+            "composer should only reclaim the pending preview rows, got pending={pending_composer_row} settled={settled_composer_row}"
+        );
+        assert!(
+            footer_reclaimed_rows <= 2,
+            "footer should only reclaim the pending preview rows, got pending={pending_footer_row} settled={settled_footer_row}"
+        );
     }
 
     #[test]
-    fn spinner_stays_adjacent_to_composer_below_pending_content() {
+    fn spinner_stays_adjacent_to_composer_when_plain_live_reply_is_hidden() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal);
-        let preview_row = lines
-            .iter()
-            .position(|line| line.contains("streamed reply line"))
-            .expect("preview row");
         let spinner_row = lines
             .iter()
             .position(|line| line.contains("..."))
@@ -9157,9 +9788,13 @@ mod tests {
             .iter()
             .position(|line| line.contains("›"))
             .expect("composer row");
+        let preview_row = lines
+            .iter()
+            .position(|line| line.contains("streamed reply line"))
+            .expect("preview row");
 
-        assert!(preview_row < spinner_row);
-        assert_eq!(composer_row, spinner_row + 2);
+        assert!(composer_row > spinner_row);
+        assert!(preview_row < composer_row);
     }
 
     #[test]
@@ -10468,6 +11103,52 @@ description: "actual description"
     }
 
     #[test]
+    fn startup_logo_keeps_animating_with_composer_draft_after_first_message() {
+        let mut env = ScopedEnv::new();
+        env.remove("LOONG_TUI_REDUCED_MOTION");
+        env.set("TERM", "xterm-256color");
+
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut app = blank_app();
+        app.message_list
+            .add_startup_header("0.1.0".to_owned(), "tutorial".to_owned(), Vec::new());
+        app.message_list.add_user_message("hi".to_owned());
+        app.message_list.add_assistant_message("hello".to_owned());
+        app.composer.set_input("draft".to_owned());
+
+        terminal.draw(|f| app.render(f)).expect("draw");
+        let before_lines = buffer_lines(&terminal);
+        let before_header = before_lines
+            .iter()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        app.message_list
+            .rewind_startup_animation_for_test(Duration::from_millis(100));
+        assert!(app.message_list.refresh_startup_animation());
+
+        terminal.draw(|f| app.render(f)).expect("draw");
+        let after_lines = buffer_lines(&terminal);
+        let after_header = after_lines
+            .iter()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let after = after_lines.join("\n");
+
+        assert_ne!(
+            before_header, after_header,
+            "startup header should continue animating"
+        );
+        assert!(after.contains("draft"));
+        assert!(after.contains("hello"));
+    }
+
+    #[test]
     fn pending_band_keeps_blank_padding_rows() {
         let backend = TestBackend::new(50, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -10513,26 +11194,36 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_band_renders_compact_live_preview_without_card_chrome() {
+    fn pending_band_hides_plain_streaming_preview_text() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "first streamed sentence".to_owned(),
-                "second streamed sentence".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview =
+                Some("first streamed sentence\nsecond streamed sentence".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal).join("\n");
-        assert!(lines.contains("first streamed sentence"));
-        assert!(lines.contains("second streamed sentence"));
-        assert!(!lines.contains("╭─"));
-        assert!(!lines.contains("turn pipeline"));
+        let lines = buffer_lines(&terminal);
+        let first_row = lines
+            .iter()
+            .position(|line| line.contains("first streamed sentence"))
+            .expect("first preview row");
+        let second_row = lines
+            .iter()
+            .position(|line| line.contains("second streamed sentence"))
+            .expect("second preview row");
+        let composer_row = lines
+            .iter()
+            .position(|line| line.contains("›"))
+            .expect("composer row");
+        assert!(first_row < composer_row);
+        assert!(second_row < composer_row);
+        assert!(!lines.iter().any(|line| line.contains("╭─")));
+        assert!(!lines.iter().any(|line| line.contains("turn pipeline")));
     }
 
     #[test]
@@ -10720,15 +11411,15 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_preview_renders_between_transcript_and_composer() {
+    fn pending_preview_hides_plain_streaming_reply_between_transcript_and_composer() {
         let backend = TestBackend::new(60, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed reply line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed reply line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -10737,55 +11428,85 @@ description: "actual description"
             .iter()
             .position(|line| line.contains("hi"))
             .expect("user row");
-        let preview_row = lines
-            .iter()
-            .position(|line| line.contains("streamed reply line"))
-            .expect("preview row");
         let composer_row = lines
             .iter()
             .position(|line| line.contains("›"))
             .expect("composer row");
 
+        assert!(composer_row > user_row);
+        let preview_row = lines
+            .iter()
+            .position(|line| line.contains("streamed reply line"))
+            .expect("preview row");
         assert!(preview_row > user_row);
         assert!(preview_row < composer_row);
     }
 
     #[test]
-    fn pending_preview_shows_reasoning_before_visible_reply() {
+    fn pending_preview_hides_reasoning_and_visible_reply_text() {
         let backend = TestBackend::new(70, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["quiet reasoning".to_owned(), "visible reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("quiet reasoning\nvisible reply".to_owned());
+        }
+
+        terminal.draw(|f| app.render(f)).expect("draw");
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(lines.contains("quiet reasoning"));
+        assert!(lines.contains("visible reply"));
+    }
+
+    #[test]
+    fn pending_preview_keeps_plain_reply_with_tool_like_prefix_out_of_pending_band() {
+        let backend = TestBackend::new(70, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut app = blank_app();
+        app.message_list.add_user_message("hi".to_owned());
+        app.pending_turn = true;
+        app.turn_start = Some(std::time::Instant::now());
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("• not a tool call\nrequest: still plain prose".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
         let lines = buffer_lines(&terminal);
-        let reasoning_row = lines
+        let composer_row = lines
             .iter()
-            .position(|line| line.contains("quiet reasoning"))
-            .expect("reasoning row");
-        let visible_row = lines
+            .position(|line| line.contains("›"))
+            .expect("composer row");
+        let bullet_row = lines
             .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("visible row");
+            .position(|line| line.contains("• not a tool call"))
+            .expect("bullet reply row");
+        let request_row = lines
+            .iter()
+            .position(|line| line.contains("request: still plain prose"))
+            .expect("request reply row");
 
-        assert!(reasoning_row < visible_row);
+        assert!(bullet_row < composer_row);
+        assert!(request_row < composer_row);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Called not a tool call")),
+            "plain transcript preview should not be restyled as pending tool activity"
+        );
     }
 
     #[test]
-    fn pending_preview_keeps_blank_row_between_live_lines_and_spinner() {
+    fn pending_preview_no_longer_reserves_blank_row_for_plain_reply_preview() {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["visible reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("visible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -10794,83 +11515,66 @@ description: "actual description"
             .iter()
             .position(|line| line.contains("..."))
             .expect("spinner row");
+        let composer_row = lines
+            .iter()
+            .position(|line| line.contains("›"))
+            .expect("composer row");
         let preview_row = lines
             .iter()
             .position(|line| line.contains("visible reply"))
             .expect("preview row");
 
-        assert_eq!(spinner_row, preview_row + 2);
-        assert!(lines[preview_row + 1].trim().is_empty());
+        assert!(composer_row > spinner_row);
+        assert!(preview_row < composer_row);
     }
 
     #[test]
-    fn pending_preview_live_lines_are_indented_like_assistant_output() {
+    fn pending_preview_does_not_render_plain_reply_lines() {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["visible reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("visible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let preview_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("preview row");
-
-        assert!(lines[preview_row].contains("  visible reply"));
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(lines.contains("visible reply"));
     }
     #[test]
-    fn pending_preview_wraps_long_live_lines_on_narrow_width() {
+    fn pending_preview_does_not_wrap_hidden_plain_reply_lines() {
         let backend = TestBackend::new(28, 20);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["visible reply wraps across the pending band".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("visible reply wraps across the pending band".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let first_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("first wrapped preview row");
-        let second_row = lines
-            .iter()
-            .skip(first_row + 1)
-            .position(|line| line.contains("pending band"))
-            .map(|offset| first_row + 1 + offset)
-            .expect("second wrapped preview row");
-        let composer_row = lines
-            .iter()
-            .position(|line| line.contains("›"))
-            .expect("composer row");
-
-        assert_eq!(second_row, first_row + 1);
-        assert!(composer_row > second_row);
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(lines.contains("visible reply"));
+        assert!(lines.contains("pending band"));
     }
 
     #[test]
-    fn pending_preview_expands_beyond_legacy_cap_when_height_allows() {
+    fn pending_preview_no_longer_expands_plain_reply_text_with_extra_height() {
         let backend = TestBackend::new(18, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines =
-                vec![(
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some(
                 "a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 omega"
-            )
-                .to_owned()];
+                    .to_owned(),
+            );
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -10880,83 +11584,53 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_preview_preserves_blank_separator_between_reasoning_and_reply() {
+    fn pending_preview_hides_reasoning_reply_separator_when_plain_text_is_hidden() {
         let backend = TestBackend::new(70, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "quiet reasoning".to_owned(),
-                String::new(),
-                "visible reply".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("quiet reasoning\n\nvisible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let lines = buffer_lines(&terminal);
-        let reasoning_row = lines
-            .iter()
-            .position(|line| line.contains("quiet reasoning"))
-            .expect("reasoning row");
-        let visible_row = lines
-            .iter()
-            .position(|line| line.contains("visible reply"))
-            .expect("visible row");
-
-        assert!(visible_row > reasoning_row + 1);
-        assert!(lines[reasoning_row + 1].trim().is_empty());
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(lines.contains("quiet reasoning"));
+        assert!(lines.contains("visible reply"));
     }
 
     #[test]
-    fn pending_preview_styles_reasoning_dim_before_visible_reply() {
+    fn pending_preview_does_not_style_hidden_reasoning_lines() {
         let backend = TestBackend::new(70, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "quiet reasoning".to_owned(),
-                String::new(),
-                "visible reply".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("quiet reasoning\n\nvisible reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
-        let buf = terminal.backend().buffer();
-        let reasoning_row = find_row(&terminal, "quiet reasoning").expect("reasoning row");
-        let visible_row = find_row(&terminal, "visible reply").expect("visible row");
-
-        assert_eq!(
-            buf[(2, reasoning_row)].fg,
-            crate::chat::chat_surface::utils::SURFACE_GRAY
-        );
-        assert_eq!(buf[(2, visible_row)].fg, ratatui::style::Color::White);
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(lines.contains("quiet reasoning"));
+        assert!(lines.contains("visible reply"));
     }
 
     #[test]
-    fn pending_preview_truncation_preserves_reasoning_and_visible_segments() {
+    fn pending_preview_truncation_ignores_hidden_plain_reply_segments() {
         let backend = TestBackend::new(70, 12);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
-                "reason-1".to_owned(),
-                "reason-2".to_owned(),
-                "reason-3".to_owned(),
-                "reason-4".to_owned(),
-                String::new(),
-                "reply-1".to_owned(),
-                "reply-2".to_owned(),
-                "reply-3".to_owned(),
-            ];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some(
+                "reason-1\nreason-2\nreason-3\nreason-4\n\nreply-1\nreply-2\nreply-3".to_owned(),
+            );
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -10964,25 +11638,25 @@ description: "actual description"
 
         assert!(rendered.contains("reason-1"));
         assert!(rendered.contains("reason-2"));
-        assert!(!rendered.contains("reason-3"));
-        assert!(!rendered.contains("reason-4"));
         assert!(rendered.contains("reply-1"));
         assert!(rendered.contains("reply-2"));
-        assert!(!rendered.contains("reply-3"));
     }
 
     #[test]
     fn pending_live_lines_trim_outer_blank_lines_and_collapse_repeats() {
-        let lines = Arc::new(StdMutex::new(vec![
-            String::new(),
-            String::new(),
-            "reasoning".to_owned(),
-            String::new(),
-            String::new(),
-            "reply".to_owned(),
-            String::new(),
-            String::new(),
-        ]));
+        let lines = Arc::new(StdMutex::new(LiveTranscriptState {
+            tool_activity_lines: vec![
+                String::new(),
+                String::new(),
+                "reasoning".to_owned(),
+                String::new(),
+                String::new(),
+                "reply".to_owned(),
+                String::new(),
+                String::new(),
+            ],
+            draft_preview: None,
+        }));
 
         let normalized = super::pending_live_lines(&lines, 6);
         assert_eq!(
@@ -10993,16 +11667,19 @@ description: "actual description"
 
     #[test]
     fn pending_live_lines_expand_with_larger_preview_budget() {
-        let lines = Arc::new(StdMutex::new(vec![
-            "reason-1".to_owned(),
-            "reason-2".to_owned(),
-            "reason-3".to_owned(),
-            String::new(),
-            "reply-1".to_owned(),
-            "reply-2".to_owned(),
-            "reply-3".to_owned(),
-            "reply-4".to_owned(),
-        ]));
+        let lines = Arc::new(StdMutex::new(LiveTranscriptState {
+            tool_activity_lines: vec![
+                "reason-1".to_owned(),
+                "reason-2".to_owned(),
+                "reason-3".to_owned(),
+                String::new(),
+                "reply-1".to_owned(),
+                "reply-2".to_owned(),
+                "reply-3".to_owned(),
+                "reply-4".to_owned(),
+            ],
+            draft_preview: None,
+        }));
 
         let compact = super::pending_live_lines(&lines, 4);
         let expanded = super::pending_live_lines(&lines, 7);
@@ -11225,6 +11902,35 @@ description: "actual description"
     }
 
     #[test]
+    fn width_resize_does_not_surface_internal_tool_result_or_transport_tail_in_plain_reply() {
+        let backend = TestBackend::new(72, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut app = blank_app();
+        app.message_list.add_assistant_message(
+            concat!(
+                "我明白你的意思。\n\n",
+                "我已经核到一件关键事实：当前配置里确实存在一个更宽的 file_root。\n\n",
+                "[ok] {\"status\":\"ok\",\"tool\":\"read\",\"tool_call_id\":\"call-1\",\"payload_summary\":\"{\\\"path\\\":\\\"/workspace/demo/crates/daemon/src/lib.rs\\\",\\\"line_start\\\":1,\\\"line_end\\\":50}\",\"payload_chars\":2121,\"payload_truncated\":true}\n",
+                "candidate_index=1 candidate_count=1 profile_index=1 profile_count=1 exhausted=true error=provider request failed for model `gpt-5.4` on attempt 3/3: error sending request for url (https://api.tonsof.blue/v1/chat/completions)"
+            )
+            .to_owned(),
+        );
+
+        terminal.draw(|f| app.render(f)).expect("draw");
+        terminal.backend_mut().resize(28, 18);
+        terminal.draw(|f| app.render(f)).expect("draw");
+
+        let lines = buffer_lines(&terminal).join("\n");
+        assert!(
+            !lines.trim().is_empty(),
+            "sanitized plain reply should still leave visible assistant content after resize: {lines}"
+        );
+        assert!(!lines.contains("[ok] {\"status\":\"ok\""));
+        assert!(!lines.contains("provider request failed for model"));
+        assert!(!lines.contains("candidate_index=1"));
+    }
+
+    #[test]
     fn width_resize_keeps_pending_restore_footer_and_previews_visible() {
         let backend = TestBackend::new(72, 18);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -11294,14 +12000,13 @@ description: "actual description"
         ));
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["streamed preview line".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("streamed preview line".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw off tail");
         let off_tail_lines = buffer_lines(&terminal).join("\n");
         assert!(off_tail_lines.contains("PgDn / End"));
-        assert!(off_tail_lines.contains("streamed preview line"));
 
         app.message_list
             .add_assistant_message("new-tail-line after scroll".to_owned());
@@ -11309,7 +12014,6 @@ description: "actual description"
         terminal.draw(|f| app.render(f)).expect("draw resized");
         let resized_lines = buffer_lines(&terminal).join("\n");
         assert!(resized_lines.contains("PgDn / End"));
-        assert!(resized_lines.contains("streamed preview line"));
 
         app.message_list.handle_key(crossterm::event::KeyEvent::new(
             KeyCode::End,
@@ -11319,7 +12023,6 @@ description: "actual description"
         let restored_lines = buffer_lines(&terminal).join("\n");
 
         assert!(restored_lines.contains("new-tail-line after scroll"));
-        assert!(restored_lines.contains("streamed preview line"));
         assert!(!restored_lines.contains("PgDn / End"));
         assert_eq!(app.message_list.scroll_offset_for_test(), 0);
     }
@@ -11443,8 +12146,8 @@ description: "actual description"
         let mut app = blank_app();
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines = vec![
                 "reason-1".to_owned(),
                 "reason-2".to_owned(),
                 "reason-3".to_owned(),
@@ -11455,8 +12158,8 @@ description: "actual description"
             ];
         }
         let before = super::pending_render_signature(&app);
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec![
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines = vec![
                 "reason-1".to_owned(),
                 "reason-2".to_owned(),
                 "reason-3".to_owned(),
@@ -11487,18 +12190,37 @@ description: "actual description"
     }
 
     #[test]
-    fn pending_signature_changes_when_visible_preview_changes() {
+    fn pending_signature_ignores_plain_reply_preview_changes() {
         let mut app = blank_app();
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["reason-1".to_owned(), String::new(), "reply-1".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines =
+                vec!["reason-1".to_owned(), String::new(), "reply-1".to_owned()];
         }
         let before = super::pending_render_signature(&app);
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["reason-1".to_owned(), String::new(), "reply-2".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.tool_activity_lines =
+                vec!["reason-1".to_owned(), String::new(), "reply-2".to_owned()];
         }
         let after = super::pending_render_signature(&app);
+
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn transcript_preview_signature_changes_when_plain_preview_changes() {
+        let mut app = blank_app();
+        app.pending_turn = true;
+        app.last_render_width = 72;
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("first preview".to_owned());
+        }
+        let before = super::transcript_preview_signature(&app);
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("second preview".to_owned());
+        }
+        let after = super::transcript_preview_signature(&app);
 
         assert_ne!(before, after);
     }
@@ -11583,7 +12305,7 @@ description: "actual description"
     }
 
     #[test]
-    fn startup_overflow_with_pending_preview_keeps_user_block_and_preview_visible() {
+    fn startup_overflow_with_pending_preview_keeps_user_block_visible_with_transcript_preview() {
         let backend = TestBackend::new(50, 16);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut app = blank_app();
@@ -11609,8 +12331,8 @@ description: "actual description"
         app.message_list.add_user_message("hi".to_owned());
         app.pending_turn = true;
         app.turn_start = Some(std::time::Instant::now());
-        if let Ok(mut lines) = app.live_lines.lock() {
-            *lines = vec!["pending reply".to_owned()];
+        if let Ok(mut live) = app.live_transcript.lock() {
+            live.draft_preview = Some("pending reply".to_owned());
         }
 
         terminal.draw(|f| app.render(f)).expect("draw");
@@ -11625,6 +12347,7 @@ description: "actual description"
         ));
         assert!(preview_row > user_row);
         assert!(preview_row < composer_row);
+        assert!(composer_row > user_row);
     }
 
     #[test]
