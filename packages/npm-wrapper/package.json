@@ -1,0 +1,45 @@
+{
+  "name": "@eastream/loong",
+  "version": "0.1.2-alpha.2",
+  "description": "thin npm distribution channel for the loong cli",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eastreams/loong.git"
+  },
+  "homepage": "https://github.com/eastreams/loong",
+  "bugs": {
+    "url": "https://github.com/eastreams/loong/issues"
+  },
+  "type": "module",
+  "bin": {
+    "loong": "bin/loong.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "prepack": "node ./scripts/prepare-package.mjs",
+    "postinstall": "node ./scripts/postinstall.mjs",
+    "test": "node ./scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "tar": "^7.4.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": false
+  },
+  "keywords": [
+    "cli",
+    "coding-agent",
+    "developer-tools",
+    "loong"
+  ]
+}
