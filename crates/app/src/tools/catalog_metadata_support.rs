@@ -165,6 +165,7 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "content.search" => {
             "query:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean"
         }
+        "memory.retrieve" => "session_id:string,query?:string,intent?:string,max_results?:integer",
         "memory_search" => "query:string,max_results?:integer",
         "memory_get" => "path:string,from?:integer,lines?:integer",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
@@ -224,6 +225,9 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
         }
         "web.fetch" => "fetch a web page, download page text, inspect http content from a url",
         "web.search" => "search the web, look up web results, find information online",
+        "memory.retrieve" => {
+            "retrieve durable memory with provenance and injection-reason truth, inspect why memory would be recalled"
+        }
         "memory_search" => {
             "search durable workspace memory, recall prior notes, query stored memory"
         }
@@ -602,6 +606,12 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("max_bytes_per_file", "integer"),
             ("case_sensitive", "boolean"),
         ],
+        "memory.retrieve" => &[
+            ("session_id", "string"),
+            ("query", "string"),
+            ("intent", "string"),
+            ("max_results", "integer"),
+        ],
         "memory_search" => &[("query", "string"), ("max_results", "integer")],
         "memory_get" => &[
             ("path", "string"),
@@ -762,6 +772,7 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "http.request" => &["url"],
         "glob.search" => &["pattern"],
         "content.search" => &["query"],
+        "memory.retrieve" => &["session_id"],
         "memory_search" => &["query"],
         "memory_get" => &["path"],
         "shell.exec" => &["command"],
@@ -864,6 +875,7 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
             "browse",
         ],
         "content.search" => &["file", "search", "content", "filesystem", "repo"],
+        "memory.retrieve" => &["memory", "retrieve", "recall", "durable", "workspace"],
         "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
         "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "shell.exec" => &["shell", "command", "process", "exec"],

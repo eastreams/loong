@@ -9,7 +9,7 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::config::LoongConfig;
 use crate::conversation::{
-    ContextArtifactDescriptor, ContextArtifactKind, PromptCompiler, PromptFragment,
+    ContextArtifactDescriptor, ContextArtifactKind, PromptCompiler, PromptFragment, PromptLane,
     ToolOutputStreamingPolicy,
 };
 use crate::runtime_identity;
@@ -544,22 +544,31 @@ pub(crate) fn build_projected_context_for_session_in_view(
         let mem_config =
             memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let workspace_root = resolved_workspace_root(config);
+        let envelope = memory::hydrate_stage_envelope_for_memory_config(
+            session_id,
+            workspace_root.as_deref(),
+            &config.memory,
+        )
+        .map_err(|error| format!("hydrate prompt memory stage envelope failed: {error}"))?;
         let session_path_projection = load_session_path_projection(session_id, &mem_config)
             .ok()
             .flatten();
-        let hydrated = memory::hydrate_memory_context_with_workspace_root(
-            session_id,
-            workspace_root.as_deref(),
-            &mem_config,
-        )
-        .map_err(|error| format!("hydrate prompt memory context failed: {error}"))?;
-        Ok(project_hydrated_memory_context_for_view_and_session_path(
+        let mut projected = project_hydrated_memory_context_for_view_and_session_path(
             config,
             include_system_prompt,
             tool_view,
-            &hydrated,
+            &envelope.hydrated,
             session_path_projection.as_ref(),
-        ))
+        );
+        if include_system_prompt
+            && let Some(retrieval_outcome) = envelope.retrieval_outcome.as_ref()
+        {
+            append_stage_envelope_retrieval_outcome_fragment(
+                &mut projected.prompt_fragments,
+                retrieval_outcome,
+            );
+        }
+        Ok(projected)
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
@@ -591,29 +600,21 @@ pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
 ) -> CliResult<ProjectedMessageContext> {
     #[cfg(feature = "memory-sqlite")]
     {
-        let mem_config =
-            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
         let workspace_root = resolved_workspace_root(config);
-        let session_path_projection = load_session_path_projection(session_id, &mem_config)
-            .ok()
-            .flatten();
-        let hydrated = memory::hydrate_memory_context_with_workspace_root(
+        let envelope = memory::hydrate_stage_envelope_for_memory_config(
             session_id,
             workspace_root.as_deref(),
-            &mem_config,
+            &config.memory,
         )
-        .map_err(|error| format!("hydrate prompt memory context failed: {error}"))?;
-        Ok(
-            project_hydrated_memory_context_for_view_with_binding_and_session_path(
-                config,
-                include_system_prompt,
-                tool_view,
-                binding,
-                &hydrated,
-                session_path_projection.as_ref(),
-            )
-            .await,
+        .map_err(|error| format!("hydrate prompt memory stage envelope failed: {error}"))?;
+        Ok(project_stage_envelope_for_view_with_binding(
+            config,
+            include_system_prompt,
+            tool_view,
+            binding,
+            &envelope,
         )
+        .await)
     }
 
     #[cfg(not(feature = "memory-sqlite"))]
@@ -639,6 +640,7 @@ fn resolved_workspace_root(config: &LoongConfig) -> Option<std::path::PathBuf> {
     Some(workspace_root)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
     config: &LoongConfig,
     include_system_prompt: bool,
@@ -657,6 +659,35 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
         None,
     )
     .await
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) async fn project_stage_envelope_for_view_with_binding(
+    config: &LoongConfig,
+    include_system_prompt: bool,
+    tool_view: &ToolView,
+    binding: ProviderRuntimeBinding<'_>,
+    envelope: &memory::StageEnvelope,
+) -> ProjectedMessageContext {
+    let mut projected = project_hydrated_memory_context_for_view_with_binding_and_session_path(
+        config,
+        include_system_prompt,
+        tool_view,
+        binding,
+        &envelope.hydrated,
+        None,
+    )
+    .await;
+
+    if include_system_prompt && let Some(retrieval_outcome) = envelope.retrieval_outcome.as_ref() {
+        append_stage_envelope_retrieval_outcome_fragment(
+            &mut projected.prompt_fragments,
+            retrieval_outcome,
+        );
+        sync_projected_prompt_fragments_into_messages(&mut projected);
+    }
+
+    projected
 }
 
 async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
@@ -688,6 +719,7 @@ async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
                 hydrated,
                 session_path_projection,
             );
+            append_hydrated_retrieval_outcome_prompt_fragment(&mut prompt_fragments, hydrated);
         }
         append_hydrated_memory_messages(
             &mut messages,
@@ -702,6 +734,97 @@ async fn project_hydrated_memory_context_for_view_with_binding_and_session_path(
         artifacts,
         prompt_fragments,
     }
+}
+
+fn sync_projected_prompt_fragments_into_messages(projected: &mut ProjectedMessageContext) {
+    if projected.prompt_fragments.is_empty() {
+        return;
+    }
+
+    let compiler = PromptCompiler;
+    let compilation = compiler.compile(projected.prompt_fragments.clone());
+    let system_text = compilation.system_text;
+    if system_text.is_empty() {
+        return;
+    }
+
+    if let Some(system_message) = projected
+        .messages
+        .iter_mut()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+    {
+        *system_message = json!({
+            "role": "system",
+            "content": system_text,
+        });
+    } else {
+        projected.messages.insert(
+            0,
+            json!({
+                "role": "system",
+                "content": system_text,
+            }),
+        );
+    }
+
+    projected.prompt_fragments = compilation.fragments;
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_stage_envelope_retrieval_outcome_fragment(
+    prompt_fragments: &mut Vec<PromptFragment>,
+    retrieval_outcome: &memory::MemoryRetrievalOutcome,
+) {
+    let section = format!(
+        "## Retrieval Outcome\n- intent: {}\n- prompt eligible: {}\n- retrieval reason: {}\n- injection reason: {}\n- results: {}",
+        retrieval_outcome.intent.as_str(),
+        if retrieval_outcome.prompt_eligible {
+            "yes"
+        } else {
+            "no"
+        },
+        retrieval_outcome.retrieval_reason,
+        retrieval_outcome.injection_reason,
+        retrieval_outcome.results.len()
+    );
+    let fragment = PromptFragment::new(
+        "memory-retrieval-outcome",
+        PromptLane::CapabilitySnapshot,
+        "memory-retrieval-outcome",
+        section,
+        ContextArtifactKind::RuntimeContract,
+    )
+    .with_cacheable(true);
+    prompt_fragments.push(fragment);
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_hydrated_retrieval_outcome_prompt_fragment(
+    prompt_fragments: &mut Vec<PromptFragment>,
+    hydrated: &memory::HydratedMemoryContext,
+) {
+    let system_id = hydrated.diagnostics.system_id.as_str();
+    let retrieved_entries = hydrated
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == memory::MemoryContextKind::RetrievedMemory)
+        .count();
+    if retrieved_entries == 0 {
+        return;
+    }
+
+    let section = format!(
+        "## Retrieval Outcome\n- memory system: {system_id}\n- retrieved entries: {retrieved_entries}\n- retrieved memory is advisory and already projected into the prompt context"
+    );
+    let fragment = PromptFragment::new(
+        "memory-retrieval-outcome",
+        PromptLane::CapabilitySnapshot,
+        "memory-retrieval-outcome",
+        section,
+        ContextArtifactKind::RuntimeContract,
+    )
+    .with_cacheable(true);
+    prompt_fragments.push(fragment);
 }
 
 #[cfg(test)]
@@ -1126,6 +1249,98 @@ mod tests {
             first_lane,
             Some(crate::conversation::PromptLane::BaseSystem)
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn projected_hydrated_context_does_not_expose_runtime_retrieval_outcome_fragment() {
+        let config = LoongConfig::default();
+        let hydrated = memory::HydratedMemoryContext {
+            entries: vec![memory::MemoryContextEntry {
+                kind: memory::MemoryContextKind::RetrievedMemory,
+                role: "system".to_owned(),
+                content: "## Advisory Durable Recall\n\nRemember the deploy freeze window."
+                    .to_owned(),
+                provenance: Vec::new(),
+            }],
+            recent_window: Vec::new(),
+            diagnostics: memory::MemoryDiagnostics {
+                system_id: "builtin".to_owned(),
+                fail_open: true,
+                strict_mode_requested: false,
+                strict_mode_active: false,
+                degraded: false,
+                derivation_error: None,
+                retrieval_error: None,
+                rank_error: None,
+                recent_window_count: 0,
+                entry_count: 1,
+            },
+        };
+
+        let projected = project_hydrated_memory_context_for_view(
+            &config,
+            true,
+            &crate::tools::runtime_tool_view(),
+            &hydrated,
+        );
+        assert!(
+            projected
+                .prompt_fragments
+                .iter()
+                .all(|fragment| fragment.fragment_id != "memory-retrieval-outcome")
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn projected_stage_envelope_exposes_runtime_retrieval_outcome_fragment() {
+        let config = LoongConfig::default();
+        let envelope = memory::StageEnvelope {
+            hydrated: memory::HydratedMemoryContext {
+                entries: Vec::new(),
+                recent_window: Vec::new(),
+                diagnostics: memory::MemoryDiagnostics {
+                    system_id: "builtin".to_owned(),
+                    fail_open: true,
+                    strict_mode_requested: false,
+                    strict_mode_active: false,
+                    degraded: false,
+                    derivation_error: None,
+                    retrieval_error: None,
+                    rank_error: None,
+                    recent_window_count: 0,
+                    entry_count: 0,
+                },
+            },
+            retrieval_request: None,
+            retrieval_planner_snapshot: None,
+            retrieval_outcome: Some(memory::MemoryRetrievalOutcome {
+                query: Some("deploy freeze".to_owned()),
+                intent: memory::MemoryRetrievalIntent::PromptAssembly,
+                prompt_eligible: true,
+                retrieval_reason: "query_match_durable_memory".to_owned(),
+                injection_reason: "prompt_assembly_advisory_recall".to_owned(),
+                results: Vec::new(),
+            }),
+            diagnostics: Vec::new(),
+        };
+
+        let projected = project_stage_envelope_for_view_with_binding(
+            &config,
+            true,
+            &crate::tools::runtime_tool_view(),
+            ProviderRuntimeBinding::direct(),
+            &envelope,
+        )
+        .await;
+
+        assert!(projected.prompt_fragments.iter().any(|fragment| {
+            fragment.fragment_id == "memory-retrieval-outcome"
+                && fragment
+                    .content
+                    .contains("retrieval reason: query_match_durable_memory")
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

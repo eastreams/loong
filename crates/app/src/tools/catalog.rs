@@ -41,8 +41,8 @@ mod io_definition_support;
 use io_definition_support::web_search_definition;
 use io_definition_support::{
     bash_exec_definition, content_search_definition, glob_search_definition,
-    http_request_definition, memory_get_definition, memory_search_definition,
-    shell_exec_definition, web_fetch_definition,
+    http_request_definition, memory_get_definition, memory_retrieve_definition,
+    memory_search_definition, shell_exec_definition, web_fetch_definition,
 };
 #[path = "catalog_session_definition_support.rs"]
 mod session_definition_support;
@@ -1602,6 +1602,20 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: content_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "memory.retrieve",
+            provider_name: "memory_retrieve",
+            aliases: &["memory_retrieve"],
+            description: "Retrieve durable memory with unified provenance, injection reason, and prompt-eligibility truth",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::MemorySearchCorpus,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: memory_retrieve_definition,
         });
         descriptors.push(ToolDescriptor {
             name: "memory_search",

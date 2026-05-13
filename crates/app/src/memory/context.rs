@@ -828,6 +828,19 @@ mod tests {
             has_durable_recall,
             "expected staged envelope payload to keep workspace durable recall"
         );
+        let retrieval_outcome = envelope
+            .retrieval_outcome
+            .as_ref()
+            .expect("retrieval outcome should be present");
+        assert_eq!(
+            retrieval_outcome.intent,
+            crate::memory::MemoryRetrievalIntent::PromptAssembly
+        );
+        assert!(retrieval_outcome.prompt_eligible);
+        assert_eq!(
+            retrieval_outcome.retrieval_reason,
+            "profile_aware_advisory_recall"
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]

@@ -243,7 +243,7 @@ pub(super) fn tool_search_entry_is_runtime_usable(
         }
         "bash.exec" => config.bash_exec.is_discoverable(),
         #[cfg(feature = "tool-file")]
-        "memory_search" => memory_tools::memory_corpus_available(config),
+        "memory.retrieve" | "memory_search" => memory_tools::memory_corpus_available(config),
         #[cfg(feature = "tool-file")]
         "memory_get" => memory_tools::workspace_memory_corpus_available(config),
         _ => true,

@@ -6,8 +6,10 @@ use serde_json::{Value, json};
 
 use super::{
     DerivedMemoryKind, HydratedMemoryContext, MemoryContextProvenance, MemoryDiagnostics,
-    MemoryRecallMode, MemoryRetrievalRequest, MemoryRetrievalStrategy, MemoryScope,
-    MemoryStageFamily, StageDiagnostics, StageEnvelope, StageOutcome,
+    MemoryRecallMode, MemoryRetrievalIntent, MemoryRetrievalOutcome,
+    MemoryRetrievalProvenanceSummary, MemoryRetrievalRequest, MemoryRetrievalResult,
+    MemoryRetrievalStrategy, MemoryScope, MemoryStageFamily, StageDiagnostics, StageEnvelope,
+    StageOutcome,
 };
 use crate::memory::stage::PlannerDiagnosticsSnapshot;
 
@@ -158,6 +160,57 @@ struct MemoryRetrievalRequestPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MemoryRetrievalProvenanceSummaryPayload {
+    source_kind: String,
+    #[serde(default)]
+    source_label: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    authority: Option<String>,
+    #[serde(default)]
+    trust_level: Option<String>,
+    recall_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MemoryRetrievalResultPayload {
+    source: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    start_line: Option<usize>,
+    #[serde(default)]
+    end_line: Option<usize>,
+    snippet: String,
+    score: u32,
+    provenance: MemoryContextProvenance,
+    provenance_summary: MemoryRetrievalProvenanceSummaryPayload,
+    #[serde(default)]
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MemoryRetrievalOutcomePayload {
+    #[serde(default)]
+    query: Option<String>,
+    intent: MemoryRetrievalIntent,
+    prompt_eligible: bool,
+    retrieval_reason: String,
+    injection_reason: String,
+    #[serde(default)]
+    results: Vec<MemoryRetrievalResultPayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct StageDiagnosticsPayload {
     family: String,
     outcome: String,
@@ -180,6 +233,8 @@ struct StageEnvelopePayload {
     retrieval_request: Option<MemoryRetrievalRequestPayload>,
     #[serde(default)]
     retrieval_planner_snapshot: Option<PlannerDiagnosticsSnapshot>,
+    #[serde(default)]
+    retrieval_outcome: Option<MemoryRetrievalOutcomePayload>,
     #[serde(default)]
     diagnostics: Vec<StageDiagnosticsPayload>,
 }
@@ -341,6 +396,9 @@ pub fn decode_stage_envelope(payload: &Value) -> Option<StageEnvelope> {
         retrieval_planner_snapshot: payload.retrieval_planner_snapshot.map(|snapshot| {
             normalize_planner_snapshot(snapshot, fallback_planner_system_id.as_deref())
         }),
+        retrieval_outcome: payload
+            .retrieval_outcome
+            .and_then(decode_memory_retrieval_outcome_payload),
         diagnostics: payload
             .diagnostics
             .into_iter()
@@ -420,6 +478,58 @@ impl From<&MemoryRetrievalRequest> for MemoryRetrievalRequestPayload {
     }
 }
 
+impl From<&MemoryRetrievalProvenanceSummary> for MemoryRetrievalProvenanceSummaryPayload {
+    fn from(value: &MemoryRetrievalProvenanceSummary) -> Self {
+        Self {
+            source_kind: value.source_kind.clone(),
+            source_label: value.source_label.clone(),
+            scope: value.scope.clone(),
+            authority: value.authority.clone(),
+            trust_level: value.trust_level.clone(),
+            recall_mode: value.recall_mode.clone(),
+        }
+    }
+}
+
+impl From<&MemoryRetrievalResult> for MemoryRetrievalResultPayload {
+    fn from(value: &MemoryRetrievalResult) -> Self {
+        Self {
+            source: value.source.clone(),
+            path: value.path.clone(),
+            session_id: value.session_id.clone(),
+            scope: value.scope.clone(),
+            kind: value.kind.clone(),
+            role: value.role.clone(),
+            start_line: value.start_line,
+            end_line: value.end_line,
+            snippet: value.snippet.clone(),
+            score: value.score,
+            provenance: value.provenance.clone(),
+            provenance_summary: MemoryRetrievalProvenanceSummaryPayload::from(
+                &value.provenance_summary,
+            ),
+            metadata: value.metadata.clone(),
+        }
+    }
+}
+
+impl From<&MemoryRetrievalOutcome> for MemoryRetrievalOutcomePayload {
+    fn from(value: &MemoryRetrievalOutcome) -> Self {
+        Self {
+            query: value.query.clone(),
+            intent: value.intent,
+            prompt_eligible: value.prompt_eligible,
+            retrieval_reason: value.retrieval_reason.clone(),
+            injection_reason: value.injection_reason.clone(),
+            results: value
+                .results
+                .iter()
+                .map(MemoryRetrievalResultPayload::from)
+                .collect(),
+        }
+    }
+}
+
 impl From<&StageDiagnostics> for StageDiagnosticsPayload {
     fn from(value: &StageDiagnostics) -> Self {
         Self {
@@ -443,6 +553,10 @@ impl From<&StageEnvelope> for StageEnvelopePayload {
                 .as_ref()
                 .map(MemoryRetrievalRequestPayload::from),
             retrieval_planner_snapshot: value.retrieval_planner_snapshot.clone(),
+            retrieval_outcome: value
+                .retrieval_outcome
+                .as_ref()
+                .map(MemoryRetrievalOutcomePayload::from),
             diagnostics: value
                 .diagnostics
                 .iter()
@@ -522,6 +636,50 @@ fn decode_memory_retrieval_request_payload(
             .into_iter()
             .filter_map(|kind| DerivedMemoryKind::parse_id(kind.as_str()))
             .collect(),
+    })
+}
+
+fn decode_memory_retrieval_outcome_payload(
+    payload: MemoryRetrievalOutcomePayload,
+) -> Option<MemoryRetrievalOutcome> {
+    Some(MemoryRetrievalOutcome {
+        query: payload.query,
+        intent: payload.intent,
+        prompt_eligible: payload.prompt_eligible,
+        retrieval_reason: payload.retrieval_reason,
+        injection_reason: payload.injection_reason,
+        results: payload
+            .results
+            .into_iter()
+            .map(decode_memory_retrieval_result_payload)
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
+fn decode_memory_retrieval_result_payload(
+    payload: MemoryRetrievalResultPayload,
+) -> Option<MemoryRetrievalResult> {
+    Some(MemoryRetrievalResult {
+        source: payload.source,
+        path: payload.path,
+        session_id: payload.session_id,
+        scope: payload.scope,
+        kind: payload.kind,
+        role: payload.role,
+        start_line: payload.start_line,
+        end_line: payload.end_line,
+        snippet: payload.snippet,
+        score: payload.score,
+        provenance: payload.provenance,
+        provenance_summary: MemoryRetrievalProvenanceSummary {
+            source_kind: payload.provenance_summary.source_kind,
+            source_label: payload.provenance_summary.source_label,
+            scope: payload.provenance_summary.scope,
+            authority: payload.provenance_summary.authority,
+            trust_level: payload.provenance_summary.trust_level,
+            recall_mode: payload.provenance_summary.recall_mode,
+        },
+        metadata: payload.metadata,
     })
 }
 
@@ -982,5 +1140,69 @@ mod tests {
 
         assert_eq!(envelope_snapshot.memory_system_id, "recall_first");
         assert_eq!(diagnostic_snapshot.memory_system_id, "recall_first");
+    }
+
+    #[test]
+    fn decode_stage_envelope_preserves_retrieval_outcome() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin"
+                }
+            },
+            "retrieval_outcome": {
+                "query": "deploy freeze",
+                "intent": "operator_inspection",
+                "prompt_eligible": true,
+                "retrieval_reason": "query_match_durable_memory",
+                "injection_reason": "operator_requested_memory_retrieval",
+                "results": [
+                    {
+                        "source": "workspace_file",
+                        "path": "MEMORY.md",
+                        "scope": "workspace",
+                        "kind": "retrieved_memory",
+                        "role": "system",
+                        "start_line": 1,
+                        "end_line": 1,
+                        "snippet": "Deploy freeze window is Friday.",
+                        "score": 42,
+                        "provenance": {
+                            "memory_system_id": "builtin",
+                            "source_kind": "workspace_document",
+                            "source_label": "MEMORY.md",
+                            "scope": "workspace",
+                            "recall_mode": "operator_inspection"
+                        },
+                        "provenance_summary": {
+                            "source_kind": "workspace_document",
+                            "source_label": "MEMORY.md",
+                            "scope": "workspace",
+                            "recall_mode": "operator_inspection"
+                        }
+                    }
+                ]
+            }
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let outcome = envelope
+            .retrieval_outcome
+            .as_ref()
+            .expect("retrieval outcome");
+        assert_eq!(outcome.query.as_deref(), Some("deploy freeze"));
+        assert_eq!(outcome.intent, MemoryRetrievalIntent::OperatorInspection);
+        assert!(outcome.prompt_eligible);
+        assert_eq!(outcome.retrieval_reason, "query_match_durable_memory");
+        assert_eq!(
+            outcome.injection_reason,
+            "operator_requested_memory_retrieval"
+        );
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(outcome.results[0].source, "workspace_file");
+        assert_eq!(
+            outcome.results[0].provenance_summary.source_kind,
+            "workspace_document"
+        );
     }
 }

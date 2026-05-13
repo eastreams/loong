@@ -3,9 +3,11 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::{
-    MemoryContextEntry, MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics,
-    StageEnvelope, StageOutcome, WindowTurn, load_prompt_context, resolve_memory_system_runtime,
-    runtime_config::MemoryRuntimeConfig,
+    MemoryContextEntry, MemoryRetrievalIntent, MemoryRetrievalOutcome, MemoryRetrievalResult,
+    MemoryStageFamily, MemorySystem, MemorySystemMetadata, StageDiagnostics, StageEnvelope,
+    StageOutcome, WindowTurn, load_prompt_context, memory_injection_reason_for_intent,
+    memory_retrieval_provenance_summary, memory_retrieval_reason_for_request,
+    resolve_memory_system_runtime, runtime_config::MemoryRuntimeConfig,
 };
 use crate::memory::stage::MemoryRetrievalPlanResult;
 
@@ -148,11 +150,18 @@ impl BuiltinMemoryOrchestrator {
         );
         entries.extend(retrieve.records);
 
+        let rank = run_rank_stage(system, session_id, entries, metadata, config)?;
+        let retrieval_outcome = retrieval_plan.as_ref().map(|plan| {
+            build_retrieval_outcome(
+                plan.request(),
+                rank.records.as_slice(),
+                MemoryRetrievalIntent::PromptAssembly,
+            )
+        });
         let (retrieval_request, retrieval_planner_snapshot) = retrieval_plan
             .map(MemoryRetrievalPlanResult::into_parts)
             .map(|(request, planner_snapshot)| (Some(request), Some(planner_snapshot)))
             .unwrap_or((None, None));
-        let rank = run_rank_stage(system, session_id, entries, metadata, config)?;
         let diagnostics = vec![derive.diagnostics, retrieve.diagnostics, rank.diagnostics];
 
         Ok(StageEnvelope {
@@ -165,6 +174,7 @@ impl BuiltinMemoryOrchestrator {
             ),
             retrieval_request,
             retrieval_planner_snapshot,
+            retrieval_outcome,
             diagnostics,
         })
     }
@@ -180,6 +190,53 @@ impl BuiltinMemoryOrchestrator {
         Ok(self
             .hydrate_stage_envelope(session_id, workspace_root, config, system, metadata)?
             .hydrated)
+    }
+}
+
+fn build_retrieval_outcome(
+    request: &super::MemoryRetrievalRequest,
+    entries: &[MemoryContextEntry],
+    intent: MemoryRetrievalIntent,
+) -> MemoryRetrievalOutcome {
+    let results = entries
+        .iter()
+        .filter(|entry| entry.kind == super::MemoryContextKind::RetrievedMemory)
+        .map(|entry| {
+            let provenance = entry.provenance.first().cloned().unwrap_or_else(|| {
+                super::MemoryContextProvenance::new(
+                    request.memory_system_id.as_str(),
+                    super::MemoryProvenanceSourceKind::WorkspaceDocument,
+                    None,
+                    None,
+                    Some(super::MemoryScope::Workspace),
+                    request.recall_mode,
+                )
+            });
+            MemoryRetrievalResult {
+                source: provenance.source_kind.as_str().to_owned(),
+                path: provenance.source_label.clone(),
+                session_id: None,
+                scope: provenance.scope.map(|scope| scope.as_str().to_owned()),
+                kind: Some("retrieved_memory".to_owned()),
+                role: Some(entry.role.clone()),
+                start_line: None,
+                end_line: None,
+                snippet: entry.content.trim().to_owned(),
+                score: 1,
+                provenance: provenance.clone(),
+                provenance_summary: memory_retrieval_provenance_summary(&provenance),
+                metadata: None,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    MemoryRetrievalOutcome {
+        query: request.query.clone(),
+        intent,
+        prompt_eligible: !results.is_empty(),
+        retrieval_reason: memory_retrieval_reason_for_request(request).to_owned(),
+        injection_reason: memory_injection_reason_for_intent(intent).to_owned(),
+        results,
     }
 }
 
@@ -685,6 +742,7 @@ pub(crate) fn hydrate_stage_envelope_without_execution_adapter(
         hydrated,
         retrieval_request: None,
         retrieval_planner_snapshot: None,
+        retrieval_outcome: None,
         diagnostics,
     };
 
@@ -1549,6 +1607,28 @@ mod tests {
                 .source_path
                 .as_deref(),
             Some(memory_file_path_text.as_str())
+        );
+        let retrieval_outcome = envelope
+            .retrieval_outcome
+            .as_ref()
+            .expect("window-plus-summary should surface retrieval outcome");
+        assert_eq!(
+            retrieval_outcome.intent,
+            MemoryRetrievalIntent::PromptAssembly
+        );
+        assert!(retrieval_outcome.prompt_eligible);
+        assert_eq!(
+            retrieval_outcome.retrieval_reason,
+            "profile_aware_advisory_recall"
+        );
+        assert_eq!(
+            retrieval_outcome.injection_reason,
+            "prompt_assembly_advisory_recall"
+        );
+        assert_eq!(retrieval_outcome.results.len(), 1);
+        assert_eq!(
+            retrieval_outcome.results[0].provenance_summary.source_kind,
+            "workspace_document"
         );
 
         let _ = std::fs::remove_file(&db_path);

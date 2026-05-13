@@ -68,9 +68,12 @@ pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoad
 use sqlite_core::{append_turn, clear_session, load_transcript, load_window, replace_turns};
 pub use stage::{
     DerivedMemoryKind, MemoryAuthority, MemoryContextProvenance, MemoryProvenanceSourceKind,
-    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalRequest, MemoryRetrievalStrategy,
-    MemoryStageFamily, MemoryTrustLevel, StageDiagnostics, StageEnvelope, StageOutcome,
-    builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
+    MemoryRecallMode, MemoryRecordStatus, MemoryRetrievalIntent, MemoryRetrievalOutcome,
+    MemoryRetrievalProvenanceSummary, MemoryRetrievalRequest, MemoryRetrievalResult,
+    MemoryRetrievalStrategy, MemoryStageFamily, MemoryTrustLevel, StageDiagnostics, StageEnvelope,
+    StageOutcome, builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
+    memory_injection_reason_for_intent, memory_retrieval_provenance_summary,
+    memory_retrieval_reason_for_request,
 };
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
@@ -283,17 +286,6 @@ pub(crate) fn search_canonical_memory(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<Vec<CanonicalMemorySearchHit>, String> {
     sqlite::search_canonical_records_for_recall(query, limit, exclude_session_id, config)
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) fn search_canonical_memory_with_sqlite_path(
-    query: &str,
-    limit: usize,
-    exclude_session_id: Option<&str>,
-    sqlite_path: &Path,
-) -> Result<Vec<CanonicalMemorySearchHit>, String> {
-    let config = runtime_config::MemoryRuntimeConfig::for_sqlite_path(sqlite_path.to_path_buf());
-    search_canonical_memory(query, limit, exclude_session_id, &config)
 }
 
 #[cfg(feature = "memory-sqlite")]

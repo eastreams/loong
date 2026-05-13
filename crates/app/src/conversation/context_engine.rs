@@ -441,12 +441,12 @@ impl ConversationContextEngine for DefaultContextEngine {
             let provider_binding = crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx);
             let envelope = load_stage_envelope(config, session_id, binding).await?;
             let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
-            let projected = crate::provider::project_hydrated_memory_context_for_view_with_binding(
+            let projected = crate::provider::project_stage_envelope_for_view_with_binding(
                 config,
                 include_system_prompt,
                 &runtime_tool_view,
                 provider_binding,
-                &envelope.hydrated,
+                &envelope,
             )
             .await;
             return Ok(AssembledConversationContext {
@@ -584,22 +584,14 @@ mod tests {
         session_id: &str,
         kernel_ctx: &crate::KernelContext,
     ) -> Vec<Value> {
-        let envelope = load_stage_envelope(
+        crate::provider::build_projected_context_for_session_with_binding(
             config,
             session_id,
-            ConversationRuntimeBinding::kernel(kernel_ctx),
-        )
-        .await
-        .expect("load staged memory envelope");
-        let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
-        crate::provider::project_hydrated_memory_context_for_view_with_binding(
-            config,
             true,
-            &runtime_tool_view,
             crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
-            &envelope.hydrated,
         )
         .await
+        .expect("build provider context")
         .messages
     }
 

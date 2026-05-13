@@ -188,7 +188,8 @@ pub fn native_query_search_active(config: &LoongConfig) -> bool {
 }
 
 pub(crate) use request_message_runtime::build_projected_context_for_session_with_binding;
-pub(crate) use request_message_runtime::project_hydrated_memory_context_for_view_with_binding;
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use request_message_runtime::project_stage_envelope_for_view_with_binding;
 
 pub fn build_messages_for_session(
     config: &LoongConfig,
