@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
 use loong_daemon::*;
+use std::io::IsTerminal;
 
 #[cfg(debug_assertions)]
 const DEBUG_TOKIO_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
@@ -39,6 +40,7 @@ impl Drop for StdinGuard {
     }
 }
 
+
 fn error_code(error: &str) -> String {
     let trimmed = error.trim();
     let mut segments = trimmed.split(':');
@@ -59,6 +61,30 @@ fn error_code(error: &str) -> String {
 
 fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
+}
+
+fn should_run_chat_surface_onboard(
+    options: &onboard_cli::OnboardCommandOptions,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> bool {
+    !options.non_interactive
+        && options.output.is_none()
+        && !onboard_cli::onboard_has_explicit_overrides(options)
+        && stdin_is_terminal
+        && stdout_is_terminal
+}
+
+fn interactive_onboard_has_legacy_overrides(
+    options: &onboard_cli::OnboardCommandOptions,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> bool {
+    !options.non_interactive
+        && options.output.is_none()
+        && onboard_cli::onboard_has_explicit_overrides(options)
+        && stdin_is_terminal
+        && stdout_is_terminal
 }
 
 #[cfg(debug_assertions)]
@@ -348,7 +374,7 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
             system_prompt,
             skip_model_probe,
         } => {
-            onboard_cli::run_onboard_cli(onboard_cli::OnboardCommandOptions {
+            let options = onboard_cli::OnboardCommandOptions {
                 output,
                 force,
                 non_interactive,
@@ -362,8 +388,37 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
                 memory_profile,
                 system_prompt,
                 skip_model_probe,
-            })
-            .await?;
+            };
+
+            if should_run_chat_surface_onboard(
+                &options,
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+            ) {
+                run_chat_cli(
+                    None,
+                    None,
+                    false,
+                    false,
+                    &[],
+                    None,
+                    true,
+                )
+                .await?;
+                return Ok(());
+            }
+
+            if interactive_onboard_has_legacy_overrides(
+                &options,
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+            ) {
+                return Err(
+                    "interactive `loong onboard` now reopens the guided TUI setup surface; legacy onboarding flags like --provider/--model/--api-key require `--non-interactive` or should be configured through the guided TUI flow".to_owned()
+                );
+            }
+
+            onboard_cli::run_onboard_backend_cli(options).await?;
 
             if invoked_as_default_entry
                 && let Some(follow_up_command) = resolve_default_entry_post_onboard_command()
@@ -551,6 +606,7 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
                 acp_event_stream,
                 &acp_bootstrap_mcp_server,
                 acp_cwd.as_deref(),
+                false,
             )
             .await
         }
@@ -571,6 +627,7 @@ mod tests {
     use super::{
         DEBUG_TOKIO_WORKER_STACK_BYTES, MAX_TOKIO_WORKER_STACK_BYTES, TOKIO_WORKER_STACK_ENV,
         error_code, redacted_command_name, resolve_tokio_worker_thread_stack_size,
+        interactive_onboard_has_legacy_overrides, should_run_chat_surface_onboard,
     };
     use loong_daemon::{Commands, TurnCommands};
 
@@ -622,6 +679,82 @@ mod tests {
         let redacted = redacted_command_name(&Commands::Welcome);
 
         assert_eq!(redacted, "welcome");
+    }
+
+    #[test]
+    fn interactive_onboard_prefers_chat_surface_only_for_tty_guided_flow() {
+        let default_options = loong_daemon::onboard_cli::OnboardCommandOptions {
+            output: None,
+            force: false,
+            non_interactive: false,
+            accept_risk: false,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: false,
+        };
+
+        assert!(should_run_chat_surface_onboard(
+            &default_options,
+            true,
+            true
+        ));
+        assert!(!should_run_chat_surface_onboard(
+            &loong_daemon::onboard_cli::OnboardCommandOptions {
+                output: Some("/tmp/out.toml".to_owned()),
+                ..default_options.clone()
+            },
+            true,
+            true
+        ));
+        assert!(!should_run_chat_surface_onboard(
+            &loong_daemon::onboard_cli::OnboardCommandOptions {
+                non_interactive: true,
+                ..default_options.clone()
+            },
+            true,
+            true
+        ));
+        assert!(!should_run_chat_surface_onboard(
+            &loong_daemon::onboard_cli::OnboardCommandOptions {
+                provider: Some("openai".to_owned()),
+                ..default_options.clone()
+            },
+            true,
+            true
+        ));
+        assert!(!should_run_chat_surface_onboard(
+            &default_options,
+            false,
+            true
+        ));
+        assert!(!should_run_chat_surface_onboard(
+            &default_options,
+            true,
+            false
+        ));
+
+        assert!(interactive_onboard_has_legacy_overrides(
+            &loong_daemon::onboard_cli::OnboardCommandOptions {
+                provider: Some("openai".to_owned()),
+                ..default_options.clone()
+            },
+            true,
+            true
+        ));
+        assert!(!should_run_chat_surface_onboard(
+            &loong_daemon::onboard_cli::OnboardCommandOptions {
+                provider: Some("openai".to_owned()),
+                ..default_options
+            },
+            true,
+            true
+        ));
     }
 
     #[test]

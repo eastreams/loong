@@ -7,8 +7,9 @@ fn decide_provider_request_action_inlines_synthetic_reply_when_requested() {
         ProviderErrorMode::InlineMessage,
     );
 
-    if let ProviderTurnRequestAction::FinalizeInlineProviderError { reply } = decision {
+    if let ProviderTurnRequestAction::FinalizeInlineProviderError { reply, raw_error } = decision {
         assert!(reply.contains("provider unavailable"));
+        assert_eq!(raw_error, "provider unavailable");
     } else {
         panic!("unexpected decision: {decision:?}");
     }

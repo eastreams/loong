@@ -665,8 +665,8 @@ pub enum Commands {
         fail_on_diagnostics: bool,
     },
     #[command(
-        about = "Guided onboarding for fast first-chat setup with preflight diagnostics",
-        long_about = "Guided onboarding for fast first-chat setup with preflight diagnostics.\n\nThis is the default path for most users. Loong will detect reusable settings for provider, channels, or workspace guidance, suggest a starting point, and walk through quick review before first chat."
+        about = "Reopen the guided first-chat setup surface with preflight diagnostics",
+        long_about = "Reopen the guided first-chat setup surface with preflight diagnostics.\n\nIn an interactive terminal without legacy override flags, this re-enters the chat/TUI guided setup surface. Non-interactive runs, explicit output writes, or legacy onboarding override flags continue through the backend configuration materialization path."
     )]
     Onboard {
         /// Write the resulting config to a custom path instead of the default loong config location

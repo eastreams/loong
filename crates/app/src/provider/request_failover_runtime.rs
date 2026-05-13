@@ -93,26 +93,49 @@ where
                     if let Some(policy) = profile_state_policy {
                         mark_provider_profile_failure(policy, profile, reason);
                     }
-                    tracing::warn!(
-                        target: "loong.provider",
-                        provider_id = %provider.kind.profile().id,
-                        binding = %binding.as_str(),
-                        model = %snapshot.model,
-                        auth_profile_id = %profile.id,
-                        reason = %snapshot.reason.as_str(),
-                        stage = %snapshot.stage.as_str(),
-                        attempt = snapshot.attempt,
-                        max_attempts = snapshot.max_attempts,
-                        status_code = ?snapshot.status_code,
-                        try_next_model,
-                        candidate_index = model_index + 1,
-                        candidate_count = model_candidates.len(),
-                        profile_index = profile_index + 1,
-                        profile_count = ordered_profiles.len(),
-                        exhausted,
-                        error = %crate::observability::summarize_error(message.as_str()),
-                        "provider request attempt failed"
-                    );
+                    if crate::observability::interactive_tui_logs_suppressed() {
+                        tracing::debug!(
+                            target: "loong.provider",
+                            provider_id = %provider.kind.profile().id,
+                            binding = %binding.as_str(),
+                            model = %snapshot.model,
+                            auth_profile_id = %profile.id,
+                            reason = %snapshot.reason.as_str(),
+                            stage = %snapshot.stage.as_str(),
+                            attempt = snapshot.attempt,
+                            max_attempts = snapshot.max_attempts,
+                            status_code = ?snapshot.status_code,
+                            try_next_model,
+                            candidate_index = model_index + 1,
+                            candidate_count = model_candidates.len(),
+                            profile_index = profile_index + 1,
+                            profile_count = ordered_profiles.len(),
+                            exhausted,
+                            error = %crate::observability::summarize_error(message.as_str()),
+                            "provider request attempt failed"
+                        );
+                    } else {
+                        tracing::warn!(
+                            target: "loong.provider",
+                            provider_id = %provider.kind.profile().id,
+                            binding = %binding.as_str(),
+                            model = %snapshot.model,
+                            auth_profile_id = %profile.id,
+                            reason = %snapshot.reason.as_str(),
+                            stage = %snapshot.stage.as_str(),
+                            attempt = snapshot.attempt,
+                            max_attempts = snapshot.max_attempts,
+                            status_code = ?snapshot.status_code,
+                            try_next_model,
+                            candidate_index = model_index + 1,
+                            candidate_count = model_candidates.len(),
+                            profile_index = profile_index + 1,
+                            profile_count = ordered_profiles.len(),
+                            exhausted,
+                            error = %crate::observability::summarize_error(message.as_str()),
+                            "provider request attempt failed"
+                        );
+                    }
                     last_error = Some(message);
                     last_error_snapshot = Some(snapshot);
                     if matches!(

@@ -722,6 +722,8 @@ fn cli_chat_options_for_turn_request(request: &AgentTurnRequest) -> CliChatOptio
         acp_event_stream: request.acp_event_stream,
         acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
         acp_working_directory: normalized_turn_working_directory(request.acp_cwd.as_deref()),
+        force_onboard: false,
+        fresh_session: false,
     }
 }
 

@@ -1303,6 +1303,9 @@ pub enum StreamingCallbackData {
     Text {
         text: String,
     },
+    Reasoning {
+        text: String,
+    },
     ToolCallStart {
         index: usize,
         name: String,
@@ -1631,6 +1634,7 @@ mod tests {
             event_type: "content_block_delta".to_owned(),
             delta: TokenDelta {
                 text: Some("Hello".to_owned()),
+                reasoning: None,
                 tool_call: None,
             },
             index: None,
@@ -1652,6 +1656,7 @@ mod tests {
             event_type: "content_block_delta".to_owned(),
             delta: TokenDelta {
                 text: None,
+                reasoning: None,
                 tool_call: Some(ToolCallDelta {
                     name: Some("get_weather".to_owned()),
                     args: Some("{\"location\":\"NYC\"}".to_owned()),

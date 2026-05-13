@@ -168,6 +168,16 @@ fn expected_tool_request_error_leaves_runtime_failures_as_warnable() {
     ));
 }
 
+#[test]
+fn interactive_tui_log_suppression_guard_is_visible_to_tool_dispatch() {
+    assert!(!crate::observability::interactive_tui_logs_suppressed());
+    {
+        let _guard = crate::observability::InteractiveTuiLogSuppressionGuard::new();
+        assert!(crate::observability::interactive_tui_logs_suppressed());
+    }
+    assert!(!crate::observability::interactive_tui_logs_suppressed());
+}
+
 fn unique_tool_temp_dir(prefix: &str) -> PathBuf {
     unique_temp_dir(prefix)
 }

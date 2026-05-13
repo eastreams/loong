@@ -837,10 +837,8 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                 return None;
             }
             ProviderTurnRequestAction::FinalizeInlineProviderError {
-                reply: provider_error_text,
-            }
-            | ProviderTurnRequestAction::ReturnError {
-                error: provider_error_text,
+                reply: _provider_error_text,
+                raw_error: raw_provider_error_text,
             } => {
                 if current_continue_phase.lane_execution.discovery_search_turn {
                     emit_discovery_first_event(
@@ -865,10 +863,40 @@ async fn handle_followup_reply_decision<R: ConversationRuntime + ?Sized>(
                     config,
                     runtime,
                     session_id,
-                    provider_error_text.as_str(),
+                    raw_provider_error_text.as_str(),
                     binding,
                 )
                 .await;
+                let checkpoint =
+                    current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
+                return Some(ResolvedProviderTurn::persist_reply(
+                    raw_reply,
+                    current_continue_phase.lane_execution.provider_usage.clone(),
+                    checkpoint,
+                ));
+            }
+            ProviderTurnRequestAction::ReturnError {
+                error: _provider_error_text,
+            } => {
+                if current_continue_phase.lane_execution.discovery_search_turn {
+                    emit_discovery_first_event(
+                        runtime,
+                        session_id,
+                        "discovery_first_followup_result",
+                        json!({
+                            "provider_round": provider_round_index.saturating_add(1),
+                            "outcome": "provider_error",
+                            "followup_tool_name": Value::Null,
+                            "followup_target_tool_id": Value::Null,
+                            "used_legacy_hidden_tool_wrapper": false,
+                            "raw_tool_output_requested": current_continue_phase
+                                .lane_execution
+                                .raw_tool_output_requested,
+                        }),
+                        binding,
+                    )
+                    .await;
+                }
                 let checkpoint =
                     current_continue_phase.checkpoint(preparation, user_input, raw_reply.as_str());
                 return Some(ResolvedProviderTurn::persist_reply(

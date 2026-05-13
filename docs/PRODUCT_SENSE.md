@@ -61,7 +61,7 @@ The current product contract is:
    checksum-verified GitHub Release binaries and keeps an explicit `--source`
    fallback from a local checkout.
 2. Run `loong` and let the main TUI own the first-run path too; when config is missing, startup onboarding stays inside that shell.
-3. Reopen `loong onboard` only when the operator wants the deeper guided setup flow explicitly.
+3. Reopen `loong onboard` only when the operator wants to rerun the guided setup surface explicitly.
 4. Get first value through a concrete one-shot command such as
    `loong ask --message "Summarize this repository and suggest the best next step."`,
    while `loong chat` remains an explicit alias for the interactive conversation surface.

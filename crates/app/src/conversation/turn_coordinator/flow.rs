@@ -63,8 +63,8 @@ pub(super) async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                 )
                 .await
         }
-        ProviderTurnRequestAction::FinalizeInlineProviderError { reply } => {
-            ProviderTurnRequestTerminalPhase::persist_inline_provider_error(reply)
+        ProviderTurnRequestAction::FinalizeInlineProviderError { reply, raw_error } => {
+            ProviderTurnRequestTerminalPhase::persist_inline_provider_error(reply, raw_error)
                 .resolve(preparation, user_input)
         }
         ProviderTurnRequestAction::ReturnError { error } => {

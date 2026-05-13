@@ -324,6 +324,17 @@ pub(crate) fn map_streaming_callback_data_to_token_event_with_elapsed(
             event_type: "text_delta".to_owned(),
             delta: TokenDelta {
                 text: Some(text),
+                reasoning: None,
+                tool_call: None,
+            },
+            index: None,
+            elapsed_ms,
+        },
+        crate::provider::StreamingCallbackData::Reasoning { text } => StreamingTokenEvent {
+            event_type: "reasoning_delta".to_owned(),
+            delta: TokenDelta {
+                text: None,
+                reasoning: Some(text),
                 tool_call: None,
             },
             index: None,
@@ -337,6 +348,7 @@ pub(crate) fn map_streaming_callback_data_to_token_event_with_elapsed(
             };
             let delta = TokenDelta {
                 text: None,
+                reasoning: None,
                 tool_call: Some(tool_call),
             };
             StreamingTokenEvent {
@@ -357,6 +369,7 @@ pub(crate) fn map_streaming_callback_data_to_token_event_with_elapsed(
             };
             let delta = TokenDelta {
                 text: None,
+                reasoning: None,
                 tool_call: Some(tool_call),
             };
             StreamingTokenEvent {
@@ -388,9 +401,24 @@ mod tests {
 
         assert_eq!(event.event_type, "text_delta");
         assert_eq!(event.delta.text.as_deref(), Some("hello"));
+        assert!(event.delta.reasoning.is_none());
         assert!(event.delta.tool_call.is_none());
         assert!(event.index.is_none());
         assert_eq!(event.elapsed_ms, None);
+    }
+
+    #[test]
+    fn map_streaming_callback_data_to_token_event_keeps_reasoning_delta_shape() {
+        let data = crate::provider::StreamingCallbackData::Reasoning {
+            text: "quiet reasoning".to_owned(),
+        };
+        let event = map_streaming_callback_data_to_token_event(data);
+
+        assert_eq!(event.event_type, "reasoning_delta");
+        assert_eq!(event.delta.reasoning.as_deref(), Some("quiet reasoning"));
+        assert!(event.delta.text.is_none());
+        assert!(event.delta.tool_call.is_none());
+        assert!(event.index.is_none());
     }
 
     #[test]
@@ -408,6 +436,7 @@ mod tests {
         assert_eq!(event.event_type, "tool_call_input_delta");
         assert_eq!(event.index, Some(2));
         assert_eq!(tool_call.args.as_deref(), Some("{\"query\":\"rust\"}"));
+        assert!(event.delta.reasoning.is_none());
         assert!(tool_call.name.is_none());
         assert!(tool_call.id.is_none());
         assert_eq!(event.elapsed_ms, None);
@@ -430,6 +459,7 @@ mod tests {
         assert_eq!(event.index, Some(1));
         assert_eq!(tool_call.name.as_deref(), Some("search"));
         assert_eq!(tool_call.id.as_deref(), Some("call_123"));
+        assert!(event.delta.reasoning.is_none());
         assert!(tool_call.args.is_none());
         assert_eq!(event.elapsed_ms, None);
     }
@@ -443,6 +473,20 @@ mod tests {
 
         assert_eq!(event.event_type, "text_delta");
         assert_eq!(event.delta.text.as_deref(), Some("hello"));
+        assert!(event.delta.reasoning.is_none());
         assert_eq!(event.elapsed_ms, Some(42));
+    }
+
+    #[test]
+    fn map_streaming_callback_data_to_token_event_with_elapsed_keeps_reasoning_latency_metadata() {
+        let data = crate::provider::StreamingCallbackData::Reasoning {
+            text: "thinking".to_owned(),
+        };
+        let event = map_streaming_callback_data_to_token_event_with_elapsed(data, Some(7));
+
+        assert_eq!(event.event_type, "reasoning_delta");
+        assert_eq!(event.delta.reasoning.as_deref(), Some("thinking"));
+        assert!(event.delta.text.is_none());
+        assert_eq!(event.elapsed_ms, Some(7));
     }
 }

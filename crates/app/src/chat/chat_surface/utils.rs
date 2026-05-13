@@ -1,8 +1,13 @@
 use crate::constants::spinners::*;
+use regex::Regex;
 use ratatui::style::Color;
 use serde_json::Value;
 use std::env;
+use std::sync::LazyLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+static LOCAL_LINK_COLON_LOCATION_SUFFIX_RE: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r":[0-9]+(?::[0-9]+)?$").ok());
 
 pub const FOCUS_RING_FRAMES: [&str; 18] = [
     "·", "·", "◦", "○", "◎", "◉", "●", "●", "●", "◉", "◎", "○", "◦", "·", "·", " ", " ", " ",
@@ -105,6 +110,10 @@ pub fn get_spinner_verb_with_seed(start_time: Instant, seed: u64) -> &'static st
         .unwrap_or(SPINNERS_ZH_CN.first().copied().unwrap_or("thinking"))
 }
 
+pub fn divider_rule_text(width: usize) -> String {
+    "─".repeat(width.max(12))
+}
+
 pub fn compact_structured_preview(text: &str, max_fields: usize) -> Option<String> {
     let value = serde_json::from_str::<Value>(text.trim()).ok()?;
     let object = value.as_object()?;
@@ -131,6 +140,344 @@ pub fn compact_structured_preview(text: &str, max_fields: usize) -> Option<Strin
     }
 }
 
+pub fn split_inline_bullet_runs(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if trimmed.matches("• ").count() < 2 {
+        return None;
+    }
+
+    let items = trimmed
+        .split("• ")
+        .filter_map(|segment| {
+            let segment = segment.trim();
+            (!segment.is_empty()).then(|| format!("• {segment}"))
+        })
+        .collect::<Vec<_>>();
+
+    (items.len() >= 2).then_some(items)
+}
+
+pub fn split_reasoning_preview_text(preview: &str) -> (Option<String>, Option<String>) {
+    let open_tag = "<think>";
+    let close_tag = "</think>";
+    let lower = preview.to_ascii_lowercase();
+    let mut visible = String::new();
+    let mut thinking = String::new();
+    let mut idx = 0usize;
+    let mut in_think = false;
+
+    while idx < preview.len() {
+        let remaining = &lower[idx..];
+        if remaining.starts_with(open_tag) {
+            in_think = true;
+            idx += open_tag.len();
+            continue;
+        }
+        if remaining.starts_with(close_tag) {
+            in_think = false;
+            idx += close_tag.len();
+            continue;
+        }
+        if open_tag.starts_with(remaining) || close_tag.starts_with(remaining) {
+            break;
+        }
+
+        let Some(ch) = preview[idx..].chars().next() else {
+            break;
+        };
+        if in_think {
+            thinking.push(ch);
+        } else {
+            visible.push(ch);
+        }
+        idx += ch.len_utf8();
+    }
+
+    let thinking = thinking.trim().to_owned();
+    let visible = visible.trim().to_owned();
+    let saw_explicit_think_tag =
+        preview.to_ascii_lowercase().contains("<think>") || preview.to_ascii_lowercase().contains("</think>");
+    if saw_explicit_think_tag {
+        return (
+            (!thinking.is_empty()).then_some(thinking),
+            (!visible.is_empty()).then_some(visible),
+        );
+    }
+
+    let lines = preview.lines().collect::<Vec<_>>();
+    if let Some(first_non_blank_idx) = lines.iter().position(|line| !line.trim().is_empty())
+        && lines
+            .get(first_non_blank_idx)
+            .is_some_and(|line| is_reasoning_heading_line(line.trim()))
+    {
+        let after_heading = lines.get(first_non_blank_idx + 1..).unwrap_or(&[]);
+        let blank_idx = after_heading.iter().position(|line| line.trim().is_empty());
+        let (reasoning_slice, visible_slice) = match blank_idx {
+            Some(idx) => (
+                after_heading.get(..idx).unwrap_or(&[]),
+                after_heading.get(idx + 1..).unwrap_or(&[]),
+            ),
+            None => (after_heading, &[][..]),
+        };
+        let reasoning = reasoning_slice.join("\n").trim().to_owned();
+        let visible = visible_slice
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_owned();
+        return (
+            (!reasoning.is_empty()).then_some(reasoning),
+            (!visible.is_empty()).then_some(visible),
+        );
+    }
+
+    let Some(blank_idx) = lines.iter().position(|line| line.trim().is_empty()) else {
+        let trimmed = preview.trim();
+        if trimmed.is_empty() {
+            return (None, Some(String::new()));
+        }
+
+        let mut truncated = trimmed.to_owned();
+        let partial_tag_prefixes = [
+            "<",
+            "</",
+            "<t",
+            "</t",
+            "<th",
+            "</th",
+            "<thi",
+            "</thi",
+            "<thin",
+            "</thin",
+            "<think",
+            "</think",
+        ];
+        if partial_tag_prefixes
+            .iter()
+            .any(|prefix| truncated.to_ascii_lowercase().ends_with(prefix))
+        {
+            while partial_tag_prefixes
+                .iter()
+                .any(|prefix| truncated.to_ascii_lowercase().ends_with(prefix))
+            {
+                truncated.pop();
+            }
+            truncated.truncate(truncated.trim_end().len());
+        }
+
+        return (None, (!truncated.is_empty()).then_some(truncated));
+    };
+    let reasoning = lines
+        .get(..blank_idx)
+        .unwrap_or(&[])
+        .join("\n")
+        .trim()
+        .to_owned();
+    let visible = lines
+        .get(blank_idx + 1..)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned();
+
+    let looks_like_structured_markdown = |text: &str| {
+        text.lines().map(str::trim).any(|line| {
+            line.starts_with("```")
+                || line.starts_with('#')
+                || line.starts_with('>')
+                || line.starts_with("- ")
+                || line.starts_with("* ")
+                || line
+                    .strip_prefix(|ch: char| ch.is_ascii_digit())
+                    .is_some_and(|rest| rest.starts_with(". "))
+                || (line.contains("](") && line.contains('['))
+                || (line.starts_with('|') && line.ends_with('|') && line.matches('|').count() >= 2)
+        })
+    };
+
+    if reasoning.is_empty() || visible.is_empty() || looks_like_structured_markdown(&reasoning) {
+        return (
+            None,
+            (!preview.trim().is_empty()).then(|| preview.trim().to_owned()),
+        );
+    }
+
+    (Some(reasoning), Some(visible))
+}
+
+pub fn strip_reasoning_heading_block(text: &str) -> String {
+    let lines = text.lines();
+    let mut kept = Vec::new();
+    let mut skipping_reasoning = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+        let reasoning_heading = is_reasoning_heading_line(trimmed);
+        let any_heading = trimmed.starts_with('#');
+        if !skipping_reasoning
+            && reasoning_heading
+        {
+            skipping_reasoning = true;
+            continue;
+        }
+
+        if skipping_reasoning {
+            if any_heading {
+                skipping_reasoning = false;
+                kept.push(line.to_owned());
+                continue;
+            }
+            if trimmed.is_empty() {
+                skipping_reasoning = false;
+                continue;
+            }
+            continue;
+        }
+
+        kept.push(line.to_owned());
+    }
+
+    kept.join("\n").trim().to_owned()
+}
+
+fn is_reasoning_heading_line(line: &str) -> bool {
+    line.strip_prefix('#')
+        .and_then(|rest| rest.strip_prefix('#'))
+        .map(str::trim)
+        .is_some_and(is_reasoning_section_title)
+}
+
+pub fn is_reasoning_section_title(title: &str) -> bool {
+    matches!(
+        title.trim().to_ascii_lowercase().as_str(),
+        "reasoning" | "analysis" | "thinking" | "thought process"
+    )
+}
+
+pub fn visible_text_for_reasoning_mode(text: &str, show_reasoning: bool) -> String {
+    if show_reasoning {
+        return split_reasoning_preview_text(text)
+            .1
+            .unwrap_or_else(|| text.to_owned());
+    }
+
+    let filtered = strip_reasoning_heading_block(text);
+    if filtered.as_str() != text {
+        return filtered;
+    }
+
+    let (reasoning, visible) = split_reasoning_preview_text(text);
+    if reasoning.is_some() {
+        return visible.unwrap_or_default();
+    }
+
+    text.to_owned()
+}
+
+pub fn shorten_home_display_path(path: &str) -> String {
+    let path = path.trim();
+    if let Some(home) = std::env::var_os("HOME").and_then(|home| home.into_string().ok())
+        && !home.is_empty()
+        && let Some(rest) = path.strip_prefix(home.as_str())
+        && (rest.is_empty() || rest.starts_with('/'))
+    {
+        return format!("~{rest}");
+    }
+    path.to_owned()
+}
+
+pub fn normalize_local_link_path_text(path_text: &str) -> String {
+    path_text.replace('\\', "/")
+}
+
+pub fn render_local_link_target_text(dest_url: &str) -> Option<String> {
+    let raw = if let Some(rest) = dest_url.strip_prefix("file://") {
+        rest
+    } else {
+        dest_url
+    };
+
+    if !(raw.starts_with('/')
+        || raw.starts_with("~/")
+        || raw.starts_with("./")
+        || raw.starts_with("../"))
+    {
+        return None;
+    }
+
+    let (path_part, location_suffix) = split_local_link_location_suffix(raw);
+    let mut rendered = shorten_home_display_path(&normalize_local_link_path_text(path_part));
+    if let Some(location_suffix) = location_suffix {
+        rendered.push_str(location_suffix.as_str());
+    }
+    Some(rendered)
+}
+
+pub fn normalize_tool_activity_detail_text(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("↳ ") {
+        return Some(rest.to_owned());
+    }
+    if let Some(request) = trimmed.strip_prefix("request:") {
+        return Some(format!("request {}", request.trim_start()));
+    }
+    if let Some(request) = trimmed.strip_prefix("request ") {
+        return Some(format!("request {}", request.trim_start()));
+    }
+    if let Some(args) = trimmed.strip_prefix("args:") {
+        return Some(format!("args {}", args.trim_start()));
+    }
+    if let Some(args) = trimmed.strip_prefix("args ") {
+        return Some(format!("args {}", args.trim_start()));
+    }
+    if let Some(stdout) = trimmed.strip_prefix("stdout:") {
+        return Some(format!("stdout {}", stdout.trim_start()));
+    }
+    if let Some(stderr) = trimmed.strip_prefix("stderr:") {
+        return Some(format!("stderr {}", stderr.trim_start()));
+    }
+    if let Some(file) = trimmed.strip_prefix("file:") {
+        return Some(format!("file {}", file.trim_start()));
+    }
+    if let Some(metrics) = trimmed.strip_prefix("metrics:") {
+        return Some(format!("metrics {}", metrics.trim_start()));
+    }
+    None
+}
+
+pub fn is_tool_activity_section_title(title: &str) -> bool {
+    matches!(
+        title.trim().to_ascii_lowercase().as_str(),
+        "tool activity" | "tools" | "tool calls"
+    )
+}
+
+pub fn split_local_link_location_suffix(dest_url: &str) -> (&str, Option<String>) {
+    if let Some((path, suffix)) = dest_url.rsplit_once('#')
+        && !suffix.trim().is_empty()
+    {
+        return (path, Some(format!("#{suffix}")));
+    }
+
+    if let Some(matched) = LOCAL_LINK_COLON_LOCATION_SUFFIX_RE
+        .as_ref()
+        .and_then(|regex| regex.find(dest_url))
+        && matched.end() == dest_url.len()
+    {
+        let path_len = dest_url.len().saturating_sub(matched.as_str().len());
+        return (&dest_url[..path_len], Some(matched.as_str().to_owned()));
+    }
+
+    (dest_url, None)
+}
+
 fn compact_preview_value(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => Some(text.clone()),
@@ -147,5 +494,154 @@ fn compact_preview_value(value: &Value) -> Option<String> {
         } else {
             "…".to_owned()
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_tool_activity_section_title, normalize_tool_activity_detail_text,
+        render_local_link_target_text, shorten_home_display_path,
+        split_local_link_location_suffix, split_reasoning_preview_text, strip_reasoning_heading_block,
+        visible_text_for_reasoning_mode,
+    };
+
+    #[test]
+    fn reasoning_preview_split_supports_blank_line_separator() {
+        let (reasoning, visible) =
+            split_reasoning_preview_text("quiet reasoning\nsecond line\n\nvisible reply");
+
+        assert_eq!(reasoning.as_deref(), Some("quiet reasoning\nsecond line"));
+        assert_eq!(visible.as_deref(), Some("visible reply"));
+    }
+
+    #[test]
+    fn reasoning_preview_split_strips_partial_closing_think_suffix_from_visible_text() {
+        let (reasoning, visible) = split_reasoning_preview_text("visible answer</t");
+
+        assert_eq!(reasoning, None);
+        assert_eq!(visible.as_deref(), Some("visible answer"));
+    }
+
+    #[test]
+    fn reasoning_preview_split_supports_explicit_reasoning_heading_block() {
+        let (reasoning, visible) = split_reasoning_preview_text(
+            "## Reasoning\nThe provider compared two options.\n\nVisible answer.",
+        );
+
+        assert_eq!(
+            reasoning.as_deref(),
+            Some("The provider compared two options.")
+        );
+        assert_eq!(visible.as_deref(), Some("Visible answer."));
+    }
+
+    #[test]
+    fn strip_reasoning_heading_block_drops_reasoning_section_and_keeps_following_answer() {
+        let stripped = strip_reasoning_heading_block(
+            "## Reasoning\nThe provider compared two options.\n\nVisible answer.",
+        );
+
+        assert!(!stripped.contains("Reasoning"));
+        assert!(!stripped.contains("The provider compared two options."));
+        assert_eq!(stripped, "Visible answer.");
+    }
+
+    #[test]
+    fn visible_text_for_reasoning_mode_hides_think_and_reasoning_heading_blocks() {
+        assert_eq!(
+            visible_text_for_reasoning_mode(
+                "<think>quiet reasoning\nsecond line</think>Hello there",
+                false,
+            ),
+            "Hello there"
+        );
+        assert_eq!(
+            visible_text_for_reasoning_mode(
+                "## Reasoning\nThe provider compared two options.\n\nVisible answer.",
+                false,
+            ),
+            "Visible answer."
+        );
+        assert_eq!(
+            visible_text_for_reasoning_mode(
+                "## Analysis\nThe provider compared two options.\n\nVisible answer.",
+                false,
+            ),
+            "Visible answer."
+        );
+    }
+
+    #[test]
+    fn shorten_home_display_path_rewrites_home_prefix_to_tilde() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/chum".to_owned());
+        assert_eq!(
+            shorten_home_display_path(format!("{home}/.loong/config.toml").as_str()),
+            "~/.loong/config.toml"
+        );
+    }
+
+    #[test]
+    fn reasoning_preview_split_supports_reasoning_heading_aliases() {
+        let (reasoning, visible) = split_reasoning_preview_text(
+            "## Analysis\nThe provider compared two options.\n\nVisible answer.",
+        );
+
+        assert_eq!(
+            reasoning.as_deref(),
+            Some("The provider compared two options.")
+        );
+        assert_eq!(visible.as_deref(), Some("Visible answer."));
+    }
+
+    #[test]
+    fn normalize_tool_activity_detail_text_rewrites_known_child_prefixes() {
+        assert_eq!(
+            normalize_tool_activity_detail_text("stdout: done").as_deref(),
+            Some("stdout done")
+        );
+        assert_eq!(
+            normalize_tool_activity_detail_text("↳ args {\"limit\":5}").as_deref(),
+            Some("args {\"limit\":5}")
+        );
+        assert_eq!(
+            normalize_tool_activity_detail_text("metrics: 42ms · exit=0").as_deref(),
+            Some("metrics 42ms · exit=0")
+        );
+    }
+
+    #[test]
+    fn is_tool_activity_section_title_accepts_known_aliases() {
+        assert!(is_tool_activity_section_title("Tool activity"));
+        assert!(is_tool_activity_section_title("Tools"));
+        assert!(is_tool_activity_section_title("Tool Calls"));
+        assert!(!is_tool_activity_section_title("Reasoning"));
+    }
+
+    #[test]
+    fn split_local_link_location_suffix_supports_hash_and_colon_suffixes() {
+        assert_eq!(
+            split_local_link_location_suffix("/Users/chum/project/src/app.rs#L12"),
+            ("/Users/chum/project/src/app.rs", Some("#L12".to_owned()))
+        );
+        assert_eq!(
+            split_local_link_location_suffix("/Users/chum/project/src/app.rs:12:3"),
+            ("/Users/chum/project/src/app.rs", Some(":12:3".to_owned()))
+        );
+    }
+
+    #[test]
+    fn render_local_link_target_text_supports_file_urls_and_relative_paths() {
+        let file_url = "file:///Users/chum/project/src/app.rs#L12";
+        let relative = "./docs/config.toml:12";
+
+        assert!(
+            render_local_link_target_text(file_url)
+                .is_some_and(|text| text.contains("src/app.rs#L12"))
+        );
+        assert_eq!(
+            render_local_link_target_text(relative).as_deref(),
+            Some("./docs/config.toml:12")
+        );
     }
 }

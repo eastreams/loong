@@ -396,26 +396,13 @@ fn build_screen_section_block(
             language,
             lines: content,
         } => (
-            build_preformatted_heading(
-                title
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty()),
-                language
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty()),
+            None,
+            render_preformatted_or_diff_lines(
+                title.as_deref(),
+                language.as_deref(),
+                content,
+                width,
             ),
-            content
-                .iter()
-                .map(|line| {
-                    if line.is_empty() {
-                        String::new()
-                    } else {
-                        format!("    {line}")
-                    }
-                })
-                .collect(),
         ),
     }
 }
@@ -460,7 +447,7 @@ fn append_section_lines(lines: &mut Vec<String>, section: &TuiSectionSpec, width
             title,
             language,
             lines: content,
-        } => render_preformatted_lines(title.as_deref(), language.as_deref(), content),
+        } => render_preformatted_or_diff_lines(title.as_deref(), language.as_deref(), content, width),
     };
 
     if section_lines.is_empty() {
@@ -590,18 +577,39 @@ fn render_callout_lines(
     lines: &[String],
     width: usize,
 ) -> Vec<String> {
-    let heading = match title.map(str::trim).filter(|value| !value.is_empty()) {
+    let trimmed_title = title.map(str::trim).filter(|value| !value.is_empty());
+    let heading = match trimmed_title {
         Some(title) => format!("{}: {title}", tone_label(tone)),
         None => tone_label(tone).to_owned(),
     };
+    let tool_activity = trimmed_title.is_some_and(|title| title.eq_ignore_ascii_case("tool activity"));
+    let quoted_context = trimmed_title.is_some_and(|title| title.eq_ignore_ascii_case("quoted context"));
 
     let mut rendered = vec![heading];
     for line in lines {
+        let (bullet_prefix, content) = if tool_activity {
+            format_tool_activity_callout_line(line.as_str())
+        } else if quoted_context {
+            ("┃ ", line.to_owned())
+        } else {
+            ("- ", line.to_owned())
+        };
         rendered.extend(crate::presentation::render_wrapped_text_line(
-            "- ", line, width,
+            bullet_prefix, content.as_str(), width,
         ));
     }
     rendered
+}
+
+fn format_tool_activity_callout_line(line: &str) -> (&'static str, String) {
+    let trimmed = line.trim_start();
+    if let Some(detail) = crate::chat::tool_activity_semantic_preview_line(trimmed) {
+        return ("• ", detail);
+    }
+    if let Some(detail) = crate::chat::normalize_tool_activity_detail_text(trimmed) {
+        return ("↳ ", detail);
+    }
+    ("• ", trimmed.to_owned())
 }
 
 fn tone_label(tone: TuiCalloutTone) -> &'static str {
@@ -612,14 +620,30 @@ fn tone_label(tone: TuiCalloutTone) -> &'static str {
     }
 }
 
-fn render_preformatted_lines(
+fn render_preformatted_or_diff_lines(
     title: Option<&str>,
     language: Option<&str>,
     lines: &[String],
+    width: usize,
 ) -> Vec<String> {
     let trimmed_title = title.map(str::trim).filter(|value| !value.is_empty());
     let trimmed_language = language.map(str::trim).filter(|value| !value.is_empty());
     let mut rendered = Vec::new();
+
+    if matches!(
+        trimmed_language.map(|language| language.to_ascii_lowercase()),
+        Some(language) if matches!(language.as_str(), "diff" | "patch")
+    ) {
+        if let Some(heading) = build_preformatted_heading(trimmed_title, trimmed_language) {
+            rendered.push(heading);
+        }
+        let diff_body = lines.join("\n");
+        rendered.extend(crate::chat::render_diff_to_strings(
+            diff_body.as_str(),
+            width.max(8),
+        ));
+        return rendered;
+    }
 
     if let Some(heading) = build_preformatted_heading(trimmed_title, trimmed_language) {
         rendered.push(heading);

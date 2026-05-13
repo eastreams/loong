@@ -121,6 +121,13 @@ fn delegate_announce_test_lock() -> &'static tokio::sync::Mutex<()> {
     super::announce::delegate_announce_test_lock_for_tests()
 }
 
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+fn shell_approval_test_lock() -> &'static tokio::sync::Mutex<()> {
+    use std::sync::OnceLock;
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn make_delegate_announce_test_config(db_path: &std::path::Path) -> LoongConfig {
     let mut config = test_config();
@@ -2938,10 +2945,10 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: Some(crate::conversation::ConstrainedSubagentProfile {
             role: crate::conversation::ConstrainedSubagentRole::Orchestrator,
             control_scope: crate::conversation::ConstrainedSubagentControlScope::Children,
@@ -3006,10 +3013,10 @@ fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     let runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
@@ -3059,10 +3066,10 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
-        workspace_root: None,
         runtime_narrowing: execution_runtime_narrowing.clone(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     let session_context = SessionContext::child(
@@ -10835,7 +10842,9 @@ async fn handle_turn_with_runtime_file_read_repair_followup_includes_failed_requ
 #[cfg(feature = "tool-shell")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_failed_request_context()
- {
+{
+    #[cfg(feature = "memory-sqlite")]
+    let _shell_lock = shell_approval_test_lock().lock().await;
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::new();
@@ -10909,6 +10918,8 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
 #[cfg(feature = "tool-shell")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_failed_request_only() {
+    #[cfg(feature = "memory-sqlite")]
+    let _shell_lock = shell_approval_test_lock().lock().await;
     use crate::test_support::TurnTestHarness;
 
     let harness = TurnTestHarness::with_tool_config(
@@ -11458,6 +11469,17 @@ async fn handle_turn_with_runtime_auth_rejected_provider_error_marks_rejected_tr
 fn format_provider_error_reply_is_stable() {
     let output = format_provider_error_reply("timeout");
     assert_eq!(output, "[provider_error] timeout");
+}
+
+#[test]
+fn format_provider_error_reply_summarizes_provider_failover_payload_for_tui() {
+    let output = format_provider_error_reply(
+        "provider request failed | provider_failover={\"reason\":\"provider_overloaded\",\"stage\":\"status_failure\",\"model\":\"gpt-5.4\",\"attempt\":3,\"max_attempts\":3,\"status_code\":502}",
+    );
+    assert_eq!(
+        output,
+        "[provider_error] 502 · provider overloaded · retried 3/3"
+    );
 }
 
 #[test]
@@ -13204,10 +13226,10 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13327,10 +13349,10 @@ async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_res
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13423,10 +13445,10 @@ async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anc
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13561,10 +13583,10 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13634,10 +13656,10 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13716,10 +13738,10 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13792,10 +13814,10 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
         timeout_seconds: 17,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["read".to_owned()],
-        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        workspace_root: None,
         profile: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
@@ -13993,6 +14015,8 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
 #[cfg(feature = "tool-shell")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_marks_repairable_shell_preflight_failure_retryable() {
+    #[cfg(feature = "memory-sqlite")]
+    let _shell_lock = shell_approval_test_lock().lock().await;
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnFailureKind, TurnResult};
     use crate::test_support::TurnTestHarness;
 
@@ -21218,6 +21242,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution() {
+    let _shell_lock = shell_approval_test_lock().lock().await;
     let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -21333,6 +21358,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_for_approve_once() {
+    let _shell_lock = shell_approval_test_lock().lock().await;
     let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -21466,6 +21492,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_fo
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses_shell_grant() {
+    let _shell_lock = shell_approval_test_lock().lock().await;
     let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -21649,6 +21676,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_shell_exec() {
+    let _shell_lock = shell_approval_test_lock().lock().await;
     let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",

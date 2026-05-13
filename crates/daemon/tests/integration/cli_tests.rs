@@ -124,6 +124,7 @@ fn root_help_uses_onboarding_language() {
     let help = render_cli_help([]);
 
     assert!(help.contains("onboarding"));
+    assert!(help.contains("guided first-chat setup surface"));
     assert!(
         !help
             .lines()

@@ -39,6 +39,37 @@ use crate::onboard_web_search::{
     WebSearchProviderRecommendation, WebSearchProviderRecommendationSource,
     recommend_web_search_provider_from_available_credentials,
 };
+
+#[derive(Debug, Clone)]
+pub struct SelectOption {
+    pub label: String,
+    pub slug: String,
+    pub description: String,
+    pub recommended: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectInteractionMode {
+    List,
+    Search,
+}
+
+pub trait OnboardUi {
+    fn print_line(&mut self, line: &str) -> CliResult<()>;
+    fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
+    fn prompt_required(&mut self, label: &str) -> CliResult<String>;
+    fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
+        self.prompt_required(label)
+    }
+    fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool>;
+    fn select_one(
+        &mut self,
+        label: &str,
+        options: &[SelectOption],
+        default: Option<usize>,
+        interaction_mode: SelectInteractionMode,
+    ) -> CliResult<usize>;
+}
 use crate::onboard_web_search::{
     current_web_search_provider, explicit_web_search_provider_override,
     resolve_effective_web_search_default_provider, resolve_web_search_provider_recommendation,
@@ -97,37 +128,6 @@ pub struct OnboardCommandOptions {
     pub memory_profile: Option<String>,
     pub system_prompt: Option<String>,
     pub skip_model_probe: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct SelectOption {
-    pub label: String,
-    pub slug: String,
-    pub description: String,
-    pub recommended: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectInteractionMode {
-    List,
-    Search,
-}
-
-pub trait OnboardUi {
-    fn print_line(&mut self, line: &str) -> CliResult<()>;
-    fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
-    fn prompt_required(&mut self, label: &str) -> CliResult<String>;
-    fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
-        self.prompt_required(label)
-    }
-    fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool>;
-    fn select_one(
-        &mut self,
-        label: &str,
-        options: &[SelectOption],
-        default: Option<usize>,
-        interaction_mode: SelectInteractionMode,
-    ) -> CliResult<usize>;
 }
 
 #[derive(Debug, Clone)]
@@ -574,7 +574,6 @@ fn rich_prompt_theme() -> ColorfulTheme {
 fn rich_prompt_term() -> Term {
     Term::stdout()
 }
-
 fn print_lines(ui: &mut impl OnboardUi, lines: impl IntoIterator<Item = String>) -> CliResult<()> {
     for line in lines {
         ui.print_line(&line)?;
@@ -1031,13 +1030,19 @@ enum OnboardShortcutChoice {
 }
 pub type ChannelImportReadiness = crate::migration::ChannelImportReadiness;
 
-pub async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult<()> {
+/// Run the legacy daemon-side onboarding backend.
+///
+/// This path remains responsible for non-interactive setup, config
+/// materialization, preflight, backup/rollback, and selected skill
+/// installation. Interactive guided onboarding is expected to enter through
+/// the chat/TUI surface and only fall back here for backend-backed write flow.
+pub async fn run_onboard_backend_cli(options: OnboardCommandOptions) -> CliResult<()> {
     let context = OnboardRuntimeContext::capture();
     let mut ui = StdioOnboardUi::default();
-    run_onboard_cli_with_ui(options, &mut ui, &context).await
+    run_onboard_backend_with_ui(options, &mut ui, &context).await
 }
 
-pub async fn run_onboard_cli_with_ui(
+pub async fn run_onboard_backend_with_ui(
     options: OnboardCommandOptions,
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
@@ -1393,6 +1398,14 @@ pub async fn run_onboard_cli_with_ui(
         render_onboarding_success_summary_lines(&success_summary, context.render_width, true);
     print_lines(ui, success_summary_lines)?;
     Ok(())
+}
+
+pub async fn run_onboard_cli_with_ui(
+    options: OnboardCommandOptions,
+    ui: &mut impl OnboardUi,
+    context: &OnboardRuntimeContext,
+) -> CliResult<()> {
+    run_onboard_backend_with_ui(options, ui, context).await
 }
 
 fn resolve_guided_prompt_path(
@@ -5623,7 +5636,7 @@ fn secret_ref_has_inline_literal(secret_ref: Option<&SecretRef>) -> bool {
     secret_ref.inline_literal_value().is_some()
 }
 
-fn onboard_has_explicit_overrides(options: &OnboardCommandOptions) -> bool {
+pub fn onboard_has_explicit_overrides(options: &OnboardCommandOptions) -> bool {
     option_has_non_empty_value(options.provider.as_deref())
         || option_has_non_empty_value(options.model.as_deref())
         || option_has_non_empty_value(options.api_key_env.as_deref())

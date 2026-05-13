@@ -106,14 +106,25 @@ pub(super) async fn prepare_provider_request_session(
                 "provider model-list unavailable for every auth profile".to_owned()
             });
 
-            tracing::warn!(
-                target: "loong.provider",
-                provider_id = %config.provider.kind.profile().id,
-                auth_profile_count = auth_profiles.len(),
-                auto_model_mode,
-                error = %crate::observability::summarize_error(error_message.as_str()),
-                "provider model catalog resolution failed for every auth profile"
-            );
+            if crate::observability::interactive_tui_logs_suppressed() {
+                tracing::debug!(
+                    target: "loong.provider",
+                    provider_id = %config.provider.kind.profile().id,
+                    auth_profile_count = auth_profiles.len(),
+                    auto_model_mode,
+                    error = %crate::observability::summarize_error(error_message.as_str()),
+                    "provider model catalog resolution failed for every auth profile"
+                );
+            } else {
+                tracing::warn!(
+                    target: "loong.provider",
+                    provider_id = %config.provider.kind.profile().id,
+                    auth_profile_count = auth_profiles.len(),
+                    auto_model_mode,
+                    error = %crate::observability::summarize_error(error_message.as_str()),
+                    "provider model catalog resolution failed for every auth profile"
+                );
+            }
 
             return Err(error_message);
         }

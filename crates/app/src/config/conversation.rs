@@ -11,6 +11,8 @@ pub struct ConversationConfig {
     #[serde(default)]
     pub turn_middlewares: Vec<String>,
     #[serde(default = "default_true")]
+    pub show_reasoning: bool,
+    #[serde(default = "default_true")]
     pub compact_enabled: bool,
     #[serde(default)]
     pub compact_min_messages: Option<usize>,
@@ -29,6 +31,7 @@ impl Default for ConversationConfig {
         Self {
             context_engine: None,
             turn_middlewares: Vec::new(),
+            show_reasoning: default_true(),
             compact_enabled: default_true(),
             compact_min_messages: None,
             compact_trigger_estimated_tokens: None,
@@ -112,6 +115,10 @@ impl ConversationConfig {
 
     pub fn compaction_fail_open(&self) -> bool {
         self.compact_fail_open
+    }
+
+    pub fn show_reasoning(&self) -> bool {
+        self.show_reasoning
     }
 }
 

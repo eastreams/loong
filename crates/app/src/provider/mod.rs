@@ -54,7 +54,9 @@ mod transport_profile_runtime;
 mod transport_trait;
 
 pub use copilot_auth::device_code_login as copilot_device_code_login;
-pub use failover::parse_provider_failover_snapshot_payload;
+pub use failover::{
+    parse_provider_failover_snapshot_payload, summarize_provider_failover_error_for_display,
+};
 pub use failover_telemetry_runtime::ProviderFailoverMetricsSnapshot;
 pub use http_client_runtime::ProviderHttpClientRuntimeMetricsSnapshot;
 pub use model_catalog_runtime::{

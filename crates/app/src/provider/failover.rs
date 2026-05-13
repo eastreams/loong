@@ -223,6 +223,84 @@ pub fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
     validate_provider_failover_snapshot_payload(payload)
 }
 
+pub fn summarize_provider_failover_error_for_display(error: &str) -> String {
+    let fallback = crate::observability::summarize_error(error);
+    let Some(payload) = parse_provider_failover_snapshot_payload(error) else {
+        return fallback;
+    };
+    let Some(payload_object) = payload.as_object() else {
+        return fallback;
+    };
+
+    let status_code = payload_object.get("status_code").and_then(Value::as_u64);
+    let attempt = payload_object.get("attempt").and_then(Value::as_u64);
+    let max_attempts = payload_object.get("max_attempts").and_then(Value::as_u64);
+    let reason = payload_object
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(provider_failover_reason_label)
+        .unwrap_or("provider failure");
+    let stage = payload_object
+        .get("stage")
+        .and_then(Value::as_str)
+        .map(provider_failover_stage_label);
+
+    let mut segments = Vec::new();
+    if let Some(status_code) = status_code {
+        segments.push(status_code.to_string());
+    } else if let Some(stage) = stage {
+        segments.push(stage.to_owned());
+    }
+    segments.push(reason.to_owned());
+    if let (Some(attempt), Some(max_attempts)) = (attempt, max_attempts)
+        && attempt > 0
+        && max_attempts > 0
+    {
+        segments.push(format!("retried {attempt}/{max_attempts}"));
+    }
+
+    let request_id = payload_object
+        .get("request_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(request_id) = request_id {
+        segments.push(format!("req {request_id}"));
+    }
+
+    if segments.is_empty() {
+        return fallback;
+    }
+
+    segments.join(" · ")
+}
+
+fn provider_failover_reason_label(raw: &str) -> &'static str {
+    match raw {
+        "model_mismatch" => "model mismatch",
+        "rate_limited" => "rate limited",
+        "provider_overloaded" => "provider overloaded",
+        "auth_rejected" => "auth rejected",
+        "payload_incompatible" => "payload incompatible",
+        "transport_failure" => "transport failure",
+        "response_decode_failure" => "decode failure",
+        "response_shape_invalid" => "invalid response shape",
+        "request_rejected" => "request rejected",
+        _ => "provider failure",
+    }
+}
+
+fn provider_failover_stage_label(raw: &str) -> &'static str {
+    match raw {
+        "status_failure" => "status",
+        "transport_failure" => "transport",
+        "response_decode" => "decode",
+        "response_shape_invalid" => "response",
+        "model_candidate_rejected" => "model switch",
+        _ => "provider",
+    }
+}
+
 fn validate_provider_failover_snapshot_payload(payload: Value) -> Option<Value> {
     let payload_object = payload.as_object()?;
     let has_only_known_keys = payload_object.keys().all(|key| {

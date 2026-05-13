@@ -1,4 +1,5 @@
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use regex::Regex;
 use serde_json::Value;
@@ -8,6 +9,7 @@ const MAX_LOGGED_JSON_KEY_CHARS: usize = 48;
 const MAX_ERROR_CHARS: usize = 240;
 const REDACTED_VALUE: &str = "[REDACTED]";
 const REDACTED_BEARER_VALUE: &str = "Bearer [REDACTED]";
+static INTERACTIVE_TUI_LOG_SUPPRESSION_DEPTH: AtomicUsize = AtomicUsize::new(0);
 
 static EMAIL_ADDRESS_REGEX: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b").ok());
@@ -80,6 +82,25 @@ pub(crate) fn summarize_error(error: &str) -> String {
     format!("{truncated}...")
 }
 
+pub(crate) fn interactive_tui_logs_suppressed() -> bool {
+    INTERACTIVE_TUI_LOG_SUPPRESSION_DEPTH.load(Ordering::Relaxed) > 0
+}
+
+pub(crate) struct InteractiveTuiLogSuppressionGuard;
+
+impl InteractiveTuiLogSuppressionGuard {
+    pub(crate) fn new() -> Self {
+        INTERACTIVE_TUI_LOG_SUPPRESSION_DEPTH.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for InteractiveTuiLogSuppressionGuard {
+    fn drop(&mut self) {
+        INTERACTIVE_TUI_LOG_SUPPRESSION_DEPTH.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 fn redact_sensitive_error_fragments(input: &str) -> String {
     let redacted_emails = redact_email_addresses(input);
     let redacted_bearer = redact_bearer_tokens(redacted_emails.as_str());
@@ -150,7 +171,10 @@ fn redact_long_hex_tokens(input: &str) -> String {
 mod tests {
     use serde_json::{Map, Value, json};
 
-    use super::{json_value_kind, summarize_error, top_level_json_keys};
+    use super::{
+        InteractiveTuiLogSuppressionGuard, interactive_tui_logs_suppressed, json_value_kind,
+        summarize_error, top_level_json_keys,
+    };
 
     #[test]
     fn json_value_kind_labels_common_shapes() {
@@ -247,5 +271,15 @@ mod tests {
         assert!(json_summary.contains(r#""password":"[REDACTED]""#));
         assert!(!json_summary.contains("secret123"));
         assert!(!json_summary.contains("hunter2"));
+    }
+
+    #[test]
+    fn interactive_tui_log_suppression_guard_is_scoped() {
+        assert!(!interactive_tui_logs_suppressed());
+        {
+            let _guard = InteractiveTuiLogSuppressionGuard::new();
+            assert!(interactive_tui_logs_suppressed());
+        }
+        assert!(!interactive_tui_logs_suppressed());
     }
 }

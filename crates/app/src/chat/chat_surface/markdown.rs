@@ -17,9 +17,116 @@ struct MarkdownTableState {
     rows: Vec<Vec<String>>,
 }
 
+#[derive(Debug, Clone)]
+struct IndentContext {
+    prefix: String,
+    continuation_prefix: String,
+}
+
+#[derive(Debug, Default)]
+struct MarkdownWriter {
+    lines: Vec<String>,
+    current_line: String,
+    wrap_width: Option<usize>,
+    indent_stack: Vec<IndentContext>,
+    in_code_block: bool,
+    code_block_lines: Vec<String>,
+    in_image: bool,
+    image_url: Option<String>,
+    image_alt: String,
+    current_link_dest: Option<String>,
+    current_link_label: String,
+}
+
+#[derive(Debug, Clone)]
+struct ListContext {
+    ordered: bool,
+    next_index: usize,
+}
+
+impl MarkdownWriter {
+    fn new(wrap_width: Option<usize>) -> Self {
+        Self {
+            wrap_width,
+            ..Self::default()
+        }
+    }
+
+    fn flush_current_line(&mut self) {
+        if self.current_line.is_empty() {
+            return;
+        }
+        let line = std::mem::take(&mut self.current_line);
+        if let Some(context) = self.indent_stack.last()
+            && let Some(body) = line.strip_prefix(context.prefix.as_str())
+        {
+            self.lines.extend(render_wrapped_markdown_text(
+                context.prefix.as_str(),
+                context.continuation_prefix.as_str(),
+                body,
+                self.wrap_width,
+            ));
+            return;
+        }
+
+        self.lines
+            .extend(render_wrapped_markdown_text("", "", line.as_str(), self.wrap_width));
+    }
+
+    fn push_blank_line(&mut self) {
+        self.flush_current_line();
+        if self.lines.last().is_some_and(|line| line.is_empty()) {
+            return;
+        }
+        self.lines.push(String::new());
+    }
+
+    fn ensure_current_line_prefix(&mut self) {
+        if !self.current_line.is_empty() {
+            return;
+        }
+        if let Some(context) = self.indent_stack.last() {
+            self.current_line.push_str(&context.prefix);
+        }
+    }
+
+    fn append_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.ensure_current_line_prefix();
+        self.current_line.push_str(text);
+    }
+}
+
 #[allow(dead_code)]
 pub fn render_markdown_to_lines(md: &str) -> Vec<Line<'static>> {
     render_markdown_to_lines_with_width(md, None)
+}
+
+pub fn contains_renderable_markdown_structure(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_TASKLISTS);
+
+    Parser::new_ext(trimmed, options).any(|event| {
+        matches!(
+            event,
+            Event::Start(Tag::Heading { .. })
+                | Event::Start(Tag::BlockQuote(_))
+                | Event::Start(Tag::CodeBlock(_))
+                | Event::Start(Tag::List(_))
+                | Event::Start(Tag::Link { .. })
+                | Event::Start(Tag::Table(_))
+                | Event::Rule
+        )
+    })
 }
 
 pub fn render_markdown_to_lines_with_width(md: &str, width: Option<usize>) -> Vec<Line<'static>> {
@@ -30,17 +137,11 @@ pub fn render_markdown_to_lines_with_width(md: &str, width: Option<usize>) -> Ve
 
     let parser = Parser::new_ext(md, options);
     let mut lines = Vec::new();
-    let mut current_spans = Vec::new();
+    let mut writer = MarkdownWriter::new(width);
 
-    let mut in_code_block = false;
-    let mut in_quote = false;
-    let mut in_image = false;
-    let mut image_url: Option<String> = None;
-    let mut image_alt = String::new();
     let mut list_depth: usize = 0;
+    let mut list_stack: Vec<ListContext> = Vec::new();
     let mut table_state: Option<MarkdownTableState> = None;
-
-    let mut current_style = Style::default();
 
     for event in parser {
         if let Some(table) = table_state.as_mut() {
@@ -139,65 +240,66 @@ pub fn render_markdown_to_lines_with_width(md: &str, width: Option<usize>) -> Ve
 
         match event {
             Event::Start(Tag::Table(alignments)) => {
-                if !current_spans.is_empty() {
-                    lines.push(Line::from(std::mem::take(&mut current_spans)));
-                }
+                writer.flush_current_line();
                 table_state = Some(MarkdownTableState {
                     alignments,
                     ..MarkdownTableState::default()
                 });
             }
             Event::Start(Tag::CodeBlock(kind)) => {
-                if !current_spans.is_empty() {
-                    lines.push(Line::from(std::mem::take(&mut current_spans)));
-                }
+                writer.push_blank_line();
                 let lang = match kind {
                     pulldown_cmark::CodeBlockKind::Fenced(l) => l.to_string(),
                     _ => "".to_string(),
                 };
-                in_code_block = true;
-                // chat-surface style: ```lang in dim gray
+                writer.in_code_block = true;
+                writer.code_block_lines.clear();
                 lines.push(Line::from(Span::styled(
                     format!("```{}", lang),
-                    Style::default()
-                        .fg(SURFACE_GRAY)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(SURFACE_GRAY).add_modifier(Modifier::DIM),
                 )));
             }
             Event::End(TagEnd::CodeBlock) => {
-                if !current_spans.is_empty() {
-                    let content = std::mem::take(&mut current_spans)
-                        .into_iter()
-                        .map(|s| s.content.into_owned())
-                        .collect::<String>();
-                    for l in content.lines() {
-                        lines.push(Line::from(vec![
-                            Span::raw("  "),
-                            Span::styled(l.to_string(), Style::default().fg(SURFACE_GREEN)),
-                        ]));
-                    }
+                writer.flush_current_line();
+                for line in std::mem::take(&mut writer.code_block_lines) {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(line, Style::default().fg(SURFACE_GREEN)),
+                    ]));
                 }
-                in_code_block = false;
+                writer.in_code_block = false;
                 lines.push(Line::from(Span::styled(
                     "```",
-                    Style::default()
-                        .fg(SURFACE_GRAY)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(SURFACE_GRAY).add_modifier(Modifier::DIM),
                 )));
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                if !current_spans.is_empty() {
-                    lines.push(Line::from(std::mem::take(&mut current_spans)));
+                writer.push_blank_line();
+                writer.in_image = true;
+                writer.image_url = Some(dest_url.to_string());
+                writer.image_alt.clear();
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                writer.current_link_dest = Some(dest_url.to_string());
+                writer.current_link_label.clear();
+            }
+            Event::End(TagEnd::Link) => {
+                if let Some(dest_url) = writer.current_link_dest.take() {
+                    let rendered = render_link_spans(
+                        dest_url.as_str(),
+                        writer.current_link_label.as_str(),
+                    );
+                    for span in rendered {
+                        writer.append_text(span.content.as_ref());
+                    }
                 }
-                in_image = true;
-                image_url = Some(dest_url.to_string());
-                image_alt.clear();
+                writer.current_link_label.clear();
             }
             Event::End(TagEnd::Image) => {
-                let alt = if image_alt.trim().is_empty() {
+                let alt = if writer.image_alt.trim().is_empty() {
                     "image".to_owned()
                 } else {
-                    image_alt.trim().to_owned()
+                    writer.image_alt.trim().to_owned()
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -208,117 +310,119 @@ pub fn render_markdown_to_lines_with_width(md: &str, width: Option<usize>) -> Ve
                     ),
                     Span::styled(alt, Style::default().fg(SURFACE_ACCENT)),
                 ]));
-                if let Some(url) = image_url.take() {
+                if let Some(url) = writer.image_url.take() {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(url, Style::default().fg(SURFACE_DIM_GRAY)),
                     ]));
                 }
                 lines.push(Line::from(""));
-                in_image = false;
+                writer.in_image = false;
             }
-            Event::Start(Tag::BlockQuote(_)) => in_quote = true,
+            Event::Start(Tag::BlockQuote(_)) => {
+                writer.flush_current_line();
+                let depth_prefix = "  ".repeat(list_depth);
+                writer.indent_stack.push(IndentContext {
+                    prefix: format!("{depth_prefix}┃ "),
+                    continuation_prefix: format!("{depth_prefix}┃ "),
+                });
+            }
             Event::End(TagEnd::BlockQuote(_)) => {
-                if !current_spans.is_empty() {
-                    let mut line_spans =
-                        vec![Span::styled("┃ ", Style::default().fg(SURFACE_GRAY))];
-                    line_spans.extend(std::mem::take(&mut current_spans));
-                    lines.push(Line::from(line_spans));
-                }
-                in_quote = false;
+                writer.flush_current_line();
+                writer.indent_stack.pop();
+                writer.push_blank_line();
             }
-            Event::Start(Tag::List(_)) => list_depth += 1,
-            Event::End(TagEnd::List(_)) => list_depth -= 1,
+            Event::Start(Tag::List(start)) => {
+                list_depth += 1;
+                list_stack.push(ListContext {
+                    ordered: start.is_some(),
+                    next_index: start.unwrap_or(1) as usize,
+                });
+            }
+            Event::End(TagEnd::List(_)) => {
+                list_depth = list_depth.saturating_sub(1);
+                list_stack.pop();
+                writer.flush_current_line();
+                writer.push_blank_line();
+            }
             Event::Start(Tag::Item) => {
+                writer.flush_current_line();
                 let indent = "  ".repeat(list_depth.saturating_sub(1));
-                current_spans.push(Span::styled(
-                    format!("{indent}• "),
-                    Style::default().fg(SURFACE_ACCENT),
-                ));
+                let marker = if let Some(list) = list_stack.last_mut() {
+                    if list.ordered {
+                        let index = list.next_index;
+                        list.next_index = list.next_index.saturating_add(1);
+                        format!("{index}. ")
+                    } else {
+                        "• ".to_owned()
+                    }
+                } else {
+                    "• ".to_owned()
+                };
+                let continuation_prefix = " ".repeat(crate::presentation::display_width(marker.as_str()));
+                writer.indent_stack.push(IndentContext {
+                    prefix: format!("{indent}{marker}"),
+                    continuation_prefix: format!("{indent}{continuation_prefix}"),
+                });
             }
             Event::Start(Tag::Heading { level, .. }) => {
+                writer.flush_current_line();
                 let prefix = match level {
                     HeadingLevel::H1 => "# ",
                     HeadingLevel::H2 => "## ",
                     HeadingLevel::H3 => "### ",
                     HeadingLevel::H4 | HeadingLevel::H5 | HeadingLevel::H6 => "#### ",
                 };
-                current_spans.push(Span::styled(
-                    prefix.to_string(),
-                    Style::default()
-                        .fg(SURFACE_HEADING)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                current_style = current_style
-                    .add_modifier(Modifier::BOLD)
-                    .fg(SURFACE_HEADING);
+                writer.append_text(prefix);
             }
             Event::End(TagEnd::Heading(_)) => {
-                current_style = current_style
-                    .remove_modifier(Modifier::BOLD)
-                    .fg(ratatui::style::Color::Reset);
-                lines.push(Line::from(std::mem::take(&mut current_spans)));
+                writer.flush_current_line();
                 lines.push(Line::from(""));
             }
-            Event::Start(Tag::Strong) => current_style = current_style.add_modifier(Modifier::BOLD),
-            Event::End(TagEnd::Strong) => {
-                current_style = current_style.remove_modifier(Modifier::BOLD)
-            }
-            Event::Start(Tag::Emphasis) => {
-                current_style = current_style.add_modifier(Modifier::ITALIC)
-            }
-            Event::End(TagEnd::Emphasis) => {
-                current_style = current_style.remove_modifier(Modifier::ITALIC)
-            }
+            Event::Start(Tag::Strong) | Event::End(TagEnd::Strong) => {}
+            Event::Start(Tag::Emphasis) | Event::End(TagEnd::Emphasis) => {}
             Event::Code(text) => {
-                current_spans.push(Span::styled(
-                    text.to_string(),
-                    Style::default().fg(SURFACE_ACCENT),
-                ));
-            }
-            Event::Text(text) => {
-                if in_image {
-                    image_alt.push_str(text.as_ref());
+                if writer.current_link_dest.is_some() {
+                    writer.current_link_label.push_str(text.as_ref());
                     continue;
                 }
-                if in_code_block {
-                    for (i, line) in text.lines().enumerate() {
-                        if i > 0 {
-                            lines.push(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), Style::default().fg(SURFACE_GREEN)),
-                            ]));
-                        } else {
-                            current_spans.push(Span::styled(
-                                line.to_string(),
-                                Style::default().fg(SURFACE_GREEN),
-                            ));
-                        }
+                writer.append_text(text.as_ref());
+            }
+            Event::Text(text) => {
+                if writer.in_image {
+                    writer.image_alt.push_str(text.as_ref());
+                    continue;
+                }
+                if writer.current_link_dest.is_some() {
+                    writer.current_link_label.push_str(text.as_ref());
+                    continue;
+                }
+                if writer.in_code_block {
+                    for line in text.lines() {
+                        writer.code_block_lines.push(line.to_owned());
                     }
                 } else {
-                    current_spans.push(Span::styled(text.to_string(), current_style));
+                    writer.append_text(text.as_ref());
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
-                if in_quote {
-                    let mut line_spans =
-                        vec![Span::styled("┃ ", Style::default().fg(SURFACE_GRAY))];
-                    line_spans.extend(std::mem::take(&mut current_spans));
-                    lines.push(Line::from(line_spans));
+                if writer.current_link_dest.is_some() {
+                    writer.current_link_label.push(' ');
+                    continue;
+                }
+                if writer.in_code_block {
+                    writer.code_block_lines.push(String::new());
                 } else {
-                    lines.push(Line::from(std::mem::take(&mut current_spans)));
+                    writer.flush_current_line();
                 }
             }
             Event::End(TagEnd::Paragraph) => {
-                if in_quote {
-                    let mut line_spans =
-                        vec![Span::styled("┃ ", Style::default().fg(SURFACE_GRAY))];
-                    line_spans.extend(std::mem::take(&mut current_spans));
-                    lines.push(Line::from(line_spans));
-                } else {
-                    lines.push(Line::from(std::mem::take(&mut current_spans)));
-                }
+                writer.flush_current_line();
                 lines.push(Line::from(""));
+            }
+            Event::End(TagEnd::Item) => {
+                writer.flush_current_line();
+                writer.indent_stack.pop();
             }
             Event::Start(_)
             | Event::End(_)
@@ -332,15 +436,100 @@ pub fn render_markdown_to_lines_with_width(md: &str, width: Option<usize>) -> Ve
         }
     }
 
-    if !current_spans.is_empty() {
-        lines.push(Line::from(current_spans));
+    writer.flush_current_line();
+    if !writer.lines.is_empty() {
+        lines.extend(writer.lines.into_iter().map(Line::from));
     }
 
     lines
 }
 
+pub fn render_markdown_to_strings_with_width(md: &str, width: Option<usize>) -> Vec<String> {
+    normalize_blank_string_lines(
+        render_markdown_to_lines_with_width(md, width)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        })
+        .collect(),
+    )
+}
+
+pub fn normalize_blank_string_lines(mut lines: Vec<String>) -> Vec<String> {
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    let mut normalized = Vec::new();
+    let mut last_was_blank = false;
+    for line in lines {
+        let is_blank = line.trim().is_empty();
+        if is_blank && last_was_blank {
+            continue;
+        }
+        last_was_blank = is_blank;
+        normalized.push(line);
+    }
+    normalized
+}
+
 fn normalize_markdown_table_cell(cell: &str) -> String {
     cell.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn render_link_spans(dest_url: &str, label: &str) -> Vec<Span<'static>> {
+    let trimmed_label = label.trim();
+    if let Some(local_target) = render_local_link_target(dest_url) {
+        let _ = trimmed_label;
+        return vec![Span::styled(local_target, Style::default().fg(SURFACE_ACCENT))];
+    }
+
+    let display_label = if trimmed_label.is_empty() {
+        dest_url
+    } else {
+        trimmed_label
+    };
+    let mut spans = vec![Span::styled(
+        display_label.to_owned(),
+        Style::default()
+            .fg(SURFACE_ACCENT)
+            .add_modifier(Modifier::UNDERLINED),
+    )];
+    if !trimmed_label.is_empty() && trimmed_label != dest_url {
+        spans.push(Span::styled(
+            format!(" ({dest_url})"),
+            Style::default().fg(SURFACE_DIM_GRAY),
+        ));
+    }
+    spans
+}
+
+fn render_local_link_target(dest_url: &str) -> Option<String> {
+    super::utils::render_local_link_target_text(dest_url)
+}
+
+
+fn render_wrapped_markdown_text(
+    prefix: &str,
+    continuation_prefix: &str,
+    text: &str,
+    width: Option<usize>,
+) -> Vec<String> {
+    let Some(width) = width else {
+        return vec![format!("{prefix}{text}")];
+    };
+    crate::presentation::render_wrapped_text_line_with_continuation(
+        prefix,
+        continuation_prefix,
+        text,
+        width.max(1),
+    )
 }
 
 fn render_markdown_table(
@@ -616,7 +805,10 @@ fn fit_markdown_table_label(label: &str, max_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_markdown_to_lines, render_markdown_to_lines_with_width};
+    use super::{
+        contains_renderable_markdown_structure, render_markdown_to_lines,
+        render_markdown_to_lines_with_width,
+    };
 
     fn lines_to_strings(lines: Vec<ratatui::text::Line<'static>>) -> Vec<String> {
         lines
@@ -661,6 +853,28 @@ mod tests {
 
         assert!(joined.contains("[image] diagram"));
         assert!(joined.contains("https://example.com/a.png"));
+    }
+
+    #[test]
+    fn renderable_markdown_structure_detects_headings_lists_and_links() {
+        assert!(contains_renderable_markdown_structure("## Heading"));
+        assert!(contains_renderable_markdown_structure("- item"));
+        assert!(contains_renderable_markdown_structure(
+            "[app](file:///Users/chum/project/src/app.rs#L12)"
+        ));
+        assert!(contains_renderable_markdown_structure(
+            "```diff\n-old\n+new\n```"
+        ));
+    }
+
+    #[test]
+    fn renderable_markdown_structure_ignores_plain_label_like_text() {
+        assert!(!contains_renderable_markdown_structure(
+            "source: imported config at ~/.loong/config.toml"
+        ));
+        assert!(!contains_renderable_markdown_structure(
+            "request: still plain prose"
+        ));
     }
 
     #[test]
@@ -735,5 +949,127 @@ mod tests {
         assert!(joined.contains("important"));
         assert!(joined.contains("trailing words"));
         assert!(!joined.contains('…'));
+    }
+
+    #[test]
+    fn renders_local_file_links_using_target_path_text() {
+        let lines = render_markdown_to_lines_with_width(
+            "[app](file:///Users/chum/project/src/app.rs#L12)",
+            Some(80),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("project/src/app.rs"));
+        assert!(joined.contains("#L12"));
+        assert!(!joined.contains("[app]"));
+    }
+
+    #[test]
+    fn local_links_under_home_are_shortened_for_display() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/chum".to_owned());
+        let lines = render_markdown_to_lines_with_width(
+            format!("[cfg](file://{home}/.loong/config.toml)").as_str(),
+            Some(80),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("~/.loong/config.toml"));
+    }
+
+    #[test]
+    fn renders_web_links_with_label_and_destination() {
+        let lines = render_markdown_to_lines_with_width(
+            "[search docs](https://example.com/docs)",
+            Some(80),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("search docs"));
+        assert!(joined.contains("https://example.com/docs"));
+    }
+
+    #[test]
+    fn wraps_nested_lists_preserving_indent() {
+        let lines = render_markdown_to_lines_with_width(
+            "- outer item with several words to wrap\n  - inner item that also needs wrapping",
+            Some(20),
+        );
+        let rendered = lines_to_strings(lines);
+
+        assert!(rendered.iter().any(|line| line.contains("• outer item")));
+        assert!(rendered.iter().any(|line| line.contains("  • inner item")));
+    }
+
+    #[test]
+    fn wraps_blockquotes_inside_lists() {
+        let lines = render_markdown_to_lines_with_width(
+            "- list item\n  > block quote inside list that wraps",
+            Some(24),
+        );
+        let rendered = lines_to_strings(lines).join("\n");
+
+        assert!(rendered.contains("• list item"));
+        assert!(rendered.contains("┃"));
+        assert!(rendered.contains("block quote inside"));
+    }
+
+    #[test]
+    fn fenced_code_blocks_preserve_content_without_ellipsis() {
+        let lines = render_markdown_to_lines_with_width(
+            "```rust\nfn main() { println!(\"hi from a long line\"); }\n```",
+            Some(12),
+        );
+        let rendered = lines_to_strings(lines).join("\n");
+
+        assert!(rendered.contains("```rust"));
+        assert!(rendered.contains("println!(\"hi from a long line\")"));
+        assert!(!rendered.contains('…'));
+    }
+
+    #[test]
+    fn renders_relative_local_links_as_target_text() {
+        let lines = render_markdown_to_lines_with_width(
+            "[local](./src/main.rs:12)",
+            Some(80),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("./src/main.rs:12"));
+        assert!(!joined.contains("[local]"));
+    }
+
+    #[test]
+    fn soft_break_inside_link_stays_inline() {
+        let lines = render_markdown_to_lines_with_width(
+            "[docs\nlink](https://example.com/docs)",
+            Some(80),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("docs link"));
+        assert!(!joined.contains("docs\nlink"));
+    }
+
+    #[test]
+    fn wraps_ordered_lists_preserving_numeric_marker() {
+        let lines = render_markdown_to_lines_with_width(
+            "1. ordered item contains many words for wrapping",
+            Some(18),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("1. ordered item"));
+        assert!(joined.contains("contains many") || joined.contains("words for"));
+    }
+
+    #[test]
+    fn local_file_links_preserve_hash_location_suffix() {
+        let lines = render_markdown_to_lines_with_width(
+            "[app](file:///Users/chum/project/src/app.rs#L12)",
+            Some(80),
+        );
+        let joined = lines_to_strings(lines).join("\n");
+
+        assert!(joined.contains("#L12"));
     }
 }

@@ -5,6 +5,8 @@ pub mod diff_viewer;
 pub mod i18n;
 pub mod markdown;
 pub mod message_list;
+pub mod pending_band;
+pub mod pending_motion;
 pub mod scroll_state;
 pub mod transcript_scroll_state;
 pub mod utils;
@@ -111,10 +113,10 @@ fn alternate_screen_enabled() -> bool {
     }
 }
 
-fn mouse_capture_enabled(use_alt_screen: bool) -> bool {
+fn mouse_capture_enabled(_use_alt_screen: bool) -> bool {
     env::var("LOONG_TUI_MOUSE_CAPTURE")
         .map(|value| !env_value_falsey(value.as_str()))
-        .unwrap_or(use_alt_screen)
+        .unwrap_or(false)
 }
 
 pub(super) async fn run_cli_chat_surface(
@@ -124,6 +126,7 @@ pub(super) async fn run_cli_chat_surface(
 ) -> CliResult<()> {
     let runtime =
         initialize_cli_chat_surface_runtime(config_path, session_hint, options, "cli-chat")?;
+    let _provider_log_guard = crate::observability::InteractiveTuiLogSuppressionGuard::new();
 
     terminal::enable_raw_mode().map_err(|e| format!("failed to enable raw mode: {}", e))?;
     let mut stdout = io::stdout();
@@ -216,7 +219,7 @@ mod tests {
     fn mouse_capture_defaults_to_enabled_and_honors_explicit_disable() {
         let mut env = ScopedEnv::new();
         env.remove("LOONG_TUI_MOUSE_CAPTURE");
-        assert!(mouse_capture_enabled(true));
+        assert!(!mouse_capture_enabled(true));
         assert!(!mouse_capture_enabled(false));
 
         env.set("LOONG_TUI_MOUSE_CAPTURE", "0");
@@ -265,7 +268,7 @@ mod tests {
 
         let use_alt_screen = alternate_screen_enabled();
         assert!(use_alt_screen);
-        assert!(mouse_capture_enabled(use_alt_screen));
+        assert!(!mouse_capture_enabled(use_alt_screen));
 
         env.set("ZELLIJ", "1");
         let use_alt_screen = alternate_screen_enabled();

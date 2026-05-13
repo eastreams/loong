@@ -15,7 +15,7 @@ use crate::CliResult;
 #[derive(Debug, Clone)]
 pub enum ProviderTurnRequestAction {
     Continue { turn: ProviderTurn },
-    FinalizeInlineProviderError { reply: String },
+    FinalizeInlineProviderError { reply: String, raw_error: String },
     ReturnError { error: String },
 }
 
@@ -30,6 +30,7 @@ pub fn decide_provider_turn_request_action(
             ProviderErrorMode::InlineMessage => {
                 ProviderTurnRequestAction::FinalizeInlineProviderError {
                     reply: format_provider_error_reply(&error),
+                    raw_error: error,
                 }
             }
         },

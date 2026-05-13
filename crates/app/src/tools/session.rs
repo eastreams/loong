@@ -10850,6 +10850,7 @@ mod tests {
             archived_at: None,
             turn_count: 0,
             last_turn_at: None,
+            first_user_message: None,
             last_error: None,
         };
         let events = vec![SessionEventRecord {
@@ -11106,6 +11107,7 @@ mod tests {
             archived_at: None,
             turn_count: 1,
             last_turn_at: Some(120),
+            first_user_message: None,
             last_error: None,
         };
         let events = vec![

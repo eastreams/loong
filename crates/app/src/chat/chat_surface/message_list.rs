@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+use regex::Regex;
 
 const PROVIDER_ERROR_REPLY_PREFIX: &str = "[provider_error] ";
 static EMPTY_RENDER_LINES: LazyLock<Vec<Line<'static>>> = LazyLock::new(Vec::new);
@@ -119,6 +120,8 @@ const IMAGE_PREVIEW_MAX_COLUMNS: u32 = 64;
 const IMAGE_PREVIEW_MAX_ROWS: u32 = 12;
 const READ_TEXT_PREVIEW_MAX_LINES: usize = 6;
 const TOOL_STREAM_PREVIEW_MAX_LINES: usize = 4;
+static ANSI_CONTROL_SEQUENCE_REGEX: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"\x1B\[[0-?]*[ -/]*[@-~]").ok());
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +187,9 @@ pub enum MessageContent {
         summary: String,
         details: Vec<String>,
     },
+    Reasoning {
+        lines: Vec<String>,
+    },
     Compaction {
         turn_count: usize,
         summary: String,
@@ -218,6 +224,7 @@ pub struct MessageList {
     scroll_state: TranscriptScrollState,
     render_revision: u64,
     render_cache: Option<RenderCache>,
+    provisional_render_cache: Option<ProvisionalRenderCache>,
     viewport_cache: Option<ViewportRenderCache>,
     startup_animation_started_at: Instant,
     last_startup_animation_signature: Option<u64>,
@@ -226,6 +233,15 @@ pub struct MessageList {
 struct RenderCache {
     width: u16,
     revision: u64,
+    lines: Vec<Line<'static>>,
+}
+
+#[derive(Clone)]
+struct ProvisionalRenderCache {
+    width: u16,
+    revision: u64,
+    text: String,
+    show_reasoning: bool,
     lines: Vec<Line<'static>>,
 }
 
@@ -249,6 +265,7 @@ impl MessageList {
             scroll_state: TranscriptScrollState::new(),
             render_revision: 0,
             render_cache: None,
+            provisional_render_cache: None,
             viewport_cache: None,
             startup_animation_started_at: Instant::now(),
             last_startup_animation_signature: None,
@@ -264,8 +281,25 @@ impl MessageList {
         self.invalidate_render_cache();
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn add_assistant_message(&mut self, msg: String) {
-        let contents = build_assistant_contents(&msg);
+        self.add_assistant_message_with_reasoning_mode(msg, true);
+    }
+
+    pub fn add_assistant_message_with_reasoning_mode(
+        &mut self,
+        msg: String,
+        show_reasoning: bool,
+    ) {
+        let visible_source = if show_reasoning {
+            msg
+        } else {
+            super::utils::visible_text_for_reasoning_mode(msg.as_str(), false)
+        };
+        if visible_source.trim().is_empty() {
+            return;
+        }
+        let contents = build_assistant_contents(&visible_source);
         self.messages.push(Message {
             role: "Assistant".to_string(),
             contents,
@@ -445,11 +479,16 @@ impl MessageList {
         &mut self,
         width: u16,
         provisional_assistant_text: Option<&str>,
+        show_reasoning: bool,
     ) -> usize {
         if provisional_assistant_text.is_none_or(|text| text.trim().is_empty()) {
             return self.rendered_line_count(width);
         }
-        self.rendered_lines_with_provisional_assistant(width, provisional_assistant_text)
+        self.rendered_lines_with_provisional_assistant(
+            width,
+            provisional_assistant_text,
+            show_reasoning,
+        )
             .len()
     }
 
@@ -477,148 +516,24 @@ impl MessageList {
         let mut previous_colored_block = false;
 
         for msg in &self.messages {
-            for content in &msg.contents {
-                let current_colored_block =
-                    content_renders_colored_block(msg.role.as_str(), content);
-                if previous_colored_block
-                    && current_colored_block
-                    && text_lines.last().is_none_or(|line| {
-                        !(is_visual_blank_line(line) && dominant_block_bg(line).is_none())
-                    })
-                {
-                    text_lines.push(Line::from(""));
-                }
-                match content {
-                    MessageContent::RenderedLines(lines) => {
-                        for line in lines {
-                            if let Some(normalized) = normalize_rendered_system_line(line) {
-                                if normalized.trim().is_empty() {
-                                    text_lines.push(Line::from(""));
-                                    continue;
-                                }
-                                text_lines.extend(render_rendered_system_line(&normalized, width));
-                            }
-                        }
-                    }
-                    MessageContent::StartupHeader {
-                        version,
-                        tutorial,
-                        sections,
-                        tips,
-                        eye_animation,
-                    } => {
-                        let elapsed = self.startup_animation_started_at.elapsed();
-                        let tip_state = startup_tip_render_state(tips, elapsed);
-                        text_lines.extend(render_startup_header_lines(
-                            version,
-                            tutorial,
-                            sections,
-                            tip_state.as_ref(),
-                            *eye_animation,
-                            elapsed,
-                            width,
-                        ));
-                    }
-                    MessageContent::Markdown(md) => {
-                        let is_user = msg.role == "You";
-                        let markdown_width = width.saturating_sub(2) as usize;
-                        let md_lines =
-                            markdown::render_markdown_to_lines_with_width(md, Some(markdown_width));
-
-                        if is_user {
-                            let mut padding =
-                                Line::from(vec![Span::raw(" ".repeat(width as usize))]);
-                            for span in &mut padding.spans {
-                                span.style = span.style.bg(SURFACE_USER_MSG_BG);
-                            }
-                            text_lines.push(padding);
-
-                            for line in render_user_markdown_lines(md_lines, width) {
-                                text_lines.push(user_block_line(line));
-                            }
-                            let mut padding =
-                                Line::from(vec![Span::raw(" ".repeat(width as usize))]);
-                            for span in &mut padding.spans {
-                                span.style = span.style.bg(SURFACE_USER_MSG_BG);
-                            }
-                            text_lines.push(padding);
-                        } else {
-                            let wrapped_lines = wrap_assistant_markdown_lines(md_lines, width);
-                            text_lines.push(Line::from(""));
-                            text_lines.extend(wrapped_lines);
-                            text_lines.push(Line::from(""));
-                        }
-                    }
-                    MessageContent::Diff { title, content } => {
-                        text_lines.extend(render_diff_block_lines(
-                            title.as_deref(),
-                            content.as_str(),
-                            width,
-                        ));
-                    }
-                    MessageContent::Image { alt, url } => {
-                        text_lines.extend(render_image_block_lines(alt, url, width));
-                    }
-                    MessageContent::ToolCall {
-                        title,
-                        lines,
-                        status,
-                    } => {
-                        text_lines.extend(render_tool_block_lines(title, lines, *status, width));
-                    }
-                    MessageContent::Error {
-                        title,
-                        summary,
-                        details,
-                    } => {
-                        text_lines.extend(render_error_block_lines(title, summary, details, width));
-                    }
-                    MessageContent::Compaction {
-                        turn_count,
-                        summary,
-                        expanded,
-                    } => {
-                        text_lines.extend(render_compaction_block_lines(
-                            *turn_count,
-                            summary.as_str(),
-                            *expanded,
-                            width,
-                        ));
-                    }
-                }
-                previous_colored_block = current_colored_block;
-            }
+            render_message_contents_into_lines(
+                &mut text_lines,
+                &mut previous_colored_block,
+                msg.role.as_str(),
+                &msg.contents,
+                width,
+                self.startup_animation_started_at,
+            );
         }
 
-        for line in &mut text_lines {
-            let is_user_bg = line
-                .spans
-                .iter()
-                .any(|span| span.style.bg == Some(SURFACE_USER_MSG_BG));
-            let is_compaction_bg = line
-                .spans
-                .iter()
-                .any(|span| span.style.bg == Some(SURFACE_COMPACTION_BG));
-            let background = if is_user_bg {
-                Some(SURFACE_USER_MSG_BG)
-            } else if is_compaction_bg {
-                Some(SURFACE_COMPACTION_BG)
-            } else {
-                None
-            };
-            if let Some(background) = background {
-                pad_and_bg(line, width, background);
-            } else {
-                pad_plain(line, width);
-            }
-        }
-
+        finalize_rendered_message_lines(&mut text_lines, width);
         text_lines
     }
 
     fn invalidate_render_cache(&mut self) {
         self.render_revision = self.render_revision.saturating_add(1);
         self.render_cache = None;
+        self.provisional_render_cache = None;
         self.viewport_cache = None;
         self.scroll_state.note_cache_invalidated();
     }
@@ -691,6 +606,7 @@ impl MessageList {
         f: &mut Frame,
         area: Rect,
         provisional_assistant_text: Option<&str>,
+        show_reasoning: bool,
     ) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -701,7 +617,11 @@ impl MessageList {
         }
 
         let rendered_lines =
-            self.rendered_lines_with_provisional_assistant(area.width, provisional_assistant_text);
+            self.rendered_lines_with_provisional_assistant(
+                area.width,
+                provisional_assistant_text,
+                show_reasoning,
+            );
         self.render_explicit_lines(f, area, rendered_lines, self.startup_mode_active());
     }
 
@@ -709,6 +629,7 @@ impl MessageList {
         &mut self,
         width: u16,
         provisional_assistant_text: Option<&str>,
+        show_reasoning: bool,
     ) -> Vec<Line<'static>> {
         let mut rendered_lines = self.get_rendered_lines(width);
         let Some(text) = provisional_assistant_text.map(str::trim) else {
@@ -717,7 +638,25 @@ impl MessageList {
         if text.is_empty() {
             return rendered_lines;
         }
-        rendered_lines.extend(render_provisional_assistant_message_lines(text, width));
+        let provisional_lines = if let Some(cache) = self.provisional_render_cache.as_ref()
+            && cache.width == width
+            && cache.revision == self.render_revision
+            && cache.text == text
+            && cache.show_reasoning == show_reasoning
+        {
+            cache.lines.clone()
+        } else {
+            let lines = render_provisional_assistant_message_lines(text, width, show_reasoning);
+            self.provisional_render_cache = Some(ProvisionalRenderCache {
+                width,
+                revision: self.render_revision,
+                text: text.to_owned(),
+                show_reasoning,
+                lines: lines.clone(),
+            });
+            lines
+        };
+        rendered_lines.extend(provisional_lines);
         rendered_lines
     }
 
@@ -983,6 +922,7 @@ impl MessageList {
                 | MessageContent::Image { .. }
                 | MessageContent::ToolCall { .. }
                 | MessageContent::Error { .. }
+                | MessageContent::Reasoning { .. }
                 | MessageContent::Compaction { .. }
                 | MessageContent::StartupHeader { .. } => None,
             })
@@ -1008,6 +948,7 @@ impl MessageList {
                 | MessageContent::Image { .. }
                 | MessageContent::ToolCall { .. }
                 | MessageContent::Error { .. }
+                | MessageContent::Reasoning { .. }
                 | MessageContent::Compaction { .. } => None,
             })
     }
@@ -1152,10 +1093,71 @@ fn normalize_rendered_system_line(line: &str) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-fn render_provisional_assistant_message_lines(text: &str, width: u16) -> Vec<Line<'static>> {
-    let mut list = MessageList::new();
-    list.add_assistant_message(text.to_owned());
-    list.get_rendered_lines(width)
+fn render_provisional_assistant_message_lines(
+    text: &str,
+    width: u16,
+    show_reasoning: bool,
+) -> Vec<Line<'static>> {
+    let (reasoning_text, _visible_text) = super::utils::split_reasoning_preview_text(text);
+    let visible_source = super::utils::visible_text_for_reasoning_mode(text, show_reasoning);
+    if visible_source.trim().is_empty() && (!show_reasoning || reasoning_text.is_none()) {
+        return Vec::new();
+    }
+    let mut rendered = Vec::new();
+    if show_reasoning && let Some(reasoning) = reasoning_text.as_deref() {
+        let content_width = width.saturating_sub(2) as usize;
+        let reasoning_style = Style::default()
+            .fg(SURFACE_GRAY)
+            .add_modifier(Modifier::DIM | Modifier::ITALIC);
+        for line in reasoning.lines().filter(|line| !line.trim().is_empty()) {
+            rendered.extend(render_assistant_plain_line(line, content_width, reasoning_style));
+        }
+        if !visible_source.trim().is_empty() {
+            rendered.push(Line::from(Span::styled(
+                super::utils::divider_rule_text(content_width),
+                Style::default()
+                    .fg(SURFACE_DIM_GRAY)
+                    .add_modifier(Modifier::DIM),
+            )));
+        }
+    }
+    let contents = build_assistant_contents(visible_source.as_str());
+    let mut previous_colored_block = false;
+    render_message_contents_into_lines(
+        &mut rendered,
+        &mut previous_colored_block,
+        "Assistant",
+        &contents,
+        width,
+        Instant::now(),
+    );
+    finalize_rendered_message_lines(&mut rendered, width);
+    rendered
+}
+
+fn finalize_rendered_message_lines(lines: &mut Vec<Line<'static>>, width: u16) {
+    for line in lines {
+        let is_user_bg = line
+            .spans
+            .iter()
+            .any(|span| span.style.bg == Some(SURFACE_USER_MSG_BG));
+        let is_compaction_bg = line
+            .spans
+            .iter()
+            .any(|span| span.style.bg == Some(SURFACE_COMPACTION_BG));
+        let background = if is_user_bg {
+            Some(SURFACE_USER_MSG_BG)
+        } else if is_compaction_bg {
+            Some(SURFACE_COMPACTION_BG)
+        } else {
+            None
+        };
+        if let Some(background) = background {
+            pad_and_bg(line, width, background);
+        } else {
+            pad_plain(line, width);
+        }
+    }
 }
 
 fn render_rendered_system_line(line: &str, width: u16) -> Vec<Line<'static>> {
@@ -1320,9 +1322,139 @@ fn content_renders_colored_block(role: &str, content: &MessageContent) -> bool {
         | MessageContent::ToolCall { .. }
         | MessageContent::Compaction { .. } => true,
         MessageContent::Error { .. }
+        | MessageContent::Reasoning { .. }
         | MessageContent::RenderedLines(_)
         | MessageContent::Image { .. }
         | MessageContent::StartupHeader { .. } => false,
+    }
+}
+
+fn render_message_contents_into_lines(
+    text_lines: &mut Vec<Line<'static>>,
+    previous_colored_block: &mut bool,
+    role: &str,
+    contents: &[MessageContent],
+    width: u16,
+    startup_animation_started_at: Instant,
+) {
+    for content in contents {
+        let current_colored_block = content_renders_colored_block(role, content);
+        if *previous_colored_block
+            && current_colored_block
+            && text_lines.last().is_none_or(|line| {
+                !(is_visual_blank_line(line) && dominant_block_bg(line).is_none())
+            })
+        {
+            text_lines.push(Line::from(""));
+        }
+        match content {
+            MessageContent::RenderedLines(lines) => {
+                for line in lines {
+                    if let Some(normalized) = normalize_rendered_system_line(line) {
+                        if normalized.trim().is_empty() {
+                            text_lines.push(Line::from(""));
+                            continue;
+                        }
+                        text_lines.extend(render_rendered_system_line(&normalized, width));
+                    }
+                }
+            }
+            MessageContent::StartupHeader {
+                version,
+                tutorial,
+                sections,
+                tips,
+                eye_animation,
+            } => {
+                let elapsed = startup_animation_started_at.elapsed();
+                let tip_state = startup_tip_render_state(tips, elapsed);
+                text_lines.extend(render_startup_header_lines(
+                    version,
+                    tutorial,
+                    sections,
+                    tip_state.as_ref(),
+                    *eye_animation,
+                    elapsed,
+                    width,
+                ));
+            }
+            MessageContent::Markdown(md) => {
+                let is_user = role == "You";
+                let markdown_width = width.saturating_sub(2) as usize;
+                let md_lines =
+                    markdown::render_markdown_to_lines_with_width(md, Some(markdown_width));
+
+                if is_user {
+                    let mut padding = Line::from(vec![Span::raw(" ".repeat(width as usize))]);
+                    for span in &mut padding.spans {
+                        span.style = span.style.bg(SURFACE_USER_MSG_BG);
+                    }
+                    text_lines.push(padding);
+
+                    for line in render_user_markdown_lines(md_lines, width) {
+                        text_lines.push(user_block_line(line));
+                    }
+                    let mut padding = Line::from(vec![Span::raw(" ".repeat(width as usize))]);
+                    for span in &mut padding.spans {
+                        span.style = span.style.bg(SURFACE_USER_MSG_BG);
+                    }
+                    text_lines.push(padding);
+                } else {
+                    let wrapped_lines = wrap_assistant_markdown_lines(md_lines, width);
+                    text_lines.push(Line::from(""));
+                    text_lines.extend(wrapped_lines);
+                    text_lines.push(Line::from(""));
+                }
+            }
+            MessageContent::Diff { title, content } => {
+                text_lines.extend(render_diff_block_lines(title.as_deref(), content.as_str(), width));
+            }
+            MessageContent::Image { alt, url } => {
+                text_lines.extend(render_image_block_lines(alt, url, width));
+            }
+            MessageContent::ToolCall {
+                title,
+                lines,
+                status,
+            } => {
+                text_lines.extend(render_tool_block_lines(title, lines, *status, width));
+            }
+            MessageContent::Error {
+                title,
+                summary,
+                details,
+            } => {
+                text_lines.extend(render_error_block_lines(title, summary, details, width));
+            }
+            MessageContent::Reasoning { lines } => {
+                let content_width = width.saturating_sub(2) as usize;
+                let reasoning_style = Style::default()
+                    .fg(SURFACE_GRAY)
+                    .add_modifier(Modifier::DIM | Modifier::ITALIC);
+                text_lines.push(Line::from(""));
+                for line in lines.iter().filter(|line| !line.trim().is_empty()) {
+                    text_lines.extend(render_assistant_plain_line(
+                        line,
+                        content_width,
+                        reasoning_style,
+                    ));
+                }
+                text_lines.push(Line::from(""));
+            }
+            MessageContent::Compaction {
+                turn_count,
+                summary,
+                expanded,
+            } => {
+                text_lines.extend(render_compaction_block_lines(
+                    *turn_count,
+                    summary.as_str(),
+                    *expanded,
+                    width,
+                ));
+            }
+        }
+        *previous_colored_block = current_colored_block;
     }
 }
 
@@ -2241,7 +2373,7 @@ fn wrap_assistant_markdown_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<L
             continue;
         }
 
-        if let Some(split_bullets) = split_inline_bullet_runs(&plain) {
+        if let Some(split_bullets) = super::utils::split_inline_bullet_runs(&plain) {
             flush_paragraph(&mut rendered, &mut paragraph_buffer, content_width);
             for bullet_line in split_bullets {
                 rendered.extend(render_assistant_plain_line(
@@ -2349,23 +2481,6 @@ fn render_assistant_code_line(line: &str, content_width: usize) -> Vec<Line<'sta
             Line::from(spans)
         })
         .collect()
-}
-
-fn split_inline_bullet_runs(line: &str) -> Option<Vec<String>> {
-    let trimmed = line.trim();
-    if trimmed.matches("• ").count() < 2 {
-        return None;
-    }
-
-    let items = trimmed
-        .split("• ")
-        .filter_map(|segment| {
-            let segment = segment.trim();
-            (!segment.is_empty()).then(|| format!("• {segment}"))
-        })
-        .collect::<Vec<_>>();
-
-    (items.len() >= 2).then_some(items)
 }
 
 fn normalize_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
@@ -2547,6 +2662,13 @@ fn build_assistant_contents(text: &str) -> Vec<MessageContent> {
             TuiSectionSpec::Callout { title, lines, .. }
                 if title
                     .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case("reasoning")) =>
+            {
+                contents.push(MessageContent::Reasoning { lines });
+            }
+            TuiSectionSpec::Callout { title, lines, .. }
+                if title
+                    .as_deref()
                     .is_some_and(|value| value.eq_ignore_ascii_case("tool activity")) =>
             {
                 contents.push(MessageContent::ToolCall {
@@ -2579,6 +2701,7 @@ fn build_assistant_contents(text: &str) -> Vec<MessageContent> {
 }
 
 fn sanitize_plain_assistant_text(text: &str) -> String {
+    let text = sanitize_surface_text(text);
     let mut visible_lines = Vec::new();
     let mut saw_visible_content = false;
     let mut internal_tail_started = false;
@@ -2620,6 +2743,17 @@ fn sanitize_plain_assistant_text(text: &str) -> String {
     }
 }
 
+fn sanitize_surface_text(text: &str) -> String {
+    let without_ansi = ANSI_CONTROL_SEQUENCE_REGEX
+        .as_ref()
+        .map(|regex| regex.replace_all(text, "").into_owned())
+        .unwrap_or_else(|| text.to_owned());
+    without_ansi
+        .chars()
+        .filter(|character| matches!(character, '\n' | '\t') || !character.is_ascii_control())
+        .collect::<String>()
+}
+
 fn looks_like_internal_tool_result_line(line: &str) -> bool {
     looks_like_status_prefixed_tool_result_envelope(line)
         || line.starts_with("[tool_result]")
@@ -2652,16 +2786,7 @@ fn looks_like_status_prefixed_tool_result_envelope(line: &str) -> bool {
 }
 
 fn assistant_text_has_explicit_structure(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return false;
-        }
-
-        trimmed.starts_with("```")
-            || trimmed.starts_with('>')
-            || super::super::parse_markdown_heading(trimmed).is_some()
-    })
+    markdown::contains_renderable_markdown_structure(text)
 }
 
 fn parse_provider_error_content(body: &str) -> MessageContent {
@@ -3064,6 +3189,11 @@ fn content_plain_text(content: &MessageContent) -> Option<String> {
             rendered.extend(details.iter().map(|detail| format!("- {detail}")));
             Some(rendered.join("\n"))
         }
+        MessageContent::Reasoning { lines } => {
+            let mut rendered = vec!["## Reasoning".to_owned()];
+            rendered.extend(lines.iter().cloned());
+            Some(rendered.join("\n"))
+        }
         MessageContent::Compaction {
             turn_count,
             summary,
@@ -3221,6 +3351,23 @@ fn render_tool_block_lines(
     rendered
 }
 
+pub(crate) fn tool_activity_semantic_preview_line(line: &str) -> Option<String> {
+    let preview_lines = vec![line.trim().to_owned()];
+    let status = infer_tool_status(&preview_lines);
+
+    if let Some(read_preview) = read_tool_preview_from_lines(&preview_lines) {
+        return Some(tool_activity_read_preview_summary(&read_preview));
+    }
+    if let Some(run_preview) = run_tool_preview_from_lines(&preview_lines, status) {
+        return Some(tool_activity_run_preview_summary(&run_preview));
+    }
+    if let Some(inspect_preview) = inspect_tool_preview_from_lines(&preview_lines, status) {
+        return Some(tool_activity_inspect_preview_summary(&inspect_preview));
+    }
+
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadToolPreview {
     display_path: Option<String>,
@@ -3266,6 +3413,41 @@ struct ToolStreamPreview {
     truncated_from_start: bool,
 }
 
+fn tool_activity_read_preview_summary(preview: &ReadToolPreview) -> String {
+    let path = preview.display_path.clone().or_else(|| {
+        preview
+            .local_path
+            .as_deref()
+            .map(|path| super::utils::shorten_home_display_path(path.to_string_lossy().as_ref()))
+    });
+    let path = path.unwrap_or_else(|| {
+        if preview.is_image {
+            "image".to_owned()
+        } else {
+            "file".to_owned()
+        }
+    });
+    format!("read {path}")
+}
+
+fn tool_activity_run_preview_summary(preview: &RunToolPreview) -> String {
+    format!(
+        "run {} {}",
+        preview.command,
+        tool_status_label(preview.status)
+    )
+}
+
+fn tool_activity_inspect_preview_summary(preview: &InspectToolPreview) -> String {
+    format!(
+        "{} {} {}",
+        preview.kind,
+        preview.primary,
+        tool_status_label(preview.status)
+    )
+}
+
+
 fn read_tool_preview_from_lines(lines: &[String]) -> Option<ReadToolPreview> {
     let read_tool_name = lines
         .iter()
@@ -3290,7 +3472,7 @@ fn read_tool_preview_from_lines(lines: &[String]) -> Option<ReadToolPreview> {
     let display_path = request
         .as_ref()
         .map(format_read_request_display)
-        .or_else(|| source_path.as_deref().map(shorten_display_path));
+        .or_else(|| source_path.as_deref().map(super::utils::shorten_home_display_path));
     let local_path = source_path
         .as_deref()
         .and_then(resolve_local_renderable_image_path);
@@ -3353,15 +3535,14 @@ fn inspect_tool_preview_from_lines(
     let tool_name = lines
         .iter()
         .filter_map(|line| activity_tool_name(line))
-        .find(|name| {
-            is_search_activity_tool_name(name)
-                || is_list_activity_tool_name(name)
-                || is_glob_activity_tool_name(name)
+        .find_map(|name| {
+            let normalized = normalized_activity_tool_name(name);
+            (is_search_activity_tool_name(normalized.as_str())
+                || is_list_activity_tool_name(normalized.as_str())
+                || is_glob_activity_tool_name(normalized.as_str()))
+            .then_some(normalized)
         })
-        .map(|name| {
-            name.trim_matches(|ch: char| ch == '`' || ch == '"' || ch == '\'')
-                .to_owned()
-        })?;
+        ?;
 
     let (kind, primary) = if is_search_activity_tool_name(tool_name.as_str()) {
         ("search", extract_search_tool_summary(lines)?)
@@ -3458,7 +3639,7 @@ fn extract_search_tool_summary(lines: &[String]) -> Option<String> {
     let path = lines
         .iter()
         .find_map(|line| extract_tool_path(line))
-        .map(|path| shorten_display_path(path.as_str()));
+        .map(|path| super::utils::shorten_home_display_path(path.as_str()));
 
     Some(if let Some(path) = path {
         format!("\"{query}\" in {path}")
@@ -3471,7 +3652,7 @@ fn extract_list_tool_summary(lines: &[String]) -> Option<String> {
     lines
         .iter()
         .find_map(|line| extract_tool_path(line))
-        .map(|path| shorten_display_path(path.as_str()))
+        .map(|path| super::utils::shorten_home_display_path(path.as_str()))
 }
 
 fn extract_glob_tool_summary(lines: &[String]) -> Option<String> {
@@ -3482,7 +3663,7 @@ fn extract_glob_tool_summary(lines: &[String]) -> Option<String> {
     let path = lines
         .iter()
         .find_map(|line| extract_tool_path(line))
-        .map(|path| shorten_display_path(path.as_str()));
+        .map(|path| super::utils::shorten_home_display_path(path.as_str()));
 
     Some(if let Some(path) = path {
         format!("{pattern} in {path}")
@@ -3698,7 +3879,7 @@ fn extract_tool_numeric_key_value(line: &str, key: &str) -> Option<u64> {
 }
 
 fn format_read_request_display(request: &ReadToolRequest) -> String {
-    let mut display = shorten_display_path(request.path.as_str());
+    let mut display = super::utils::shorten_home_display_path(request.path.as_str());
     if let Some(offset) = request.offset {
         display.push_str(format_read_line_range(offset, request.limit).as_str());
     }
@@ -3713,17 +3894,6 @@ fn format_read_line_range(offset: u64, limit: Option<u64>) -> String {
     }
 }
 
-fn shorten_display_path(path: &str) -> String {
-    let path = path.trim();
-    if let Some(home) = std::env::var_os("HOME").and_then(|home| home.into_string().ok())
-        && !home.is_empty()
-        && let Some(rest) = path.strip_prefix(home.as_str())
-        && (rest.is_empty() || rest.starts_with('/'))
-    {
-        return format!("~{rest}");
-    }
-    path.to_owned()
-}
 
 fn extract_read_image_summary(line: &str) -> Option<String> {
     let trimmed = line.trim();
@@ -5283,7 +5453,8 @@ fn render_diff_block_lines(title: Option<&str>, diff: &str, width: u16) -> Vec<L
         width,
         SURFACE_TOOL_BG,
     ));
-    for line in render_diff_to_lines(diff) {
+    let diff_width = width.saturating_sub(4).max(8) as usize;
+    for line in render_diff_to_lines(diff, diff_width) {
         let mut line = line;
         pad_and_bg(&mut line, width, SURFACE_TOOL_BG);
         rendered.push(line);
@@ -5408,7 +5579,7 @@ mod tests {
         SURFACE_TOOL_BG, SURFACE_USER_MSG_BG,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-    use ratatui::{Terminal, backend::TestBackend, style::Color, text::Line};
+    use ratatui::{Terminal, backend::TestBackend, style::{Color, Modifier}, text::Line};
     use std::time::Duration;
 
     #[test]
@@ -6594,6 +6765,17 @@ mod tests {
     }
 
     #[test]
+    fn assistant_plain_text_strips_ansi_control_sequences() {
+        let mut list = MessageList::new();
+        list.add_assistant_message("\u{1b}[31mhello\u{1b}[0m\u{7}".to_owned());
+
+        let plain_text = list.export_markdown();
+        assert!(plain_text.contains("hello"));
+        assert!(!plain_text.contains('\u{1b}'));
+        assert!(!plain_text.contains('\u{7}'));
+    }
+
+    #[test]
     fn inserts_blank_spacer_between_adjacent_colored_blocks() {
         let mut list = MessageList::new();
         list.add_user_message("hi".to_owned());
@@ -7056,6 +7238,51 @@ let beta = alpha + 1;
 
         assert_eq!(alpha_span.style.fg, Some(SURFACE_GREEN));
         assert_eq!(beta_span.style.fg, Some(SURFACE_GREEN));
+    }
+
+    #[test]
+    fn assistant_markdown_ordered_list_keeps_numeric_markers_after_render() {
+        let mut list = MessageList::new();
+        list.add_assistant_message(
+            "1. first item wraps across the available transcript width\n2. second item follows".to_owned(),
+        );
+
+        let rendered = list
+            .get_rendered_lines(32)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("1. first item")));
+        assert!(rendered.iter().any(|line| line.contains("2. second item")));
+    }
+
+    #[test]
+    fn assistant_markdown_blockquote_inside_list_keeps_quote_marker_after_render() {
+        let mut list = MessageList::new();
+        list.add_assistant_message(
+            "- item\n  > quoted detail that should remain visibly quoted".to_owned(),
+        );
+
+        let rendered = list
+            .get_rendered_lines(40)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(rendered.iter().any(|line| line.contains("• item")));
+        assert!(rendered.iter().any(|line| line.contains("┃")));
+        assert!(rendered.iter().any(|line| line.contains("quoted detail")));
     }
 
     #[test]
@@ -7937,7 +8164,250 @@ cargo test -p loong-app --lib
 
         assert!(rendered.iter().any(|line| line.contains("• first item")));
         assert!(rendered.iter().any(|line| line.contains("• second item")));
-        assert!(rendered.iter().any(|line| line.contains("• third item")));
+        let third_index = rendered
+            .iter()
+            .position(|line| line.contains("• third"))
+            .expect("third bullet marker");
+        assert!(
+            rendered
+                .get(third_index + 1)
+                .is_some_and(|line| line.contains("item"))
+        );
+    }
+
+    #[test]
+    fn provisional_assistant_render_matches_final_assistant_render_for_same_text() {
+        let width = 44;
+        let text = "### Patch\n[app](file:///Users/chum/project/src/app.rs#L12)\n• first item • second item • third item\n```diff\n-old value\n+new value\n```";
+
+        let provisional = super::render_provisional_assistant_message_lines(text, width, true)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        let mut list = MessageList::new();
+        list.add_assistant_message(text.to_owned());
+        let finalized = list
+            .get_rendered_lines(width)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(provisional, finalized);
+    }
+
+    #[test]
+    fn finalized_assistant_hides_reasoning_lines_when_disabled() {
+        let mut list = MessageList::new();
+        list.add_assistant_message_with_reasoning_mode(
+            "<think>quiet reasoning\nsecond line</think>Hello there".to_owned(),
+            false,
+        );
+
+        let rendered = list
+            .get_rendered_lines(48)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("quiet reasoning"));
+        assert!(!rendered.contains("second line"));
+        assert!(rendered.contains("Hello there"));
+    }
+
+    #[test]
+    fn finalized_assistant_hides_explicit_reasoning_heading_when_disabled() {
+        let mut list = MessageList::new();
+        list.add_assistant_message_with_reasoning_mode(
+            "## Reasoning\nThe provider compared two options.\n\nVisible answer.".to_owned(),
+            false,
+        );
+
+        let rendered = list
+            .get_rendered_lines(48)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("Reasoning"));
+        assert!(!rendered.contains("The provider compared two options."));
+        assert!(rendered.contains("Visible answer."));
+    }
+
+    #[test]
+    fn finalized_assistant_drops_reasoning_only_reply_when_disabled() {
+        let mut list = MessageList::new();
+        list.add_assistant_message_with_reasoning_mode(
+            "<think>quiet reasoning only</think>".to_owned(),
+            false,
+        );
+
+        assert!(list.get_rendered_lines(48).is_empty());
+    }
+
+    #[test]
+    fn provisional_assistant_drops_reasoning_only_reply_when_disabled() {
+        let rendered = super::render_provisional_assistant_message_lines(
+            "<think>quiet reasoning only</think>",
+            48,
+            false,
+        );
+
+        assert!(rendered.is_empty());
+    }
+
+    #[test]
+    fn finalized_assistant_keeps_reasoning_lines_when_enabled() {
+        let mut list = MessageList::new();
+        list.add_assistant_message_with_reasoning_mode(
+            "<think>quiet reasoning\nsecond line</think>Hello there".to_owned(),
+            true,
+        );
+
+        let rendered = list
+            .get_rendered_lines(48)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("quiet reasoning"));
+        assert!(rendered.contains("second line"));
+        assert!(rendered.contains("Hello there"));
+    }
+
+    #[test]
+    fn finalized_assistant_styles_explicit_reasoning_heading_content_when_enabled() {
+        let mut list = MessageList::new();
+        list.add_assistant_message_with_reasoning_mode(
+            "## Reasoning\nThe provider compared two options.\n\nVisible answer.".to_owned(),
+            true,
+        );
+
+        let rendered = list.get_rendered_lines(48);
+        let reasoning_line = rendered
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("The provider compared two options."))
+            })
+            .expect("reasoning line");
+        let span = reasoning_line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("The provider compared two options."))
+            .expect("reasoning span");
+
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
+        assert!(span.style.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn provisional_assistant_can_render_reasoning_lines_when_enabled() {
+        let rendered =
+            super::render_provisional_assistant_message_lines(
+                "<think>quiet reasoning\nsecond line</think>Hello there",
+                48,
+                true,
+            );
+
+        let reasoning_line = rendered
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("quiet reasoning"))
+            })
+            .expect("reasoning line");
+        let span = reasoning_line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("quiet reasoning"))
+            .expect("reasoning span");
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
+        assert!(span.style.add_modifier.contains(Modifier::ITALIC));
+        assert!(rendered.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("────────"))
+        }));
+    }
+
+    #[test]
+    fn provisional_assistant_styles_explicit_reasoning_heading_content_when_enabled() {
+        let rendered = super::render_provisional_assistant_message_lines(
+            "## Reasoning\nThe provider compared two options.\n\nVisible answer.",
+            48,
+            true,
+        );
+
+        let reasoning_line = rendered
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("The provider compared two options."))
+            })
+            .expect("reasoning line");
+        let span = reasoning_line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("The provider compared two options."))
+            .expect("reasoning span");
+
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
+        assert!(span.style.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn provisional_assistant_hides_reasoning_lines_when_disabled() {
+        let rendered =
+            super::render_provisional_assistant_message_lines(
+                "<think>quiet reasoning\nsecond line</think>Hello there",
+                48,
+                false,
+            )
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!rendered.contains("quiet reasoning"));
+        assert!(!rendered.contains("second line"));
+        assert!(rendered.contains("Hello there"));
     }
 
     #[test]
@@ -7988,7 +8458,7 @@ cargo test -p loong-app --lib
         let mut list = MessageList::new();
         list.add_startup_header("0.1.0".to_owned(), "help".to_owned(), Vec::new());
         list.add_user_message("hello world".to_owned());
-        list.add_assistant_message("reply".to_owned());
+        list.add_assistant_message_with_reasoning_mode("reply".to_owned(), true);
 
         let rendered = list.get_rendered_lines(24);
         let first_user_bg = rendered

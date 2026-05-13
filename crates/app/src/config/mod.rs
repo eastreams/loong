@@ -2539,6 +2539,7 @@ system = " LuCid "
     fn conversation_compaction_fields_parse_and_gate_compact_hook() {
         let raw = r#"
 [conversation]
+show_reasoning = false
 compact_enabled = true
 compact_min_messages = 6
 compact_trigger_estimated_tokens = 120
@@ -2548,6 +2549,7 @@ compact_fail_open = false
 "#;
         let parsed =
             toml::from_str::<LoongConfig>(raw).expect("parse conversation compaction config");
+        assert!(!parsed.conversation.show_reasoning());
         assert!(parsed.conversation.compact_enabled);
         assert_eq!(parsed.conversation.compact_min_messages(), Some(6));
         assert_eq!(
@@ -2580,6 +2582,7 @@ compact_fail_open = false
     fn conversation_compaction_defaults_require_explicit_thresholds() {
         let config = ConversationConfig::default();
         assert!(config.turn_middleware_ids().is_empty());
+        assert!(config.show_reasoning());
         assert!(config.compact_enabled);
         assert!(config.compaction_fail_open());
         assert_eq!(config.compact_preserve_recent_turns(), 6);

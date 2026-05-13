@@ -469,6 +469,8 @@ pub struct StreamingTokenEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenDelta {
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     pub tool_call: Option<ToolCallDelta>,
 }
 

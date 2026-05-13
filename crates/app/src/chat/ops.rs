@@ -6,13 +6,14 @@ use super::CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND;
 use super::CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS;
 
 pub(super) use super::deck::print_help;
+#[cfg(test)]
 pub(super) use super::deck::render_cli_chat_help_lines_with_width;
 pub(super) use super::onboard::render_cli_chat_missing_config_decline_lines_with_width;
 pub(super) use super::onboard::render_cli_chat_missing_config_lines_with_width;
 pub(super) use super::onboard::should_run_missing_config_onboard;
+#[cfg(test)]
 pub(super) use super::startup_state::CliChatStartupSummary;
 pub(super) use super::startup_state::build_cli_chat_startup_summary;
-pub(super) use super::startup_view::build_cli_chat_startup_screen_spec;
 pub(super) use super::startup_view::print_cli_chat_startup;
 #[cfg(test)]
 pub(super) use super::startup_view::render_cli_chat_startup_lines_with_width;

@@ -1058,6 +1058,7 @@ fn resolved_provider_turn_checkpoint_preserves_safe_lane_route_provenance() {
     let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
         reply: "preface\nsafe lane terminal".to_owned(),
         usage: None,
+        provider_error_text: None,
         checkpoint: TurnCheckpointSnapshot {
             identity: Some(TurnCheckpointIdentity::from_turn(
                 "deploy to production",
@@ -1167,6 +1168,7 @@ fn resolved_provider_turn_checkpoint_keeps_inline_provider_error_terminal_shape(
     let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
         reply: "provider unavailable".to_owned(),
         usage: None,
+        provider_error_text: None,
         checkpoint: TurnCheckpointSnapshot {
             identity: Some(TurnCheckpointIdentity::from_turn(
                 "say hello",
@@ -1266,6 +1268,7 @@ fn resolved_provider_turn_terminal_phase_builds_reply_tail_and_checkpoint() {
     let resolved = ResolvedProviderTurn::PersistReply(ResolvedProviderReply {
         reply: "done".to_owned(),
         usage: None,
+        provider_error_text: None,
         checkpoint: TurnCheckpointSnapshot {
             identity: Some(TurnCheckpointIdentity::from_turn("say hello", "done")),
             preparation: ProviderTurnPreparation::from_assembled_context(
@@ -1372,6 +1375,7 @@ fn provider_turn_request_terminal_phase_builds_inline_provider_error_reply() {
     );
 
     let resolved = ProviderTurnRequestTerminalPhase::persist_inline_provider_error(
+        "provider unavailable".to_owned(),
         "provider unavailable".to_owned(),
     )
     .resolve(&preparation, "say hello");

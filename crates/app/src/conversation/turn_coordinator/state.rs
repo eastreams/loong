@@ -284,10 +284,20 @@ impl ResolvedProviderTurn {
         usage: Option<Value>,
         checkpoint: TurnCheckpointSnapshot,
     ) -> Self {
+        Self::persist_reply_with_provider_error(reply, usage, checkpoint, None)
+    }
+
+    pub(super) fn persist_reply_with_provider_error(
+        reply: String,
+        usage: Option<Value>,
+        checkpoint: TurnCheckpointSnapshot,
+        provider_error_text: Option<String>,
+    ) -> Self {
         Self::PersistReply(ResolvedProviderReply {
             reply,
             usage,
             checkpoint,
+            provider_error_text,
         })
     }
 
@@ -337,7 +347,10 @@ impl ResolvedProviderTurn {
 
     pub(super) fn provider_error_text(&self) -> Option<&str> {
         match self {
-            Self::PersistReply(reply) => provider_error_reply_body(reply.reply.as_str()),
+            Self::PersistReply(reply) => reply
+                .provider_error_text
+                .as_deref()
+                .or_else(|| provider_error_reply_body(reply.reply.as_str())),
             Self::ReturnError(error) => Some(error.error.as_str()),
         }
     }
@@ -348,6 +361,7 @@ pub(super) struct ResolvedProviderReply {
     pub(super) reply: String,
     pub(super) usage: Option<Value>,
     pub(super) checkpoint: TurnCheckpointSnapshot,
+    pub(super) provider_error_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -420,13 +434,13 @@ pub(super) struct ProviderTurnReturnErrorPhase<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ProviderTurnRequestTerminalPhase {
-    PersistInlineProviderError { reply: String },
+    PersistInlineProviderError { reply: String, raw_error: String },
     ReturnError { error: String },
 }
 
 impl ProviderTurnRequestTerminalPhase {
-    pub(super) fn persist_inline_provider_error(reply: String) -> Self {
-        Self::PersistInlineProviderError { reply }
+    pub(super) fn persist_inline_provider_error(reply: String, raw_error: String) -> Self {
+        Self::PersistInlineProviderError { reply, raw_error }
     }
 
     pub(super) fn return_error(error: String) -> Self {
@@ -439,7 +453,7 @@ impl ProviderTurnRequestTerminalPhase {
         user_input: &str,
     ) -> ResolvedProviderTurn {
         match self {
-            Self::PersistInlineProviderError { reply } => {
+            Self::PersistInlineProviderError { reply, raw_error } => {
                 let checkpoint = build_resolved_provider_checkpoint(
                     preparation,
                     user_input,
@@ -451,7 +465,12 @@ impl ProviderTurnRequestTerminalPhase {
                         ReplyPersistenceMode::InlineProviderError,
                     ),
                 );
-                ResolvedProviderTurn::persist_reply(reply, None, checkpoint)
+                ResolvedProviderTurn::persist_reply_with_provider_error(
+                    reply,
+                    None,
+                    checkpoint,
+                    Some(raw_error),
+                )
             }
             Self::ReturnError { error } => {
                 let checkpoint = build_resolved_provider_checkpoint(

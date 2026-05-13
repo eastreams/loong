@@ -8,6 +8,7 @@ use crate::acp::{
 use crate::memory::{
     build_conversation_event_content, build_tool_decision_content, build_tool_outcome_content,
 };
+use crate::provider::summarize_provider_failover_error_for_display;
 
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
@@ -16,7 +17,8 @@ use super::turn_shared::ReplyPersistenceMode;
 const PROVIDER_ERROR_REPLY_PREFIX: &str = "[provider_error] ";
 
 pub(super) fn format_provider_error_reply(error: &str) -> String {
-    format!("{PROVIDER_ERROR_REPLY_PREFIX}{error}")
+    let summary = summarize_provider_failover_error_for_display(error);
+    format!("{PROVIDER_ERROR_REPLY_PREFIX}{summary}")
 }
 
 pub(super) fn provider_error_reply_body(reply: &str) -> Option<&str> {

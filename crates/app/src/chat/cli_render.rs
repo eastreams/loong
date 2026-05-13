@@ -1,4 +1,6 @@
 use super::*;
+use regex::Regex;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ChatCommandMatchResult {
@@ -22,6 +24,17 @@ pub(super) fn detect_cli_chat_render_width() -> usize {
     crate::presentation::detect_render_width()
 }
 
+use std::io::IsTerminal;
+
+const LIVE_REASONING_ANSI_PREFIX: &str = "\u{1b}[2m\u{1b}[3m";
+const LIVE_REASONING_ANSI_SUFFIX: &str = "\u{1b}[0m";
+const CLI_CODE_ANSI_PREFIX: &str = "\u{1b}[32m";
+const CLI_CODE_ANSI_SUFFIX: &str = "\u{1b}[0m";
+static INLINE_MARKDOWN_IMAGE_REGEX: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").ok());
+static INLINE_MARKDOWN_LINK_REGEX: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").ok());
+
 #[allow(clippy::print_stdout)] // CLI output
 pub(super) fn print_rendered_cli_chat_lines(lines: &[String]) {
     for line in lines {
@@ -33,11 +46,67 @@ pub(super) fn render_cli_chat_assistant_lines_with_width(
     assistant_text: &str,
     width: usize,
 ) -> Vec<String> {
+    render_cli_chat_assistant_lines_with_width_and_reasoning_mode(assistant_text, width, true)
+}
+
+pub(super) fn render_cli_chat_assistant_lines_with_width_and_reasoning_mode(
+    assistant_text: &str,
+    width: usize,
+    show_reasoning: bool,
+) -> Vec<String> {
     if let Some(screen_spec) = build_cli_chat_approval_screen_spec(assistant_text) {
         return render_tui_screen_spec(&screen_spec, width, false);
     }
-    let message_spec = build_cli_chat_assistant_message_spec(assistant_text);
+    let prepared_text =
+        prepare_cli_chat_assistant_text_for_reasoning_mode(assistant_text, width, show_reasoning);
+    if prepared_text.trim().is_empty() {
+        return Vec::new();
+    }
+    let message_spec =
+        build_cli_chat_assistant_message_spec_with_reasoning_mode(prepared_text.as_str(), show_reasoning);
     render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+fn prepare_cli_chat_assistant_text_for_reasoning_mode(
+    assistant_text: &str,
+    _width: usize,
+    show_reasoning: bool,
+) -> String {
+    if !show_reasoning {
+        return super::chat_surface::utils::visible_text_for_reasoning_mode(assistant_text, false);
+    }
+
+    let (reasoning_text, visible_text) =
+        super::chat_surface::utils::split_reasoning_preview_text(assistant_text);
+    let Some(reasoning_text) = reasoning_text else {
+        return assistant_text.to_owned();
+    };
+
+    if !show_reasoning {
+        return visible_text.unwrap_or_default();
+    }
+
+    let visible_text = visible_text.unwrap_or_default();
+    if visible_text.trim().is_empty() {
+        return format!("## Reasoning\n{reasoning_text}");
+    }
+
+    format!("## Reasoning\n{reasoning_text}\n\n{visible_text}")
+}
+
+fn build_cli_chat_assistant_message_spec_with_reasoning_mode(
+    assistant_text: &str,
+    show_reasoning: bool,
+) -> TuiMessageSpec {
+    let sections = parse_cli_chat_markdown_sections(assistant_text);
+    let sections = filter_reasoning_sections_for_display(sections, show_reasoning);
+
+    TuiMessageSpec {
+        role: config::CLI_COMMAND_NAME.to_owned(),
+        caption: Some("reply".to_owned()),
+        sections,
+        footer_lines: vec!["/help commands · /status runtime · /history transcript".to_owned()],
+    }
 }
 
 pub(super) fn render_cli_chat_command_usage_lines_with_width(
@@ -69,16 +138,119 @@ pub(super) fn maybe_render_nonfatal_usage_error(error: &str) -> Option<Vec<Strin
 
     Some(usage_lines)
 }
-
-fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec {
-    let sections = parse_cli_chat_markdown_sections(assistant_text);
-
-    TuiMessageSpec {
-        role: config::CLI_COMMAND_NAME.to_owned(),
-        caption: Some("reply".to_owned()),
-        sections,
-        footer_lines: vec!["/help commands · /status runtime · /history transcript".to_owned()],
+pub(super) fn style_reasoning_block_lines_for_stdout(
+    lines: &[String],
+    stdout_is_terminal: bool,
+) -> Vec<String> {
+    if !stdout_is_terminal {
+        return lines.to_owned();
     }
+
+    let mut styled = lines.to_owned();
+    let mut in_reasoning_block = false;
+    let mut styled_any = false;
+
+    for line in &mut styled {
+        if line.trim_end() == "│" {
+            if in_reasoning_block {
+                break;
+            }
+            continue;
+        }
+
+        if !in_reasoning_block {
+            if let Some(content) = line.strip_prefix("│ ")
+                && content == "note: reasoning"
+            {
+                *line = format!("│ {LIVE_REASONING_ANSI_PREFIX}{content}{LIVE_REASONING_ANSI_SUFFIX}");
+                in_reasoning_block = true;
+                styled_any = true;
+            }
+            continue;
+        }
+
+        if let Some(content) = line.strip_prefix("│ ") {
+            *line = format!("│ {LIVE_REASONING_ANSI_PREFIX}{content}{LIVE_REASONING_ANSI_SUFFIX}");
+            styled_any = true;
+            continue;
+        }
+        break;
+    }
+
+    if styled_any { styled } else { lines.to_owned() }
+}
+
+pub(super) fn render_cli_chat_assistant_lines_for_stdout(
+    assistant_text: &str,
+    width: usize,
+    show_reasoning: bool,
+) -> Vec<String> {
+    let rendered =
+        render_cli_chat_assistant_lines_with_width_and_reasoning_mode(assistant_text, width, show_reasoning);
+    let rendered = style_reasoning_block_lines_for_stdout(&rendered, std::io::stdout().is_terminal());
+    style_code_block_lines_for_stdout(&rendered, std::io::stdout().is_terminal())
+}
+
+fn filter_reasoning_sections_for_display(
+    sections: Vec<TuiSectionSpec>,
+    show_reasoning: bool,
+) -> Vec<TuiSectionSpec> {
+    if show_reasoning {
+        return sections;
+    }
+
+    sections
+        .into_iter()
+        .filter(|section| {
+            !matches!(
+                section,
+                TuiSectionSpec::Callout { title: Some(title), .. }
+                    if title.eq_ignore_ascii_case("reasoning")
+            )
+        })
+        .collect()
+}
+
+pub(super) fn style_code_block_lines_for_stdout(
+    lines: &[String],
+    stdout_is_terminal: bool,
+) -> Vec<String> {
+    if !stdout_is_terminal {
+        return lines.to_owned();
+    }
+
+    let mut styled = lines.to_owned();
+    let mut in_code_block = false;
+    let mut styled_any = false;
+
+    for line in &mut styled {
+        let Some(content) = line.strip_prefix("│ ") else {
+            in_code_block = false;
+            continue;
+        };
+
+        if content.starts_with("code [") || content == "code" {
+            in_code_block = true;
+            continue;
+        }
+
+        if content.trim().is_empty() {
+            in_code_block = false;
+            continue;
+        }
+
+        if in_code_block && content.starts_with("    ") {
+            *line = format!("│ {CLI_CODE_ANSI_PREFIX}{content}{CLI_CODE_ANSI_SUFFIX}");
+            styled_any = true;
+            continue;
+        }
+
+        if in_code_block {
+            in_code_block = false;
+        }
+    }
+
+    if styled_any { styled } else { lines.to_owned() }
 }
 
 pub(super) fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
@@ -194,7 +366,23 @@ pub(super) fn render_cli_chat_message_spec_with_width(
     spec: &TuiMessageSpec,
     width: usize,
 ) -> Vec<String> {
-    let body_lines = render_tui_message_body_spec(spec, cli_chat_card_inner_width(width));
+    let inner_width = cli_chat_card_inner_width(width);
+    let mut body_lines = render_tui_message_body_spec(spec, inner_width);
+    if spec
+        .sections
+        .first()
+        .is_some_and(|section| matches!(
+            section,
+            TuiSectionSpec::Callout { title: Some(title), .. } if title.eq_ignore_ascii_case("reasoning")
+        ))
+        && spec.sections.len() > 1
+        && let Some(insert_at) = body_lines.iter().position(|line| line == "draft preview")
+    {
+        body_lines.insert(
+            insert_at,
+            super::chat_surface::utils::divider_rule_text(inner_width.saturating_sub(2).max(1)),
+        );
+    }
     render_cli_chat_message_card_lines(
         spec.role.as_str(),
         spec.caption.as_deref(),
@@ -306,7 +494,11 @@ pub(super) fn parse_cli_chat_markdown_sections(text: &str) -> Vec<TuiSectionSpec
             continue;
         }
 
-        narrative_lines.push(normalized_line);
+        if let Some(split_bullets) = super::chat_surface::utils::split_inline_bullet_runs(&normalized_line) {
+            narrative_lines.extend(split_bullets);
+        } else {
+            narrative_lines.push(normalized_line);
+        }
     }
 
     if inside_code_block {
@@ -365,6 +557,20 @@ fn refine_cli_chat_sections(sections: Vec<TuiSectionSpec>) -> Vec<TuiSectionSpec
                     lines,
                 }
             }
+            TuiSectionSpec::Narrative { title, lines }
+                if section_lines_look_like_markdown_table(lines.as_slice()) =>
+            {
+                let markdown_table = lines.join("\n");
+                let rendered =
+                    crate::chat::chat_surface::markdown::render_markdown_to_strings_with_width(
+                        markdown_table.as_str(),
+                        None,
+                    );
+                TuiSectionSpec::Narrative {
+                    title,
+                    lines: rendered,
+                }
+            }
             other @ TuiSectionSpec::Narrative { .. }
             | other @ TuiSectionSpec::KeyValues { .. }
             | other @ TuiSectionSpec::ActionGroup { .. }
@@ -376,11 +582,7 @@ fn refine_cli_chat_sections(sections: Vec<TuiSectionSpec>) -> Vec<TuiSectionSpec
 }
 
 fn is_reasoning_section_title(title: &str) -> bool {
-    let normalized = title.trim().to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "reasoning" | "analysis" | "thinking" | "thought process"
-    )
+    super::chat_surface::utils::is_reasoning_section_title(title)
 }
 
 fn is_diff_language(language: &str) -> bool {
@@ -391,10 +593,19 @@ fn is_diff_language(language: &str) -> bool {
 }
 
 fn is_tool_activity_section_title(title: &str) -> bool {
-    matches!(
-        title.trim().to_ascii_lowercase().as_str(),
-        "tool activity" | "tools" | "tool calls"
-    )
+    super::chat_surface::utils::is_tool_activity_section_title(title)
+}
+
+fn section_lines_look_like_markdown_table(lines: &[String]) -> bool {
+    let non_blank = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    non_blank.len() >= 2
+        && non_blank
+            .iter()
+            .all(|line| line.starts_with('|') && line.ends_with('|') && line.matches('|').count() >= 2)
 }
 
 fn push_narrative_section(
@@ -567,5 +778,93 @@ fn normalize_markdown_display_line(line: &str) -> String {
         return format!("{indent}- {rest}");
     }
 
-    trimmed_end.to_owned()
+    if let Some((alt, url)) = parse_markdown_image_display_line(trimmed_start) {
+        let display_url = if let Some(rest) = url.strip_prefix("file://") {
+            let (path, suffix) = super::chat_surface::utils::split_local_link_location_suffix(rest);
+            format!(
+                "{}{}",
+                super::chat_surface::utils::shorten_home_display_path(path),
+                suffix.unwrap_or_default()
+            )
+        } else {
+            url
+        };
+        let label = if alt.trim().is_empty() {
+            "[image]".to_owned()
+        } else {
+            format!("[image] {alt}")
+        };
+        return format!("{indent}{label} · {display_url}");
+    }
+
+    if let Some(display) = parse_markdown_link_display_line(trimmed_start) {
+        return format!("{indent}{display}");
+    }
+
+    let with_images = INLINE_MARKDOWN_IMAGE_REGEX
+        .as_ref()
+        .map(|regex| {
+            regex.replace_all(trimmed_start, |captures: &regex::Captures<'_>| {
+            let alt = captures.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+            let url = captures.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+            let display_url = if let Some(rest) = url.strip_prefix("file://") {
+                let (path, suffix) = super::chat_surface::utils::split_local_link_location_suffix(rest);
+                format!(
+                    "{}{}",
+                    super::chat_surface::utils::shorten_home_display_path(path),
+                    suffix.unwrap_or_default()
+                )
+            } else {
+                url.to_owned()
+            };
+            if alt.is_empty() {
+                format!("[image] {display_url}")
+            } else {
+                format!("[image] {alt} · {display_url}")
+            }
+        })
+        })
+        .map(|cow| cow.into_owned())
+        .unwrap_or_else(|| trimmed_start.to_owned());
+    let with_links = INLINE_MARKDOWN_LINK_REGEX
+        .as_ref()
+        .map(|regex| {
+            regex.replace_all(with_images.as_str(), |captures: &regex::Captures<'_>| {
+                let label = captures.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+                let url = captures.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+                if let Some(rest) = url.strip_prefix("file://") {
+                    return shorten_cli_file_link_target(rest);
+                }
+                format!("{label} · {url}")
+            })
+        })
+        .map(|cow| cow.into_owned())
+        .unwrap_or(with_images);
+
+    format!("{indent}{with_links}")
+}
+
+fn parse_markdown_image_display_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("![")?;
+    let (alt, remainder) = rest.split_once("](")?;
+    let url = remainder.strip_suffix(')')?;
+    Some((alt.trim().to_owned(), url.trim().to_owned()))
+}
+
+fn parse_markdown_link_display_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix('[')?;
+    let (label, remainder) = rest.split_once("](")?;
+    let url = remainder.strip_suffix(')')?.trim();
+
+    if let Some(display) = super::chat_surface::utils::render_local_link_target_text(url) {
+        return Some(display);
+    }
+
+    Some(format!("{} · {}", label.trim(), url))
+}
+
+fn shorten_cli_file_link_target(url: &str) -> String {
+    super::chat_surface::utils::render_local_link_target_text(url).unwrap_or_else(|| url.to_owned())
 }
