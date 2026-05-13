@@ -1722,6 +1722,8 @@ pub struct ControlPlaneSessionObservationView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControlPlaneTaskSummaryView {
     pub task_id: String,
+    pub task_session_id: String,
+    pub owner_session_id: String,
     pub session_id: String,
     pub scope_session_id: String,
     pub label: Option<String>,
@@ -2142,6 +2144,8 @@ impl ControlPlaneRepositoryView {
 
         let task_view = ControlPlaneTaskSummaryView {
             task_id: task_id.clone(),
+            task_session_id: session.session_id.clone(),
+            owner_session_id: session.session_id.clone(),
             session_id: session.session_id.clone(),
             scope_session_id: self.current_session_id.clone(),
             label: session.label.clone(),
@@ -3732,6 +3736,8 @@ mod tests {
 
         let task = tasks.tasks.first().expect("first background task");
         assert_eq!(task.task_id, "task-child");
+        assert_eq!(task.task_session_id, "child-session");
+        assert_eq!(task.owner_session_id, "child-session");
         assert_eq!(task.workflow.workflow_id, "root-session");
         assert_eq!(
             task.workflow.task.as_deref(),
@@ -3763,6 +3769,8 @@ mod tests {
             .expect("background task detail");
 
         assert_eq!(task.task_id, "task-child");
+        assert_eq!(task.task_session_id, "child-session");
+        assert_eq!(task.owner_session_id, "child-session");
         assert_eq!(task.workflow.workflow_id, "root-session");
         assert_eq!(
             task.workflow
@@ -3792,6 +3800,8 @@ mod tests {
             .expect("background task legacy alias")
             .expect("background task legacy detail");
         assert_eq!(legacy_alias.task_id, "task-child");
+        assert_eq!(legacy_alias.task_session_id, "child-session");
+        assert_eq!(legacy_alias.owner_session_id, "child-session");
         assert_eq!(legacy_alias.session_id, "child-session");
 
         let hidden_error = view

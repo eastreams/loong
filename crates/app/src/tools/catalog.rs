@@ -58,8 +58,9 @@ use session_definition_support::{
     session_tool_policy_clear_definition, session_tool_policy_set_definition,
     session_tool_policy_status_definition, session_unpin_head_definition, session_wait_definition,
     sessions_history_definition, sessions_list_definition, sessions_send_definition,
-    task_events_definition, task_history_definition, task_status_definition, task_wait_definition,
-    tasks_list_definition, tasks_search_definition,
+    task_cancel_definition, task_events_definition, task_history_definition,
+    task_recover_definition, task_status_definition, task_wait_definition, tasks_list_definition,
+    tasks_search_definition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -623,6 +624,8 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "task_wait"
         | "task_history"
         | "task_events"
+        | "task_cancel"
+        | "task_recover"
         | "tasks_list"
         | "tasks_search"
         | "sessions_history"
@@ -1231,6 +1234,34 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: task_events_definition,
         },
         ToolDescriptor {
+            name: "task_cancel",
+            provider_name: "task_cancel",
+            aliases: &[],
+            description: "Cancel a durable task using task-first identity while preserving runtime ownership truth",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: task_cancel_definition,
+        },
+        ToolDescriptor {
+            name: "task_recover",
+            provider_name: "task_recover",
+            aliases: &[],
+            description: "Recover a durable task using task-first identity while preserving runtime ownership truth",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: task_recover_definition,
+        },
+        ToolDescriptor {
             name: "tasks_list",
             provider_name: "tasks_list",
             aliases: &[],
@@ -1727,6 +1758,62 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_open_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.snapshot",
+            provider_name: "browser_companion_snapshot",
+            aliases: &["browser_companion_snapshot"],
+            description: "Capture a managed browser snapshot for the current browser session",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: browser_extract_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.click",
+            provider_name: "browser_companion_click",
+            aliases: &["browser_companion_click"],
+            description: "Click a managed browser element within the current browser session",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: browser_click_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.type",
+            provider_name: "browser_companion_type",
+            aliases: &["browser_companion_type"],
+            description: "Type into a managed browser element within the current browser session",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: browser_click_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "browser.companion.wait",
+            provider_name: "browser_companion_wait",
+            aliases: &["browser_companion_wait"],
+            description: "Wait on a managed browser condition within the current browser session",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: browser_extract_definition,
         });
     }
 

@@ -422,6 +422,8 @@ fn runtime_tool_view_hides_session_mutation_tools_when_explicitly_disabled() {
         "session_wait",
         "task_events",
         "task_history",
+        "task_cancel",
+        "task_recover",
         "task_status",
         "task_wait",
         "tasks_list",

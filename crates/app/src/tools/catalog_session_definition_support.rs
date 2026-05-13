@@ -616,6 +616,56 @@ pub(super) fn task_events_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+pub(super) fn task_cancel_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Durable task identifier to cancel."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "When true, return the planned cancellation action without mutating runtime state."
+                    }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+pub(super) fn task_recover_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Durable task identifier to recover."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "When true, return the planned recovery action without mutating runtime state."
+                    }
+                },
+                "required": ["task_id"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 pub(super) fn tasks_list_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",

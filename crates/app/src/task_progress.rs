@@ -5,11 +5,11 @@ use serde_json::{Value, json};
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::SessionRepository;
 
-pub(crate) const TASK_PROGRESS_EVENT_KIND: &str = "task_progress";
+pub const TASK_PROGRESS_EVENT_KIND: &str = "task_progress";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TaskProgressStatus {
+pub enum TaskProgressStatus {
     #[default]
     Active,
     Waiting,
@@ -43,7 +43,7 @@ impl TaskProgressStatus {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TaskVerificationState {
+pub enum TaskVerificationState {
     #[default]
     NotStarted,
     Pending,
@@ -65,7 +65,7 @@ impl TaskVerificationState {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct TaskActiveHandleRecord {
+pub struct TaskActiveHandleRecord {
     pub handle_kind: String,
     pub handle_id: String,
     pub state: String,
@@ -75,9 +75,9 @@ pub(crate) struct TaskActiveHandleRecord {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TaskResumeRecipeRecord {
+pub struct TaskResumeRecipeRecord {
     pub recommended_tool: String,
-    pub session_id: String,
+    pub task_session_id: String,
     pub note: Option<String>,
 }
 
@@ -85,7 +85,7 @@ pub(crate) struct TaskResumeRecipeRecord {
 impl TaskResumeRecipeRecord {
     #[must_use]
     pub fn task_session_id(&self) -> &str {
-        &self.session_id
+        &self.task_session_id
     }
 }
 
@@ -96,8 +96,8 @@ impl Serialize for TaskResumeRecipeRecord {
     {
         let mut map = serializer.serialize_map(Some(if self.note.is_some() { 4 } else { 3 }))?;
         map.serialize_entry("recommended_tool", &self.recommended_tool)?;
-        map.serialize_entry("task_session_id", &self.session_id)?;
-        map.serialize_entry("session_id", &self.session_id)?;
+        map.serialize_entry("task_session_id", &self.task_session_id)?;
+        map.serialize_entry("session_id", &self.task_session_id)?;
         if let Some(note) = &self.note {
             map.serialize_entry("note", note)?;
         }
@@ -120,18 +120,18 @@ impl<'de> Deserialize<'de> for TaskResumeRecipeRecord {
         }
 
         let raw = RawTaskResumeRecipeRecord::deserialize(deserializer)?;
-        let session_id = raw.task_session_id.or(raw.session_id).unwrap_or_default();
+        let task_session_id = raw.task_session_id.or(raw.session_id).unwrap_or_default();
 
         Ok(TaskResumeRecipeRecord {
             recommended_tool: raw.recommended_tool,
-            session_id,
+            task_session_id,
             note: raw.note,
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TaskProgressRecord {
+pub struct TaskProgressRecord {
     pub task_id: String,
     pub owner_kind: String,
     pub status: TaskProgressStatus,
@@ -178,7 +178,6 @@ impl Serialize for TaskProgressRecord {
 
         let mut map = serializer.serialize_map(Some(entry_count))?;
         map.serialize_entry("task_id", &self.task_id)?;
-        map.serialize_entry("session_id", &self.task_id)?;
         map.serialize_entry("owner_kind", &self.owner_kind)?;
         map.serialize_entry("status", &self.status)?;
         if let Some(intent_summary) = &self.intent_summary {
@@ -233,7 +232,7 @@ impl<'de> Deserialize<'de> for TaskProgressRecord {
     }
 }
 
-pub(crate) fn task_progress_from_event_payload(payload: &Value) -> Option<TaskProgressRecord> {
+pub fn task_progress_from_event_payload(payload: &Value) -> Option<TaskProgressRecord> {
     let task_progress = payload
         .get("task_progress")
         .cloned()
@@ -241,10 +240,7 @@ pub(crate) fn task_progress_from_event_payload(payload: &Value) -> Option<TaskPr
     serde_json::from_value(task_progress).ok()
 }
 
-pub(crate) fn task_progress_event_payload(
-    source: &str,
-    task_progress: &TaskProgressRecord,
-) -> Value {
+pub fn task_progress_event_payload(source: &str, task_progress: &TaskProgressRecord) -> Value {
     json!({
         "source": source,
         "task_progress": task_progress,
@@ -253,7 +249,7 @@ pub(crate) fn task_progress_event_payload(
 
 #[cfg(feature = "memory-sqlite")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedTaskIdentity {
+pub struct ResolvedTaskIdentity {
     pub task_id: String,
     pub task_session_id: String,
 }
@@ -297,7 +293,7 @@ fn task_identity_from_delegate_payload(
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) fn resolve_canonical_task_id_for_session(
+pub fn resolve_canonical_task_id_for_session(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Option<String> {
@@ -333,7 +329,7 @@ pub(crate) fn resolve_task_identity_for_event(
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(crate) fn resolve_task_identity_for_session(
+pub fn resolve_task_identity_for_session(
     repo: &SessionRepository,
     session_id: &str,
 ) -> ResolvedTaskIdentity {
@@ -391,7 +387,7 @@ mod tests {
             }],
             resume_recipe: Some(TaskResumeRecipeRecord {
                 recommended_tool: "session_status".to_owned(),
-                session_id: "session-1".to_owned(),
+                task_session_id: "session-1".to_owned(),
                 note: Some("Inspect durable task progress.".to_owned()),
             }),
             updated_at: 123,
@@ -436,7 +432,7 @@ mod tests {
         assert_eq!(decoded.task_id, "legacy-session-1");
         let resume_recipe = decoded.resume_recipe.expect("legacy resume recipe");
         assert_eq!(resume_recipe.task_session_id(), "legacy-session-1");
-        assert_eq!(resume_recipe.session_id, "legacy-session-1");
+        assert_eq!(resume_recipe.task_session_id, "legacy-session-1");
     }
 
     #[test]
@@ -465,7 +461,7 @@ mod tests {
         assert_eq!(decoded.task_id, "task-123");
         let resume_recipe = decoded.resume_recipe.expect("canonical resume recipe");
         assert_eq!(resume_recipe.task_session_id(), "session-123");
-        assert_eq!(resume_recipe.session_id, "session-123");
+        assert_eq!(resume_recipe.task_session_id, "session-123");
     }
 
     #[cfg(feature = "memory-sqlite")]

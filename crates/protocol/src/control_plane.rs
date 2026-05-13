@@ -497,6 +497,8 @@ pub struct ControlPlaneSessionReadResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneTaskSummary {
     pub task_id: String,
+    pub task_session_id: String,
+    pub owner_session_id: String,
     pub session_id: String,
     pub scope_session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

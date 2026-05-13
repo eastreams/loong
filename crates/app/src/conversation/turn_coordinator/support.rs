@@ -280,7 +280,7 @@ pub(super) fn active_task_progress_record(
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
             recommended_tool: "task_status".to_owned(),
-            session_id: session_id.to_owned(),
+            task_session_id: session_id.to_owned(),
             note: Some(
                 "Inspect task_status, task_wait, or task_history for durable task progress."
                     .to_owned(),
@@ -313,7 +313,7 @@ pub(super) fn verifying_task_progress_record(
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
             recommended_tool: "task_status".to_owned(),
-            session_id: session_id.to_owned(),
+            task_session_id: session_id.to_owned(),
             note: Some(
                 "Check task_status to see whether finalization verification has completed."
                     .to_owned(),
@@ -346,7 +346,7 @@ pub(super) fn waiting_task_progress_record(
         }],
         resume_recipe: Some(TaskResumeRecipeRecord {
             recommended_tool: "task_status".to_owned(),
-            session_id: session_id.to_owned(),
+            task_session_id: session_id.to_owned(),
             note: Some(
                 "Use task_status or the approval control path to resolve the waiting task."
                     .to_owned(),
@@ -389,7 +389,7 @@ pub(super) fn failed_task_progress_record(
         active_handles: Vec::new(),
         resume_recipe: Some(TaskResumeRecipeRecord {
             recommended_tool: "task_history".to_owned(),
-            session_id: session_id.to_owned(),
+            task_session_id: session_id.to_owned(),
             note: Some(
                 "Inspect recent task_history and task_status to diagnose the failed task."
                     .to_owned(),

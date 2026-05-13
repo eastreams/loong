@@ -252,6 +252,8 @@ pub(super) fn map_task_summary(
 
     ControlPlaneTaskSummary {
         task_id: task.task_id,
+        task_session_id: task.task_session_id,
+        owner_session_id: task.owner_session_id,
         session_id: task.session_id,
         scope_session_id: task.scope_session_id,
         label,

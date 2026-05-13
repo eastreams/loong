@@ -1,0 +1,99 @@
+---
+title: Background Tasks
+description: Use task-first commands for delegated async work without dropping into raw session internals.
+---
+
+# Background Tasks
+
+Use this page when you want Loong to launch background delegated work and keep
+the operator contract task-first.
+
+The current public contract is:
+
+- `loong tasks create`
+- `loong tasks list`
+- `loong tasks status`
+- `loong tasks events`
+- `loong tasks wait`
+- `loong tasks cancel`
+- `loong tasks recover`
+
+## Task-First Model
+
+Loong now treats delegated async work as a task-shaped operator surface.
+
+Three identifiers matter:
+
+- `task_id` is the durable task identity you should pass back to task commands
+- `task_session_id` is the current runtime carrier for that task lane
+- `owner_session_id` is runtime ownership metadata that stays visible for
+  inspection, follow-up, and repair
+
+This keeps one truthful model:
+
+- operators work through `tasks ...`
+- runtime ownership still uses child sessions underneath
+- `sessions ...` remains the inspection and repair path, not the normal
+  day-to-day task surface
+
+## What Task Status Means
+
+`tasks status` and `tasks wait` surface derived task state instead of forcing
+you to infer meaning from raw session fields.
+
+Current task-first summary fields include:
+
+- `task_status.status`
+- `task_status.needs_attention`
+- `task_status.next_action`
+- `task_status.signals`
+
+Use those fields as the primary operator truth for:
+
+- queued vs running work
+- approval-pending or blocked work
+- overdue or recoverable work
+- recovered, failed, or completed work
+- session-scoped tool narrowing that materially changes what the child may do
+
+## When To Use Tasks Vs Sessions
+
+Use `tasks ...` when:
+
+- you are following delegated async work as a product object
+- you need the next action for one task
+- you want task lineage, task events, or task recovery without reasoning in raw
+  session terms
+
+Use `sessions ...` when:
+
+- you are debugging runtime ownership directly
+- you need branch heads, raw history, or lower-level session tree detail
+- you are repairing runtime state outside the normal task workflow
+
+## Scope Of This First Slice
+
+Included today:
+
+- delegated background work implemented through child-session runtime lanes
+- task-first create, inspect, wait, follow, cancel, and recover flows
+
+Out of scope today:
+
+- cron
+- heartbeat jobs
+- daemon-owned always-on scheduling
+- distributed schedulers
+- web dashboards
+
+If you need longer-lived service ownership, use the gateway and supervision
+surfaces instead of treating background tasks as a scheduler product.
+
+## Continue Reading
+
+- Continue to [Tools And Memory](/use-loong/tools-and-memory) for the broader
+  governed capability story.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) for
+  longer-lived ownership models.
+- Continue to [Tool Surface](/use-loong/tool-surface) for the public visible-tool
+  contract.

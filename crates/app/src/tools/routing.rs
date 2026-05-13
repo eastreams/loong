@@ -142,8 +142,21 @@ fn route_direct_browser_tool_name_for_view(
     view: &ToolView,
 ) -> Result<&'static str, String> {
     let routed_tool_name = route_direct_browser_tool_name(payload)?;
-    let page_inspection_available = tool_surface::browser_page_inspection_available_in_view(view);
-    if page_inspection_available {
+    let browser_runtime_modes = tool_surface::direct_browser_runtime_modes_for_view(view);
+    let interactive_tool = matches!(
+        routed_tool_name,
+        "browser.companion.snapshot"
+            | "browser.companion.click"
+            | "browser.companion.type"
+            | "browser.companion.wait"
+    );
+    if interactive_tool {
+        if browser_runtime_modes.page_inspection_available {
+            return Ok(routed_tool_name);
+        }
+        return Err("managed browser automation is unavailable in this runtime".to_owned());
+    }
+    if browser_runtime_modes.page_inspection_available {
         return Ok(routed_tool_name);
     }
     Err("browser page inspection is unavailable in this runtime".to_owned())
@@ -433,17 +446,35 @@ pub(super) fn route_direct_browser_tool_name(payload: &Value) -> Result<&'static
     let has_text = payload_has_non_null_field(payload, "text");
     let has_condition = payload_has_non_null_field(payload, "condition");
     let has_timeout_ms = payload_has_non_null_field(payload, "timeout_ms");
+    let has_selector = payload_has_non_null_field(payload, "selector");
 
-    if matches!(
-        action,
-        Some("start" | "navigate" | "snapshot" | "wait" | "stop" | "type")
-    ) || has_text
-        || has_condition
-        || has_timeout_ms
-        || (has_session_id && has_url)
-    {
+    if matches!(action, Some("snapshot")) {
+        return Ok("browser.companion.snapshot");
+    }
+
+    if matches!(action, Some("wait")) || has_condition || has_timeout_ms {
+        return Ok("browser.companion.wait");
+    }
+
+    if matches!(action, Some("type")) || has_text {
+        return Ok("browser.companion.type");
+    }
+
+    if matches!(action, Some("start" | "navigate" | "stop")) {
         return Err(
-            "direct_browser_interactive_automation_unavailable: built-in browser only supports `open`, `extract`, and page-link `click`; use the `agent-browser` skill for richer browser automation".to_owned(),
+            "direct_browser_unknown_action: unsupported browser action for the direct browser surface"
+                .to_owned(),
+        );
+    }
+
+    if has_session_id && has_selector {
+        return Ok("browser.companion.click");
+    }
+
+    if has_session_id && has_url {
+        return Err(
+            "direct_browser_ambiguous: provide either a page session action or a navigation target, not both"
+                .to_owned(),
         );
     }
 
@@ -504,6 +535,8 @@ pub(crate) fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static s
             "tasks-search" => Ok("tasks_search"),
             "task-status" => Ok("task_status"),
             "task-wait" => Ok("task_wait"),
+            "task-cancel" => Ok("task_cancel"),
+            "task-recover" => Ok("task_recover"),
             "session-policy-status" => Ok("session_tool_policy_status"),
             "session-policy-set" => Ok("session_tool_policy_set"),
             "session-policy-clear" => Ok("session_tool_policy_clear"),
@@ -606,6 +639,12 @@ pub(crate) fn route_hidden_agent_tool_name(payload: &Value) -> Result<&'static s
     }
 
     if has_task_id || has_task_ids {
+        if has_dry_run {
+            return Err(
+                "hidden_agent_requires_operation: provide `operation` for task cancel/recover work"
+                    .to_owned(),
+            );
+        }
         if has_timeout_ms {
             return Ok("task_wait");
         }
@@ -702,6 +741,8 @@ pub(crate) fn hidden_operation_for_tool_name(raw: &str) -> Option<String> {
         "tasks_search" => Some("tasks-search".to_owned()),
         "task_status" => Some("task-status".to_owned()),
         "task_wait" => Some("task-wait".to_owned()),
+        "task_cancel" => Some("task-cancel".to_owned()),
+        "task_recover" => Some("task-recover".to_owned()),
         "session_tool_policy_status" => Some("session-policy-status".to_owned()),
         "session_tool_policy_set" => Some("session-policy-set".to_owned()),
         "session_tool_policy_clear" => Some("session-policy-clear".to_owned()),
@@ -834,7 +875,13 @@ fn routed_tool_display_name(routed_tool_name: &str) -> &str {
 fn display_inner_tool_name_for_logs(tool_name: &str) -> &str {
     if matches!(
         tool_name,
-        "browser.open" | "browser.extract" | "browser.click"
+        "browser.open"
+            | "browser.extract"
+            | "browser.click"
+            | "browser.companion.snapshot"
+            | "browser.companion.click"
+            | "browser.companion.type"
+            | "browser.companion.wait"
     ) {
         return "browse";
     }
@@ -882,7 +929,7 @@ mod tests {
             route_direct_tool_request(request, &runtime_config::ToolRuntimeConfig::default())
                 .expect_err("interactive browser automation should be unavailable");
 
-        assert!(error.contains("agent-browser"));
+        assert!(error.contains("managed browser automation is unavailable"));
         assert_eq!(
             unavailable_runtime_hint("browser.extract", &runtime_view),
             ""
@@ -928,14 +975,14 @@ mod tests {
     }
 
     #[test]
-    fn interactive_browser_payloads_surface_agent_browser_guidance() {
-        let error = route_direct_browser_tool_name(&json!({
+    fn interactive_browser_payloads_route_to_managed_browser_tools() {
+        let routed = route_direct_browser_tool_name(&json!({
             "session_id": "browser-1",
             "selector": "#submit",
             "text": "hello"
         }))
-        .expect_err("DOM interaction should not route through browse");
-        assert!(error.contains("agent-browser"));
+        .expect("DOM interaction should route through managed browser");
+        assert_eq!(routed, "browser.companion.type");
     }
 
     #[test]
@@ -960,6 +1007,18 @@ mod tests {
         .expect("task events payload should route");
 
         assert_eq!(routed, "task_events");
+    }
+
+    #[test]
+    fn hidden_operation_for_task_cancel_uses_task_cancel_alias() {
+        let operation = hidden_operation_for_tool_name("task_cancel").expect("task cancel alias");
+        assert_eq!(operation, "task-cancel");
+    }
+
+    #[test]
+    fn hidden_operation_for_task_recover_uses_task_recover_alias() {
+        let operation = hidden_operation_for_tool_name("task_recover").expect("task recover alias");
+        assert_eq!(operation, "task-recover");
     }
 
     #[test]

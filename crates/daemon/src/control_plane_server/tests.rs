@@ -2194,6 +2194,8 @@ async fn task_list_returns_visible_background_tasks() {
     assert_eq!(tasks.returned_count, 1);
     let task = tasks.tasks.first().expect("task summary");
     assert_eq!(task.task_id, "child-session");
+    assert_eq!(task.task_session_id, "child-session");
+    assert_eq!(task.owner_session_id, "child-session");
     assert_eq!(task.workflow.workflow_id, "root-session");
     assert_eq!(
         task.workflow.task.as_deref(),
@@ -2244,6 +2246,8 @@ async fn task_read_returns_visible_background_task_detail() {
     let task: ControlPlaneTaskReadResponse = serde_json::from_slice(&body).expect("task read json");
     assert_eq!(task.current_session_id, "root-session");
     assert_eq!(task.task.task_id, "child-session");
+    assert_eq!(task.task.task_session_id, "child-session");
+    assert_eq!(task.task.owner_session_id, "child-session");
     assert_eq!(task.task.workflow.workflow_id, "root-session");
     assert_eq!(
         task.task

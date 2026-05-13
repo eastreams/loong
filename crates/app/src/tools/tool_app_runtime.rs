@@ -50,6 +50,8 @@ fn execute_app_tool_dispatch(
         | "sessions_history"
         | "task_history"
         | "task_events"
+        | "task_cancel"
+        | "task_recover"
         | "session_heads"
         | "session_path"
         | "session_children"
