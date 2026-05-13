@@ -710,6 +710,7 @@ Channel configuration uses top-level TOML tables such as `[cli]`, `[telegram]`, 
 | `webhook_bind` | string | `"127.0.0.1:8080"` | Address | Webhook bind address |
 | `webhook_path` | string | `"/feishu/events"` | Path | Webhook path |
 | `allowed_chat_ids` | string[] | `[]` | Chat IDs | Allowed chat IDs |
+| `require_mention` | boolean | `false` | `true`, `false` | When enabled, ignore Feishu group messages that do not @-mention this bot |
 | `ignore_bot_messages` | boolean | `true` | `true`, `false` | Ignore bot messages |
 | `acp` | table | `{}` | ACP config table | ACP overrides for this channel |
 | `accounts` | map | `{}` | Account ID -> account config | Per-account overrides |
@@ -735,6 +736,7 @@ Channel configuration uses top-level TOML tables such as `[cli]`, `[telegram]`, 
 | `encrypt_key` | string? | `null` | Key string | Encryption key |
 | `encrypt_key_env` | string? | `null` | Env var name | Env var for encrypt key |
 | `allowed_chat_ids` | string[]? | `null` | Chat IDs | Allowed chat IDs |
+| `require_mention` | boolean? | `null` | `true`, `false` | Override whether group messages must @-mention this bot |
 | `ignore_bot_messages` | boolean? | `null` | `true`, `false` | Ignore bot messages override |
 | `acp` | table? | `null` | - | ACP configuration |
 

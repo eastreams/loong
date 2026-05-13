@@ -7075,6 +7075,54 @@ mod tests {
     }
 
     #[test]
+    fn feishu_multi_account_resolution_merges_require_mention_override() {
+        let config: FeishuChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "mode": "websocket",
+            "app_id": "cli_base",
+            "app_secret": "base-secret",
+            "allowed_chat_ids": ["oc_base"],
+            "allowed_sender_ids": ["ou_owner"],
+            "require_mention": true,
+            "accounts": {
+                "Ops": {
+                    "account_id": "Ops-Bot",
+                    "app_id": "cli_ops",
+                    "app_secret": "ops-secret",
+                    "allowed_chat_ids": ["oc_ops"],
+                    "allowed_sender_ids": ["ou_ops"],
+                    "require_mention": false
+                },
+                "Backup": {
+                    "enabled": false,
+                    "app_id": "cli_backup",
+                    "app_secret": "backup-secret"
+                }
+            },
+            "default_account": "Ops"
+        }))
+        .expect("deserialize feishu multi-account config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default feishu account");
+        assert_eq!(resolved.configured_account_id, "ops");
+        assert_eq!(resolved.account.id, "ops-bot");
+        assert_eq!(resolved.allowed_chat_ids, vec!["oc_ops".to_owned()]);
+        assert_eq!(resolved.allowed_sender_ids, vec!["ou_ops".to_owned()]);
+        assert!(!resolved.require_mention);
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve backup feishu account");
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.allowed_chat_ids, vec!["oc_base".to_owned()]);
+        assert_eq!(backup.allowed_sender_ids, vec!["ou_owner".to_owned()]);
+        assert!(backup.require_mention);
+    }
+
+    #[test]
     fn feishu_resolve_account_for_session_account_id_matches_runtime_identity() {
         let config: FeishuChannelConfig = serde_json::from_value(json!({
             "default_account": "Lark Prod",
