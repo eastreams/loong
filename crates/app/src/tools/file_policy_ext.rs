@@ -97,7 +97,11 @@ impl FilePolicyExtension {
             "write" | "edit" => {
                 required_capabilities.insert(Capability::FilesystemWrite);
             }
-            _ if matches!(tool_name, "memory_search" | "memory_get") => {
+            _ if matches!(
+                tool_name,
+                "memory.retrieve" | "memory_search" | "memory_get"
+            ) =>
+            {
                 required_capabilities.insert(Capability::FilesystemRead);
             }
             _ if tool_name == "config.import" => {

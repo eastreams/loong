@@ -416,6 +416,105 @@ pub struct MemoryRetrievalRequest {
     pub allowed_kinds: Vec<DerivedMemoryKind>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryRetrievalIntent {
+    OperatorInspection,
+    PromptAssembly,
+}
+
+impl MemoryRetrievalIntent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OperatorInspection => "operator_inspection",
+            Self::PromptAssembly => "prompt_assembly",
+        }
+    }
+}
+
+pub fn memory_retrieval_provenance_summary(
+    provenance: &MemoryContextProvenance,
+) -> MemoryRetrievalProvenanceSummary {
+    MemoryRetrievalProvenanceSummary {
+        source_kind: provenance.source_kind.as_str().to_owned(),
+        source_label: provenance.source_label.clone(),
+        scope: provenance.scope.map(|scope| scope.as_str().to_owned()),
+        authority: provenance
+            .authority
+            .map(|authority| authority.as_str().to_owned()),
+        trust_level: provenance
+            .trust_level
+            .map(|trust| trust.as_str().to_owned()),
+        recall_mode: provenance.recall_mode.as_str().to_owned(),
+    }
+}
+
+pub fn memory_retrieval_reason_for_request(request: &MemoryRetrievalRequest) -> &'static str {
+    if request.query.is_some() {
+        "query_match_durable_memory"
+    } else {
+        "profile_aware_advisory_recall"
+    }
+}
+
+pub fn memory_injection_reason_for_intent(intent: MemoryRetrievalIntent) -> &'static str {
+    match intent {
+        MemoryRetrievalIntent::OperatorInspection => "operator_requested_memory_retrieval",
+        MemoryRetrievalIntent::PromptAssembly => "prompt_assembly_advisory_recall",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRetrievalProvenanceSummary {
+    pub source_kind: String,
+    #[serde(default)]
+    pub source_label: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub authority: Option<String>,
+    #[serde(default)]
+    pub trust_level: Option<String>,
+    pub recall_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRetrievalResult {
+    pub source: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub start_line: Option<usize>,
+    #[serde(default)]
+    pub end_line: Option<usize>,
+    pub snippet: String,
+    pub score: u32,
+    pub provenance: MemoryContextProvenance,
+    pub provenance_summary: MemoryRetrievalProvenanceSummary,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRetrievalOutcome {
+    #[serde(default)]
+    pub query: Option<String>,
+    pub intent: MemoryRetrievalIntent,
+    pub prompt_eligible: bool,
+    pub retrieval_reason: String,
+    pub injection_reason: String,
+    #[serde(default)]
+    pub results: Vec<MemoryRetrievalResult>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryRetrievalPlanResult {
     pub request: MemoryRetrievalRequest,
@@ -522,6 +621,7 @@ pub struct StageEnvelope {
     pub hydrated: HydratedMemoryContext,
     pub retrieval_request: Option<MemoryRetrievalRequest>,
     pub retrieval_planner_snapshot: Option<PlannerDiagnosticsSnapshot>,
+    pub retrieval_outcome: Option<MemoryRetrievalOutcome>,
     pub diagnostics: Vec<StageDiagnostics>,
 }
 
@@ -593,6 +693,42 @@ mod tests {
                 allowed_kinds: vec![DerivedMemoryKind::Summary],
             }),
             retrieval_planner_snapshot: None,
+            retrieval_outcome: Some(MemoryRetrievalOutcome {
+                query: Some("deploy freeze".to_owned()),
+                intent: MemoryRetrievalIntent::OperatorInspection,
+                prompt_eligible: true,
+                retrieval_reason: "query_match_durable_memory".to_owned(),
+                injection_reason: "operator_requested_memory_retrieval".to_owned(),
+                results: vec![MemoryRetrievalResult {
+                    source: "workspace_file".to_owned(),
+                    path: Some("MEMORY.md".to_owned()),
+                    session_id: None,
+                    scope: Some("workspace".to_owned()),
+                    kind: Some("retrieved_memory".to_owned()),
+                    role: Some("system".to_owned()),
+                    start_line: Some(1),
+                    end_line: Some(1),
+                    snippet: "Deploy freeze window is Friday.".to_owned(),
+                    score: 42,
+                    provenance: MemoryContextProvenance::new(
+                        "builtin",
+                        MemoryProvenanceSourceKind::WorkspaceDocument,
+                        Some("MEMORY.md".to_owned()),
+                        None,
+                        Some(MemoryScope::Workspace),
+                        MemoryRecallMode::OperatorInspection,
+                    ),
+                    provenance_summary: MemoryRetrievalProvenanceSummary {
+                        source_kind: "workspace_document".to_owned(),
+                        source_label: Some("MEMORY.md".to_owned()),
+                        scope: Some("workspace".to_owned()),
+                        authority: None,
+                        trust_level: None,
+                        recall_mode: "operator_inspection".to_owned(),
+                    },
+                    metadata: None,
+                }],
+            }),
             diagnostics: vec![StageDiagnostics::succeeded(MemoryStageFamily::Derive)],
         };
 
@@ -621,6 +757,7 @@ mod tests {
             },
             retrieval_request: None,
             retrieval_planner_snapshot: None,
+            retrieval_outcome: None,
             diagnostics: vec![],
         };
 

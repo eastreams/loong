@@ -781,6 +781,7 @@ fn registry_selected_system_can_override_memory_runtime_execution() {
                 hydrated,
                 retrieval_request: None,
                 retrieval_planner_snapshot: None,
+                retrieval_outcome: None,
                 diagnostics: vec![StageDiagnostics::succeeded(MemoryStageFamily::Retrieve)],
             };
 

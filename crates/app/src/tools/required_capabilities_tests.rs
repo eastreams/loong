@@ -88,6 +88,15 @@ fn required_capabilities_follow_effective_tool_request() {
         BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
     );
 
+    let direct_memory_retrieve = ToolCoreRequest {
+        tool_name: "memory.retrieve".to_owned(),
+        payload: json!({"session_id": "session-1", "query": "deploy freeze"}),
+    };
+    assert_eq!(
+        required_capabilities_for_request(&direct_memory_retrieve),
+        BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+    );
+
     let direct_memory_get = ToolCoreRequest {
         tool_name: "memory_get".to_owned(),
         payload: json!({"path": "MEMORY.md"}),

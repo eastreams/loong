@@ -297,6 +297,10 @@ fn dispatch_tool_request(
         "glob.search" => file::execute_glob_search_tool_with_config(request, config),
         "content.search" => file::execute_content_search_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
+        "memory.retrieve" => {
+            memory_tools::execute_memory_retrieve_tool_with_config(request, config)
+        }
+        #[cfg(feature = "tool-file")]
         "memory_search" => memory_tools::execute_memory_search_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
         "memory_get" => memory_tools::execute_memory_get_tool_with_config(request, config),

@@ -4,10 +4,15 @@ use std::path::Path;
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Map, Value, json};
 
+use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::memory::{
-    MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
-    ParsedWorkspaceMemoryDocument, WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
-    collect_workspace_memory_document_locations, parse_workspace_memory_document,
+    BuiltinMemorySystem, MemoryContextEntry, MemoryContextKind, MemoryContextProvenance,
+    MemoryProvenanceSourceKind, MemoryRecallMode, MemoryRetrievalIntent, MemoryRetrievalOutcome,
+    MemoryRetrievalRequest, MemoryRetrievalResult, MemoryRetrievalStrategy, MemoryScope,
+    MemorySystem, MemoryTrustLevel, ParsedWorkspaceMemoryDocument, WorkspaceMemoryDocumentKind,
+    WorkspaceMemoryDocumentLocation, collect_workspace_memory_document_locations,
+    memory_injection_reason_for_intent, memory_retrieval_provenance_summary,
+    memory_retrieval_reason_for_request, parse_workspace_memory_document,
 };
 use crate::search_text::{normalize_search_text, tokenize_normalized_search_text};
 
@@ -45,11 +50,312 @@ struct MemoryFileWindow {
     selected_lines: Vec<String>,
 }
 
+fn parse_memory_retrieve_intent(
+    payload: &Map<String, Value>,
+) -> Result<MemoryRetrievalIntent, String> {
+    let Some(raw_intent) = payload.get("intent") else {
+        return Ok(MemoryRetrievalIntent::OperatorInspection);
+    };
+    let raw_intent = raw_intent
+        .as_str()
+        .ok_or_else(|| "memory.retrieve payload.intent must be a string".to_owned())?;
+    match raw_intent.trim().to_ascii_lowercase().as_str() {
+        "" | "operator_inspection" => Ok(MemoryRetrievalIntent::OperatorInspection),
+        "prompt_assembly" => Ok(MemoryRetrievalIntent::PromptAssembly),
+        other => Err(format!(
+            "memory.retrieve payload.intent `{other}` must be one of `operator_inspection` or `prompt_assembly`"
+        )),
+    }
+}
+
+fn build_memory_retrieve_bundle(
+    session_id: &str,
+    query: Option<String>,
+    intent: MemoryRetrievalIntent,
+    max_results: usize,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<MemoryRetrievalOutcome, String> {
+    let results = if let Some(query) = query.as_deref() {
+        search_memory_retrieval_results(session_id, query, max_results, config)?
+    } else {
+        retrieve_prompt_memory_results(session_id, max_results, config)?
+    };
+
+    let retrieval_request = MemoryRetrievalRequest {
+        session_id: session_id.to_owned(),
+        memory_system_id: config.selected_memory_system_id.clone(),
+        strategy: if query.is_some() {
+            MemoryRetrievalStrategy::RecentUserQueryWithWorkspace
+        } else {
+            MemoryRetrievalStrategy::WorkspaceReferenceOnly
+        },
+        planning_notes: Vec::new(),
+        query: query.clone(),
+        recall_mode: match intent {
+            MemoryRetrievalIntent::OperatorInspection => MemoryRecallMode::OperatorInspection,
+            MemoryRetrievalIntent::PromptAssembly => MemoryRecallMode::PromptAssembly,
+        },
+        scopes: vec![MemoryScope::Workspace, MemoryScope::Session],
+        budget_items: max_results.max(1),
+        allowed_kinds: Vec::new(),
+    };
+
+    Ok(MemoryRetrievalOutcome {
+        query,
+        intent,
+        prompt_eligible: !results.is_empty(),
+        retrieval_reason: memory_retrieval_reason_for_request(&retrieval_request).to_owned(),
+        injection_reason: memory_injection_reason_for_intent(intent).to_owned(),
+        results,
+    })
+}
+
+fn build_memory_runtime_config_for_tools(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> MemoryRuntimeConfig {
+    MemoryRuntimeConfig {
+        sqlite_path: config.memory_sqlite_path.clone(),
+        resolved_system_id: Some(config.selected_memory_system_id.clone()),
+        summary_max_chars: config.browser.max_text_chars.max(256),
+        ..MemoryRuntimeConfig::default()
+    }
+}
+
+fn search_memory_retrieval_results(
+    session_id: &str,
+    query: &str,
+    max_results: usize,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<MemoryRetrievalResult>, String> {
+    let query_normalized = normalize_search_text(query);
+    let query_tokens = tokenize_memory_query(query_normalized.as_str());
+
+    let mut results: Vec<MemoryRetrievalResult> = Vec::new();
+    if let Some(workspace_root) = config.file_root.as_deref() {
+        if let Some(indexed_results) = search_indexed_workspace_memory_results(
+            query_normalized.as_str(),
+            query_tokens.as_slice(),
+            max_results,
+            config,
+            workspace_root,
+        )? {
+            results.extend(
+                indexed_results
+                    .into_iter()
+                    .map(memory_search_result_to_retrieval_result),
+            );
+        } else {
+            let locations = collect_workspace_memory_document_locations(workspace_root)?;
+            for location in locations {
+                let maybe_result = search_memory_location(
+                    query_normalized.as_str(),
+                    query_tokens.as_slice(),
+                    config,
+                    &location,
+                )?;
+                let Some(result) = maybe_result else {
+                    continue;
+                };
+                results.push(memory_search_result_to_retrieval_result(result));
+            }
+        }
+    }
+    results.extend(
+        search_canonical_memory_results_for_session(
+            session_id,
+            query_normalized.as_str(),
+            query_tokens.as_slice(),
+            max_results,
+            config,
+        )?
+        .into_iter()
+        .map(memory_search_result_to_retrieval_result),
+    );
+
+    sort_memory_retrieval_results(&mut results);
+    Ok(results.into_iter().take(max_results).collect())
+}
+
+fn retrieve_prompt_memory_results(
+    session_id: &str,
+    max_results: usize,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<MemoryRetrievalResult>, String> {
+    let memory_runtime_config = build_memory_runtime_config_for_tools(config);
+    let system = BuiltinMemorySystem;
+    let request = MemoryRetrievalRequest {
+        session_id: session_id.to_owned(),
+        memory_system_id: memory_runtime_config.selected_system_id().to_owned(),
+        strategy: MemoryRetrievalStrategy::WorkspaceReferenceOnly,
+        planning_notes: vec!["memory.retrieve prompt retrieval".to_owned()],
+        query: None,
+        recall_mode: MemoryRecallMode::PromptAssembly,
+        scopes: vec![MemoryScope::Workspace, MemoryScope::Session],
+        budget_items: max_results.max(1),
+        allowed_kinds: Vec::new(),
+    };
+    let entries = system
+        .run_retrieve_stage(
+            &request,
+            config.file_root.as_deref(),
+            &memory_runtime_config,
+            &[],
+        )?
+        .unwrap_or_default();
+    let ranked_entries = system
+        .run_rank_stage(entries, &memory_runtime_config)?
+        .unwrap_or_default();
+
+    let results = ranked_entries
+        .into_iter()
+        .filter(|entry| entry.kind == MemoryContextKind::RetrievedMemory)
+        .map(memory_entry_to_retrieval_result)
+        .collect::<Vec<_>>();
+    Ok(results.into_iter().take(max_results).collect())
+}
+
+fn memory_entry_to_retrieval_result(entry: MemoryContextEntry) -> MemoryRetrievalResult {
+    let provenance = entry.provenance.first().cloned().unwrap_or_else(|| {
+        MemoryContextProvenance::new(
+            "builtin",
+            MemoryProvenanceSourceKind::WorkspaceDocument,
+            None,
+            None,
+            Some(MemoryScope::Workspace),
+            MemoryRecallMode::PromptAssembly,
+        )
+        .with_trust_level(MemoryTrustLevel::Derived)
+    });
+    let snippet = entry.content.trim().to_owned();
+    MemoryRetrievalResult {
+        source: "retrieved_memory".to_owned(),
+        path: provenance.source_label.clone(),
+        session_id: None,
+        scope: provenance.scope.map(|scope| scope.as_str().to_owned()),
+        kind: Some(memory_context_kind_id(entry.kind).to_owned()),
+        role: Some(entry.role),
+        start_line: None,
+        end_line: None,
+        snippet,
+        score: 1,
+        provenance: provenance.clone(),
+        provenance_summary: memory_retrieval_provenance_summary(&provenance),
+        metadata: None,
+    }
+}
+
+fn memory_context_kind_id(kind: MemoryContextKind) -> &'static str {
+    match kind {
+        MemoryContextKind::Profile => "profile",
+        MemoryContextKind::Summary => "summary",
+        MemoryContextKind::Derived => "derived",
+        MemoryContextKind::RetrievedMemory => "retrieved_memory",
+        MemoryContextKind::Turn => "turn",
+    }
+}
+
+fn memory_retrieve_result_payload(result: &MemoryRetrievalResult) -> Value {
+    json!({
+        "source": result.source,
+        "path": result.path,
+        "session_id": result.session_id,
+        "scope": result.scope,
+        "kind": result.kind,
+        "role": result.role,
+        "start_line": result.start_line,
+        "end_line": result.end_line,
+        "snippet": result.snippet,
+        "score": result.score,
+        "provenance": result.provenance,
+        "provenance_summary": result.provenance_summary,
+        "metadata": result.metadata,
+    })
+}
+
+fn sort_memory_retrieval_results(results: &mut [MemoryRetrievalResult]) {
+    results.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then(left.source.cmp(&right.source))
+            .then(left.path.cmp(&right.path))
+            .then(left.session_id.cmp(&right.session_id))
+            .then(left.start_line.cmp(&right.start_line))
+    });
+}
+
+fn memory_search_result_to_retrieval_result(result: MemorySearchResult) -> MemoryRetrievalResult {
+    let provenance_summary = memory_retrieval_provenance_summary(&result.provenance);
+    MemoryRetrievalResult {
+        source: result.source.to_owned(),
+        path: result.path,
+        session_id: result.session_id,
+        scope: result.scope,
+        kind: result.kind,
+        role: result.role,
+        start_line: result.start_line,
+        end_line: result.end_line,
+        snippet: result.snippet,
+        score: result.score,
+        provenance: result.provenance,
+        provenance_summary,
+        metadata: result.metadata,
+    }
+}
+
+pub(super) fn execute_memory_retrieve_tool_with_config(
+    request: ToolCoreRequest,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| "memory.retrieve payload must be an object".to_owned())?;
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "memory.retrieve requires payload.session_id".to_owned())?;
+    let intent = parse_memory_retrieve_intent(payload)?;
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let max_results = parse_optional_usize_field(
+        payload,
+        "memory.retrieve",
+        "max_results",
+        DEFAULT_MEMORY_SEARCH_MAX_RESULTS,
+        1,
+        Some(MAX_MEMORY_SEARCH_RESULTS),
+    )?;
+
+    let bundle = build_memory_retrieve_bundle(session_id, query, intent, max_results, config)?;
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": request.tool_name,
+            "session_id": session_id,
+            "query": bundle.query,
+            "intent": bundle.intent.as_str(),
+            "prompt_eligible": bundle.prompt_eligible,
+            "retrieval_reason": bundle.retrieval_reason,
+            "injection_reason": bundle.injection_reason,
+            "returned": bundle.results.len(),
+            "results": bundle.results.iter().map(memory_retrieve_result_payload).collect::<Vec<_>>(),
+        }),
+    })
+}
+
 pub(super) fn execute_memory_search_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let tool_name = request.tool_name.as_str();
     let payload = request
         .payload
         .as_object()
@@ -64,63 +370,40 @@ pub(super) fn execute_memory_search_tool_with_config(
 
     let max_results = parse_optional_usize_field(
         payload,
-        tool_name,
+        request.tool_name.as_str(),
         "max_results",
         DEFAULT_MEMORY_SEARCH_MAX_RESULTS,
         1,
         Some(MAX_MEMORY_SEARCH_RESULTS),
     )?;
 
-    let query_normalized = normalize_search_text(query);
-    let query_tokens = tokenize_memory_query(query_normalized.as_str());
-
-    let mut results = Vec::new();
-    if let Some(workspace_root) = config.file_root.as_deref() {
-        if let Some(indexed_results) = search_indexed_workspace_memory_results(
-            query_normalized.as_str(),
-            query_tokens.as_slice(),
-            max_results,
-            config,
-            workspace_root,
-        )? {
-            results.extend(indexed_results);
-        } else {
-            let locations = collect_workspace_memory_document_locations(workspace_root)?;
-            for location in locations {
-                let maybe_result = search_memory_location(
-                    query_normalized.as_str(),
-                    query_tokens.as_slice(),
-                    config,
-                    &location,
-                )?;
-                let Some(result) = maybe_result else {
-                    continue;
-                };
-                results.push(result);
-            }
-        }
-    }
-    results.extend(search_canonical_memory_results(
-        query_normalized.as_str(),
-        query_tokens.as_slice(),
+    let bundle = build_memory_retrieve_bundle(
+        "__operator_memory_search__",
+        Some(query.to_owned()),
+        MemoryRetrievalIntent::OperatorInspection,
         max_results,
         config,
-    )?);
-
-    results.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then(left.source.cmp(right.source))
-            .then(left.path.cmp(&right.path))
-            .then(left.session_id.cmp(&right.session_id))
-            .then(left.start_line.cmp(&right.start_line))
-    });
-
-    let bounded_results = results.into_iter().take(max_results).collect::<Vec<_>>();
-    let result_payload = bounded_results
+    )?;
+    let result_payload = bundle
+        .results
         .iter()
-        .map(memory_search_result_payload)
+        .map(|result| {
+            let search_result = MemorySearchResult {
+                source: Box::leak(result.source.clone().into_boxed_str()),
+                path: result.path.clone(),
+                session_id: result.session_id.clone(),
+                scope: result.scope.clone(),
+                kind: result.kind.clone(),
+                role: result.role.clone(),
+                start_line: result.start_line,
+                end_line: result.end_line,
+                snippet: result.snippet.clone(),
+                score: result.score,
+                provenance: result.provenance.clone(),
+                metadata: result.metadata.clone(),
+            };
+            memory_search_result_payload(&search_result)
+        })
         .collect::<Vec<_>>();
 
     Ok(ToolCoreOutcome {
@@ -129,6 +412,10 @@ pub(super) fn execute_memory_search_tool_with_config(
             "adapter": "core-tools",
             "tool_name": request.tool_name,
             "query": query,
+            "intent": bundle.intent.as_str(),
+            "prompt_eligible": bundle.prompt_eligible,
+            "retrieval_reason": bundle.retrieval_reason,
+            "injection_reason": bundle.injection_reason,
             "returned": result_payload.len(),
             "results": result_payload,
         }),
@@ -536,51 +823,6 @@ fn normalized_existing_path_key(path: &Path) -> Result<String, String> {
     Ok(normalized_path.display().to_string())
 }
 
-fn search_canonical_memory_results(
-    query: &str,
-    query_tokens: &[String],
-    max_results: usize,
-    config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<Vec<MemorySearchResult>, String> {
-    let Some(sqlite_path) = config.memory_sqlite_path.as_ref() else {
-        return Ok(Vec::new());
-    };
-    if !sqlite_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let hits = crate::memory::search_canonical_memory_with_sqlite_path(
-        query,
-        max_results,
-        None,
-        sqlite_path,
-    )?;
-
-    Ok(hits
-        .into_iter()
-        .map(|hit| {
-            let score = canonical_memory_match_score(query, query_tokens, &hit);
-            let scope = hit.record.scope.as_str().to_owned();
-            let kind = hit.record.kind.as_str().to_owned();
-            let provenance = canonical_memory_hit_provenance(config, &hit);
-            MemorySearchResult {
-                source: "canonical_session",
-                path: None,
-                session_id: Some(hit.record.session_id),
-                scope: Some(scope),
-                kind: Some(kind),
-                role: hit.record.role,
-                start_line: None,
-                end_line: None,
-                snippet: hit.record.content,
-                score,
-                provenance,
-                metadata: None,
-            }
-        })
-        .collect())
-}
-
 fn canonical_memory_match_score(
     query: &str,
     query_tokens: &[String],
@@ -807,6 +1049,96 @@ fn indexed_workspace_memory_metadata_payload(
         "superseded_by": hit.superseded_by,
         "body_line_offset": hit.body_line_offset,
     })
+}
+
+fn search_canonical_memory_results_for_session(
+    session_id: &str,
+    query: &str,
+    query_tokens: &[String],
+    max_results: usize,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<MemorySearchResult>, String> {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (session_id, query, query_tokens, max_results, config);
+        Ok(Vec::new())
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let memory_config = build_memory_runtime_config_for_tools(config);
+        let hits = crate::memory::search_canonical_memory(
+            query,
+            max_results,
+            Some(session_id),
+            &memory_config,
+        )?;
+        let mut results = Vec::new();
+        for hit in hits {
+            let maybe_result = canonical_memory_hit_to_result(query, query_tokens, config, &hit)?;
+            let Some(result) = maybe_result else {
+                continue;
+            };
+            results.push(result);
+        }
+        Ok(results)
+    }
+}
+
+fn canonical_memory_hit_to_result(
+    query: &str,
+    query_tokens: &[String],
+    config: &super::runtime_config::ToolRuntimeConfig,
+    hit: &crate::memory::CanonicalMemorySearchHit,
+) -> Result<Option<MemorySearchResult>, String> {
+    let lines = hit.record.content.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Ok(None);
+    }
+
+    let metadata = json!({
+        "session_id": hit.record.session_id,
+        "scope": hit.record.scope.as_str(),
+        "kind": hit.record.kind.as_str(),
+        "role": hit.record.role,
+    });
+    let metadata_score = canonical_memory_match_score(query, query_tokens, hit);
+    let best_body_match = best_line_match(query, query_tokens, lines.as_slice());
+    let focus_line = best_body_match
+        .map(|matched| matched.line_number)
+        .or_else(|| (metadata_score > 0).then_some(1));
+    let Some(focus_line) = focus_line else {
+        return Ok(None);
+    };
+    let total_lines = lines.len();
+    let (start_line, end_line) =
+        snippet_window(total_lines, focus_line, MEMORY_SEARCH_CONTEXT_RADIUS_LINES);
+    let snippet_lines = lines
+        .get(start_line.saturating_sub(1)..end_line)
+        .ok_or_else(|| {
+            "memory_search selected canonical snippet window is out of bounds".to_owned()
+        })?;
+    let snippet = snippet_lines.join("\n");
+    let score = best_body_match
+        .map(|matched| matched.score)
+        .unwrap_or(0)
+        .max(metadata_score)
+        .max(1);
+
+    Ok(Some(MemorySearchResult {
+        source: "canonical_session",
+        path: None,
+        session_id: Some(hit.record.session_id.clone()),
+        scope: Some(hit.record.scope.as_str().to_owned()),
+        kind: Some(hit.record.kind.as_str().to_owned()),
+        role: hit.record.role.clone(),
+        start_line: None,
+        end_line: None,
+        snippet,
+        score,
+        provenance: canonical_memory_hit_provenance(config, hit),
+        metadata: Some(metadata),
+    }))
 }
 
 fn canonical_memory_hit_provenance(

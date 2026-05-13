@@ -247,7 +247,7 @@ const EDIT_COVERED_TOOL_NAMES: &[&str] = &["file.edit"];
 const BASH_COVERED_TOOL_NAMES: &[&str] = &["shell.exec", "bash.exec"];
 const WEB_COVERED_TOOL_NAMES: &[&str] = &["web.fetch", "web.search", "http.request"];
 const BROWSER_COVERED_TOOL_NAMES: &[&str] = &["browser.open", "browser.extract", "browser.click"];
-const MEMORY_COVERED_TOOL_NAMES: &[&str] = &["memory_search", "memory_get"];
+const MEMORY_COVERED_TOOL_NAMES: &[&str] = &["memory.retrieve", "memory_search", "memory_get"];
 
 const READ_DIRECT_METADATA: DirectToolSurfaceMetadata = DirectToolSurfaceMetadata {
     argument_hint: "path?:string,offset?:integer,limit?:integer,max_bytes?:integer,query?:string,pattern?:string,root?:string,glob?:string,max_results?:integer,max_bytes_per_file?:integer,case_sensitive?:boolean,include_directories?:boolean",

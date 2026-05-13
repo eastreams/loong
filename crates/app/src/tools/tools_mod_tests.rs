@@ -1144,6 +1144,7 @@ fn runtime_tool_view_includes_memory_tools_when_memory_corpus_exists() {
     let config = test_tool_runtime_config(root);
     let tool_view = runtime_tool_view_for_runtime_config(&config);
 
+    assert!(tool_view.contains("memory.retrieve"));
     assert!(tool_view.contains("memory_search"));
     assert!(tool_view.contains("memory_get"));
 }
@@ -1332,6 +1333,126 @@ fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
         }),
         "expected structured workspace metadata: {results:?}"
     );
+    assert_eq!(outcome.payload["intent"], "operator_inspection");
+    assert_eq!(
+        outcome.payload["retrieval_reason"],
+        "query_match_durable_memory"
+    );
+    assert_eq!(
+        outcome.payload["injection_reason"],
+        "operator_requested_memory_retrieval"
+    );
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn memory_retrieve_tool_returns_operator_visible_retrieval_truth() {
+    let root = unique_tool_temp_dir("loongclaw-memory-retrieve");
+    let memory_dir = root.join("memory");
+
+    std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+    std::fs::write(
+        root.join("MEMORY.md"),
+        "# Durable Notes\nDeploy freeze window is Friday.\n",
+    )
+    .expect("write root memory");
+    std::fs::write(
+        memory_dir.join("2026-03-23.md"),
+        "Customer migration starts tomorrow.\n",
+    )
+    .expect("write daily log");
+
+    let config = test_tool_runtime_config(root);
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "memory.retrieve".to_owned(),
+            payload: json!({
+                "session_id": "session-1",
+                "query": "deploy freeze window",
+                "intent": "operator_inspection",
+                "max_results": 4
+            }),
+        },
+        &config,
+    )
+    .expect("memory retrieve should succeed");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["intent"], "operator_inspection");
+    assert_eq!(outcome.payload["prompt_eligible"], true);
+    assert_eq!(
+        outcome.payload["retrieval_reason"],
+        "query_match_durable_memory"
+    );
+    assert_eq!(
+        outcome.payload["injection_reason"],
+        "operator_requested_memory_retrieval"
+    );
+
+    let results = outcome.payload["results"].as_array().expect("results");
+    assert!(!results.is_empty());
+    assert!(results.iter().any(|entry| entry["path"] == "MEMORY.md"));
+    assert!(
+        results
+            .iter()
+            .all(|entry| entry["provenance_summary"]["source_kind"].is_string())
+    );
+    assert!(
+        results
+            .iter()
+            .all(|entry| entry["provenance_summary"]["authority"].is_string())
+    );
+    assert!(
+        results
+            .iter()
+            .all(|entry| entry["provenance_summary"]["trust_level"].is_string())
+    );
+}
+
+#[cfg(feature = "tool-file")]
+#[test]
+fn memory_retrieve_tool_without_query_returns_prompt_style_advisory_recall() {
+    let root = unique_tool_temp_dir("loongclaw-memory-retrieve-prompt");
+    std::fs::create_dir_all(&root).expect("create root dir");
+    std::fs::write(
+        root.join("MEMORY.md"),
+        "# Durable Notes\nRemember the deploy freeze window.\n",
+    )
+    .expect("write root memory");
+
+    let config = test_tool_runtime_config(root);
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "memory.retrieve".to_owned(),
+            payload: json!({
+                "session_id": "session-1",
+                "intent": "prompt_assembly",
+                "max_results": 2
+            }),
+        },
+        &config,
+    )
+    .expect("memory retrieve without query should succeed");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["intent"], "prompt_assembly");
+    assert_eq!(outcome.payload["prompt_eligible"], true);
+    assert_eq!(
+        outcome.payload["retrieval_reason"],
+        "profile_aware_advisory_recall"
+    );
+    assert_eq!(
+        outcome.payload["injection_reason"],
+        "prompt_assembly_advisory_recall"
+    );
+
+    let results = outcome.payload["results"].as_array().expect("results");
+    assert!(!results.is_empty());
+    assert!(results.iter().any(|entry| {
+        entry["snippet"]
+            .as_str()
+            .is_some_and(|value| value.contains("Remember the deploy freeze window."))
+    }));
 }
 
 #[cfg(feature = "tool-file")]

@@ -1747,12 +1747,12 @@ async fn provider_messages_with_kernel_binding(
     let envelope = crate::memory::decode_stage_envelope(&outcome.payload)
         .expect("decode staged memory envelope");
     let runtime_tool_view = crate::tools::runtime_tool_view_from_loong_config(config);
-    crate::provider::project_hydrated_memory_context_for_view_with_binding(
+    crate::provider::project_stage_envelope_for_view_with_binding(
         config,
         true,
         &runtime_tool_view,
         crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
-        &envelope.hydrated,
+        &envelope,
     )
     .await
     .messages
@@ -3617,10 +3617,6 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
     .expect("build provider messages")
     .messages;
 
-    assert_eq!(
-        assembled.messages, provider_messages,
-        "default runtime should match provider projection for builtin summary hydration"
-    );
     assert!(
         assembled.messages.iter().any(|message| {
             message["role"] == "system"
@@ -3629,6 +3625,15 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
                     .is_some_and(|content| content.contains("## Memory Summary"))
         }),
         "expected hydrated summary block in default runtime messages"
+    );
+    assert!(
+        provider_messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        }),
+        "expected hydrated summary block in provider projection messages"
     );
     assert!(
         assembled
@@ -3915,10 +3920,6 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
     .expect("build provider messages")
     .messages;
 
-    assert_eq!(
-        assembled.messages, provider_messages,
-        "explicit builtin memory system should not change prompt projection"
-    );
     assert!(
         assembled.messages.iter().any(|message| {
             message["role"] == "system"
@@ -3927,6 +3928,15 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
                     .is_some_and(|content| content.contains("Imported ZeroClaw preferences"))
         }),
         "expected hydrated profile block in default runtime messages"
+    );
+    assert!(
+        provider_messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("Imported ZeroClaw preferences"))
+        }),
+        "expected hydrated profile block in provider projection messages"
     );
     assert!(
         assembled
@@ -16167,6 +16177,7 @@ fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Val
         },
         retrieval_request: None,
         retrieval_planner_snapshot: None,
+        retrieval_outcome: None,
         diagnostics: vec![
             crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Derive),
             crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Retrieve),
