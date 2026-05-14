@@ -309,8 +309,54 @@ pub(crate) fn search_workspace_memory_documents(
 pub(crate) fn build_read_stage_envelope_request_for_memory_config(
     session_id: &str,
     workspace_root: Option<&Path>,
+    config: &crate::config::MemoryConfig,
 ) -> MemoryCoreRequest {
-    build_read_stage_envelope_request_with_workspace_root(session_id, workspace_root)
+    let base_request =
+        build_read_stage_envelope_request_with_workspace_root(session_id, workspace_root);
+    let mut payload = base_request
+        .payload
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+
+    payload.insert(
+        "profile".to_owned(),
+        serde_json::json!(config.resolved_profile().as_str()),
+    );
+    payload.insert(
+        "system".to_owned(),
+        serde_json::json!(config.resolved_system().as_str()),
+    );
+    payload.insert(
+        "system_id".to_owned(),
+        serde_json::json!(config.resolved_system_id()),
+    );
+    payload.insert(
+        "sliding_window".to_owned(),
+        serde_json::json!(config.sliding_window),
+    );
+    payload.insert(
+        "summary_max_chars".to_owned(),
+        serde_json::json!(config.summary_char_budget()),
+    );
+
+    let profile_note = config.trimmed_profile_note();
+    if let Some(profile_note) = profile_note {
+        payload.insert("profile_note".to_owned(), serde_json::json!(profile_note));
+    }
+
+    let personalization = config.trimmed_personalization();
+    if let Some(personalization) = personalization {
+        payload.insert(
+            "personalization".to_owned(),
+            serde_json::json!(personalization),
+        );
+    }
+
+    MemoryCoreRequest {
+        operation: base_request.operation,
+        payload: serde_json::Value::Object(payload),
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]

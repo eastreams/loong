@@ -1,7 +1,7 @@
 use loong_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
-use crate::config::{MemoryMode, MemoryProfile, MemorySystemKind};
+use crate::config::{MemoryMode, MemoryProfile, MemorySystemKind, PersonalizationConfig};
 use crate::runtime_identity;
 
 #[cfg(feature = "memory-sqlite")]
@@ -138,6 +138,31 @@ fn read_context_runtime_config(
         };
 
         runtime_config.profile_note = profile_note;
+    }
+
+    if let Some(personalization_value) = payload.get("personalization") {
+        let personalization = match personalization_value {
+            Value::Null => None,
+            Value::Object(_) => {
+                let decoded_personalization = serde_json::from_value::<PersonalizationConfig>(
+                    personalization_value.clone(),
+                )
+                .map_err(|error| {
+                    format!(
+                        "memory.read_context payload.personalization must match PersonalizationConfig: {error}"
+                    )
+                })?;
+                decoded_personalization.normalized()
+            }
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::String(_) => {
+                return Err(
+                    "memory.read_context payload.personalization must be an object or null"
+                        .to_owned(),
+                );
+            }
+        };
+
+        runtime_config.personalization = personalization;
     }
 
     Ok(runtime_config)
