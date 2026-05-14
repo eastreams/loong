@@ -2790,7 +2790,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
         ) {
             let prefix = match action.kind {
                 crate::next_actions::SetupNextActionKind::Ask => "Get a first answer",
-                crate::next_actions::SetupNextActionKind::Chat => "Continue in chat",
+                crate::next_actions::SetupNextActionKind::Chat => "Continue in loong",
                 crate::next_actions::SetupNextActionKind::Personalize => {
                     "Set your working preferences"
                 }
@@ -6368,9 +6368,9 @@ mod tests {
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Continue in chat: LOONG_CONFIG_PATH='/tmp/loong.toml' loong"
+                step == "Continue in loong: LOONG_CONFIG_PATH='/tmp/loong.toml' loong"
             }),
-            "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
+            "green doctor runs should still advertise the root interactive surface as the follow-up path: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {

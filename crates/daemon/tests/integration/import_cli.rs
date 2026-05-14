@@ -771,14 +771,14 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
-        "apply summary should surface interactive chat immediately after the primary ask step: {lines:#?}"
+            .any(|line| line == "- loong: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
+        "apply summary should surface the root interactive entrypoint immediately after the primary ask step: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| {
             line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
         }),
-        "apply summary should continue surfacing registry-driven channel handoff commands after ask/chat: {lines:#?}"
+        "apply summary should continue surfacing registry-driven channel handoff commands after ask/root-entry: {lines:#?}"
     );
 }
 

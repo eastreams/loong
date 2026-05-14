@@ -134,7 +134,6 @@ impl ChatCliFixture {
         let loong_home = self.home_dir.join(".loong");
         let mut command = Command::new(env!("CARGO_BIN_EXE_loong"));
         command
-            .arg("chat")
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
             .env("LOONG_HOME", &loong_home)
@@ -404,7 +403,7 @@ fn chat_cli_latest_session_selector_process_uses_selected_root_session_history()
     fixture.set_turn_timestamps("root-archived", 500);
     fixture.archive_session("root-archived", 600);
 
-    let output = fixture.run_process(&["chat", "--session", "latest"], Some(b"/history\n/exit\n"));
+    let output = fixture.run_process(&["--session", "latest"], Some(b"/history\n/exit\n"));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
 
@@ -443,7 +442,7 @@ fn chat_cli_latest_session_selector_process_rejects_missing_resumable_root() {
     let fixture = LatestSelectorCliFixture::new("chat-latest-selector-empty");
     fixture.write_config_with(|_| {});
 
-    let output = fixture.run_process(&["chat", "--session", "latest"], None);
+    let output = fixture.run_process(&["--session", "latest"], None);
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
 

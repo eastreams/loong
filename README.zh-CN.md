@@ -144,7 +144,7 @@ loong onboard                # 交互式初始化，配置 provider 和 model
 
 ```bash
 loong ask --message "用一句话总结这个仓库"  # 单轮提问，验证配置是否生效
-loong chat                   # 进入多轮对话
+loong                        # 进入主交互 coding TUI
 loong doctor --fix           # 检查环境并自动修复常见问题
 loong update                 # 把当前安装升级到最新稳定版 GitHub Release
 ```

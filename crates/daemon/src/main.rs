@@ -173,23 +173,40 @@ fn main() {
     loong_daemon::make_env_compatible();
     check_legacy_home_migration();
     let cli = parse_cli();
+    let default_entry_interactive = cli.interactive.clone();
     let invoked_as_default_entry = cli.command.is_none();
     let command_source = if cli.command.is_some() {
         "explicit"
     } else {
         "default"
     };
-    let command = cli.command.unwrap_or_else(resolve_default_entry_command);
-    let command_kind = command.command_kind_for_logging();
-    let redacted_command = redacted_command_name(&command);
+    let resolved_command = match cli.command {
+        Some(command) => ResolvedCommand::Cli(Box::new(command)),
+        None => resolve_default_entry_command(&cli),
+    };
+    let command_kind = resolved_command.command_kind_for_logging();
+    let redacted_command = match &resolved_command {
+        ResolvedCommand::Cli(command) => redacted_command_name(command),
+        ResolvedCommand::Interactive(_) => "interactive_root",
+    };
     tracing::debug!(
         target: "loong.daemon",
         command_source,
         command = %redacted_command,
         "resolved CLI command"
     );
-    let result = build_daemon_runtime(&command)
-        .and_then(|runtime| runtime.block_on(run_command(command, invoked_as_default_entry)));
+    let interactive_runtime_seed = Commands::Welcome;
+    let runtime_seed_command = match &resolved_command {
+        ResolvedCommand::Cli(command) => command.as_ref(),
+        ResolvedCommand::Interactive(_) => &interactive_runtime_seed,
+    };
+    let result = build_daemon_runtime(runtime_seed_command).and_then(|runtime| {
+        runtime.block_on(run_resolved_command(
+            resolved_command,
+            invoked_as_default_entry,
+            default_entry_interactive,
+        ))
+    });
     if let Err(error) = result {
         let error_code = error_code(error.as_str());
         tracing::error!(
@@ -207,7 +224,39 @@ fn main() {
     }
 }
 
-async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliResult<()> {
+async fn run_resolved_command(
+    command: ResolvedCommand,
+    invoked_as_default_entry: bool,
+    default_entry_interactive: InteractiveCliArgs,
+) -> CliResult<()> {
+    match command {
+        ResolvedCommand::Cli(command) => {
+            run_command(
+                *command,
+                invoked_as_default_entry,
+                default_entry_interactive,
+            )
+            .await
+        }
+        ResolvedCommand::Interactive(args) => {
+            run_chat_cli(
+                args.config.as_deref(),
+                args.session.as_deref(),
+                args.acp,
+                args.acp_event_stream,
+                &args.acp_bootstrap_mcp_server,
+                args.acp_cwd.as_deref(),
+            )
+            .await
+        }
+    }
+}
+
+async fn run_command(
+    command: Commands,
+    invoked_as_default_entry: bool,
+    default_entry_interactive: InteractiveCliArgs,
+) -> CliResult<()> {
     match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
@@ -366,9 +415,15 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
             .await?;
 
             if invoked_as_default_entry
-                && let Some(follow_up_command) = resolve_default_entry_post_onboard_command()
+                && let Some(follow_up_command) =
+                    resolve_default_entry_post_onboard_command(&default_entry_interactive)
             {
-                return Box::pin(run_command(follow_up_command, false)).await;
+                return Box::pin(run_resolved_command(
+                    follow_up_command,
+                    false,
+                    default_entry_interactive,
+                ))
+                .await;
             }
 
             Ok(())
@@ -529,24 +584,6 @@ async fn run_command(command: Commands, invoked_as_default_entry: bool) -> CliRe
                 config.as_deref(),
                 session.as_deref(),
                 &message,
-                acp,
-                acp_event_stream,
-                &acp_bootstrap_mcp_server,
-                acp_cwd.as_deref(),
-            )
-            .await
-        }
-        Commands::Chat {
-            config,
-            session,
-            acp,
-            acp_event_stream,
-            acp_bootstrap_mcp_server,
-            acp_cwd,
-        } => {
-            run_chat_cli(
-                config.as_deref(),
-                session.as_deref(),
                 acp,
                 acp_event_stream,
                 &acp_bootstrap_mcp_server,

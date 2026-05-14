@@ -38,7 +38,13 @@ fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
     let (_env, _home, _config_path) = isolated_home("loong-default-entry-missing");
 
     assert!(
-        matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
+        matches!(
+            resolve_default_entry_command(&Cli {
+                interactive: InteractiveCliArgs::default(),
+                command: None,
+            }),
+            ResolvedCommand::Cli(command) if matches!(command.as_ref(), Commands::Onboard { .. })
+        ),
         "missing config should route to onboard"
     );
 }
@@ -50,13 +56,19 @@ fn resolve_default_entry_command_ignores_legacy_home_when_config_is_missing() {
     fs::create_dir_all(&legacy_home).expect("create legacy home");
 
     assert!(
-        matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
+        matches!(
+            resolve_default_entry_command(&Cli {
+                interactive: InteractiveCliArgs::default(),
+                command: None,
+            }),
+            ResolvedCommand::Cli(command) if matches!(command.as_ref(), Commands::Onboard { .. })
+        ),
         "legacy home alone should still route to onboard"
     );
 }
 
 #[test]
-fn resolve_default_entry_command_routes_to_chat_when_default_config_exists() {
+fn resolve_default_entry_command_routes_to_root_interactive_surface_when_default_config_exists() {
     let (_env, _home, config_path) = isolated_home("loong-default-entry-present");
 
     mvp::config::write(
@@ -68,26 +80,38 @@ fn resolve_default_entry_command_routes_to_chat_when_default_config_exists() {
 
     assert!(
         matches!(
-            resolve_default_entry_command(),
-            Commands::Chat {
+            resolve_default_entry_command(&Cli {
+                interactive: InteractiveCliArgs::default(),
+                command: None,
+            }),
+            ResolvedCommand::Interactive(InteractiveCliArgs {
                 config: None,
                 session: None,
                 acp: false,
                 acp_event_stream: false,
                 acp_bootstrap_mcp_server,
                 acp_cwd: None,
-            } if acp_bootstrap_mcp_server.is_empty()
+            }) if acp_bootstrap_mcp_server.is_empty()
         ),
-        "present config should route to chat"
+        "present config should route to the root interactive surface"
     );
 }
 
 #[test]
-fn should_resolve_default_entry_to_chat_prefers_chat_for_interactive_first_run() {
-    assert!(should_resolve_default_entry_to_chat(false, false, true));
-    assert!(should_resolve_default_entry_to_chat(true, false, false));
-    assert!(!should_resolve_default_entry_to_chat(false, true, true));
-    assert!(!should_resolve_default_entry_to_chat(false, false, false));
+fn should_resolve_default_entry_to_chat_prefers_root_interactive_surface_for_interactive_first_run()
+{
+    assert!(should_resolve_default_entry_to_interactive_surface(
+        false, false, true
+    ));
+    assert!(should_resolve_default_entry_to_interactive_surface(
+        true, false, false
+    ));
+    assert!(!should_resolve_default_entry_to_interactive_surface(
+        false, true, true
+    ));
+    assert!(!should_resolve_default_entry_to_interactive_surface(
+        false, false, false
+    ));
 }
 
 #[test]
@@ -106,13 +130,19 @@ fn resolve_default_entry_command_ignores_loongclaw_config_path_without_compat_sh
     env.set("LOONGCLAW_CONFIG_PATH", &config_path);
 
     assert!(
-        matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
+        matches!(
+            resolve_default_entry_command(&Cli {
+                interactive: InteractiveCliArgs::default(),
+                command: None,
+            }),
+            ResolvedCommand::Cli(command) if matches!(command.as_ref(), Commands::Onboard { .. })
+        ),
         "legacy env override should not bypass the canonical default-entry path without compatibility shims"
     );
 }
 
 #[test]
-fn resolve_default_entry_command_honors_loong_config_path_override() {
+fn resolve_default_entry_command_honors_loong_config_path_override_for_root_interactive_surface() {
     let mut env = ScopedEnv::new();
     let config_path = unique_temp_dir("loong-default-entry-env").join("custom-config.toml");
     if let Some(parent) = config_path.parent() {
@@ -128,17 +158,20 @@ fn resolve_default_entry_command_honors_loong_config_path_override() {
 
     assert!(
         matches!(
-            resolve_default_entry_command(),
-            Commands::Chat {
+            resolve_default_entry_command(&Cli {
+                interactive: InteractiveCliArgs::default(),
+                command: None,
+            }),
+            ResolvedCommand::Interactive(InteractiveCliArgs {
                 config: None,
                 session: None,
                 acp: false,
                 acp_event_stream: false,
                 acp_bootstrap_mcp_server,
                 acp_cwd: None,
-            } if acp_bootstrap_mcp_server.is_empty()
+            }) if acp_bootstrap_mcp_server.is_empty()
         ),
-        "new env override config should route to chat"
+        "new env override config should route to the root interactive surface"
     );
 }
 
@@ -150,13 +183,20 @@ fn resolve_default_entry_command_routes_to_onboard_when_config_path_is_a_directo
     env.set("LOONG_CONFIG_PATH", &config_dir);
 
     assert!(
-        matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
+        matches!(
+            resolve_default_entry_command(&Cli {
+                interactive: InteractiveCliArgs::default(),
+                command: None,
+            }),
+            ResolvedCommand::Cli(command) if matches!(command.as_ref(), Commands::Onboard { .. })
+        ),
         "directory config path should still route to onboard"
     );
 }
 
 #[test]
-fn resolve_default_entry_post_onboard_command_returns_chat_once_config_exists() {
+fn resolve_default_entry_post_onboard_command_returns_root_interactive_surface_once_config_exists()
+{
     let (_env, _home, config_path) = isolated_home("loong-default-entry-post-onboard-present");
 
     mvp::config::write(
@@ -168,17 +208,17 @@ fn resolve_default_entry_post_onboard_command_returns_chat_once_config_exists() 
 
     assert!(
         matches!(
-            resolve_default_entry_post_onboard_command(),
-            Some(Commands::Chat {
+            resolve_default_entry_post_onboard_command(&InteractiveCliArgs::default()),
+            Some(ResolvedCommand::Interactive(InteractiveCliArgs {
                 config: None,
                 session: None,
                 acp: false,
                 acp_event_stream: false,
                 acp_bootstrap_mcp_server,
                 acp_cwd: None,
-            }) if acp_bootstrap_mcp_server.is_empty()
+            })) if acp_bootstrap_mcp_server.is_empty()
         ),
-        "a written default config should hand off into chat after onboarding"
+        "a written default config should hand off into the root interactive surface after onboarding"
     );
 }
 
@@ -187,8 +227,8 @@ fn resolve_default_entry_post_onboard_command_stays_none_when_config_is_still_mi
     let (_env, _home, _config_path) = isolated_home("loong-default-entry-post-onboard-missing");
 
     assert!(
-        resolve_default_entry_post_onboard_command().is_none(),
-        "missing config should not try to continue into chat after onboarding exits"
+        resolve_default_entry_post_onboard_command(&InteractiveCliArgs::default()).is_none(),
+        "missing config should not try to continue into the root interactive surface after onboarding exits"
     );
 }
 

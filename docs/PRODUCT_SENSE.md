@@ -64,7 +64,7 @@ The current product contract is:
 3. Reopen `loong onboard` only when the operator wants the deeper guided setup flow explicitly.
 4. Get first value through a concrete one-shot command such as
    `loong ask --message "Summarize this repository and suggest the best next step."`,
-   while `loong chat` remains an explicit alias for the interactive conversation surface.
+   then continue in root `loong`.
 5. If anything is broken, use `loong doctor` or `loong doctor --fix`.
 6. Enable gateway or channel surfaces only after the base CLI flow is healthy.
 

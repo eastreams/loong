@@ -102,8 +102,8 @@ fn cli_ask_help_mentions_one_shot_assistant_usage() {
         "ask help should explain ACP event streaming for runtime debugging: {help}"
     );
     assert!(
-        help.contains("loong chat"),
-        "ask help should point users to chat for the interactive path: {help}"
+        help.contains("root `loong` surface"),
+        "ask help should point users to the root interactive path: {help}"
     );
 }
 

@@ -37,7 +37,6 @@ impl Commands {
             Self::Channels { .. } => "channels",
             Self::Runtime { .. } => "runtime",
             Self::Ask { .. } => "ask",
-            Self::Chat { .. } => "chat",
             Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
             Self::Weixin { .. } => "weixin",
@@ -49,7 +48,7 @@ impl Commands {
 
 #[cfg(test)]
 mod tests {
-    use crate::Commands;
+    use crate::{Commands, ResolvedCommand};
     #[test]
     fn command_kind_for_logging_uses_stable_variant_names() {
         assert_eq!(Commands::Welcome.command_kind_for_logging(), "welcome");
@@ -107,6 +106,11 @@ mod tests {
             }
             .command_kind_for_logging(),
             "runtime"
+        );
+        assert_eq!(
+            ResolvedCommand::Interactive(crate::InteractiveCliArgs::default())
+                .command_kind_for_logging(),
+            "interactive_root"
         );
         assert_eq!(
             Commands::Weixin {

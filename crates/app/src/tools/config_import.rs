@@ -18,6 +18,17 @@ const MAP_SKILLS_MODE_KEY: &str = "map_skills";
 const APPLY_SKILLS_PLAN_KEY: &str = "apply_skills_plan";
 const SKILLS_MANIFEST_PATH_KEY: &str = "skills_manifest_path";
 
+fn shell_quote_argument(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn format_root_entry_with_config(config_path: &Path) -> String {
+    let config_path_display = config_path.display().to_string();
+    let quoted_config_path = shell_quote_argument(config_path_display.as_str());
+    let command_name = config::active_cli_command_name();
+    format!("LOONG_CONFIG_PATH={quoted_config_path} {command_name}")
+}
+
 pub(super) fn config_import_mode(payload: &serde_json::Map<String, Value>) -> &str {
     let raw_mode = payload.get("mode");
     let raw_mode = raw_mode.and_then(Value::as_str);
@@ -282,13 +293,7 @@ pub(super) fn execute_config_import_tool_with_config(
             "config_toml": config_toml,
             "next_step": written_output_path
                 .as_ref()
-                .map(|path| {
-                    format!(
-                        "{} chat --config {}",
-                        config::active_cli_command_name(),
-                        path.display()
-                    )
-                }),
+                .map(|path| format_root_entry_with_config(path)),
         }),
     })
 }

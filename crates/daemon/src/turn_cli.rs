@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 
 use crate::CliResult;
 use crate::mvp;
@@ -34,6 +34,28 @@ pub enum TurnCommands {
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
     },
+}
+
+#[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractiveCliArgs {
+    /// Path to the Loong config file, or omit to use normal config discovery
+    #[arg(long)]
+    pub config: Option<String>,
+    /// Session id or selector such as `latest`; defaults to the normal CLI session
+    #[arg(long)]
+    pub session: Option<String>,
+    /// Enable ACP bridge behavior for this interactive session
+    #[arg(long, default_value_t = false)]
+    pub acp: bool,
+    /// Stream ACP turn events while interactive turns run
+    #[arg(long, default_value_t = false)]
+    pub acp_event_stream: bool,
+    /// Bootstrap an MCP server before the ACP session starts; repeat to add more servers
+    #[arg(long = "acp-bootstrap-mcp-server")]
+    pub acp_bootstrap_mcp_server: Vec<String>,
+    /// Working directory used for ACP and bootstrapped MCP server context
+    #[arg(long = "acp-cwd")]
+    pub acp_cwd: Option<String>,
 }
 
 pub async fn run_chat_cli(

@@ -66,7 +66,7 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Chat,
             channel_action_id: None,
-            label: "chat".to_owned(),
+            label: "loong".to_owned(),
             command: crate::cli_handoff::format_root_entry_with_config(config_path),
         });
         if should_suggest_personalization(config) {

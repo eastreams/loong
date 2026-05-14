@@ -141,7 +141,6 @@ fn root_help_prefers_grouped_namespaces_and_hides_flat_legacy_aliases() {
         "onboard",
         "ask",
         "turn",
-        "chat",
         "doctor",
         "status",
         "update",
@@ -171,6 +170,11 @@ fn root_help_prefers_grouped_namespaces_and_hides_flat_legacy_aliases() {
             .iter()
             .any(|value| value == "runtime" || value == "ops"),
         "root help should expose one grouped runtime/operator namespace: {visible_root_subcommands:?}"
+    );
+
+    assert!(
+        !visible_root_subcommands.iter().any(|value| value == "chat"),
+        "root help should not expose the removed `chat` subcommand: {visible_root_subcommands:?}"
     );
 
     for legacy in [
@@ -1989,10 +1993,19 @@ fn format_acp_event_summary_includes_routing_intent_and_provenance() {
 }
 
 #[test]
-fn chat_cli_accepts_acp_runtime_option_flags() {
+fn chat_cli_is_no_longer_exposed_as_a_public_subcommand() {
+    let error = try_parse_cli(["loong", "chat"]).expect_err("chat subcommand should be removed");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("unrecognized subcommand") || rendered.contains("unexpected argument"),
+        "removing chat should fail through clap parsing: {rendered}"
+    );
+}
+
+#[test]
+fn root_interactive_flags_still_parse_on_the_main_entrypoint() {
     let cli = try_parse_cli([
         "loong",
-        "chat",
         "--session",
         "telegram:42",
         "--acp",
@@ -2004,28 +2017,23 @@ fn chat_cli_accepts_acp_runtime_option_flags() {
         "--acp-cwd",
         "/workspace/project",
     ])
-    .expect("chat CLI should parse ACP runtime option flags");
+    .expect("root interactive flags should parse on the main entrypoint");
 
-    match cli.command {
-        Some(Commands::Chat {
-            session,
-            acp,
-            acp_event_stream,
-            acp_bootstrap_mcp_server,
-            acp_cwd,
-            ..
-        }) => {
-            assert_eq!(session.as_deref(), Some("telegram:42"));
-            assert!(acp);
-            assert!(acp_event_stream);
-            assert_eq!(
-                acp_bootstrap_mcp_server,
-                vec!["filesystem".to_owned(), "search".to_owned()]
-            );
-            assert_eq!(acp_cwd.as_deref(), Some("/workspace/project"));
-        }
-        other => panic!("unexpected command parse result: {other:?}"),
-    }
+    assert!(
+        cli.command.is_none(),
+        "root interactive path should not synthesize a subcommand"
+    );
+    assert_eq!(cli.interactive.session.as_deref(), Some("telegram:42"));
+    assert!(cli.interactive.acp);
+    assert!(cli.interactive.acp_event_stream);
+    assert_eq!(
+        cli.interactive.acp_bootstrap_mcp_server,
+        vec!["filesystem".to_owned(), "search".to_owned()]
+    );
+    assert_eq!(
+        cli.interactive.acp_cwd.as_deref(),
+        Some("/workspace/project")
+    );
 }
 
 #[test]

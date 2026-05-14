@@ -744,7 +744,7 @@ mod tests {
                 },
                 OnboardingAction {
                     kind: OnboardingActionKind::Chat,
-                    label: "chat".to_owned(),
+                    label: "loong".to_owned(),
                     command: "LOONG_CONFIG_PATH='/tmp/loong.toml' loong".to_owned(),
                 },
                 OnboardingAction {
@@ -783,7 +783,7 @@ mod tests {
                 TuiSectionSpec::ActionGroup { title: Some(title), items, .. }
                     if title == "also available"
                         && items.iter().all(|item| item.label != "channels")
-                        && items.iter().any(|item| item.label == "chat")
+                        && items.iter().any(|item| item.label == "loong")
                         && items.iter().any(|item| item.label == personalize_action_label())
             )),
             "expected general follow-up actions to stay separate from setup surfaces: {spec:#?}"

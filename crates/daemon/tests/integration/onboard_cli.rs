@@ -6130,7 +6130,7 @@ fn onboarding_success_summary_derives_structured_actions() {
         loong_daemon::onboard_cli::OnboardingActionKind::Channel
     );
     assert_eq!(summary.next_actions[0].label, "first answer");
-    assert_eq!(summary.next_actions[1].label, "chat");
+    assert_eq!(summary.next_actions[1].label, "loong");
     assert_eq!(
         summary.next_actions[2].label,
         "teach Loong your working style"
@@ -7895,13 +7895,13 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
         "narrow renderer should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("- chat:"))
+        lines.iter().any(|line| line.contains("- loong:"))
             && rendered.contains("LOONG_CONFIG_PATH='/tmp/loong-config.tom")
             && rendered.contains("l' loong")
             && rendered.contains(
                 "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
             ),
-        "narrow renderer should keep secondary chat and channel actions visible after the primary ask example: {lines:#?}"
+        "narrow renderer should keep secondary root-entry and channel actions visible after the primary ask example: {lines:#?}"
     );
 }
 
@@ -8445,8 +8445,8 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
         "wide success summary should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
-        "wide success summary should still surface interactive chat as a secondary follow-up: {lines:#?}"
+        rendered.contains("- loong: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
+        "wide success summary should still surface the root interactive entrypoint as a secondary follow-up: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line
@@ -8487,8 +8487,8 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
     assert!(
         lines
             .iter()
-            .all(|line| line != "- chat: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
-        "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
+            .all(|line| line != "- loong: LOONG_CONFIG_PATH='/tmp/loong-config.toml' loong"),
+        "success summary should not keep the root interactive handoff once cli is disabled: {lines:#?}"
     );
 }
 
@@ -8868,7 +8868,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         .next_actions
         .iter()
         .position(|action| action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Ask);
-    let chat_position = summary
+    let loong_position = summary
         .next_actions
         .iter()
         .position(|action| action.kind == loong_daemon::onboard_cli::OnboardingActionKind::Chat);
@@ -8891,9 +8891,9 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         "cli-enabled plugin-backed setups should keep the direct ask handoff first: {summary:#?}"
     );
     assert_eq!(
-        chat_position,
+        loong_position,
         Some(1),
-        "cli-enabled plugin-backed setups should keep the chat handoff second: {summary:#?}"
+        "cli-enabled plugin-backed setups should keep the root interactive handoff second: {summary:#?}"
     );
     let personalize_position = personalize_position.expect(
         "cli-enabled plugin-backed setups should keep the personalization handoff visible before diagnostics",

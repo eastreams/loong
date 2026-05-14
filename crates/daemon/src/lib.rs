@@ -258,7 +258,9 @@ pub use session_cli::{
 use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
-pub use turn_cli::{TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli};
+pub use turn_cli::{
+    InteractiveCliArgs, TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli,
+};
 pub use update_cli::run_update_cli;
 #[rustfmt::skip]
 use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
@@ -484,8 +486,25 @@ impl std::str::FromStr for MultiChannelServeChannelAccount {
     version
 )]
 pub struct Cli {
+    #[command(flatten)]
+    pub interactive: InteractiveCliArgs,
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+#[derive(Debug)]
+pub enum ResolvedCommand {
+    Cli(Box<Commands>),
+    Interactive(InteractiveCliArgs),
+}
+
+impl ResolvedCommand {
+    pub fn command_kind_for_logging(&self) -> &'static str {
+        match self {
+            Self::Cli(command) => command.command_kind_for_logging(),
+            Self::Interactive(_) => "interactive_root",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
@@ -916,7 +935,7 @@ pub enum Commands {
     },
     #[command(
         about = "Run one non-interactive assistant turn",
-        long_about = "Run one non-interactive one-shot assistant turn.\n\nUse this when you want a fast answer without entering the interactive `loong chat` REPL. The command reuses the normal CLI conversation runtime, session memory, provider selection, and ACP options."
+        long_about = "Run one non-interactive one-shot assistant turn.\n\nUse this when you want a fast answer without entering the interactive root `loong` surface. The command reuses the normal CLI conversation runtime, session memory, provider selection, and ACP options."
     )]
     Ask {
         /// Path to the Loong config file, or omit to use normal config discovery
@@ -935,27 +954,6 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         acp_event_stream: bool,
         /// Bootstrap an MCP server before the ACP turn starts; repeat to add more servers
-        #[arg(long = "acp-bootstrap-mcp-server")]
-        acp_bootstrap_mcp_server: Vec<String>,
-        /// Working directory used for ACP and bootstrapped MCP server context
-        #[arg(long = "acp-cwd")]
-        acp_cwd: Option<String>,
-    },
-    /// Start interactive CLI chat channel with sliding-window memory
-    Chat {
-        /// Path to the Loong config file, or omit to use normal config discovery
-        #[arg(long)]
-        config: Option<String>,
-        /// Session id or selector such as `latest`; defaults to the normal CLI session
-        #[arg(long)]
-        session: Option<String>,
-        /// Enable ACP bridge behavior for this chat session
-        #[arg(long, default_value_t = false)]
-        acp: bool,
-        /// Stream ACP turn events while chat turns run
-        #[arg(long, default_value_t = false)]
-        acp_event_stream: bool,
-        /// Bootstrap an MCP server before the ACP session starts; repeat to add more servers
         #[arg(long = "acp-bootstrap-mcp-server")]
         acp_bootstrap_mcp_server: Vec<String>,
         /// Working directory used for ACP and bootstrapped MCP server context
@@ -1067,7 +1065,7 @@ pub(crate) fn resolved_default_entry_config_path() -> PathBuf {
     default_entry_config_path_override().unwrap_or_else(mvp::config::default_config_path)
 }
 
-fn default_onboard_command() -> Commands {
+pub(crate) fn default_onboard_command() -> Commands {
     Commands::Onboard {
         output: None,
         force: false,
@@ -1085,45 +1083,36 @@ fn default_onboard_command() -> Commands {
     }
 }
 
-fn default_chat_command() -> Commands {
-    Commands::Chat {
-        config: None,
-        session: None,
-        acp: false,
-        acp_event_stream: false,
-        acp_bootstrap_mcp_server: Vec::new(),
-        acp_cwd: None,
-    }
-}
-
-const fn should_resolve_default_entry_to_chat(
-    config_exists: bool,
+const fn should_resolve_default_entry_to_interactive_surface(
+    _config_exists: bool,
     config_path_is_directory: bool,
-    interactive_terminal: bool,
+    _interactive_terminal: bool,
 ) -> bool {
-    config_exists || (!config_path_is_directory && interactive_terminal)
+    !config_path_is_directory
 }
 
-pub fn resolve_default_entry_command() -> Commands {
+pub fn resolve_default_entry_command(cli: &Cli) -> ResolvedCommand {
     let config_path = resolved_default_entry_config_path();
     let config_exists = config_path.is_file();
     let config_path_is_directory = config_path.is_dir();
     let interactive_terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    if should_resolve_default_entry_to_chat(
+    if should_resolve_default_entry_to_interactive_surface(
         config_exists,
         config_path_is_directory,
         interactive_terminal,
     ) {
-        default_chat_command()
+        ResolvedCommand::Interactive(cli.interactive.clone())
     } else {
-        default_onboard_command()
+        ResolvedCommand::Cli(Box::new(default_onboard_command()))
     }
 }
 
-pub fn resolve_default_entry_post_onboard_command() -> Option<Commands> {
+pub fn resolve_default_entry_post_onboard_command(
+    interactive: &InteractiveCliArgs,
+) -> Option<ResolvedCommand> {
     resolved_default_entry_config_path()
         .is_file()
-        .then(default_chat_command)
+        .then(|| ResolvedCommand::Interactive(interactive.clone()))
 }
 
 pub fn redacted_command_name(command: &Commands) -> &'static str {
@@ -1181,7 +1170,7 @@ fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConfig) 
         tone: mvp::tui_surface::TuiCalloutTone::Info,
         title: Some("operator flow".to_owned()),
         lines: vec![
-            "Start with a first answer, then continue in chat for follow-up work.".to_owned(),
+            "Start with a first answer, then continue in the root loong surface for follow-up work.".to_owned(),
             "Use doctor when setup or runtime health feels off instead of debugging the config by hand.".to_owned(),
         ],
     });
