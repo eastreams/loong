@@ -399,6 +399,8 @@ pub struct ControlPlaneSessionWorkflowBindingWorktree {
 pub struct ControlPlaneSessionWorkflowBinding {
     pub session_id: String,
     pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_session_id: Option<String>,
     pub mode: String,
     pub execution_surface: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

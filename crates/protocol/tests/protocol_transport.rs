@@ -709,6 +709,7 @@ fn control_plane_session_read_response_roundtrips_through_json() {
                     binding: Some(ControlPlaneSessionWorkflowBinding {
                         session_id: "child-session".to_owned(),
                         task_id: "child-session".to_owned(),
+                        task_session_id: Some("child-session".to_owned()),
                         mode: "advisory_only".to_owned(),
                         execution_surface: "delegate.async".to_owned(),
                         worktree: Some(ControlPlaneSessionWorkflowBindingWorktree {
@@ -808,6 +809,8 @@ fn control_plane_task_read_response_roundtrips_through_json() {
         current_session_id: "root-session".to_owned(),
         task: ControlPlaneTaskSummary {
             task_id: "child-session".to_owned(),
+            task_session_id: "child-session".to_owned(),
+            owner_session_id: "child-session".to_owned(),
             session_id: "child-session".to_owned(),
             scope_session_id: "root-session".to_owned(),
             label: Some("Child".to_owned()),
@@ -832,6 +835,7 @@ fn control_plane_task_read_response_roundtrips_through_json() {
                 binding: Some(ControlPlaneSessionWorkflowBinding {
                     session_id: "child-session".to_owned(),
                     task_id: "child-session".to_owned(),
+                    task_session_id: Some("child-session".to_owned()),
                     mode: "advisory_only".to_owned(),
                     execution_surface: "delegate.async".to_owned(),
                     worktree: Some(ControlPlaneSessionWorkflowBindingWorktree {
@@ -864,6 +868,8 @@ fn control_plane_task_list_response_roundtrips_through_json() {
         returned_count: 1,
         tasks: vec![ControlPlaneTaskSummary {
             task_id: "child-session".to_owned(),
+            task_session_id: "child-session".to_owned(),
+            owner_session_id: "child-session".to_owned(),
             session_id: "child-session".to_owned(),
             scope_session_id: "root-session".to_owned(),
             label: Some("Child".to_owned()),

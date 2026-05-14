@@ -154,6 +154,7 @@ pub(super) fn map_session_workflow_binding(
     ControlPlaneSessionWorkflowBinding {
         session_id: binding.session_id,
         task_id: binding.task_id,
+        task_session_id: Some(binding.task_session_id),
         mode: binding.mode,
         execution_surface: binding.execution_surface,
         worktree,
