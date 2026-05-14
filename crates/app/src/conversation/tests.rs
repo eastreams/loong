@@ -1731,6 +1731,7 @@ async fn provider_messages_with_kernel_binding(
     let request = crate::memory::build_read_stage_envelope_request_for_memory_config(
         session_id,
         workspace_root.as_deref(),
+        &config.memory,
     );
     let caps = BTreeSet::from([Capability::MemoryRead]);
     let outcome = kernel_ctx
@@ -16560,17 +16561,25 @@ async fn build_messages_routes_memory_context_through_kernel_when_context_provid
         crate::memory::MEMORY_OP_READ_STAGE_ENVELOPE
     );
     assert_eq!(captured[0].payload["session_id"], "session-k-window");
-    assert!(
-        captured[0].payload.get("profile").is_none(),
-        "canonical memory requests should not carry request-level profile overrides"
+    assert_eq!(
+        captured[0].payload["profile"],
+        config.memory.resolved_profile().as_str()
     );
-    assert!(
-        captured[0].payload.get("sliding_window").is_none(),
-        "canonical memory requests should not carry request-level window overrides"
+    assert_eq!(
+        captured[0].payload["system"],
+        config.memory.resolved_system().as_str()
     );
-    assert!(
-        captured[0].payload.get("summary_max_chars").is_none(),
-        "canonical memory requests should not carry request-level summary overrides"
+    assert_eq!(
+        captured[0].payload["system_id"],
+        config.memory.resolved_system_id()
+    );
+    assert_eq!(
+        captured[0].payload["sliding_window"],
+        config.memory.sliding_window
+    );
+    assert_eq!(
+        captured[0].payload["summary_max_chars"],
+        config.memory.summary_char_budget()
     );
 
     let events = audit.snapshot();

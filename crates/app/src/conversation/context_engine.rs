@@ -549,6 +549,7 @@ async fn load_stage_envelope(
         let request = memory::build_read_stage_envelope_request_for_memory_config(
             session_id,
             workspace_root.as_deref(),
+            &config.memory,
         );
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let outcome = ctx

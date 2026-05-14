@@ -567,6 +567,7 @@ pub(crate) fn build_projected_context_for_session_in_view(
                 &mut projected.prompt_fragments,
                 retrieval_outcome,
             );
+            sync_projected_prompt_fragments_into_messages(&mut projected);
         }
         Ok(projected)
     }
