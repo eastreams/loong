@@ -72,44 +72,35 @@ pub(super) async fn turn_submit(
             registry: turn_registry.clone(),
             turn_id: spawned_turn_id.clone(),
         };
-        let turn_request = mvp::agent_runtime::AgentTurnRequest {
-            message: input,
-            turn_mode: mvp::agent_runtime::AgentTurnMode::Oneshot,
-            channel_id,
-            account_id,
-            conversation_id,
-            participant_id: request.participant_id.clone(),
-            thread_id,
-            metadata,
-            live_surface_enabled: false,
-        };
         let projection_request = crate::mvp::turn_gateway::build_turn_gateway_request(
             crate::build_acp_dispatch_address(
                 session_id.as_str(),
-                turn_request.channel_id.as_deref(),
-                turn_request.conversation_id.as_deref(),
-                turn_request.account_id.as_deref(),
-                turn_request.participant_id.as_deref(),
-                turn_request.thread_id.as_deref(),
+                channel_id.as_deref(),
+                conversation_id.as_deref(),
+                account_id.as_deref(),
+                request.participant_id.as_deref(),
+                thread_id.as_deref(),
             )
             .expect("validated control-plane turn target"),
-            turn_request.message.clone(),
-            turn_request.metadata.clone(),
-            turn_request.turn_mode,
+            input.clone(),
+            metadata,
+            mvp::agent_runtime::AgentTurnMode::Oneshot,
             crate::mvp::acp::AcpRoutingIntent::Explicit,
             true,
             Vec::new(),
             working_directory.clone(),
             false,
         );
+        let (turn_request, turn_options) =
+            crate::mvp::turn_gateway::project_turn_gateway_execution(
+                &projection_request,
+                Some(&event_forwarder),
+            )
+            .expect("project control-plane turn gateway execution");
         let turn_service =
             crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
                 .with_acp_manager(acp_manager)
                 .without_runtime_environment_init();
-        let turn_options = crate::mvp::turn_gateway::build_turn_execution_options(
-            &projection_request,
-            Some(&event_forwarder),
-        );
         let execution_result = turn_service
             .execute(Some(session_id.as_str()), &turn_request, turn_options)
             .await;

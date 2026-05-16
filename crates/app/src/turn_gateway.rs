@@ -186,6 +186,15 @@ pub fn build_turn_execution_options<'a>(
     }
 }
 
+pub fn project_turn_gateway_execution<'a>(
+    request: &'a TurnGatewayRequest,
+    event_sink: Option<&'a dyn AcpTurnEventSink>,
+) -> CliResult<(AgentTurnRequest, TurnExecutionOptions<'a>)> {
+    let turn_request = build_agent_turn_request(request)?;
+    let turn_options = build_turn_execution_options(request, event_sink);
+    Ok((turn_request, turn_options))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

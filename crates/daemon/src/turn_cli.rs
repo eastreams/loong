@@ -222,12 +222,6 @@ impl AppProtocolOneshotExecutor for LegacyOneshotExecutor {
             self.resolved_path.clone(),
             self.config.clone(),
         );
-        let turn_request = mvp::agent_runtime::AgentTurnRequest {
-            message: request.message,
-            turn_mode: mvp::agent_runtime::AgentTurnMode::Oneshot,
-            metadata: std::collections::BTreeMap::new(),
-            ..Default::default()
-        };
         let projection_request = mvp::turn_gateway::build_turn_gateway_request(
             mvp::conversation::ConversationSessionAddress::from_session_id(
                 request
@@ -235,9 +229,9 @@ impl AppProtocolOneshotExecutor for LegacyOneshotExecutor {
                     .clone()
                     .unwrap_or_else(|| "default".to_owned()),
             ),
-            turn_request.message.clone(),
-            turn_request.metadata.clone(),
-            turn_request.turn_mode,
+            request.message,
+            std::collections::BTreeMap::new(),
+            mvp::agent_runtime::AgentTurnMode::Oneshot,
             if request.acp {
                 mvp::acp::AcpRoutingIntent::Explicit
             } else {
@@ -248,8 +242,9 @@ impl AppProtocolOneshotExecutor for LegacyOneshotExecutor {
             request.acp_cwd.clone(),
             false,
         );
-        let turn_options =
-            mvp::turn_gateway::build_turn_execution_options(&projection_request, None);
+        let (turn_request, turn_options) =
+            mvp::turn_gateway::project_turn_gateway_execution(&projection_request, None)
+                .expect("project turn runtime gateway execution");
         let result = turn_service
             .execute(request.session_hint.as_deref(), &turn_request, turn_options)
             .await?;
