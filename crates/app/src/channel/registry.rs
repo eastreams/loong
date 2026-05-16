@@ -738,9 +738,9 @@ pub const MATRIX_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
 
 const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "proactive send",
+    label: "bridge send",
     command: "channels send wecom",
-    availability: ChannelCatalogOperationAvailability::Implemented,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: WECOM_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -749,10 +749,10 @@ const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 
 const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "long connection reply loop",
+    label: "bridge serve",
     command: "channels serve wecom",
-    availability: ChannelCatalogOperationAvailability::Implemented,
-    tracks_runtime: true,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
     requirements: WECOM_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -1351,18 +1351,11 @@ const WECOM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: WECOM_SERVE_DOCTOR_CHECKS,
     },
 ];
-const WECOM_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::RuntimeBacked,
-    ChannelCapability::MultiAccount,
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const WECOM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure wecom aibot long connection credentials, allowed conversation ids, and optional websocket overrides in loong.toml under wecom or wecom.accounts.<account>; do not configure webhook callback mode for this surface",
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a WeCom bridge plugin that declares setup.surface=channel plus wecom bot_id, secret, allowed conversation ids, and optional websocket overrides before serving the managed bridge surface",
     status_command: "loong doctor",
-    repair_command: Some("loong doctor --fix"),
+    repair_command: None,
 };
 
 const DINGTALK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -8136,7 +8129,7 @@ mod tests {
             .expect("wecom surface");
         assert_eq!(
             wecom.catalog.implementation_status,
-            ChannelCatalogImplementationStatus::RuntimeBacked
+            ChannelCatalogImplementationStatus::PluginBacked
         );
         assert_eq!(wecom.configured_accounts.len(), 1);
         assert_eq!(

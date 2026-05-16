@@ -71,18 +71,16 @@ pub(super) const MATRIX_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const WECOM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "wecom",
-        runtime: Some(ChannelRuntimeDescriptor {
-            family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
-        }),
+        runtime: None,
         snapshot_builder: Some(build_wecom_snapshots),
         selection_order: 35,
         selection_label: "enterprise aibot",
-        blurb: "Shipped WeCom AIBot long-connection surface with proactive send and account-aware runtime state.",
-        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
-        capabilities: WECOM_CAPABILITIES,
+        blurb: "Plugin-backed WeCom surface for AIBot gateway bridges that externalize send and serve contract ownership into a managed bridge plugin.",
+        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
         label: "WeCom",
         aliases: &["wechat-work", "qywx"],
-        transport: "wecom_aibot_long_connection",
+        transport: "wecom_aibot_long_connection_or_plugin_bridge",
         onboarding: WECOM_ONBOARDING_DESCRIPTOR,
         operations: WECOM_OPERATIONS,
     };
