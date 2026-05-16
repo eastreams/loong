@@ -14,18 +14,16 @@ use super::*;
 pub(super) const TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "telegram",
-        runtime: Some(ChannelRuntimeDescriptor {
-            family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-        }),
+        runtime: None,
         snapshot_builder: Some(build_telegram_snapshots),
         selection_order: 10,
         selection_label: "personal and group chat bot",
-        blurb: "Shipped Telegram Bot API surface with direct send and reply-loop runtime support.",
-        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
-        capabilities: TELEGRAM_CAPABILITIES,
+        blurb: "Plugin-backed Telegram surface for bot API bridges that externalize direct send and reply-loop contract ownership into a managed bridge plugin.",
+        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
         label: "Telegram",
         aliases: &[],
-        transport: "telegram_bot_api_polling",
+        transport: "telegram_bot_api_polling_or_plugin_bridge",
         onboarding: TELEGRAM_ONBOARDING_DESCRIPTOR,
         operations: TELEGRAM_OPERATIONS,
     };

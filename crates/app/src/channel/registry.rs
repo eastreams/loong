@@ -267,9 +267,9 @@ pub(crate) struct ChannelRegistryDescriptor {
 
 const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "direct send",
+    label: "bridge send",
     command: "channels send telegram",
-    availability: ChannelCatalogOperationAvailability::Implemented,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: TELEGRAM_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -278,10 +278,10 @@ const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
 
 const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "reply loop",
+    label: "bridge serve",
     command: "channels serve telegram",
-    availability: ChannelCatalogOperationAvailability::Implemented,
-    tracks_runtime: true,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
     requirements: TELEGRAM_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -386,18 +386,11 @@ const TELEGRAM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: TELEGRAM_SERVE_DOCTOR_CHECKS,
     },
 ];
-const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::RuntimeBacked,
-    ChannelCapability::MultiAccount,
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure telegram bot credentials, allowed chat ids, and optional mention gating in loong.toml under telegram or telegram.accounts.<account>",
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a Telegram bridge plugin that declares setup.surface=channel plus telegram bot credentials, allowed chat ids, and optional mention gating before serving the managed bridge surface",
     status_command: "loong doctor",
-    repair_command: Some("loong doctor --fix"),
+    repair_command: None,
 };
 
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -7985,6 +7978,10 @@ mod tests {
             .iter()
             .find(|surface| surface.catalog.id == "telegram")
             .expect("telegram surface");
+        assert_eq!(
+            telegram.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::PluginBacked
+        );
         assert_eq!(telegram.configured_accounts.len(), 1);
         assert_eq!(
             telegram.default_configured_account_id.as_deref(),

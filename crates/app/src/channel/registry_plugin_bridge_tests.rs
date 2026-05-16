@@ -239,7 +239,22 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
     let wecom = resolve_channel_catalog_entry("wecom").expect("wecom entry");
     let onebot = resolve_channel_catalog_entry("onebot").expect("onebot entry");
 
-    assert_eq!(telegram.plugin_bridge_contract, None);
+    let telegram_contract = telegram
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("telegram plugin bridge contract");
+    assert_eq!(
+        telegram
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
+    assert_eq!(telegram_contract.manifest_channel_id, "telegram");
 
     let weixin_contract = weixin
         .plugin_bridge_contract
@@ -361,6 +376,7 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
 
 #[test]
 fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
+    let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
     let weixin = resolve_channel_catalog_entry("wechat").expect("weixin entry");
     let matrix = resolve_channel_catalog_entry("matrix").expect("matrix entry");
     let line = resolve_channel_catalog_entry("line").expect("line entry");
@@ -368,6 +384,10 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
     let wecom = resolve_channel_catalog_entry("qywx").expect("wecom entry");
     let onebot = resolve_channel_catalog_entry("onebot-v11").expect("onebot entry");
 
+    let telegram_contract = telegram
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("telegram plugin bridge contract");
     let weixin_contract = weixin
         .plugin_bridge_contract
         .as_ref()
@@ -392,6 +412,19 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         .plugin_bridge_contract
         .as_ref()
         .expect("onebot plugin bridge contract");
+
+    assert_eq!(
+        telegram_contract
+            .stable_targets
+            .iter()
+            .map(|target| { (target.template, target.target_kind, target.description,) })
+            .collect::<Vec<_>>(),
+        vec![(
+            "telegram:<account>:chat:<chat_id>",
+            ChannelCatalogTargetKind::Conversation,
+            "Telegram chat id for bridged direct or group conversation routing",
+        )]
+    );
 
     assert_eq!(
         weixin_contract
@@ -493,6 +526,14 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
 
 #[test]
 fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
+    let telegram_manifest = sample_channel_bridge_manifest(Some("telegram"), Some("channel"));
+    let telegram_validation = validate_plugin_channel_bridge_manifest(&telegram_manifest)
+        .expect("telegram plugin bridge validation");
+    assert_eq!(
+        telegram_validation.status,
+        ChannelPluginBridgeManifestStatus::Compatible
+    );
+
     let compatible_manifest = sample_channel_bridge_manifest(Some("weixin"), Some("channel"));
     let compatible_validation = validate_plugin_channel_bridge_manifest(&compatible_manifest)
         .expect("compatible channel bridge validation");
@@ -530,7 +571,7 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
             .expect("runtime-backed channel validation");
     assert_eq!(
         runtime_backed_validation.status,
-        ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
+        ChannelPluginBridgeManifestStatus::Compatible
     );
 
     let qqbot_manifest = sample_channel_bridge_manifest(Some("qqbot"), Some("channel"));
