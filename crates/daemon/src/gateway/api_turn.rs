@@ -140,22 +140,17 @@ pub(crate) async fn handle_turn(
             .map(|sink| sink as &dyn crate::mvp::acp::AcpTurnEventSink),
         initialize_runtime_environment: false,
     };
-    let turn_request = crate::mvp::turn_gateway::TurnGatewayRequest {
+    let turn_request = crate::mvp::turn_gateway::build_turn_gateway_request(
         address,
-        message: turn_request.input.clone(),
-        metadata: turn_request.metadata.clone(),
-        turn_mode: crate::mvp::agent_runtime::AgentTurnMode::Oneshot,
-        acp_routing_intent: crate::mvp::acp::AcpRoutingIntent::Explicit,
-        acp_event_stream: event_sink.is_some(),
-        acp_bootstrap_mcp_servers: Vec::new(),
-        acp_cwd: working_directory,
-        live_surface_enabled: false,
-        ingress: None,
-        observer: None,
-        provenance: crate::mvp::turn_gateway::TurnGatewayProvenance::default(),
-        provider_error_mode: crate::mvp::conversation::ProviderErrorMode::InlineMessage,
-        retry_progress: None,
-    };
+        turn_request.input.clone(),
+        turn_request.metadata.clone(),
+        crate::mvp::agent_runtime::AgentTurnMode::Oneshot,
+        crate::mvp::acp::AcpRoutingIntent::Explicit,
+        event_sink.is_some(),
+        Vec::new(),
+        working_directory,
+        false,
+    );
     let result = crate::mvp::turn_gateway::run_turn_gateway(execution, turn_request).await;
 
     match result {
