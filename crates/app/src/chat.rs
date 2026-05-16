@@ -510,15 +510,15 @@ pub async fn run_cli_ask(
     let acp_event_printer = options
         .acp_event_stream
         .then(|| JsonlAcpTurnEventSink::stderr_with_prefix("acp-event> "));
-    let assistant_text = run_cli_turn(
-        &runtime,
-        input,
+    let acp_options = build_cli_chat_acp_turn_options(
+        options,
         acp_event_printer
             .as_ref()
             .map(|printer| printer as &dyn AcpTurnEventSink),
-        false,
-    )
-    .await?;
+        None,
+        AcpTurnProvenance::default(),
+    );
+    let assistant_text = run_cli_turn(&runtime, input, &acp_options, false).await?;
     println!("{assistant_text}");
     Ok(())
 }
@@ -559,16 +559,15 @@ fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult
 pub(crate) async fn run_cli_turn(
     runtime: &CliTurnRuntime,
     input: &str,
-    event_sink: Option<&dyn AcpTurnEventSink>,
+    acp_options: &AcpConversationTurnOptions<'_>,
     live_surface_enabled: bool,
 ) -> CliResult<String> {
     run_cli_turn_with_address(
         runtime,
         &runtime.session_address,
         input,
-        event_sink,
+        acp_options,
         live_surface_enabled,
-        None,
         None,
     )
     .await
@@ -578,20 +577,17 @@ pub(crate) async fn run_cli_turn_with_address(
     runtime: &CliTurnRuntime,
     address: &ConversationSessionAddress,
     input: &str,
-    event_sink: Option<&dyn AcpTurnEventSink>,
+    acp_options: &AcpConversationTurnOptions<'_>,
     live_surface_enabled: bool,
-    metadata: Option<&BTreeMap<String, String>>,
     observer_override: Option<ConversationTurnObserverHandle>,
 ) -> CliResult<String> {
     run_cli_turn_with_address_and_ingress_and_error_mode(
         runtime,
         address,
         input,
-        event_sink,
+        acp_options,
         live_surface_enabled,
-        metadata,
         None,
-        AcpTurnProvenance::default(),
         ProviderErrorMode::InlineMessage,
         observer_override,
         None,
@@ -604,11 +600,9 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
     runtime: &CliTurnRuntime,
     address: &ConversationSessionAddress,
     input: &str,
-    event_sink: Option<&dyn AcpTurnEventSink>,
+    acp_options: &AcpConversationTurnOptions<'_>,
     live_surface_enabled: bool,
-    metadata: Option<&BTreeMap<String, String>>,
     ingress: Option<&ConversationIngressContext>,
-    provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
@@ -618,11 +612,9 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
         runtime,
         address,
         input,
-        event_sink,
+        acp_options,
         live_surface_enabled,
-        metadata,
         ingress,
-        provenance,
         provider_error_mode,
         observer_override,
         retry_progress,
@@ -636,30 +628,15 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     runtime: &CliTurnRuntime,
     address: &ConversationSessionAddress,
     input: &str,
-    event_sink: Option<&dyn AcpTurnEventSink>,
+    acp_options: &AcpConversationTurnOptions<'_>,
     live_surface_enabled: bool,
-    metadata: Option<&BTreeMap<String, String>>,
     ingress: Option<&ConversationIngressContext>,
-    provenance: AcpTurnProvenance<'_>,
     provider_error_mode: ProviderErrorMode,
     observer_override: Option<ConversationTurnObserverHandle>,
     retry_progress: crate::provider::ProviderRetryProgressCallback,
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
-    let acp_options = if event_sink.is_some()
-        || !runtime.effective_bootstrap_mcp_servers.is_empty()
-        || runtime.effective_working_directory.is_some()
-    {
-        AcpConversationTurnOptions::explicit()
-    } else {
-        AcpConversationTurnOptions::automatic()
-    }
-    .with_event_sink(event_sink)
-    .with_additional_bootstrap_mcp_servers(&runtime.effective_bootstrap_mcp_servers)
-    .with_working_directory(runtime.effective_working_directory.as_deref())
-    .with_metadata(metadata)
-    .with_provenance(provenance);
     let live_surface_observer = if let Some(observer) = observer_override {
         Some(observer)
     } else if live_surface_enabled {
@@ -677,7 +654,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 address,
                 input,
                 provider_error_mode,
-                &acp_options,
+                acp_options,
                 binding,
                 Some(ingress),
                 live_surface_observer,
@@ -709,7 +686,7 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
                 input,
                 provider_error_mode,
                 &hosted_runtime,
-                &acp_options,
+                acp_options,
                 binding,
                 None,
                 live_surface_observer,
@@ -718,6 +695,24 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
             )
             .await
     }
+}
+
+fn build_cli_chat_acp_turn_options<'a>(
+    options: &'a CliChatOptions,
+    event_sink: Option<&'a dyn AcpTurnEventSink>,
+    metadata: Option<&'a BTreeMap<String, String>>,
+    provenance: AcpTurnProvenance<'a>,
+) -> AcpConversationTurnOptions<'a> {
+    let base = if options.requests_explicit_acp() {
+        AcpConversationTurnOptions::explicit()
+    } else {
+        AcpConversationTurnOptions::automatic()
+    };
+    base.with_event_sink(event_sink)
+        .with_additional_bootstrap_mcp_servers(&options.acp_bootstrap_mcp_servers)
+        .with_working_directory(options.acp_working_directory.as_deref())
+        .with_metadata(metadata)
+        .with_provenance(provenance)
 }
 
 fn reload_cli_turn_config(config: &LoongConfig, resolved_path: &Path) -> CliResult<LoongConfig> {
