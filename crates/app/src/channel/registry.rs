@@ -395,9 +395,9 @@ const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboa
 
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "direct send",
-    command: "feishu send",
-    availability: ChannelCatalogOperationAvailability::Implemented,
+    label: "bridge send",
+    command: "channels send feishu",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: FEISHU_SEND_REQUIREMENTS,
     default_target_kind: Some(ChannelCatalogTargetKind::ReceiveId),
@@ -409,10 +409,10 @@ const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 
 const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "inbound reply service",
-    command: "feishu serve",
-    availability: ChannelCatalogOperationAvailability::Implemented,
-    tracks_runtime: true,
+    label: "bridge serve",
+    command: "channels serve feishu",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
     requirements: FEISHU_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::MessageReply],
@@ -557,18 +557,11 @@ const FEISHU_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: FEISHU_SERVE_DOCTOR_CHECKS,
     },
 ];
-const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::RuntimeBacked,
-    ChannelCapability::MultiAccount,
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::QrRegistration,
-    setup_hint: "run `loong feishu onboard` to create Feishu or Lark bot credentials from an in-terminal QR flow and persist them under feishu or feishu.accounts.<account>; `loong feishu onboard --manual --app-id ... --app-secret ...` remains available for manual credential handoff, and webhook mode still requires verification_token plus encrypt_key",
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a Feishu/Lark bridge plugin that declares setup.surface=channel plus app credentials, allowed chat ids, serve mode, and any webhook verification inputs before serving the managed bridge surface",
     status_command: "loong doctor",
-    repair_command: Some("loong feishu onboard"),
+    repair_command: None,
 };
 
 pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -6511,7 +6504,7 @@ mod tests {
 
         assert_eq!(
             feishu.implementation_status,
-            ChannelCatalogImplementationStatus::RuntimeBacked
+            ChannelCatalogImplementationStatus::PluginBacked
         );
         assert_eq!(feishu.aliases, vec!["lark"]);
         assert_eq!(feishu.operations.len(), 2);

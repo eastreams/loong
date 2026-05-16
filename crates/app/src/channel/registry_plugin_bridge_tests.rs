@@ -232,6 +232,7 @@ fn metadata_only_channel_bridge_manifest_is_discovery_ready_without_runtime_meta
 #[test]
 fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
     let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
+    let feishu = resolve_channel_catalog_entry("feishu").expect("feishu entry");
     let weixin = resolve_channel_catalog_entry("weixin").expect("weixin entry");
     let matrix = resolve_channel_catalog_entry("matrix").expect("matrix entry");
     let line = resolve_channel_catalog_entry("line").expect("line entry");
@@ -255,6 +256,23 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
         ]
     );
     assert_eq!(telegram_contract.manifest_channel_id, "telegram");
+
+    let feishu_contract = feishu
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("feishu plugin bridge contract");
+    assert_eq!(
+        feishu
+            .operations
+            .iter()
+            .map(|operation| operation.availability)
+            .collect::<Vec<_>>(),
+        vec![
+            ChannelCatalogOperationAvailability::ManagedBridge,
+            ChannelCatalogOperationAvailability::ManagedBridge,
+        ]
+    );
+    assert_eq!(feishu_contract.manifest_channel_id, "feishu");
 
     let weixin_contract = weixin
         .plugin_bridge_contract
@@ -377,6 +395,7 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
 #[test]
 fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
     let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
+    let feishu = resolve_channel_catalog_entry("lark").expect("feishu entry");
     let weixin = resolve_channel_catalog_entry("wechat").expect("weixin entry");
     let matrix = resolve_channel_catalog_entry("matrix").expect("matrix entry");
     let line = resolve_channel_catalog_entry("line").expect("line entry");
@@ -388,6 +407,10 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
         .plugin_bridge_contract
         .as_ref()
         .expect("telegram plugin bridge contract");
+    let feishu_contract = feishu
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("feishu plugin bridge contract");
     let weixin_contract = weixin
         .plugin_bridge_contract
         .as_ref()
@@ -423,6 +446,19 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
             "telegram:<account>:chat:<chat_id>",
             ChannelCatalogTargetKind::Conversation,
             "Telegram chat id for bridged direct or group conversation routing",
+        )]
+    );
+
+    assert_eq!(
+        feishu_contract
+            .stable_targets
+            .iter()
+            .map(|target| { (target.template, target.target_kind, target.description,) })
+            .collect::<Vec<_>>(),
+        vec![(
+            "feishu:<account>:receive:<open_id_or_union_id>",
+            ChannelCatalogTargetKind::Conversation,
+            "Feishu or Lark receive_id for bridged direct or group conversation routing",
         )]
     );
 
@@ -531,6 +567,14 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
         .expect("telegram plugin bridge validation");
     assert_eq!(
         telegram_validation.status,
+        ChannelPluginBridgeManifestStatus::Compatible
+    );
+
+    let feishu_manifest = sample_channel_bridge_manifest(Some("feishu"), Some("channel"));
+    let feishu_validation = validate_plugin_channel_bridge_manifest(&feishu_manifest)
+        .expect("feishu plugin bridge validation");
+    assert_eq!(
+        feishu_validation.status,
         ChannelPluginBridgeManifestStatus::Compatible
     );
 

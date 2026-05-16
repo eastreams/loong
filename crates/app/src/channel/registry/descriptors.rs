@@ -31,18 +31,16 @@ pub(super) const TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor
 pub(super) const FEISHU_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "feishu",
-        runtime: Some(ChannelRuntimeDescriptor {
-            family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
-        }),
+        runtime: None,
         snapshot_builder: Some(build_feishu_snapshots),
         selection_order: 20,
         selection_label: "enterprise chat app",
-        blurb: "Shipped Feishu/Lark app surface with webhook or websocket ingress and account-aware runtime state.",
-        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
-        capabilities: FEISHU_CAPABILITIES,
+        blurb: "Plugin-backed Feishu/Lark surface for app bridges that externalize send and inbound reply-loop contract ownership into a managed bridge plugin.",
+        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
         label: "Feishu/Lark",
         aliases: &["lark"],
-        transport: "feishu_openapi_webhook_or_websocket",
+        transport: "feishu_openapi_webhook_or_websocket_or_plugin_bridge",
         onboarding: FEISHU_ONBOARDING_DESCRIPTOR,
         operations: FEISHU_OPERATIONS,
     };

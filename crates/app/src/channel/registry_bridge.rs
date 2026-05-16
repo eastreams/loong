@@ -421,6 +421,13 @@ const TELEGRAM_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] 
         description: "Telegram chat id for bridged direct or group conversation routing",
     }];
 
+const FEISHU_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] =
+    &[ChannelPluginBridgeStableTarget {
+        template: "feishu:<account>:receive:<open_id_or_union_id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "Feishu or Lark receive_id for bridged direct or group conversation routing",
+    }];
+
 const WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
     ChannelPluginBridgeStableTarget {
         template: "weixin:<account>:contact:<id>",
@@ -683,6 +690,7 @@ pub(super) fn plugin_bridge_stable_targets_for_channel_id(
 ) -> &'static [ChannelPluginBridgeStableTarget] {
     match channel_id {
         "telegram" => TELEGRAM_PLUGIN_BRIDGE_STABLE_TARGETS,
+        "feishu" => FEISHU_PLUGIN_BRIDGE_STABLE_TARGETS,
         "weixin" => WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS,
         "qqbot" => QQBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
         "line" => LINE_PLUGIN_BRIDGE_STABLE_TARGETS,
