@@ -90,19 +90,23 @@ pub async fn run_turn_gateway(
     if !execution.initialize_runtime_environment {
         turn_service = turn_service.without_runtime_environment_init();
     }
-    let ingress = ingress.as_ref();
-    let turn_options = TurnExecutionOptions {
-        event_sink: execution.event_sink,
-        observer,
-        ingress,
-        provenance: provenance.as_acp_turn_provenance(),
-        provider_error_mode,
-        retry_progress,
+    let projection_request = TurnGatewayRequest {
+        address: ConversationSessionAddress::from_session_id(session_hint.as_str()),
+        message: String::new(),
+        metadata: BTreeMap::new(),
+        turn_mode: AgentTurnMode::Oneshot,
         acp_routing_intent,
         acp_event_stream,
         acp_bootstrap_mcp_servers,
-        acp_working_directory: acp_cwd.map(PathBuf::from),
+        acp_cwd,
+        live_surface_enabled: false,
+        ingress,
+        observer,
+        provenance,
+        provider_error_mode,
+        retry_progress,
     };
+    let turn_options = build_turn_execution_options(&projection_request, execution.event_sink);
 
     turn_service
         .execute(
@@ -121,7 +125,7 @@ fn session_hint(session_id: &str) -> CliResult<&str> {
     Ok(session_id)
 }
 
-fn build_agent_turn_request(request: &TurnGatewayRequest) -> CliResult<AgentTurnRequest> {
+pub fn build_agent_turn_request(request: &TurnGatewayRequest) -> CliResult<AgentTurnRequest> {
     session_hint(request.address.session_id.as_str())?;
     if request.message.trim().is_empty() {
         return Err("agent runtime message must not be empty".to_owned());
@@ -138,6 +142,24 @@ fn build_agent_turn_request(request: &TurnGatewayRequest) -> CliResult<AgentTurn
         metadata: request.metadata.clone(),
         live_surface_enabled: request.live_surface_enabled,
     })
+}
+
+pub fn build_turn_execution_options<'a>(
+    request: &'a TurnGatewayRequest,
+    event_sink: Option<&'a dyn AcpTurnEventSink>,
+) -> TurnExecutionOptions<'a> {
+    TurnExecutionOptions {
+        event_sink,
+        observer: request.observer.clone(),
+        ingress: request.ingress.as_ref(),
+        provenance: request.provenance.as_acp_turn_provenance(),
+        provider_error_mode: request.provider_error_mode,
+        retry_progress: request.retry_progress.clone(),
+        acp_routing_intent: request.acp_routing_intent,
+        acp_event_stream: request.acp_event_stream,
+        acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
+        acp_working_directory: request.acp_cwd.clone().map(PathBuf::from),
+    }
 }
 
 #[cfg(test)]
@@ -201,5 +223,48 @@ mod tests {
 
         let error = build_agent_turn_request(&request).expect_err("empty session id should fail");
         assert_eq!(error, "turn gateway requires a non-empty session id");
+    }
+
+    #[test]
+    fn build_turn_execution_options_projects_acp_adapter_inputs() {
+        let request = TurnGatewayRequest {
+            address: ConversationSessionAddress::from_session_id("session-1"),
+            message: "hello".to_owned(),
+            metadata: BTreeMap::new(),
+            turn_mode: AgentTurnMode::Oneshot,
+            acp_routing_intent: crate::acp::AcpRoutingIntent::Explicit,
+            acp_event_stream: true,
+            acp_bootstrap_mcp_servers: vec!["filesystem".to_owned(), "search".to_owned()],
+            acp_cwd: Some("/workspace/project".to_owned()),
+            live_surface_enabled: false,
+            ingress: None,
+            observer: None,
+            provenance: TurnGatewayProvenance {
+                trace_id: Some("trace-1".to_owned()),
+                source_message_id: Some("message-2".to_owned()),
+                ack_cursor: Some("cursor-3".to_owned()),
+            },
+            provider_error_mode: ProviderErrorMode::InlineMessage,
+            retry_progress: None,
+        };
+
+        let options = build_turn_execution_options(&request, None);
+
+        assert_eq!(
+            options.acp_routing_intent,
+            crate::acp::AcpRoutingIntent::Explicit
+        );
+        assert!(options.acp_event_stream);
+        assert_eq!(
+            options.acp_bootstrap_mcp_servers,
+            vec!["filesystem".to_owned(), "search".to_owned()]
+        );
+        assert_eq!(
+            options.acp_working_directory,
+            Some(PathBuf::from("/workspace/project"))
+        );
+        assert_eq!(options.provenance.trace_id, Some("trace-1"));
+        assert_eq!(options.provenance.source_message_id, Some("message-2"));
+        assert_eq!(options.provenance.ack_cursor, Some("cursor-3"));
     }
 }

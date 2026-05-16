@@ -101,20 +101,36 @@ impl HarnessAdapter for EmbeddedAgentHarness {
                 loong_app::agent_runtime::AgentTurnMode::Interactive
             ),
         };
-        let turn_service =
-            loong_app::agent_runtime::load_turn_execution_service(payload.config_path.as_deref())
-                .map_err(HarnessError::Execution)?;
-        let turn_options = loong_app::agent_runtime::TurnExecutionOptions {
+        let projection_request = loong_app::turn_gateway::TurnGatewayRequest {
+            address: loong_app::conversation::ConversationSessionAddress::from_session_id(
+                payload
+                    .session_hint
+                    .clone()
+                    .unwrap_or_else(|| "default".to_owned()),
+            ),
+            message: turn_request.message.clone(),
+            metadata: turn_request.metadata.clone(),
+            turn_mode: turn_request.turn_mode,
             acp_routing_intent: if payload.acp {
                 loong_app::acp::AcpRoutingIntent::Explicit
             } else {
                 loong_app::acp::AcpRoutingIntent::Automatic
             },
             acp_event_stream: payload.acp_event_stream,
-            acp_bootstrap_mcp_servers: payload.acp_bootstrap_mcp_servers,
-            acp_working_directory: payload.acp_cwd.map(std::path::PathBuf::from),
-            ..loong_app::agent_runtime::TurnExecutionOptions::default()
+            acp_bootstrap_mcp_servers: payload.acp_bootstrap_mcp_servers.clone(),
+            acp_cwd: payload.acp_cwd.clone(),
+            live_surface_enabled: turn_request.live_surface_enabled,
+            ingress: None,
+            observer: None,
+            provenance: loong_app::turn_gateway::TurnGatewayProvenance::default(),
+            provider_error_mode: loong_app::conversation::ProviderErrorMode::InlineMessage,
+            retry_progress: None,
         };
+        let turn_service =
+            loong_app::agent_runtime::load_turn_execution_service(payload.config_path.as_deref())
+                .map_err(HarnessError::Execution)?;
+        let turn_options =
+            loong_app::turn_gateway::build_turn_execution_options(&projection_request, None);
         let turn_result = turn_service
             .execute(payload.session_hint.as_deref(), &turn_request, turn_options)
             .await

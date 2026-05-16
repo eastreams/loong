@@ -228,17 +228,33 @@ impl AppProtocolOneshotExecutor for LegacyOneshotExecutor {
             metadata: std::collections::BTreeMap::new(),
             ..Default::default()
         };
-        let turn_options = mvp::agent_runtime::TurnExecutionOptions {
+        let projection_request = mvp::turn_gateway::TurnGatewayRequest {
+            address: mvp::conversation::ConversationSessionAddress::from_session_id(
+                request
+                    .session_hint
+                    .clone()
+                    .unwrap_or_else(|| "default".to_owned()),
+            ),
+            message: turn_request.message.clone(),
+            metadata: turn_request.metadata.clone(),
+            turn_mode: turn_request.turn_mode,
             acp_routing_intent: if request.acp {
                 mvp::acp::AcpRoutingIntent::Explicit
             } else {
                 mvp::acp::AcpRoutingIntent::Automatic
             },
             acp_event_stream: request.acp_event_stream,
-            acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers,
-            acp_working_directory: request.acp_cwd.map(PathBuf::from),
-            ..mvp::agent_runtime::TurnExecutionOptions::default()
+            acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
+            acp_cwd: request.acp_cwd.clone(),
+            live_surface_enabled: false,
+            ingress: None,
+            observer: None,
+            provenance: mvp::turn_gateway::TurnGatewayProvenance::default(),
+            provider_error_mode: mvp::conversation::ProviderErrorMode::InlineMessage,
+            retry_progress: None,
         };
+        let turn_options =
+            mvp::turn_gateway::build_turn_execution_options(&projection_request, None);
         let result = turn_service
             .execute(request.session_hint.as_deref(), &turn_request, turn_options)
             .await?;

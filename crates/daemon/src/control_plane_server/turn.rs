@@ -83,17 +83,38 @@ pub(super) async fn turn_submit(
             metadata,
             live_surface_enabled: false,
         };
+        let projection_request = crate::mvp::turn_gateway::TurnGatewayRequest {
+            address: crate::build_acp_dispatch_address(
+                session_id.as_str(),
+                turn_request.channel_id.as_deref(),
+                turn_request.conversation_id.as_deref(),
+                turn_request.account_id.as_deref(),
+                turn_request.participant_id.as_deref(),
+                turn_request.thread_id.as_deref(),
+            )
+            .expect("validated control-plane turn target"),
+            message: turn_request.message.clone(),
+            metadata: turn_request.metadata.clone(),
+            turn_mode: turn_request.turn_mode,
+            acp_routing_intent: crate::mvp::acp::AcpRoutingIntent::Explicit,
+            acp_event_stream: true,
+            acp_bootstrap_mcp_servers: Vec::new(),
+            acp_cwd: working_directory.clone(),
+            live_surface_enabled: false,
+            ingress: None,
+            observer: None,
+            provenance: crate::mvp::turn_gateway::TurnGatewayProvenance::default(),
+            provider_error_mode: crate::mvp::conversation::ProviderErrorMode::InlineMessage,
+            retry_progress: None,
+        };
         let turn_service =
             crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
                 .with_acp_manager(acp_manager)
                 .without_runtime_environment_init();
-        let turn_options = crate::mvp::agent_runtime::TurnExecutionOptions {
-            event_sink: Some(&event_forwarder),
-            acp_routing_intent: crate::mvp::acp::AcpRoutingIntent::Explicit,
-            acp_event_stream: true,
-            acp_working_directory: working_directory.map(std::path::PathBuf::from),
-            ..Default::default()
-        };
+        let turn_options = crate::mvp::turn_gateway::build_turn_execution_options(
+            &projection_request,
+            Some(&event_forwarder),
+        );
         let execution_result = turn_service
             .execute(Some(session_id.as_str()), &turn_request, turn_options)
             .await;
