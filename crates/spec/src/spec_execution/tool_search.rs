@@ -12,9 +12,9 @@ use serde_json::Value;
 
 use super::descriptor_bridge_kind;
 use crate::spec_runtime::{
-    ToolSearchEntry, ToolSearchOperationSummary, ToolSearchOperationSummaryEntry, ToolSearchResult,
-    ToolSearchTrustFilterSummary, detect_provider_bridge_kind,
-    provider_plugin_activation_attestation_result,
+    ToolSearchChannelBridgeSnapshot, ToolSearchEntry, ToolSearchOperationSummary,
+    ToolSearchOperationSummaryEntry, ToolSearchResult, ToolSearchTrustFilterSummary,
+    detect_provider_bridge_kind, provider_plugin_activation_attestation_result,
 };
 
 #[derive(Debug)]
@@ -525,11 +525,13 @@ pub(super) fn execute_tool_search(
                 setup_default_env_var,
                 setup_docs_urls,
                 setup_remediation,
-                channel_bridge_transport_family,
-                channel_bridge_target_contract,
-                channel_bridge_account_scope,
-                channel_bridge_ready,
-                channel_bridge_missing_fields,
+                channel_bridge: ToolSearchChannelBridgeSnapshot {
+                    transport_family: channel_bridge_transport_family,
+                    target_contract: channel_bridge_target_contract,
+                    account_scope: channel_bridge_account_scope,
+                    ready: channel_bridge_ready,
+                    missing_fields: channel_bridge_missing_fields,
+                },
                 setup_ready: true,
                 missing_required_env_vars: Vec::new(),
                 missing_required_config_keys: Vec::new(),
@@ -703,11 +705,13 @@ pub(super) fn execute_tool_search(
                         .setup
                         .as_ref()
                         .and_then(|setup| setup.remediation.clone()),
-                    channel_bridge_transport_family: channel_bridge_transport_family.clone(),
-                    channel_bridge_target_contract: channel_bridge_target_contract.clone(),
-                    channel_bridge_account_scope: channel_bridge_account_scope.clone(),
-                    channel_bridge_ready,
-                    channel_bridge_missing_fields: channel_bridge_missing_fields.clone(),
+                    channel_bridge: ToolSearchChannelBridgeSnapshot {
+                        transport_family: channel_bridge_transport_family.clone(),
+                        target_contract: channel_bridge_target_contract.clone(),
+                        account_scope: channel_bridge_account_scope.clone(),
+                        ready: channel_bridge_ready,
+                        missing_fields: channel_bridge_missing_fields.clone(),
+                    },
                     setup_ready: true,
                     missing_required_env_vars: Vec::new(),
                     missing_required_config_keys: Vec::new(),
@@ -906,20 +910,20 @@ pub(super) fn execute_tool_search(
                     .as_ref()
                     .and_then(|setup| setup.remediation.clone());
             }
-            if entry.channel_bridge_transport_family.is_none() {
-                entry.channel_bridge_transport_family = channel_bridge_transport_family.clone();
+            if entry.channel_bridge.transport_family.is_none() {
+                entry.channel_bridge.transport_family = channel_bridge_transport_family.clone();
             }
-            if entry.channel_bridge_target_contract.is_none() {
-                entry.channel_bridge_target_contract = channel_bridge_target_contract.clone();
+            if entry.channel_bridge.target_contract.is_none() {
+                entry.channel_bridge.target_contract = channel_bridge_target_contract.clone();
             }
-            if entry.channel_bridge_account_scope.is_none() {
-                entry.channel_bridge_account_scope = channel_bridge_account_scope.clone();
+            if entry.channel_bridge.account_scope.is_none() {
+                entry.channel_bridge.account_scope = channel_bridge_account_scope.clone();
             }
-            if entry.channel_bridge_ready.is_none() {
-                entry.channel_bridge_ready = channel_bridge_ready;
+            if entry.channel_bridge.ready.is_none() {
+                entry.channel_bridge.ready = channel_bridge_ready;
             }
-            if entry.channel_bridge_missing_fields.is_empty() {
-                entry.channel_bridge_missing_fields = channel_bridge_missing_fields.clone();
+            if entry.channel_bridge.missing_fields.is_empty() {
+                entry.channel_bridge.missing_fields = channel_bridge_missing_fields.clone();
             }
             if entry.input_examples.is_empty() {
                 entry.input_examples = manifest.input_examples.clone();
@@ -1025,11 +1029,7 @@ pub(super) fn execute_tool_search(
             setup_default_env_var: entry.setup_default_env_var,
             setup_docs_urls: entry.setup_docs_urls,
             setup_remediation: entry.setup_remediation,
-            channel_bridge_transport_family: entry.channel_bridge_transport_family,
-            channel_bridge_target_contract: entry.channel_bridge_target_contract,
-            channel_bridge_account_scope: entry.channel_bridge_account_scope,
-            channel_bridge_ready: entry.channel_bridge_ready,
-            channel_bridge_missing_fields: entry.channel_bridge_missing_fields,
+            channel_bridge: entry.channel_bridge,
             setup_ready: entry.setup_ready,
             missing_required_env_vars: entry.missing_required_env_vars,
             missing_required_config_keys: entry.missing_required_config_keys,
@@ -1542,22 +1542,26 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
         .unwrap_or_default()
         .to_ascii_lowercase();
     let channel_bridge_transport_family = entry
-        .channel_bridge_transport_family
+        .channel_bridge
+        .transport_family
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
     let channel_bridge_target_contract = entry
-        .channel_bridge_target_contract
+        .channel_bridge
+        .target_contract
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
     let channel_bridge_account_scope = entry
-        .channel_bridge_account_scope
+        .channel_bridge
+        .account_scope
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
     let channel_bridge_missing_fields = entry
-        .channel_bridge_missing_fields
+        .channel_bridge
+        .missing_fields
         .join(" ")
         .to_ascii_lowercase();
     let tags: Vec<String> = entry
@@ -2741,19 +2745,19 @@ mod tests {
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].channel_id.as_deref(), Some("weixin"));
         assert_eq!(
-            report.results[0].channel_bridge_transport_family.as_deref(),
+            report.results[0].channel_bridge.transport_family.as_deref(),
             Some("wechat_clawbot_ilink_bridge")
         );
         assert_eq!(
-            report.results[0].channel_bridge_target_contract.as_deref(),
+            report.results[0].channel_bridge.target_contract.as_deref(),
             Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
         );
         assert_eq!(
-            report.results[0].channel_bridge_account_scope.as_deref(),
+            report.results[0].channel_bridge.account_scope.as_deref(),
             Some("multi_account")
         );
-        assert_eq!(report.results[0].channel_bridge_ready, Some(true));
-        assert!(report.results[0].channel_bridge_missing_fields.is_empty());
+        assert_eq!(report.results[0].channel_bridge.ready, Some(true));
+        assert!(report.results[0].channel_bridge.missing_fields.is_empty());
     }
 
     #[test]
@@ -2789,9 +2793,9 @@ mod tests {
         );
 
         assert_eq!(report.results.len(), 1);
-        assert_eq!(report.results[0].channel_bridge_ready, Some(false));
+        assert_eq!(report.results[0].channel_bridge.ready, Some(false));
         assert_eq!(
-            report.results[0].channel_bridge_missing_fields,
+            report.results[0].channel_bridge.missing_fields,
             vec![
                 "metadata.transport_family".to_owned(),
                 "metadata.target_contract".to_owned(),
