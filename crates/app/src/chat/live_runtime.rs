@@ -33,7 +33,6 @@ pub(super) type CliChatLiveSurfaceRerender = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CliChatLiveSurfaceRenderMode {
-    Card,
     Compact,
 }
 
@@ -160,37 +159,6 @@ pub(super) struct CliChatLiveSurfaceObserver {
     state: StdMutex<CliChatLiveSurfaceState>,
 }
 
-pub(super) fn build_cli_chat_live_surface_observer(
-    render_width: usize,
-) -> ConversationTurnObserverHandle {
-    let render_sink: CliChatLiveSurfaceSink = Arc::new(|payload| {
-        print_rendered_cli_chat_lines(&payload.lines);
-    });
-    build_cli_chat_live_surface_observer_with_sink(render_width, render_sink)
-}
-
-pub(super) fn build_cli_chat_live_surface_observer_with_sink(
-    render_width: usize,
-    render_sink: CliChatLiveSurfaceSink,
-) -> ConversationTurnObserverHandle {
-    build_cli_chat_live_surface_observer_with_dynamic_width_sink(
-        Arc::new(AtomicUsize::new(render_width.max(1))),
-        render_sink,
-    )
-}
-
-pub(super) fn build_cli_chat_live_surface_observer_with_dynamic_width_sink(
-    render_width: Arc<AtomicUsize>,
-    render_sink: CliChatLiveSurfaceSink,
-) -> ConversationTurnObserverHandle {
-    let observer = CliChatLiveSurfaceObserver::new_with_mode(
-        render_width,
-        render_sink,
-        CliChatLiveSurfaceRenderMode::Card,
-    );
-    Arc::new(observer)
-}
-
 #[allow(dead_code)]
 pub(super) fn build_cli_chat_live_compact_observer_with_sink(
     render_width: usize,
@@ -237,7 +205,7 @@ impl CliChatLiveSurfaceObserver {
         Self::new_with_mode(
             Arc::new(AtomicUsize::new(render_width.max(1))),
             render_sink,
-            CliChatLiveSurfaceRenderMode::Card,
+            CliChatLiveSurfaceRenderMode::Compact,
         )
     }
 
@@ -266,12 +234,6 @@ impl CliChatLiveSurfaceObserver {
             } else {
                 build_cli_chat_live_surface_snapshot(&state).and_then(|snapshot| {
                     let lines = match self.render_mode {
-                        CliChatLiveSurfaceRenderMode::Card => {
-                            render_cli_chat_live_surface_lines_with_width(
-                                &snapshot,
-                                self.render_width(),
-                            )
-                        }
                         CliChatLiveSurfaceRenderMode::Compact => {
                             render_cli_chat_live_compact_lines_with_width(
                                 &snapshot,
@@ -460,9 +422,6 @@ impl CliChatLiveSurfaceObserver {
         }
 
         let lines = match self.render_mode {
-            CliChatLiveSurfaceRenderMode::Card => {
-                render_cli_chat_live_surface_lines_with_width(&snapshot, self.render_width())
-            }
             CliChatLiveSurfaceRenderMode::Compact => {
                 render_cli_chat_live_compact_lines_with_width(&snapshot, self.render_width())
             }

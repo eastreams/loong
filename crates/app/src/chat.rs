@@ -115,11 +115,10 @@ use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
-    ConversationIngressContext, ConversationRuntimeBinding, ConversationSessionAddress,
-    ConversationTurnCoordinator, ConversationTurnObserver, ConversationTurnObserverHandle,
-    ConversationTurnPhase, ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent,
-    ConversationTurnToolEvent, ConversationTurnToolState, ExecutionLane, ProviderErrorMode,
-    parse_approval_prompt_view,
+    ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
+    ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
+    ConversationTurnPhaseEvent, ConversationTurnRuntimeEvent, ConversationTurnToolEvent,
+    ConversationTurnToolState, ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -518,7 +517,36 @@ pub async fn run_cli_ask(
         None,
         AcpTurnProvenance::default(),
     );
-    let assistant_text = run_cli_turn(&runtime, input, &acp_options, false).await?;
+    let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
+    #[cfg(feature = "memory-sqlite")]
+    let memory_config =
+        crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+            &turn_config.memory,
+        );
+    #[cfg(feature = "memory-sqlite")]
+    let hosted_runtime = crate::conversation::HostedConversationRuntime::new_with_memory_config(
+        crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
+        memory_config,
+    );
+    #[cfg(not(feature = "memory-sqlite"))]
+    let hosted_runtime =
+        crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
+    let assistant_text = runtime
+        .turn_coordinator
+        .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_with_manager(
+            &turn_config,
+            &runtime.session_address,
+            input,
+            ProviderErrorMode::InlineMessage,
+            &hosted_runtime,
+            &acp_options,
+            runtime.conversation_binding(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
     println!("{assistant_text}");
     Ok(())
 }
@@ -554,147 +582,6 @@ fn run_concurrent_cli_host_repl(options: &ConcurrentCliHostOptions) -> CliResult
         print_turn_checkpoint_startup_health(&runtime).await;
         run_concurrent_cli_host_loop(&runtime, &chat_options, &options.shutdown).await
     })
-}
-
-pub(crate) async fn run_cli_turn(
-    runtime: &CliTurnRuntime,
-    input: &str,
-    acp_options: &AcpConversationTurnOptions<'_>,
-    live_surface_enabled: bool,
-) -> CliResult<String> {
-    run_cli_turn_with_address(
-        runtime,
-        &runtime.session_address,
-        input,
-        acp_options,
-        live_surface_enabled,
-        None,
-    )
-    .await
-}
-
-pub(crate) async fn run_cli_turn_with_address(
-    runtime: &CliTurnRuntime,
-    address: &ConversationSessionAddress,
-    input: &str,
-    acp_options: &AcpConversationTurnOptions<'_>,
-    live_surface_enabled: bool,
-    observer_override: Option<ConversationTurnObserverHandle>,
-) -> CliResult<String> {
-    run_cli_turn_with_address_and_ingress_and_error_mode(
-        runtime,
-        address,
-        input,
-        acp_options,
-        live_surface_enabled,
-        None,
-        ProviderErrorMode::InlineMessage,
-        observer_override,
-        None,
-        None,
-    )
-    .await
-}
-
-pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode(
-    runtime: &CliTurnRuntime,
-    address: &ConversationSessionAddress,
-    input: &str,
-    acp_options: &AcpConversationTurnOptions<'_>,
-    live_surface_enabled: bool,
-    ingress: Option<&ConversationIngressContext>,
-    provider_error_mode: ProviderErrorMode,
-    observer_override: Option<ConversationTurnObserverHandle>,
-    retry_progress: crate::provider::ProviderRetryProgressCallback,
-    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
-) -> CliResult<String> {
-    run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
-        runtime,
-        address,
-        input,
-        acp_options,
-        live_surface_enabled,
-        ingress,
-        provider_error_mode,
-        observer_override,
-        retry_progress,
-        acp_manager,
-    )
-    .await
-    .map(|outcome| outcome.reply)
-}
-
-pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
-    runtime: &CliTurnRuntime,
-    address: &ConversationSessionAddress,
-    input: &str,
-    acp_options: &AcpConversationTurnOptions<'_>,
-    live_surface_enabled: bool,
-    ingress: Option<&ConversationIngressContext>,
-    provider_error_mode: ProviderErrorMode,
-    observer_override: Option<ConversationTurnObserverHandle>,
-    retry_progress: crate::provider::ProviderRetryProgressCallback,
-    acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
-) -> CliResult<crate::conversation::ConversationTurnOutcome> {
-    let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
-    let live_surface_observer = if let Some(observer) = observer_override {
-        Some(observer)
-    } else if live_surface_enabled {
-        let render_width = detect_cli_chat_render_width();
-        Some(build_cli_chat_live_surface_observer(render_width))
-    } else {
-        None
-    };
-    let binding = runtime.conversation_binding();
-    if let Some(ingress) = ingress {
-        runtime
-            .turn_coordinator
-            .handle_turn_with_address_and_acp_options_and_ingress_and_observer_with_manager(
-                &turn_config,
-                address,
-                input,
-                provider_error_mode,
-                acp_options,
-                binding,
-                Some(ingress),
-                live_surface_observer,
-                retry_progress,
-                acp_manager,
-            )
-            .await
-            .map(|reply| crate::conversation::ConversationTurnOutcome { reply, usage: None })
-    } else {
-        #[cfg(feature = "memory-sqlite")]
-        let memory_config =
-            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
-                &turn_config.memory,
-            );
-        #[cfg(feature = "memory-sqlite")]
-        let hosted_runtime = crate::conversation::HostedConversationRuntime::new_with_memory_config(
-            crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?,
-            memory_config,
-        );
-        #[cfg(not(feature = "memory-sqlite"))]
-        let hosted_runtime =
-            crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
-
-        runtime
-            .turn_coordinator
-            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
-                &turn_config,
-                address,
-                input,
-                provider_error_mode,
-                &hosted_runtime,
-                acp_options,
-                binding,
-                None,
-                live_surface_observer,
-                retry_progress,
-                acp_manager,
-            )
-            .await
-    }
 }
 
 fn build_cli_chat_acp_turn_options<'a>(
