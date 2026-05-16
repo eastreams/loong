@@ -536,9 +536,7 @@ pub(super) fn execute_tool_search(
                 .get(&(descriptor.path.clone(), manifest.plugin_id.clone()));
             let activation_fallback =
                 activation_by_key.get(&(descriptor.path.clone(), manifest.plugin_id.clone()));
-            let channel_id = translation
-                .and_then(|snapshot| snapshot.channel_id.clone())
-                .or_else(|| manifest.channel_id.clone());
+            let channel_id = translation.and_then(|snapshot| snapshot.channel_id.clone());
             let mut channel_bridge =
                 tool_search_bridge_snapshot_from_manifest_metadata(&manifest.metadata);
             merge_tool_search_bridge_snapshot(
@@ -3042,5 +3040,34 @@ mod tests {
         );
         assert_eq!(report.results[0].channel_bridge.ready, Some(true));
         assert!(report.results[0].channel_bridge.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn execute_tool_search_surfaces_channel_id_from_translated_scan_path_without_manifest_fallback()
+    {
+        let descriptor = test_channel_bridge_descriptor();
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        };
+        let translation = test_channel_bridge_translation();
+
+        let search = execute_tool_search(
+            &IntegrationCatalog::new(),
+            &[report],
+            &[translation],
+            &PluginSetupReadinessContext::default(),
+            &[],
+            "weixin",
+            10,
+            &[],
+            true,
+            false,
+        );
+
+        assert_eq!(search.results.len(), 1);
+        assert_eq!(search.results[0].channel_id.as_deref(), Some("weixin"));
     }
 }
