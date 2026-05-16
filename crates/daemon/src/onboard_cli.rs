@@ -594,25 +594,6 @@ fn ensure_onboard_input_not_cancelled(raw: String) -> CliResult<String> {
     Ok(raw)
 }
 
-fn prompt_optional(
-    ui: &mut impl OnboardUi,
-    label: &str,
-    current: Option<&str>,
-) -> CliResult<Option<String>> {
-    let value = ui.prompt_allow_empty(label)?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(current
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned));
-    }
-    if trimmed == "-" {
-        return Ok(None);
-    }
-    Ok(Some(trimmed.to_owned()))
-}
-
 fn render_preinstalled_skills_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
@@ -798,16 +779,14 @@ impl GuidedPromptPath {
             (_, GuidedOnboardStep::Provider) => 1,
             (_, GuidedOnboardStep::Model) => 2,
             (_, GuidedOnboardStep::CredentialEnv) => 3,
-            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Personality) => 4,
-            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::PromptCustomization) => 5,
+            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::PromptCustomization) => 4,
             (_, GuidedOnboardStep::WebSearchProvider) => match self {
-                GuidedPromptPath::NativePromptPack => 6,
-                GuidedPromptPath::InlineOverride => 5,
+                GuidedPromptPath::NativePromptPack => 5,
+                GuidedPromptPath::InlineOverride => 4,
             },
-            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Review) => 7,
+            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Review) => 6,
             (GuidedPromptPath::InlineOverride, GuidedOnboardStep::PromptCustomization) => 4,
-            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Review) => 6,
-            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Personality) => 4,
+            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Review) => 5,
         }
     }
 
@@ -816,7 +795,6 @@ impl GuidedPromptPath {
             GuidedOnboardStep::Provider => "provider",
             GuidedOnboardStep::Model => "model",
             GuidedOnboardStep::CredentialEnv => "credential source",
-            GuidedOnboardStep::Personality => "personality",
             GuidedOnboardStep::PromptCustomization => match self {
                 GuidedPromptPath::NativePromptPack => "prompt addendum",
                 GuidedPromptPath::InlineOverride => "system prompt",
@@ -832,7 +810,6 @@ enum GuidedOnboardStep {
     Provider,
     Model,
     CredentialEnv,
-    Personality,
     PromptCustomization,
     WebSearchProvider,
     Review,
@@ -885,13 +862,6 @@ impl ReviewFlowStyle {
     const fn header_subtitle(self) -> &'static str {
         crate::onboard_presentation::review_flow_copy(self.review_kind()).header_subtitle
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SystemPromptSelection {
-    KeepCurrent,
-    RestoreBuiltIn,
-    Set(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1073,32 +1043,42 @@ pub async fn run_onboard_cli_with_ui(
             apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
         }
 
-        match guided_prompt_path {
-            GuidedPromptPath::NativePromptPack => {
-                let personality = resolve_personality_selection(&options, &config, ui, context)?;
-                config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                config.cli.personality = Some(personality);
-                config.cli.system_prompt_addendum =
-                    resolve_prompt_addendum_selection(&options, &config, ui, context)?;
-                config.cli.refresh_native_system_prompt();
-            }
-            GuidedPromptPath::InlineOverride => {
-                let system_prompt_selection =
-                    resolve_system_prompt_selection(&options, &config, ui, context)?;
-                match system_prompt_selection {
-                    SystemPromptSelection::KeepCurrent => {}
-                    SystemPromptSelection::RestoreBuiltIn => {
+        if options.non_interactive {
+            match guided_prompt_path {
+                GuidedPromptPath::NativePromptPack => {
+                    if let Some(personality_raw) = options.personality.as_deref() {
+                        let personality = parse_prompt_personality(personality_raw).ok_or_else(
+                            || {
+                                format!(
+                                    "unsupported --personality value \"{personality_raw}\". supported: {}",
+                                    supported_personality_list()
+                                )
+                            },
+                        )?;
                         config.cli.prompt_pack_id =
                             Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                        config.cli.personality = Some(mvp::prompt::PromptPersonality::default());
-                        config.cli.system_prompt_addendum = None;
+                        config.cli.personality = Some(personality);
                         config.cli.refresh_native_system_prompt();
                     }
-                    SystemPromptSelection::Set(system_prompt) => {
-                        config.cli.prompt_pack_id = Some(String::new());
-                        config.cli.personality = None;
-                        config.cli.system_prompt_addendum = None;
-                        config.cli.system_prompt = system_prompt;
+                }
+                GuidedPromptPath::InlineOverride => {
+                    if let Some(system_prompt) = options.system_prompt.as_deref() {
+                        if is_explicit_onboard_clear_input(system_prompt) {
+                            config.cli.prompt_pack_id =
+                                Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+                            config.cli.personality =
+                                Some(mvp::prompt::PromptPersonality::default());
+                            config.cli.system_prompt_addendum = None;
+                            config.cli.refresh_native_system_prompt();
+                        } else {
+                            let trimmed = system_prompt.trim();
+                            if !trimmed.is_empty() {
+                                config.cli.prompt_pack_id = Some(String::new());
+                                config.cli.personality = None;
+                                config.cli.system_prompt_addendum = None;
+                                config.cli.system_prompt = trimmed.to_owned();
+                            }
+                        }
                     }
                 }
             }
@@ -2192,151 +2172,17 @@ fn apply_selected_api_key_env(
 #[cfg(test)]
 fn apply_selected_system_prompt(
     config: &mut mvp::config::LoongConfig,
-    selection: SystemPromptSelection,
+    system_prompt: Option<String>,
 ) {
-    match selection {
-        SystemPromptSelection::KeepCurrent => {}
-        SystemPromptSelection::RestoreBuiltIn => {
-            config.cli.system_prompt = if config.cli.uses_native_prompt_pack() {
-                config.cli.rendered_native_system_prompt()
-            } else {
-                mvp::config::CliChannelConfig::default().system_prompt
-            };
-        }
-        SystemPromptSelection::Set(system_prompt) => {
-            config.cli.system_prompt = system_prompt;
-        }
+    if let Some(system_prompt) = system_prompt {
+        config.cli.system_prompt = system_prompt;
+    } else {
+        config.cli.system_prompt = if config.cli.uses_native_prompt_pack() {
+            config.cli.rendered_native_system_prompt()
+        } else {
+            mvp::config::CliChannelConfig::default().system_prompt
+        };
     }
-}
-
-fn resolve_personality_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongConfig,
-    ui: &mut impl OnboardUi,
-    context: &OnboardRuntimeContext,
-) -> CliResult<mvp::prompt::PromptPersonality> {
-    if options.non_interactive {
-        if let Some(personality_raw) = options.personality.as_deref() {
-            return parse_prompt_personality(personality_raw).ok_or_else(|| {
-                format!(
-                    "unsupported --personality value \"{personality_raw}\". supported: {}",
-                    supported_personality_list()
-                )
-            });
-        }
-        return Ok(config.cli.resolved_personality());
-    }
-
-    let default_personality = options
-        .personality
-        .as_deref()
-        .and_then(parse_prompt_personality)
-        .unwrap_or_else(|| config.cli.resolved_personality());
-
-    let personality_catalog = mvp::prompt::prompt_personality_catalog();
-    let select_options: Vec<SelectOption> = personality_catalog
-        .iter()
-        .map(|descriptor| {
-            let label = descriptor.label.to_owned();
-            let slug = descriptor.id.to_owned();
-            let description = personality_selection_description(descriptor);
-            let recommended = descriptor.personality == default_personality;
-
-            SelectOption {
-                label,
-                slug,
-                description,
-                recommended,
-            }
-        })
-        .collect();
-    let default_idx = personality_catalog
-        .iter()
-        .position(|descriptor| descriptor.personality == default_personality);
-
-    print_lines(
-        ui,
-        render_personality_selection_header_lines(config, context.render_width),
-    )?;
-    let idx = ui.select_one(
-        "Personality",
-        &select_options,
-        default_idx,
-        SelectInteractionMode::List,
-    )?;
-    let descriptor = personality_catalog
-        .get(idx)
-        .ok_or_else(|| format!("personality selection index {idx} out of range"))?;
-    Ok(descriptor.personality)
-}
-
-fn resolve_prompt_addendum_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongConfig,
-    ui: &mut impl OnboardUi,
-    context: &OnboardRuntimeContext,
-) -> CliResult<Option<String>> {
-    if options.non_interactive {
-        return Ok(config.cli.system_prompt_addendum.clone());
-    }
-    print_lines(
-        ui,
-        render_prompt_addendum_selection_screen_lines_with_style(
-            config,
-            context.render_width,
-            true,
-        ),
-    )?;
-    prompt_optional(
-        ui,
-        "Prompt addendum",
-        config.cli.system_prompt_addendum.as_deref(),
-    )
-}
-
-fn resolve_system_prompt_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongConfig,
-    ui: &mut impl OnboardUi,
-    context: &OnboardRuntimeContext,
-) -> CliResult<SystemPromptSelection> {
-    if options.non_interactive {
-        if let Some(system_prompt) = options.system_prompt.as_deref() {
-            if is_explicit_onboard_clear_input(system_prompt) {
-                return Ok(SystemPromptSelection::RestoreBuiltIn);
-            }
-            let trimmed = system_prompt.trim();
-            if !trimmed.is_empty() {
-                return Ok(SystemPromptSelection::Set(trimmed.to_owned()));
-            }
-        }
-        return Ok(SystemPromptSelection::KeepCurrent);
-    }
-    let initial = options
-        .system_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(config.cli.system_prompt.as_str());
-    print_lines(
-        ui,
-        render_system_prompt_selection_screen_lines_with_style(
-            config,
-            initial,
-            GuidedPromptPath::InlineOverride,
-            context.render_width,
-            true,
-        ),
-    )?;
-    let value = ui.prompt_with_default("CLI system prompt", initial)?;
-    if is_explicit_onboard_clear_input(&value) {
-        return Ok(SystemPromptSelection::RestoreBuiltIn);
-    }
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed == config.cli.system_prompt.trim() {
-        return Ok(SystemPromptSelection::KeepCurrent);
-    }
-    Ok(SystemPromptSelection::Set(trimmed.to_owned()))
 }
 
 async fn resolve_web_search_provider_selection(
@@ -4640,141 +4486,6 @@ fn render_system_prompt_selection_screen_lines_with_style(
             } else {
                 render_clear_input_hint_line("use the built-in behavior")
             },
-            ONBOARD_SINGLE_LINE_INPUT_HINT.to_owned(),
-        ],
-        color_enabled,
-    )
-}
-
-pub fn render_personality_selection_screen_lines(
-    config: &mvp::config::LoongConfig,
-    width: usize,
-) -> Vec<String> {
-    render_personality_selection_screen_lines_with_style(
-        config,
-        config.cli.resolved_personality(),
-        width,
-        false,
-    )
-}
-
-fn render_personality_selection_screen_lines_with_style(
-    config: &mvp::config::LoongConfig,
-    default_personality: mvp::prompt::PromptPersonality,
-    width: usize,
-    color_enabled: bool,
-) -> Vec<String> {
-    let options = mvp::prompt::prompt_personality_catalog()
-        .iter()
-        .map(|descriptor| {
-            let key = descriptor.id.to_owned();
-            let label = descriptor.label.to_owned();
-            let detail = personality_selection_description(descriptor);
-            let recommended = descriptor.personality == default_personality;
-
-            OnboardScreenOption {
-                key,
-                label,
-                detail_lines: vec![detail],
-                recommended,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
-        width,
-        "choose how Loong should speak and take initiative",
-        "choose personality",
-        Some((
-            GuidedOnboardStep::Personality,
-            GuidedPromptPath::NativePromptPack,
-        )),
-        vec![format!(
-            "- current personality: {}",
-            prompt_personality_id(config.cli.resolved_personality())
-        )],
-        options,
-        vec![render_default_choice_footer_line(
-            prompt_personality_id(default_personality),
-            "the current personality",
-        )],
-        true,
-        color_enabled,
-    )
-}
-
-fn render_personality_selection_header_lines(
-    config: &mvp::config::LoongConfig,
-    width: usize,
-) -> Vec<String> {
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
-        width,
-        "choose how Loong should speak and take initiative",
-        "choose personality",
-        Some((
-            GuidedOnboardStep::Personality,
-            GuidedPromptPath::NativePromptPack,
-        )),
-        vec![format!(
-            "- current personality: {}",
-            prompt_personality_id(config.cli.resolved_personality())
-        )],
-        vec![],
-        vec![],
-        true,
-        true,
-    )
-}
-
-fn personality_selection_description(
-    descriptor: &mvp::prompt::PromptPersonalityDescriptor,
-) -> String {
-    let summary = descriptor.selection_summary;
-
-    if descriptor.experimental {
-        return format!("experimental · {summary}");
-    }
-
-    summary.to_owned()
-}
-
-pub fn render_prompt_addendum_selection_screen_lines(
-    config: &mvp::config::LoongConfig,
-    width: usize,
-) -> Vec<String> {
-    render_prompt_addendum_selection_screen_lines_with_style(config, width, false)
-}
-
-fn render_prompt_addendum_selection_screen_lines_with_style(
-    config: &mvp::config::LoongConfig,
-    width: usize,
-    color_enabled: bool,
-) -> Vec<String> {
-    let current_addendum = config
-        .cli
-        .system_prompt_addendum
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("none");
-
-    render_onboard_input_screen(
-        width,
-        "adjust prompt addendum",
-        GuidedOnboardStep::PromptCustomization,
-        GuidedPromptPath::NativePromptPack,
-        vec![
-            format!(
-                "- personality: {}",
-                prompt_personality_id(config.cli.resolved_personality())
-            ),
-            format!("- current addendum: {current_addendum}"),
-        ],
-        vec![
-            "- press Enter to keep current addendum".to_owned(),
-            "- type '-' to clear it".to_owned(),
             ONBOARD_SINGLE_LINE_INPUT_HINT.to_owned(),
         ],
         color_enabled,

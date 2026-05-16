@@ -5846,110 +5846,6 @@ fn onboard_system_prompt_screen_wraps_long_current_prompt() {
 }
 
 #[test]
-fn onboard_personality_selection_screen_shows_native_personality_choices() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
-
-    let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
-    let expected_personality_ids = [
-        "classicist",
-        "pragmatist",
-        "idealist",
-        "romanticist",
-        "hermit",
-        "cyber_radical",
-        "nihilist",
-    ];
-    let selector_line_count = lines
-        .iter()
-        .filter(|line| {
-            expected_personality_ids
-                .iter()
-                .any(|personality_id| line.contains(&format!("{personality_id})")))
-        })
-        .count();
-    let experimental_line_count = lines
-        .iter()
-        .filter(|line| line.contains("experimental ·"))
-        .count();
-
-    assert_compact_loong_header(&lines, "personality screen");
-    assert!(
-        lines.iter().all(|line| !line.starts_with("██╗")),
-        "personality screen should not repeat the large LOONG banner mid-onboarding: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line == "choose personality"),
-        "personality screen should use a focused title: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line == "step 4 of 8 · personality"),
-        "personality screen should surface the native prompt-pack progress step: {lines:#?}"
-    );
-
-    for personality_id in expected_personality_ids {
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains(&format!("{personality_id})"))),
-            "personality screen should surface every catalog personality id: {lines:#?}"
-        );
-    }
-
-    assert_eq!(
-        selector_line_count, 7,
-        "personality screen should render exactly seven selector lines from the shared catalog: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line.contains("experimental ·")),
-        "personality screen should mark sharper presets as experimental in the shared catalog-driven descriptions: {lines:#?}"
-    );
-    assert_eq!(
-        experimental_line_count, 2,
-        "personality screen should label both experimental personalities: {lines:#?}"
-    );
-    assert!(
-        lines.iter().all(|line| !line.contains("[hermit]")),
-        "personality screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
-    );
-}
-
-#[test]
-fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-
-    let lines = crate::onboard_cli::render_prompt_addendum_selection_screen_lines(&config, 80);
-
-    assert!(
-        lines.iter().any(|line| line == "adjust prompt addendum"),
-        "prompt-addendum screen should use a focused title: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line == "step 5 of 8 · prompt addendum"),
-        "prompt-addendum screen should surface the native prompt-pack progress step: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line == "- press Enter to keep current addendum"),
-        "prompt-addendum screen should explain the Enter behavior in the same style as other input screens: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("type '-' to clear it")),
-        "prompt-addendum screen should explain how to clear the current addendum: {lines:#?}"
-    );
-    assert!(
-        lines.iter().any(|line| line == "- single-line input only"),
-        "prompt-addendum screen should keep the input instruction concise and consistent: {lines:#?}"
-    );
-}
-
-#[test]
 fn onboard_provider_selection_uses_imported_provider_config_for_selected_choice() {
     let recommended = import_candidate_with_kind(
         loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
@@ -7236,7 +7132,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn onboard_current_setup_adjustments_leave_memory_profile_to_personalize() {
+async fn onboard_current_setup_adjustments_leave_prompt_preferences_to_followup_surface() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("current-adjusted-personality-memory-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
@@ -7273,8 +7169,6 @@ async fn onboard_current_setup_adjustments_leave_memory_profile_to_personalize()
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
-            "hermit".to_owned(),
-            String::new(),
             "3".to_owned(),
             String::new(),
             "y".to_owned(),
@@ -7285,16 +7179,12 @@ async fn onboard_current_setup_adjustments_leave_memory_profile_to_personalize()
         None,
     )
     .await
-    .expect("run scripted current-setup onboarding with personality changes");
+    .expect("run scripted current-setup onboarding without prompt preference shaping");
 
     let joined = transcript.join("\n");
     assert!(
-        joined.contains("step 4 of 7 · personality"),
-        "guided current-setup adjustments should expose a dedicated personality step: {transcript:#?}"
-    );
-    assert!(
-        joined.contains("step 5 of 7 · prompt addendum"),
-        "guided current-setup adjustments should expose a dedicated prompt-addendum step: {transcript:#?}"
+        !joined.contains("choose personality") && !joined.contains("prompt addendum"),
+        "guided onboarding should stop owning prompt-preference shaping steps: {transcript:#?}"
     );
     assert!(
         !joined.contains("step 6 of 7 · memory profile")
@@ -7306,7 +7196,7 @@ async fn onboard_current_setup_adjustments_leave_memory_profile_to_personalize()
         .expect("load current-setup personality/memory config");
     assert_eq!(
         config.cli.personality,
-        Some(mvp::prompt::PromptPersonality::Hermit)
+        Some(mvp::prompt::PromptPersonality::default())
     );
     assert_eq!(
         config.memory.profile,

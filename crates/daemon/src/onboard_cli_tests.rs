@@ -32,18 +32,6 @@ impl SelectOnlyTestUi {
     }
 }
 
-struct AllowEmptyOnlyTestUi {
-    inputs: VecDeque<String>,
-}
-
-impl AllowEmptyOnlyTestUi {
-    fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            inputs: inputs.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
 fn interactive_onboard_options() -> OnboardCommandOptions {
     OnboardCommandOptions {
         output: None,
@@ -215,42 +203,6 @@ impl OnboardUi for SelectOnlyTestUi {
             }
             None => default.ok_or_else(|| "missing test input for required selection".to_owned()),
         }
-    }
-}
-
-impl OnboardUi for AllowEmptyOnlyTestUi {
-    fn print_line(&mut self, _line: &str) -> CliResult<()> {
-        Ok(())
-    }
-
-    fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
-        Err("test expected prompt_allow_empty instead of prompt_with_default".to_owned())
-    }
-
-    fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-        Err("test expected prompt_allow_empty instead of prompt_required".to_owned())
-    }
-
-    fn prompt_allow_empty(&mut self, _label: &str) -> CliResult<String> {
-        let value = self
-            .inputs
-            .pop_front()
-            .ok_or_else(|| "missing allow-empty test input".to_owned())?;
-        Ok(ensure_onboard_input_not_cancelled(value)?.trim().to_owned())
-    }
-
-    fn prompt_confirm(&mut self, _message: &str, _default: bool) -> CliResult<bool> {
-        Err("test expected prompt_allow_empty instead of prompt_confirm".to_owned())
-    }
-
-    fn select_one(
-        &mut self,
-        _label: &str,
-        _options: &[SelectOption],
-        _default: Option<usize>,
-        _interaction_mode: SelectInteractionMode,
-    ) -> CliResult<usize> {
-        Err("test expected prompt_allow_empty instead of select_one".to_owned())
     }
 }
 
@@ -1625,261 +1577,13 @@ fn provider_matches_for_review_ignores_credential_field_explicitness() {
 }
 
 #[test]
-fn resolve_system_prompt_selection_accepts_explicit_clear_token_in_interactive_mode() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt = "be terse and code-focused".to_owned();
-    let mut ui = TestOnboardUi::with_inputs([":clear"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_system_prompt_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve system prompt selection");
-
-    assert_eq!(
-        selected,
-        SystemPromptSelection::RestoreBuiltIn,
-        "typing :clear should restore the built-in system prompt instead of keeping the literal token"
-    );
-}
-
-#[test]
-fn resolve_system_prompt_selection_keeps_current_prompt_when_interactive_default_is_used() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt = "be terse and code-focused".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_system_prompt_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve system prompt selection");
-
-    assert_eq!(
-        selected,
-        SystemPromptSelection::KeepCurrent,
-        "using the prompt default should keep the current system prompt when no override is prefilled"
-    );
-}
-
-#[test]
-fn resolve_system_prompt_selection_keeps_prefilled_override_when_interactive_default_is_used() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt = "be terse and code-focused".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_system_prompt_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: Some("prefer concise code reviews".to_owned()),
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve system prompt selection");
-
-    assert_eq!(
-        selected,
-        SystemPromptSelection::Set("prefer concise code reviews".to_owned()),
-        "using the prompt default should still apply a prefilled system prompt override"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_keeps_current_addendum_when_blank_input_is_used() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-    let mut ui = TestOnboardUi::with_inputs([""]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected.as_deref(),
-        Some("Keep answers direct."),
-        "blank optional input should keep the current addendum"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_blank_first_run_input() {
-    let config = mvp::config::LoongConfig::default();
-    let mut ui = AllowEmptyOnlyTestUi::with_inputs([""]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected, None,
-        "blank first-run optional input should preserve the absence of an addendum"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_clear_input() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-    let mut ui = AllowEmptyOnlyTestUi::with_inputs(["-"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected, None,
-        "allow-empty prompt handling should still respect the explicit clear token"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_clears_current_addendum_when_dash_input_is_used() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-    let mut ui = TestOnboardUi::with_inputs(["-"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected, None,
-        "typing '-' should still clear the current addendum"
-    );
-}
-
-#[test]
 fn apply_selected_system_prompt_restore_uses_rendered_native_prompt() {
     let mut config = mvp::config::LoongConfig::default();
     config.cli.system_prompt = "custom review prompt".to_owned();
     config.cli.system_prompt_addendum = Some("Prefer concrete remediation steps.".to_owned());
     let expected = config.cli.rendered_native_system_prompt();
 
-    apply_selected_system_prompt(&mut config, SystemPromptSelection::RestoreBuiltIn);
+    apply_selected_system_prompt(&mut config, None);
 
     assert_eq!(
         config.cli.system_prompt, expected,
@@ -2837,17 +2541,6 @@ fn stdio_onboard_line_reader_warns_once_when_background_spawn_fails() {
         reader.take_degraded_notice(),
         None,
         "degraded-mode notice should only be emitted once per session"
-    );
-}
-
-#[test]
-fn prompt_addendum_screen_mentions_single_line_terminal_input() {
-    let lines =
-        render_prompt_addendum_selection_screen_lines(&mvp::config::LoongConfig::default(), 80);
-
-    assert!(
-        lines.iter().any(|line| line == "- single-line input only"),
-        "prompt addendum screen should keep the terminal input note concise: {lines:#?}"
     );
 }
 
