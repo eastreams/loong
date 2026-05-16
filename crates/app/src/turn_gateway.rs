@@ -119,23 +119,18 @@ pub async fn run_turn_gateway(
     if !execution.initialize_runtime_environment {
         turn_service = turn_service.without_runtime_environment_init();
     }
-    let projection_request = TurnGatewayRequest {
-        address: ConversationSessionAddress::from_session_id(session_hint.as_str()),
-        message: String::new(),
-        metadata: BTreeMap::new(),
-        turn_mode: AgentTurnMode::Oneshot,
+    let turn_options = TurnExecutionOptions {
+        event_sink: execution.event_sink,
+        observer,
+        ingress: ingress.as_ref(),
+        provenance: provenance.as_acp_turn_provenance(),
+        provider_error_mode,
+        retry_progress,
         acp_routing_intent,
         acp_event_stream,
         acp_bootstrap_mcp_servers,
-        acp_cwd,
-        live_surface_enabled: false,
-        ingress,
-        observer,
-        provenance,
-        provider_error_mode,
-        retry_progress,
+        acp_working_directory: acp_cwd.map(PathBuf::from),
     };
-    let turn_options = build_turn_execution_options(&projection_request, execution.event_sink);
 
     turn_service
         .execute(
