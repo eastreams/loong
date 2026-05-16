@@ -521,10 +521,7 @@ fn enrich_scan_report_adds_channel_bridge_contract_metadata() {
     let enriched = enrich_scan_report_with_translation(&report, &translation, None);
     let metadata = &enriched.descriptors[0].manifest.metadata;
 
-    assert_eq!(
-        metadata.get("plugin_channel_id").map(String::as_str),
-        Some("weixin")
-    );
+    assert_eq!(metadata.get("plugin_channel_id"), None);
     assert_eq!(metadata.get("plugin_channel_bridge_transport_family"), None);
     assert_eq!(metadata.get("plugin_channel_bridge_target_contract"), None);
     assert_eq!(metadata.get("plugin_channel_bridge_account_scope"), None);

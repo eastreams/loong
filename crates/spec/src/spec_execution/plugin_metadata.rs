@@ -8,7 +8,6 @@ pub(super) struct PluginTranslationMetadataSnapshot {
     adapter_family: String,
     entrypoint_hint: String,
     source_language: String,
-    channel_id: Option<String>,
     channel_bridge: Option<kernel::CanonicalPluginChannelBridgeContract>,
 }
 
@@ -26,9 +25,6 @@ pub(super) fn enrich_scan_report_with_translation(
 
     for entry in &translation.entries {
         let channel_bridge = entry.channel_bridge.as_ref();
-        let channel_id = channel_bridge
-            .and_then(|bridge| bridge.channel_id.clone())
-            .or_else(|| entry.channel_id.clone());
         let channel_bridge = channel_bridge.map(kernel::canonical_channel_bridge_contract);
 
         runtime_by_key.insert(
@@ -38,7 +34,6 @@ pub(super) fn enrich_scan_report_with_translation(
                 adapter_family: entry.runtime.adapter_family.clone(),
                 entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
                 source_language: entry.runtime.source_language.clone(),
-                channel_id,
                 channel_bridge,
             },
         );
@@ -358,14 +353,12 @@ fn insert_plugin_channel_bridge_metadata(
         return;
     };
 
-    upsert_or_remove_metadata_value(metadata, "plugin_channel_id", snapshot.channel_id.as_ref());
     let channel_bridge = snapshot.channel_bridge.as_ref();
     insert_plugin_channel_bridge_contract_metadata(metadata, channel_bridge);
     remove_legacy_plugin_channel_bridge_projection_metadata(metadata);
 }
 
 fn remove_plugin_channel_bridge_metadata(metadata: &mut BTreeMap<String, String>) {
-    metadata.remove("plugin_channel_id");
     metadata.remove(PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY);
     remove_legacy_plugin_channel_bridge_projection_metadata(metadata);
 }
@@ -398,21 +391,6 @@ fn insert_plugin_channel_bridge_contract_metadata(
         PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
         serialized,
     );
-}
-
-fn upsert_or_remove_metadata_value(
-    metadata: &mut BTreeMap<String, String>,
-    key: &str,
-    value: Option<&String>,
-) {
-    let Some(value) = value else {
-        metadata.remove(key);
-        return;
-    };
-
-    let metadata_key = key.to_owned();
-    let metadata_value = value.clone();
-    metadata.insert(metadata_key, metadata_value);
 }
 
 fn insert_plugin_setup_string_list_metadata(

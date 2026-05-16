@@ -346,7 +346,7 @@ pub(super) fn execute_tool_search(
         let mut activation_status = None;
         let mut activation_reason = None;
         let mut diagnostic_findings = Vec::new();
-        let mut channel_id = provider.metadata.get("plugin_channel_id").cloned();
+        let mut channel_id = None;
         let mut channel_bridge =
             tool_search_bridge_snapshot_from_provider_metadata(&provider.metadata);
         let mut adapter_family = provider.metadata.get("adapter_family").cloned();
@@ -538,7 +538,6 @@ pub(super) fn execute_tool_search(
                 activation_by_key.get(&(descriptor.path.clone(), manifest.plugin_id.clone()));
             let channel_id = translation
                 .and_then(|snapshot| snapshot.channel_id.clone())
-                .or_else(|| manifest.metadata.get("plugin_channel_id").cloned())
                 .or_else(|| manifest.channel_id.clone());
             let mut channel_bridge =
                 tool_search_bridge_snapshot_from_manifest_metadata(&manifest.metadata);
@@ -2807,7 +2806,6 @@ mod tests {
             version: "1.0.0".to_owned(),
             metadata: BTreeMap::from([
                 ("plugin_id".to_owned(), "weixin-clawbot-bridge".to_owned()),
-                ("plugin_channel_id".to_owned(), "weixin".to_owned()),
                 (
                     crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
                     raw_canonical,
@@ -2875,7 +2873,6 @@ mod tests {
             version: "1.0.0".to_owned(),
             metadata: BTreeMap::from([
                 ("plugin_id".to_owned(), "weixin-clawbot-bridge".to_owned()),
-                ("plugin_channel_id".to_owned(), "weixin".to_owned()),
                 (
                     crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
                     raw_canonical,
@@ -2936,7 +2933,6 @@ mod tests {
                     "plugin_source_path".to_owned(),
                     "/tmp/weixin/loong.plugin.json".to_owned(),
                 ),
-                ("plugin_channel_id".to_owned(), "weixin".to_owned()),
                 (
                     crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
                     stale_canonical,
@@ -3000,7 +2996,6 @@ mod tests {
             version: "1.0.0".to_owned(),
             metadata: BTreeMap::from([
                 ("plugin_id".to_owned(), "weixin-clawbot-bridge".to_owned()),
-                ("plugin_channel_id".to_owned(), "weixin".to_owned()),
                 (
                     crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
                     raw_canonical,
