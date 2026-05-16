@@ -525,35 +525,13 @@ fn enrich_scan_report_adds_channel_bridge_contract_metadata() {
         metadata.get("plugin_channel_id").map(String::as_str),
         Some("weixin")
     );
+    assert_eq!(metadata.get("plugin_channel_bridge_transport_family"), None);
+    assert_eq!(metadata.get("plugin_channel_bridge_target_contract"), None);
+    assert_eq!(metadata.get("plugin_channel_bridge_account_scope"), None);
+    assert_eq!(metadata.get("plugin_channel_bridge_ready"), None);
     assert_eq!(
-        metadata
-            .get("plugin_channel_bridge_transport_family")
-            .map(String::as_str),
-        Some("wechat_clawbot_ilink_bridge")
-    );
-    assert_eq!(
-        metadata
-            .get("plugin_channel_bridge_target_contract")
-            .map(String::as_str),
-        Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
-    );
-    assert_eq!(
-        metadata
-            .get("plugin_channel_bridge_account_scope")
-            .map(String::as_str),
-        Some("multi_account")
-    );
-    assert_eq!(
-        metadata
-            .get("plugin_channel_bridge_ready")
-            .map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        metadata
-            .get("plugin_channel_bridge_missing_fields_json")
-            .map(String::as_str),
-        Some("[]")
+        metadata.get("plugin_channel_bridge_missing_fields_json"),
+        None
     );
     let raw_contract = metadata
         .get(crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY)
