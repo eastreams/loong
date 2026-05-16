@@ -1135,33 +1135,17 @@ fn tool_search_bridge_snapshot_from_provider_metadata(
     ToolSearchChannelBridgeSnapshot {
         transport_family: canonical
             .as_ref()
-            .and_then(|bridge| bridge.transport_family.clone())
-            .or_else(|| {
-                metadata
-                    .get("plugin_channel_bridge_transport_family")
-                    .cloned()
-            }),
+            .and_then(|bridge| bridge.transport_family.clone()),
         target_contract: canonical
             .as_ref()
-            .and_then(|bridge| bridge.target_contract.clone())
-            .or_else(|| {
-                metadata
-                    .get("plugin_channel_bridge_target_contract")
-                    .cloned()
-            }),
+            .and_then(|bridge| bridge.target_contract.clone()),
         account_scope: canonical
             .as_ref()
-            .and_then(|bridge| bridge.account_scope.clone())
-            .or_else(|| metadata.get("plugin_channel_bridge_account_scope").cloned()),
-        ready: canonical
-            .as_ref()
-            .map(|bridge| bridge.readiness.ready)
-            .or_else(|| metadata_bool(metadata, "plugin_channel_bridge_ready")),
+            .and_then(|bridge| bridge.account_scope.clone()),
+        ready: canonical.as_ref().map(|bridge| bridge.readiness.ready),
         missing_fields: canonical
             .map(|bridge| bridge.readiness.missing_fields)
-            .unwrap_or_else(|| {
-                metadata_strings(metadata, "plugin_channel_bridge_missing_fields_json")
-            }),
+            .unwrap_or_default(),
     }
 }
 
@@ -1178,35 +1162,19 @@ fn tool_search_bridge_snapshot_from_manifest_metadata(
         transport_family: canonical
             .as_ref()
             .and_then(|bridge| bridge.transport_family.clone())
-            .or_else(|| {
-                metadata
-                    .get("plugin_channel_bridge_transport_family")
-                    .cloned()
-            })
             .or_else(|| metadata.get("transport_family").cloned()),
         target_contract: canonical
             .as_ref()
             .and_then(|bridge| bridge.target_contract.clone())
-            .or_else(|| {
-                metadata
-                    .get("plugin_channel_bridge_target_contract")
-                    .cloned()
-            })
             .or_else(|| metadata.get("target_contract").cloned()),
         account_scope: canonical
             .as_ref()
             .and_then(|bridge| bridge.account_scope.clone())
-            .or_else(|| metadata.get("plugin_channel_bridge_account_scope").cloned())
             .or_else(|| metadata.get("account_scope").cloned()),
-        ready: canonical
-            .as_ref()
-            .map(|bridge| bridge.readiness.ready)
-            .or_else(|| metadata_bool(metadata, "plugin_channel_bridge_ready")),
+        ready: canonical.as_ref().map(|bridge| bridge.readiness.ready),
         missing_fields: canonical
             .map(|bridge| bridge.readiness.missing_fields)
-            .unwrap_or_else(|| {
-                metadata_strings(metadata, "plugin_channel_bridge_missing_fields_json")
-            }),
+            .unwrap_or_default(),
     }
 }
 
@@ -2818,6 +2786,21 @@ mod tests {
     #[test]
     fn execute_tool_search_surfaces_channel_bridge_contract_fields() {
         let mut catalog = IntegrationCatalog::new();
+        let raw_canonical = serde_json::json!({
+            "channel_id": "weixin",
+            "setup_surface": "channel",
+            "transport_family": "wechat_clawbot_ilink_bridge",
+            "target_contract": "weixin:<account>:contact:<id> | weixin:<account>:room:<id>",
+            "account_scope": "multi_account",
+            "runtime_contract": "loong_channel_bridge_v1",
+            "runtime_operations": ["send_message"],
+            "runtime_metadata_issues": [],
+            "readiness": {
+                "ready": true,
+                "missing_fields": []
+            }
+        })
+        .to_string();
         let provider = ProviderConfig {
             provider_id: "weixin-bridge".to_owned(),
             connector_name: "weixin-clawbot-http".to_owned(),
@@ -2826,21 +2809,8 @@ mod tests {
                 ("plugin_id".to_owned(), "weixin-clawbot-bridge".to_owned()),
                 ("plugin_channel_id".to_owned(), "weixin".to_owned()),
                 (
-                    "plugin_channel_bridge_transport_family".to_owned(),
-                    "wechat_clawbot_ilink_bridge".to_owned(),
-                ),
-                (
-                    "plugin_channel_bridge_target_contract".to_owned(),
-                    "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
-                ),
-                (
-                    "plugin_channel_bridge_account_scope".to_owned(),
-                    "multi_account".to_owned(),
-                ),
-                ("plugin_channel_bridge_ready".to_owned(), "true".to_owned()),
-                (
-                    "plugin_channel_bridge_missing_fields_json".to_owned(),
-                    "[]".to_owned(),
+                    crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
+                    raw_canonical,
                 ),
                 (
                     "summary".to_owned(),
@@ -2884,6 +2854,21 @@ mod tests {
     #[test]
     fn execute_tool_search_surfaces_incomplete_channel_bridge_contract_fields() {
         let mut catalog = IntegrationCatalog::new();
+        let raw_canonical = serde_json::json!({
+            "channel_id": "weixin",
+            "setup_surface": "channel",
+            "transport_family": null,
+            "target_contract": null,
+            "account_scope": null,
+            "runtime_contract": "loong_channel_bridge_v1",
+            "runtime_operations": ["send_message"],
+            "runtime_metadata_issues": [],
+            "readiness": {
+                "ready": false,
+                "missing_fields": ["metadata.transport_family", "metadata.target_contract"]
+            }
+        })
+        .to_string();
         let provider = ProviderConfig {
             provider_id: "weixin-bridge".to_owned(),
             connector_name: "weixin-clawbot-http".to_owned(),
@@ -2891,10 +2876,9 @@ mod tests {
             metadata: BTreeMap::from([
                 ("plugin_id".to_owned(), "weixin-clawbot-bridge".to_owned()),
                 ("plugin_channel_id".to_owned(), "weixin".to_owned()),
-                ("plugin_channel_bridge_ready".to_owned(), "false".to_owned()),
                 (
-                    "plugin_channel_bridge_missing_fields_json".to_owned(),
-                    "[\"metadata.transport_family\",\"metadata.target_contract\"]".to_owned(),
+                    crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
+                    raw_canonical,
                 ),
             ]),
         };
@@ -2925,8 +2909,23 @@ mod tests {
     }
 
     #[test]
-    fn execute_tool_search_prefers_canonical_translation_bridge_snapshot_over_provider_metadata() {
+    fn execute_tool_search_prefers_canonical_translation_bridge_snapshot_over_canonical_metadata() {
         let mut catalog = IntegrationCatalog::new();
+        let stale_canonical = serde_json::json!({
+            "channel_id": "weixin",
+            "setup_surface": "channel",
+            "transport_family": "stale_provider_bridge",
+            "target_contract": "stale:<id>",
+            "account_scope": "single_account",
+            "runtime_contract": "loong_channel_bridge_v1",
+            "runtime_operations": ["send_message"],
+            "runtime_metadata_issues": [],
+            "readiness": {
+                "ready": false,
+                "missing_fields": ["metadata.transport_family"]
+            }
+        })
+        .to_string();
         catalog.upsert_provider(ProviderConfig {
             provider_id: "weixin-bridge".to_owned(),
             connector_name: "weixin-clawbot-http".to_owned(),
@@ -2939,21 +2938,8 @@ mod tests {
                 ),
                 ("plugin_channel_id".to_owned(), "weixin".to_owned()),
                 (
-                    "plugin_channel_bridge_transport_family".to_owned(),
-                    "stale_provider_bridge".to_owned(),
-                ),
-                (
-                    "plugin_channel_bridge_target_contract".to_owned(),
-                    "stale:<id>".to_owned(),
-                ),
-                (
-                    "plugin_channel_bridge_account_scope".to_owned(),
-                    "single_account".to_owned(),
-                ),
-                ("plugin_channel_bridge_ready".to_owned(), "false".to_owned()),
-                (
-                    "plugin_channel_bridge_missing_fields_json".to_owned(),
-                    "[\"metadata.transport_family\"]".to_owned(),
+                    crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
+                    stale_canonical,
                 ),
             ]),
         });
@@ -2990,7 +2976,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_tool_search_reads_canonical_bridge_contract_metadata_before_legacy_bridge_fields() {
+    fn execute_tool_search_reads_canonical_bridge_contract_metadata() {
         let mut catalog = IntegrationCatalog::new();
         let raw_canonical = serde_json::json!({
             "channel_id": "weixin",
@@ -3018,23 +3004,6 @@ mod tests {
                 (
                     crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY.to_owned(),
                     raw_canonical,
-                ),
-                (
-                    "plugin_channel_bridge_transport_family".to_owned(),
-                    "stale_provider_bridge".to_owned(),
-                ),
-                (
-                    "plugin_channel_bridge_target_contract".to_owned(),
-                    "stale:<id>".to_owned(),
-                ),
-                (
-                    "plugin_channel_bridge_account_scope".to_owned(),
-                    "single_account".to_owned(),
-                ),
-                ("plugin_channel_bridge_ready".to_owned(), "false".to_owned()),
-                (
-                    "plugin_channel_bridge_missing_fields_json".to_owned(),
-                    "[\"metadata.transport_family\"]".to_owned(),
                 ),
             ]),
         });
