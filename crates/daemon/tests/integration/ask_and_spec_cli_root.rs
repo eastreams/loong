@@ -269,6 +269,23 @@ fn turn_run_cli_accepts_message_session_and_acp_flags() {
 }
 
 #[test]
+fn ask_and_turn_run_remain_distinct_one_shot_surfaces() {
+    let ask = try_parse_cli(["loong", "ask", "--message", "Legacy one-shot path"])
+        .expect("ask CLI should still parse");
+    let turn_run = try_parse_cli([
+        "loong",
+        "turn",
+        "run",
+        "--message",
+        "Migrated one-shot path",
+    ])
+    .expect("turn run CLI should still parse");
+
+    assert!(matches!(ask.command, Some(Commands::Ask { .. })));
+    assert!(matches!(turn_run.command, Some(Commands::Turn { .. })));
+}
+
+#[test]
 fn ask_cli_accepts_latest_session_selector() {
     let cli = try_parse_cli([
         "loong",

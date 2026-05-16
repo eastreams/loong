@@ -20,6 +20,9 @@ set -euo pipefail
 #   ├── loong-app-protocol → loong-runtime
 #   ├── loong-cli → loong-app-protocol
 #   └── loong-plugin-sdk → loong-core
+#
+# Narrow Phase 3 migration allowance:
+#   daemon -> loong-app-protocol for the single migrated `turn run` path
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -85,6 +88,7 @@ allowed=(
   "daemon -> bridge-runtime"
   "daemon -> spec"
   "daemon -> bench"
+  "daemon -> app-protocol"
   "runtime -> core"
   "app-protocol -> runtime"
   "cli -> app-protocol"

@@ -898,6 +898,89 @@ fn ask_cli_latest_session_selector_process_wait_budget_starts_with_process_run()
 }
 
 #[test]
+fn turn_run_cli_latest_session_selector_process_uses_selected_root_session_history() {
+    let fixture = LatestSelectorCliFixture::new("turn-run-latest-selector-process");
+    let provider_server = MockProviderServer::spawn();
+    let provider_base_url = provider_server.base_url().to_owned();
+    fixture.write_config_with(|config| {
+        config.provider.kind = ProviderKind::Openai;
+        config.provider.base_url = provider_base_url;
+        config.provider.model = "test-model".to_owned();
+        config.provider.api_key = Some(SecretRef::Inline("test-provider-key".to_owned()));
+    });
+
+    fixture.create_root_session("root-old");
+    fixture.append_session_turn("root-old", "user", "old root turn");
+    fixture.set_session_updated_at("root-old", 100);
+    fixture.set_turn_timestamps("root-old", 100);
+
+    fixture.create_root_session("root-new");
+    fixture.append_session_turn("root-new", "user", "selected user turn");
+    fixture.append_session_turn("root-new", "assistant", "selected assistant turn");
+    fixture.set_session_updated_at("root-new", 200);
+    fixture.set_turn_timestamps("root-new", 200);
+
+    fixture.create_delegate_child_session("delegate-child", "root-new");
+    fixture.append_session_turn("delegate-child", "assistant", "delegate child turn");
+    fixture.set_session_updated_at("delegate-child", 400);
+    fixture.set_turn_timestamps("delegate-child", 400);
+
+    provider_server.arm();
+    let output = fixture.run_process(
+        &[
+            "turn",
+            "run",
+            "--session",
+            "latest",
+            "--message",
+            "Summarize the current session.",
+        ],
+        None,
+    );
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+    let provider_requests = provider_server.finish(&stdout, &stderr);
+
+    assert!(
+        output.status.success(),
+        "turn run latest selector should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains(MOCK_PROVIDER_REPLY),
+        "turn run should print the mock provider reply: {stdout:?}"
+    );
+    assert_eq!(
+        provider_requests.len(),
+        1,
+        "turn run should issue exactly one provider request: {provider_requests:#?}"
+    );
+
+    let request = &provider_requests[0];
+    let request_path_is_supported = request.starts_with("POST /v1/chat/completions ")
+        || request.starts_with("POST /v1/responses ");
+    assert!(
+        request_path_is_supported,
+        "turn run should target a supported provider endpoint: {request}"
+    );
+    assert!(
+        request.contains("selected user turn"),
+        "selected latest root user history should reach the turn run provider request: {request}"
+    );
+    assert!(
+        request.contains("selected assistant turn"),
+        "selected latest root assistant history should reach the turn run provider request: {request}"
+    );
+    assert!(
+        !request.contains("old root turn"),
+        "older root history should not leak into the selected latest request: {request}"
+    );
+    assert!(
+        !request.contains("delegate child turn"),
+        "delegate child history should not be selected as the latest resumable root: {request}"
+    );
+}
+
+#[test]
 fn ask_cli_openai_preface_plus_tool_search_then_exec_runs_full_e2e() {
     let fixture = LatestSelectorCliFixture::new("ask-tool-search-exec-e2e");
     let final_reply = "E2E PASS direct bash execution.";
