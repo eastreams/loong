@@ -52,18 +52,16 @@ pub(super) const FEISHU_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const MATRIX_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "matrix",
-        runtime: Some(ChannelRuntimeDescriptor {
-            family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-        }),
+        runtime: None,
         snapshot_builder: Some(build_matrix_snapshots),
         selection_order: 30,
         selection_label: "federated room sync bot",
-        blurb: "Shipped Matrix surface with direct send and sync-based reply-loop support.",
-        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
-        capabilities: MATRIX_CAPABILITIES,
+        blurb: "Plugin-backed Matrix surface for bridges that externalize direct send and sync-style reply-loop contract ownership into a managed bridge plugin.",
+        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
         label: "Matrix",
         aliases: &[],
-        transport: "matrix_client_server_sync",
+        transport: "matrix_client_server_sync_or_plugin_bridge",
         onboarding: MATRIX_ONBOARDING_DESCRIPTOR,
         operations: MATRIX_OPERATIONS,
     };

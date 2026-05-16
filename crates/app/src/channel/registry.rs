@@ -702,9 +702,9 @@ const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardi
 
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "direct send",
+    label: "bridge send",
     command: "channels send matrix",
-    availability: ChannelCatalogOperationAvailability::Implemented,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: MATRIX_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -713,10 +713,10 @@ const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
 
 const MATRIX_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "sync reply loop",
+    label: "bridge serve",
     command: "channels serve matrix",
-    availability: ChannelCatalogOperationAvailability::Implemented,
-    tracks_runtime: true,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
     requirements: MATRIX_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -882,18 +882,11 @@ const MATRIX_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: MATRIX_SERVE_DOCTOR_CHECKS,
     },
 ];
-const MATRIX_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::RuntimeBacked,
-    ChannelCapability::MultiAccount,
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure matrix access tokens, homeserver base url, allowed room ids, and optional mention gating in loong.toml under matrix or matrix.accounts.<account>",
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a Matrix bridge plugin that declares setup.surface=channel plus matrix access tokens, homeserver base url, allowed room ids, and optional mention gating before serving the managed bridge surface",
     status_command: "loong doctor",
-    repair_command: Some("loong doctor --fix"),
+    repair_command: None,
 };
 
 const PLUGIN_BACKED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
