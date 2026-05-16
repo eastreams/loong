@@ -786,8 +786,10 @@ fn discovered_plugin_match_from_descriptor(
     let missing_fields = channel_bridge_missing_fields(canonical_channel_bridge.as_ref());
     let setup_details = plugin_bridge_setup_details(&descriptor.manifest);
     let manifest_status = validation.status;
-    let status =
-        discovered_plugin_bridge_status_from_validation(manifest_status, canonical_channel_bridge.as_ref());
+    let status = discovered_plugin_bridge_status_from_validation(
+        manifest_status,
+        canonical_channel_bridge.as_ref(),
+    );
     let mut issues = validation.issues;
     let runtime_metadata_issues =
         channel_bridge_runtime_metadata_issues(canonical_channel_bridge.as_ref());

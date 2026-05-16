@@ -55,6 +55,7 @@ pub use integration::{
     ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
 };
 pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongKernel};
+pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
 pub use memory::{
     CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
     MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane, MemoryTier,
@@ -76,7 +77,6 @@ pub use plugin_ir::{
     PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
-pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
 pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
 pub use runtime::{
