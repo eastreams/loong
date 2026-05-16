@@ -642,15 +642,24 @@ fn resolved_runtime_endpoint(
     ))
 }
 
+fn canonical_channel_bridge_contract(
+    plugin: &PluginIR,
+) -> Option<loong_kernel::CanonicalPluginChannelBridgeContract> {
+    plugin
+        .channel_bridge
+        .as_ref()
+        .map(loong_kernel::canonical_channel_bridge_contract)
+}
+
 fn resolved_runtime_contract(plugin: &PluginIR) -> CliResult<String> {
-    let Some(channel_bridge) = plugin.channel_bridge.as_ref() else {
+    let Some(channel_bridge) = canonical_channel_bridge_contract(plugin) else {
         return Err(format!(
             "managed bridge runtime plugin {} is missing channel bridge metadata",
             plugin.plugin_id
         ));
     };
 
-    let Some(runtime_contract) = channel_bridge.runtime_contract.as_ref() else {
+    let Some(runtime_contract) = channel_bridge.runtime_contract.as_deref() else {
         return Err(format!(
             "managed bridge runtime plugin {} does not declare channel_runtime_contract",
             plugin.plugin_id
@@ -670,7 +679,7 @@ fn resolved_runtime_contract(plugin: &PluginIR) -> CliResult<String> {
 
 fn normalized_runtime_operations(plugin: &PluginIR) -> BTreeSet<String> {
     let mut normalized_operations = BTreeSet::new();
-    let Some(channel_bridge) = plugin.channel_bridge.as_ref() else {
+    let Some(channel_bridge) = canonical_channel_bridge_contract(plugin) else {
         return normalized_operations;
     };
 
