@@ -346,7 +346,7 @@ pub(super) fn execute_tool_search(
         let mut activation_status = None;
         let mut activation_reason = None;
         let mut diagnostic_findings = Vec::new();
-        let mut channel_id = None;
+        let mut channel_id = tool_search_channel_id_from_provider_metadata(&provider.metadata);
         let mut channel_bridge =
             tool_search_bridge_snapshot_from_provider_metadata(&provider.metadata);
         let mut adapter_family = provider.metadata.get("adapter_family").cloned();
@@ -1146,6 +1146,17 @@ fn tool_search_bridge_snapshot_from_provider_metadata(
             .map(|bridge| bridge.readiness.missing_fields)
             .unwrap_or_default(),
     }
+}
+
+fn tool_search_channel_id_from_provider_metadata(
+    metadata: &BTreeMap<String, String>,
+) -> Option<String> {
+    metadata
+        .get(crate::spec_runtime::PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY)
+        .and_then(|raw| {
+            serde_json::from_str::<kernel::CanonicalPluginChannelBridgeContract>(raw).ok()
+        })
+        .and_then(|bridge| bridge.channel_id)
 }
 
 fn tool_search_bridge_snapshot_from_manifest_metadata(
