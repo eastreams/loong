@@ -1746,9 +1746,9 @@ const WEBHOOK_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 ];
 const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "http post send",
+    label: "bridge send",
     command: "channels send webhook",
-    availability: ChannelCatalogOperationAvailability::Implemented,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: false,
     requirements: WEBHOOK_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -1756,9 +1756,9 @@ const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
 };
 const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "inbound webhook service",
+    label: "bridge serve",
     command: "channels serve webhook",
-    availability: ChannelCatalogOperationAvailability::Implemented,
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
     tracks_runtime: true,
     requirements: WEBHOOK_SERVE_REQUIREMENTS,
     default_target_kind: None,
@@ -1800,16 +1800,9 @@ const WEBHOOK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: WEBHOOK_SERVE_DOCTOR_CHECKS,
     },
 ];
-const WEBHOOK_CAPABILITIES: &[ChannelCapability] = &[
-    ChannelCapability::RuntimeBacked,
-    ChannelCapability::MultiAccount,
-    ChannelCapability::Send,
-    ChannelCapability::Serve,
-    ChannelCapability::RuntimeTracking,
-];
 const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure generic webhook delivery in loong.toml under webhook or webhook.accounts.<account>; outbound endpoint send and inbound signed webhook serve are shipped, and webhook-serve requires --bind plus an optional --path override at runtime",
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a webhook bridge plugin that declares setup.surface=channel plus endpoint delivery details, signed inbound webhook requirements, and any bind/path serve requirements before exposing the managed bridge surface",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -8042,7 +8035,7 @@ mod tests {
             .expect("qqbot surface");
         assert_eq!(
             qqbot.catalog.implementation_status,
-            ChannelCatalogImplementationStatus::RuntimeBacked
+            ChannelCatalogImplementationStatus::PluginBacked
         );
         assert_eq!(qqbot.configured_accounts.len(), 1);
         assert_eq!(
@@ -8106,6 +8099,22 @@ mod tests {
             Some("default")
         );
         assert_eq!(wecom.configured_accounts[0].id, "wecom");
+
+        let webhook = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "webhook")
+            .expect("webhook surface");
+        assert_eq!(
+            webhook.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::PluginBacked
+        );
+        assert_eq!(webhook.configured_accounts.len(), 1);
+        assert_eq!(
+            webhook.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(webhook.configured_accounts[0].id, "webhook");
 
         let mattermost = inventory
             .channel_surfaces

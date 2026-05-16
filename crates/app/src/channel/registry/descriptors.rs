@@ -232,18 +232,16 @@ const EMAIL_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegi
 
 const WEBHOOK_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegistryDescriptor {
     id: "webhook",
-    runtime: Some(ChannelRuntimeDescriptor {
-        family: WEBHOOK_COMMAND_FAMILY_DESCRIPTOR,
-    }),
+    runtime: None,
     snapshot_builder: Some(build_webhook_snapshots),
     selection_order: 110,
     selection_label: "generic http integration",
-    blurb: "Shipped generic webhook surface with outbound POST delivery and signed inbound webhook serve support.",
-    implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
-    capabilities: WEBHOOK_CAPABILITIES,
+    blurb: "Plugin-backed generic HTTP integration surface that can delegate outbound endpoint send and inbound signed webhook serve ownership to a managed bridge while preserving the stable catalog contract.",
+    implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
+    capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
     label: "Webhook",
     aliases: &["http-webhook"],
-    transport: "generic_webhook",
+    transport: "generic_webhook_or_plugin_bridge",
     onboarding: WEBHOOK_ONBOARDING_DESCRIPTOR,
     operations: WEBHOOK_OPERATIONS,
 };

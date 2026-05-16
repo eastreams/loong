@@ -482,6 +482,19 @@ const LINE_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] =
         description: "LINE user, room, or group id for bridged conversation routing",
     }];
 
+const WEBHOOK_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
+    ChannelPluginBridgeStableTarget {
+        template: "webhook:<account>:endpoint:<url_or_alias>",
+        target_kind: ChannelCatalogTargetKind::Endpoint,
+        description: "outbound endpoint target for generic webhook delivery",
+    },
+    ChannelPluginBridgeStableTarget {
+        template: "webhook:<account>:serve:<path_or_bind>",
+        target_kind: ChannelCatalogTargetKind::Endpoint,
+        description: "signed inbound webhook serve target keyed by bind/path runtime ownership",
+    },
+];
+
 const WHATSAPP_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] =
     &[ChannelPluginBridgeStableTarget {
         template: "whatsapp:<account>:conversation:<phone_number_or_wa_id>",
@@ -701,6 +714,7 @@ pub(super) fn plugin_bridge_stable_targets_for_channel_id(
         "weixin" => WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS,
         "qqbot" => QQBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
         "line" => LINE_PLUGIN_BRIDGE_STABLE_TARGETS,
+        "webhook" => WEBHOOK_PLUGIN_BRIDGE_STABLE_TARGETS,
         "matrix" => MATRIX_PLUGIN_BRIDGE_STABLE_TARGETS,
         "wecom" => WECOM_PLUGIN_BRIDGE_STABLE_TARGETS,
         "whatsapp" => WHATSAPP_PLUGIN_BRIDGE_STABLE_TARGETS,
