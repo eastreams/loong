@@ -347,24 +347,8 @@ pub(super) fn execute_tool_search(
         let mut activation_reason = None;
         let mut diagnostic_findings = Vec::new();
         let mut channel_id = provider.metadata.get("plugin_channel_id").cloned();
-        let mut channel_bridge_transport_family = provider
-            .metadata
-            .get("plugin_channel_bridge_transport_family")
-            .cloned();
-        let mut channel_bridge_target_contract = provider
-            .metadata
-            .get("plugin_channel_bridge_target_contract")
-            .cloned();
-        let mut channel_bridge_account_scope = provider
-            .metadata
-            .get("plugin_channel_bridge_account_scope")
-            .cloned();
-        let mut channel_bridge_ready =
-            metadata_bool(&provider.metadata, "plugin_channel_bridge_ready");
-        let mut channel_bridge_missing_fields = metadata_strings(
-            &provider.metadata,
-            "plugin_channel_bridge_missing_fields_json",
-        );
+        let mut channel_bridge =
+            tool_search_bridge_snapshot_from_provider_metadata(&provider.metadata);
         let mut adapter_family = provider.metadata.get("adapter_family").cloned();
         let mut entrypoint_hint = provider
             .metadata
@@ -387,23 +371,12 @@ pub(super) fn execute_tool_search(
                 entrypoint_hint = Some(snapshot.entrypoint_hint.clone());
                 source_language = Some(snapshot.source_language.clone());
                 channel_id = snapshot.channel_id.clone().or(channel_id);
-                if let Some(channel_bridge) = snapshot.channel_bridge.as_ref() {
-                    channel_bridge_transport_family = channel_bridge
-                        .transport_family
-                        .clone()
-                        .or(channel_bridge_transport_family);
-                    channel_bridge_target_contract = channel_bridge
-                        .target_contract
-                        .clone()
-                        .or(channel_bridge_target_contract);
-                    channel_bridge_account_scope = channel_bridge
-                        .account_scope
-                        .clone()
-                        .or(channel_bridge_account_scope);
-
-                    channel_bridge_ready = Some(channel_bridge.readiness.ready);
-                    channel_bridge_missing_fields = channel_bridge.readiness.missing_fields.clone();
-                }
+                merge_tool_search_bridge_snapshot(
+                    &mut channel_bridge,
+                    tool_search_bridge_snapshot_from_canonical_translation(
+                        snapshot.channel_bridge.as_ref(),
+                    ),
+                );
             }
         }
         if let (Some(source_path), Some(plugin_id)) = (
@@ -525,13 +498,7 @@ pub(super) fn execute_tool_search(
                 setup_default_env_var,
                 setup_docs_urls,
                 setup_remediation,
-                channel_bridge: ToolSearchChannelBridgeSnapshot {
-                    transport_family: channel_bridge_transport_family,
-                    target_contract: channel_bridge_target_contract,
-                    account_scope: channel_bridge_account_scope,
-                    ready: channel_bridge_ready,
-                    missing_fields: channel_bridge_missing_fields,
-                },
+                channel_bridge,
                 setup_ready: true,
                 missing_required_env_vars: Vec::new(),
                 missing_required_config_keys: Vec::new(),
@@ -573,70 +540,16 @@ pub(super) fn execute_tool_search(
                 .and_then(|snapshot| snapshot.channel_id.clone())
                 .or_else(|| manifest.metadata.get("plugin_channel_id").cloned())
                 .or_else(|| manifest.channel_id.clone());
-            let channel_bridge_transport_family = translation
-                .and_then(|snapshot| {
-                    snapshot
-                        .channel_bridge
-                        .as_ref()
-                        .and_then(|bridge| bridge.transport_family.clone())
-                })
-                .or_else(|| {
-                    manifest
-                        .metadata
-                        .get("plugin_channel_bridge_transport_family")
-                        .cloned()
-                })
-                .or_else(|| manifest.metadata.get("transport_family").cloned());
-            let channel_bridge_target_contract = translation
-                .and_then(|snapshot| {
-                    snapshot
-                        .channel_bridge
-                        .as_ref()
-                        .and_then(|bridge| bridge.target_contract.clone())
-                })
-                .or_else(|| {
-                    manifest
-                        .metadata
-                        .get("plugin_channel_bridge_target_contract")
-                        .cloned()
-                })
-                .or_else(|| manifest.metadata.get("target_contract").cloned());
-            let channel_bridge_account_scope = translation
-                .and_then(|snapshot| {
-                    snapshot
-                        .channel_bridge
-                        .as_ref()
-                        .and_then(|bridge| bridge.account_scope.clone())
-                })
-                .or_else(|| {
-                    manifest
-                        .metadata
-                        .get("plugin_channel_bridge_account_scope")
-                        .cloned()
-                })
-                .or_else(|| manifest.metadata.get("account_scope").cloned());
-            let channel_bridge_ready = translation
-                .and_then(|snapshot| {
-                    snapshot
-                        .channel_bridge
-                        .as_ref()
-                        .map(|bridge| bridge.readiness.ready)
-                })
-                .or_else(|| metadata_bool(&manifest.metadata, "plugin_channel_bridge_ready"));
-            let channel_bridge_missing_fields = translation
-                .map(|snapshot| {
-                    snapshot
-                        .channel_bridge
-                        .as_ref()
-                        .map(|bridge| bridge.readiness.missing_fields.clone())
-                        .unwrap_or_default()
-                })
-                .unwrap_or_else(|| {
-                    metadata_strings(
-                        &manifest.metadata,
-                        "plugin_channel_bridge_missing_fields_json",
+            let mut channel_bridge =
+                tool_search_bridge_snapshot_from_manifest_metadata(&manifest.metadata);
+            merge_tool_search_bridge_snapshot(
+                &mut channel_bridge,
+                translation.and_then(|snapshot| {
+                    tool_search_bridge_snapshot_from_canonical_translation(
+                        snapshot.channel_bridge.as_ref(),
                     )
-                });
+                }),
+            );
 
             let entry = entries
                 .entry(tool_id.clone())
@@ -705,13 +618,7 @@ pub(super) fn execute_tool_search(
                         .setup
                         .as_ref()
                         .and_then(|setup| setup.remediation.clone()),
-                    channel_bridge: ToolSearchChannelBridgeSnapshot {
-                        transport_family: channel_bridge_transport_family.clone(),
-                        target_contract: channel_bridge_target_contract.clone(),
-                        account_scope: channel_bridge_account_scope.clone(),
-                        ready: channel_bridge_ready,
-                        missing_fields: channel_bridge_missing_fields.clone(),
-                    },
+                    channel_bridge: channel_bridge.clone(),
                     setup_ready: true,
                     missing_required_env_vars: Vec::new(),
                     missing_required_config_keys: Vec::new(),
@@ -910,21 +817,7 @@ pub(super) fn execute_tool_search(
                     .as_ref()
                     .and_then(|setup| setup.remediation.clone());
             }
-            if entry.channel_bridge.transport_family.is_none() {
-                entry.channel_bridge.transport_family = channel_bridge_transport_family.clone();
-            }
-            if entry.channel_bridge.target_contract.is_none() {
-                entry.channel_bridge.target_contract = channel_bridge_target_contract.clone();
-            }
-            if entry.channel_bridge.account_scope.is_none() {
-                entry.channel_bridge.account_scope = channel_bridge_account_scope.clone();
-            }
-            if entry.channel_bridge.ready.is_none() {
-                entry.channel_bridge.ready = channel_bridge_ready;
-            }
-            if entry.channel_bridge.missing_fields.is_empty() {
-                entry.channel_bridge.missing_fields = channel_bridge_missing_fields.clone();
-            }
+            merge_tool_search_bridge_snapshot(&mut entry.channel_bridge, Some(channel_bridge));
             if entry.input_examples.is_empty() {
                 entry.input_examples = manifest.input_examples.clone();
             }
@@ -1228,6 +1121,74 @@ fn metadata_bool(metadata: &BTreeMap<String, String>, key: &str) -> Option<bool>
             "false" | "0" | "no" | "n" | "off" => Some(false),
             _ => None,
         })
+}
+
+fn tool_search_bridge_snapshot_from_provider_metadata(
+    metadata: &BTreeMap<String, String>,
+) -> ToolSearchChannelBridgeSnapshot {
+    ToolSearchChannelBridgeSnapshot {
+        transport_family: metadata
+            .get("plugin_channel_bridge_transport_family")
+            .cloned(),
+        target_contract: metadata
+            .get("plugin_channel_bridge_target_contract")
+            .cloned(),
+        account_scope: metadata.get("plugin_channel_bridge_account_scope").cloned(),
+        ready: metadata_bool(metadata, "plugin_channel_bridge_ready"),
+        missing_fields: metadata_strings(metadata, "plugin_channel_bridge_missing_fields_json"),
+    }
+}
+
+fn tool_search_bridge_snapshot_from_manifest_metadata(
+    metadata: &BTreeMap<String, String>,
+) -> ToolSearchChannelBridgeSnapshot {
+    ToolSearchChannelBridgeSnapshot {
+        transport_family: metadata
+            .get("plugin_channel_bridge_transport_family")
+            .cloned()
+            .or_else(|| metadata.get("transport_family").cloned()),
+        target_contract: metadata
+            .get("plugin_channel_bridge_target_contract")
+            .cloned()
+            .or_else(|| metadata.get("target_contract").cloned()),
+        account_scope: metadata
+            .get("plugin_channel_bridge_account_scope")
+            .cloned()
+            .or_else(|| metadata.get("account_scope").cloned()),
+        ready: metadata_bool(metadata, "plugin_channel_bridge_ready"),
+        missing_fields: metadata_strings(metadata, "plugin_channel_bridge_missing_fields_json"),
+    }
+}
+
+fn tool_search_bridge_snapshot_from_canonical_translation(
+    bridge: Option<&kernel::CanonicalPluginChannelBridgeContract>,
+) -> Option<ToolSearchChannelBridgeSnapshot> {
+    bridge.map(|bridge| ToolSearchChannelBridgeSnapshot {
+        transport_family: bridge.transport_family.clone(),
+        target_contract: bridge.target_contract.clone(),
+        account_scope: bridge.account_scope.clone(),
+        ready: Some(bridge.readiness.ready),
+        missing_fields: bridge.readiness.missing_fields.clone(),
+    })
+}
+
+fn merge_tool_search_bridge_snapshot(
+    target: &mut ToolSearchChannelBridgeSnapshot,
+    source: Option<ToolSearchChannelBridgeSnapshot>,
+) {
+    let Some(source) = source else {
+        return;
+    };
+
+    target.transport_family = source.transport_family.or(target.transport_family.take());
+    target.target_contract = source.target_contract.or(target.target_contract.take());
+    target.account_scope = source.account_scope.or(target.account_scope.take());
+    if let Some(ready) = source.ready {
+        target.ready = Some(ready);
+        target.missing_fields = source.missing_fields;
+    } else if target.missing_fields.is_empty() {
+        target.missing_fields = source.missing_fields;
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1906,13 +1867,123 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
 mod tests {
     use super::*;
     use kernel::{
-        IntegrationCatalog, PluginActivationCandidate, PluginActivationPlan,
+        Capability, IntegrationCatalog, PluginActivationCandidate, PluginActivationPlan,
         PluginActivationStatus, PluginBridgeKind, PluginCompatibilityMode, PluginContractDialect,
-        PluginDiagnosticCode, PluginDiagnosticFinding, PluginDiagnosticPhase,
-        PluginDiagnosticSeverity, PluginSetupReadinessContext, PluginSlotClaim, PluginSlotMode,
-        PluginSourceKind, ProviderConfig,
+        PluginDescriptor, PluginDiagnosticCode, PluginDiagnosticFinding, PluginDiagnosticPhase,
+        PluginDiagnosticSeverity, PluginIR, PluginManifest, PluginRuntimeProfile, PluginSetup,
+        PluginSetupMode, PluginSetupReadinessContext, PluginSlotClaim, PluginSlotMode,
+        PluginSourceKind, PluginTranslationReport, PluginTrustTier, ProviderConfig,
     };
     use std::collections::{BTreeMap, BTreeSet};
+
+    fn test_channel_bridge_descriptor() -> PluginDescriptor {
+        PluginDescriptor {
+            path: "/tmp/weixin/loong.plugin.json".to_owned(),
+            source_kind: PluginSourceKind::PackageManifest,
+            dialect: PluginContractDialect::LoongPackageManifest,
+            dialect_version: Some("v1alpha1".to_owned()),
+            compatibility_mode: PluginCompatibilityMode::Native,
+            package_root: "/tmp/weixin".to_owned(),
+            package_manifest_path: Some("/tmp/weixin/loong.plugin.json".to_owned()),
+            language: "manifest".to_owned(),
+            manifest: PluginManifest {
+                api_version: Some("v1alpha1".to_owned()),
+                version: Some("0.3.0".to_owned()),
+                plugin_id: "weixin-clawbot-bridge".to_owned(),
+                provider_id: "weixin-bridge".to_owned(),
+                connector_name: "weixin-clawbot-http".to_owned(),
+                channel_id: Some("weixin".to_owned()),
+                endpoint: Some("http://127.0.0.1:8091/bridge".to_owned()),
+                capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier: PluginTrustTier::VerifiedCommunity,
+                metadata: BTreeMap::from([
+                    (
+                        "transport_family".to_owned(),
+                        "wechat_clawbot_ilink_bridge".to_owned(),
+                    ),
+                    (
+                        "target_contract".to_owned(),
+                        "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+                    ),
+                    ("account_scope".to_owned(), "multi_account".to_owned()),
+                ]),
+                summary: Some("Weixin bridge".to_owned()),
+                tags: vec!["weixin".to_owned(), "bridge".to_owned()],
+                input_examples: Vec::new(),
+                output_examples: Vec::new(),
+                defer_loading: false,
+                setup: Some(PluginSetup {
+                    mode: PluginSetupMode::MetadataOnly,
+                    surface: Some("channel".to_owned()),
+                    required_env_vars: vec!["WEIXIN_BRIDGE_URL".to_owned()],
+                    recommended_env_vars: vec!["WEIXIN_BRIDGE_ACCESS_TOKEN".to_owned()],
+                    required_config_keys: vec!["weixin.enabled".to_owned()],
+                    default_env_var: Some("WEIXIN_BRIDGE_URL".to_owned()),
+                    docs_urls: vec!["https://docs.example.com/weixin-bridge".to_owned()],
+                    remediation: Some("configure the sanctioned weixin bridge contract".to_owned()),
+                }),
+                slot_claims: vec![PluginSlotClaim {
+                    slot: "channel:weixin".to_owned(),
+                    key: "bridge".to_owned(),
+                    mode: PluginSlotMode::Exclusive,
+                }],
+                compatibility: None,
+            },
+        }
+    }
+
+    fn test_channel_bridge_translation() -> PluginTranslationReport {
+        let descriptor = test_channel_bridge_descriptor();
+        PluginTranslationReport {
+            translated_plugins: 1,
+            bridge_distribution: BTreeMap::from([("http_json".to_owned(), 1)]),
+            entries: vec![PluginIR {
+                manifest_api_version: descriptor.manifest.api_version.clone(),
+                plugin_version: descriptor.manifest.version.clone(),
+                dialect: descriptor.dialect,
+                dialect_version: descriptor.dialect_version.clone(),
+                compatibility_mode: descriptor.compatibility_mode,
+                plugin_id: descriptor.manifest.plugin_id.clone(),
+                provider_id: descriptor.manifest.provider_id.clone(),
+                connector_name: descriptor.manifest.connector_name.clone(),
+                channel_id: descriptor.manifest.channel_id.clone(),
+                endpoint: descriptor.manifest.endpoint.clone(),
+                capabilities: descriptor.manifest.capabilities.clone(),
+                trust_tier: descriptor.manifest.trust_tier,
+                metadata: descriptor.manifest.metadata.clone(),
+                source_path: descriptor.path.clone(),
+                source_kind: descriptor.source_kind,
+                package_root: descriptor.package_root.clone(),
+                package_manifest_path: descriptor.package_manifest_path.clone(),
+                diagnostic_findings: Vec::new(),
+                setup: descriptor.manifest.setup.clone(),
+                channel_bridge: Some(kernel::PluginChannelBridgeContract {
+                    channel_id: Some("weixin".to_owned()),
+                    setup_surface: Some("channel".to_owned()),
+                    transport_family: Some("wechat_clawbot_ilink_bridge".to_owned()),
+                    target_contract: Some(
+                        "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+                    ),
+                    account_scope: Some("multi_account".to_owned()),
+                    runtime_contract: Some("loong_channel_bridge_v1".to_owned()),
+                    runtime_operations: vec!["send_message".to_owned()],
+                    runtime_metadata_issues: Vec::new(),
+                    readiness: kernel::PluginChannelBridgeReadiness {
+                        ready: true,
+                        missing_fields: Vec::new(),
+                    },
+                }),
+                slot_claims: descriptor.manifest.slot_claims.clone(),
+                compatibility: descriptor.manifest.compatibility.clone(),
+                runtime: PluginRuntimeProfile {
+                    source_language: descriptor.language,
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "channel-bridge".to_owned(),
+                    entrypoint_hint: "http://127.0.0.1:8091/bridge".to_owned(),
+                },
+            }],
+        }
+    }
 
     #[test]
     fn execute_tool_search_surfaces_plugin_provenance_and_setup_metadata() {
@@ -2801,5 +2872,70 @@ mod tests {
                 "metadata.target_contract".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn execute_tool_search_prefers_canonical_translation_bridge_snapshot_over_provider_metadata() {
+        let mut catalog = IntegrationCatalog::new();
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "weixin-bridge".to_owned(),
+            connector_name: "weixin-clawbot-http".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "weixin-clawbot-bridge".to_owned()),
+                (
+                    "plugin_source_path".to_owned(),
+                    "/tmp/weixin/loong.plugin.json".to_owned(),
+                ),
+                ("plugin_channel_id".to_owned(), "weixin".to_owned()),
+                (
+                    "plugin_channel_bridge_transport_family".to_owned(),
+                    "stale_provider_bridge".to_owned(),
+                ),
+                (
+                    "plugin_channel_bridge_target_contract".to_owned(),
+                    "stale:<id>".to_owned(),
+                ),
+                (
+                    "plugin_channel_bridge_account_scope".to_owned(),
+                    "single_account".to_owned(),
+                ),
+                ("plugin_channel_bridge_ready".to_owned(), "false".to_owned()),
+                (
+                    "plugin_channel_bridge_missing_fields_json".to_owned(),
+                    "[\"metadata.transport_family\"]".to_owned(),
+                ),
+            ]),
+        });
+
+        let translation = test_channel_bridge_translation();
+        let report = execute_tool_search(
+            &catalog,
+            &[],
+            &[translation],
+            &PluginSetupReadinessContext::default(),
+            &[],
+            "weixin",
+            10,
+            &[],
+            true,
+            false,
+        );
+
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(
+            report.results[0].channel_bridge.transport_family.as_deref(),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            report.results[0].channel_bridge.target_contract.as_deref(),
+            Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
+        );
+        assert_eq!(
+            report.results[0].channel_bridge.account_scope.as_deref(),
+            Some("multi_account")
+        );
+        assert_eq!(report.results[0].channel_bridge.ready, Some(true));
+        assert!(report.results[0].channel_bridge.missing_fields.is_empty());
     }
 }
