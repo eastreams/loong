@@ -58,6 +58,35 @@ pub struct TurnGatewayRequest {
     pub retry_progress: ProviderRetryProgressCallback,
 }
 
+pub fn build_turn_gateway_request(
+    address: ConversationSessionAddress,
+    message: String,
+    metadata: BTreeMap<String, String>,
+    turn_mode: AgentTurnMode,
+    acp_routing_intent: crate::acp::AcpRoutingIntent,
+    acp_event_stream: bool,
+    acp_bootstrap_mcp_servers: Vec<String>,
+    acp_cwd: Option<String>,
+    live_surface_enabled: bool,
+) -> TurnGatewayRequest {
+    TurnGatewayRequest {
+        address,
+        message,
+        metadata,
+        turn_mode,
+        acp_routing_intent,
+        acp_event_stream,
+        acp_bootstrap_mcp_servers,
+        acp_cwd,
+        live_surface_enabled,
+        ingress: None,
+        observer: None,
+        provenance: TurnGatewayProvenance::default(),
+        provider_error_mode: ProviderErrorMode::InlineMessage,
+        retry_progress: None,
+    }
+}
+
 pub async fn run_turn_gateway(
     execution: TurnGatewayExecution<'_>,
     request: TurnGatewayRequest,
@@ -266,5 +295,49 @@ mod tests {
         assert_eq!(options.provenance.trace_id, Some("trace-1"));
         assert_eq!(options.provenance.source_message_id, Some("message-2"));
         assert_eq!(options.provenance.ack_cursor, Some("cursor-3"));
+    }
+
+    #[test]
+    fn build_turn_gateway_request_projects_common_daemon_payload_fields() {
+        let request = build_turn_gateway_request(
+            ConversationSessionAddress::from_session_id("session-2")
+                .with_channel_scope("telegram", "chat-7")
+                .with_account_id("ops-bot")
+                .with_participant_id("alice")
+                .with_thread_id("thread-9"),
+            "hello".to_owned(),
+            BTreeMap::from([("trace".to_owned(), "abc".to_owned())]),
+            AgentTurnMode::Oneshot,
+            crate::acp::AcpRoutingIntent::Explicit,
+            true,
+            vec!["filesystem".to_owned()],
+            Some("/workspace/project".to_owned()),
+            false,
+        );
+
+        assert_eq!(request.address.session_id, "session-2");
+        assert_eq!(request.address.channel_id.as_deref(), Some("telegram"));
+        assert_eq!(request.address.conversation_id.as_deref(), Some("chat-7"));
+        assert_eq!(request.address.account_id.as_deref(), Some("ops-bot"));
+        assert_eq!(request.address.participant_id.as_deref(), Some("alice"));
+        assert_eq!(request.address.thread_id.as_deref(), Some("thread-9"));
+        assert_eq!(request.message, "hello");
+        assert_eq!(
+            request.metadata.get("trace").map(String::as_str),
+            Some("abc")
+        );
+        assert_eq!(
+            request.acp_routing_intent,
+            crate::acp::AcpRoutingIntent::Explicit
+        );
+        assert!(request.acp_event_stream);
+        assert_eq!(
+            request.acp_bootstrap_mcp_servers,
+            vec!["filesystem".to_owned()]
+        );
+        assert_eq!(request.acp_cwd.as_deref(), Some("/workspace/project"));
+        assert!(!request.live_surface_enabled);
+        assert!(request.ingress.is_none());
+        assert!(request.observer.is_none());
     }
 }

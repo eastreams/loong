@@ -83,8 +83,8 @@ pub(super) async fn turn_submit(
             metadata,
             live_surface_enabled: false,
         };
-        let projection_request = crate::mvp::turn_gateway::TurnGatewayRequest {
-            address: crate::build_acp_dispatch_address(
+        let projection_request = crate::mvp::turn_gateway::build_turn_gateway_request(
+            crate::build_acp_dispatch_address(
                 session_id.as_str(),
                 turn_request.channel_id.as_deref(),
                 turn_request.conversation_id.as_deref(),
@@ -93,20 +93,15 @@ pub(super) async fn turn_submit(
                 turn_request.thread_id.as_deref(),
             )
             .expect("validated control-plane turn target"),
-            message: turn_request.message.clone(),
-            metadata: turn_request.metadata.clone(),
-            turn_mode: turn_request.turn_mode,
-            acp_routing_intent: crate::mvp::acp::AcpRoutingIntent::Explicit,
-            acp_event_stream: true,
-            acp_bootstrap_mcp_servers: Vec::new(),
-            acp_cwd: working_directory.clone(),
-            live_surface_enabled: false,
-            ingress: None,
-            observer: None,
-            provenance: crate::mvp::turn_gateway::TurnGatewayProvenance::default(),
-            provider_error_mode: crate::mvp::conversation::ProviderErrorMode::InlineMessage,
-            retry_progress: None,
-        };
+            turn_request.message.clone(),
+            turn_request.metadata.clone(),
+            turn_request.turn_mode,
+            crate::mvp::acp::AcpRoutingIntent::Explicit,
+            true,
+            Vec::new(),
+            working_directory.clone(),
+            false,
+        );
         let turn_service =
             crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
                 .with_acp_manager(acp_manager)
