@@ -242,16 +242,23 @@ impl<'a> RuntimeTurnExecutionService<'a> {
 
             let (effective_ingress, effective_provenance) =
                 effective_turn_context(ingress, provenance);
+            let acp_options = acp_turn_options_from_runtime(
+                runtime,
+                event_sink,
+                Some(&request.metadata),
+                options.acp_routing_intent,
+                acp_bootstrap_mcp_servers.as_slice(),
+                acp_working_directory.as_deref(),
+            )
+            .with_provenance(effective_provenance);
             let turn_outcome =
                 crate::chat::run_cli_turn_with_address_and_ingress_and_error_mode_outcome(
                     runtime,
                     &turn_address,
                     message,
-                    event_sink,
+                    &acp_options,
                     request.live_surface_enabled,
-                    Some(&request.metadata),
                     effective_ingress,
-                    effective_provenance,
                     provider_error_mode,
                     observer,
                     retry_progress,
