@@ -596,6 +596,15 @@ pub const SPEC_RUN_REPORT_SCHEMA_VERSION: u32 = 1;
 pub const SPEC_RUN_REPORT_SCHEMA_SURFACE: &str = "spec_run_report";
 pub const SPEC_RUN_REPORT_SCHEMA_PURPOSE: &str = "runtime_execution";
 #[derive(Debug, Clone)]
+pub struct ToolSearchChannelBridgeSnapshot {
+    pub transport_family: Option<String>,
+    pub target_contract: Option<String>,
+    pub account_scope: Option<String>,
+    pub ready: Option<bool>,
+    pub missing_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ToolSearchEntry {
     pub tool_id: String,
     pub plugin_id: Option<String>,
@@ -628,11 +637,7 @@ pub struct ToolSearchEntry {
     pub setup_default_env_var: Option<String>,
     pub setup_docs_urls: Vec<String>,
     pub setup_remediation: Option<String>,
-    pub channel_bridge_transport_family: Option<String>,
-    pub channel_bridge_target_contract: Option<String>,
-    pub channel_bridge_account_scope: Option<String>,
-    pub channel_bridge_ready: Option<bool>,
-    pub channel_bridge_missing_fields: Vec<String>,
+    pub channel_bridge: ToolSearchChannelBridgeSnapshot,
     pub setup_ready: bool,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,
@@ -683,11 +688,8 @@ pub struct ToolSearchResult {
     pub setup_default_env_var: Option<String>,
     pub setup_docs_urls: Vec<String>,
     pub setup_remediation: Option<String>,
-    pub channel_bridge_transport_family: Option<String>,
-    pub channel_bridge_target_contract: Option<String>,
-    pub channel_bridge_account_scope: Option<String>,
-    pub channel_bridge_ready: Option<bool>,
-    pub channel_bridge_missing_fields: Vec<String>,
+    #[serde(flatten)]
+    pub channel_bridge: ToolSearchChannelBridgeSnapshot,
     pub setup_ready: bool,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,
@@ -704,6 +706,23 @@ pub struct ToolSearchResult {
     pub tags: Vec<String>,
     pub input_examples: Vec<Value>,
     pub output_examples: Vec<Value>,
+}
+
+impl Serialize for ToolSearchChannelBridgeSnapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("ToolSearchChannelBridgeSnapshot", 5)?;
+        state.serialize_field("channel_bridge_transport_family", &self.transport_family)?;
+        state.serialize_field("channel_bridge_target_contract", &self.target_contract)?;
+        state.serialize_field("channel_bridge_account_scope", &self.account_scope)?;
+        state.serialize_field("channel_bridge_ready", &self.ready)?;
+        state.serialize_field("channel_bridge_missing_fields", &self.missing_fields)?;
+        state.end()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
