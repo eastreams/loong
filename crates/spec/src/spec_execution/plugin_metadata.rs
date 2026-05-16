@@ -361,42 +361,18 @@ fn insert_plugin_channel_bridge_metadata(
     upsert_or_remove_metadata_value(metadata, "plugin_channel_id", snapshot.channel_id.as_ref());
     let channel_bridge = snapshot.channel_bridge.as_ref();
     insert_plugin_channel_bridge_contract_metadata(metadata, channel_bridge);
-    upsert_or_remove_metadata_value(
-        metadata,
-        "plugin_channel_bridge_transport_family",
-        channel_bridge.and_then(|bridge| bridge.transport_family.as_ref()),
-    );
-    upsert_or_remove_metadata_value(
-        metadata,
-        "plugin_channel_bridge_target_contract",
-        channel_bridge.and_then(|bridge| bridge.target_contract.as_ref()),
-    );
-    upsert_or_remove_metadata_value(
-        metadata,
-        "plugin_channel_bridge_account_scope",
-        channel_bridge.and_then(|bridge| bridge.account_scope.as_ref()),
-    );
-
-    if let Some(channel_bridge_ready) = channel_bridge.map(|bridge| bridge.readiness.ready) {
-        let ready_key = "plugin_channel_bridge_ready".to_owned();
-        let ready_value = channel_bridge_ready.to_string();
-        metadata.insert(ready_key, ready_value);
-    } else {
-        metadata.remove("plugin_channel_bridge_ready");
-    }
-
-    upsert_or_remove_json_string_list_metadata(
-        metadata,
-        "plugin_channel_bridge_missing_fields_json",
-        &channel_bridge
-            .map(|bridge| bridge.readiness.missing_fields.clone())
-            .unwrap_or_default(),
-    );
+    remove_legacy_plugin_channel_bridge_projection_metadata(metadata);
 }
 
 fn remove_plugin_channel_bridge_metadata(metadata: &mut BTreeMap<String, String>) {
     metadata.remove("plugin_channel_id");
     metadata.remove(PLUGIN_CHANNEL_BRIDGE_CONTRACT_METADATA_KEY);
+    remove_legacy_plugin_channel_bridge_projection_metadata(metadata);
+}
+
+fn remove_legacy_plugin_channel_bridge_projection_metadata(
+    metadata: &mut BTreeMap<String, String>,
+) {
     metadata.remove("plugin_channel_bridge_transport_family");
     metadata.remove("plugin_channel_bridge_target_contract");
     metadata.remove("plugin_channel_bridge_account_scope");
@@ -437,21 +413,6 @@ fn upsert_or_remove_metadata_value(
     let metadata_key = key.to_owned();
     let metadata_value = value.clone();
     metadata.insert(metadata_key, metadata_value);
-}
-
-fn upsert_or_remove_json_string_list_metadata(
-    metadata: &mut BTreeMap<String, String>,
-    key: &str,
-    values: &[String],
-) {
-    let serialized = serde_json::to_string(values);
-    let Ok(serialized) = serialized else {
-        metadata.remove(key);
-        return;
-    };
-
-    let metadata_key = key.to_owned();
-    metadata.insert(metadata_key, serialized);
 }
 
 fn insert_plugin_setup_string_list_metadata(
