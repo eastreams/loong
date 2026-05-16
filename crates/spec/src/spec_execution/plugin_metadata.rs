@@ -9,11 +9,7 @@ pub(super) struct PluginTranslationMetadataSnapshot {
     entrypoint_hint: String,
     source_language: String,
     channel_id: Option<String>,
-    channel_bridge_transport_family: Option<String>,
-    channel_bridge_target_contract: Option<String>,
-    channel_bridge_account_scope: Option<String>,
-    channel_bridge_ready: Option<bool>,
-    channel_bridge_missing_fields: Vec<String>,
+    channel_bridge: Option<kernel::CanonicalPluginChannelBridgeContract>,
 }
 
 pub(super) fn enrich_scan_report_with_translation(
@@ -33,16 +29,7 @@ pub(super) fn enrich_scan_report_with_translation(
         let channel_id = channel_bridge
             .and_then(|bridge| bridge.channel_id.clone())
             .or_else(|| entry.channel_id.clone());
-        let channel_bridge_transport_family =
-            channel_bridge.and_then(|bridge| bridge.transport_family.clone());
-        let channel_bridge_target_contract =
-            channel_bridge.and_then(|bridge| bridge.target_contract.clone());
-        let channel_bridge_account_scope =
-            channel_bridge.and_then(|bridge| bridge.account_scope.clone());
-        let channel_bridge_ready = channel_bridge.map(|bridge| bridge.readiness.ready);
-        let channel_bridge_missing_fields = channel_bridge
-            .map(|bridge| bridge.readiness.missing_fields.clone())
-            .unwrap_or_default();
+        let channel_bridge = channel_bridge.map(kernel::canonical_channel_bridge_contract);
 
         runtime_by_key.insert(
             (entry.source_path.clone(), entry.plugin_id.clone()),
@@ -52,11 +39,7 @@ pub(super) fn enrich_scan_report_with_translation(
                 entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
                 source_language: entry.runtime.source_language.clone(),
                 channel_id,
-                channel_bridge_transport_family,
-                channel_bridge_target_contract,
-                channel_bridge_account_scope,
-                channel_bridge_ready,
-                channel_bridge_missing_fields,
+                channel_bridge,
             },
         );
     }
@@ -376,23 +359,24 @@ fn insert_plugin_channel_bridge_metadata(
     };
 
     upsert_or_remove_metadata_value(metadata, "plugin_channel_id", snapshot.channel_id.as_ref());
+    let channel_bridge = snapshot.channel_bridge.as_ref();
     upsert_or_remove_metadata_value(
         metadata,
         "plugin_channel_bridge_transport_family",
-        snapshot.channel_bridge_transport_family.as_ref(),
+        channel_bridge.and_then(|bridge| bridge.transport_family.as_ref()),
     );
     upsert_or_remove_metadata_value(
         metadata,
         "plugin_channel_bridge_target_contract",
-        snapshot.channel_bridge_target_contract.as_ref(),
+        channel_bridge.and_then(|bridge| bridge.target_contract.as_ref()),
     );
     upsert_or_remove_metadata_value(
         metadata,
         "plugin_channel_bridge_account_scope",
-        snapshot.channel_bridge_account_scope.as_ref(),
+        channel_bridge.and_then(|bridge| bridge.account_scope.as_ref()),
     );
 
-    if let Some(channel_bridge_ready) = snapshot.channel_bridge_ready {
+    if let Some(channel_bridge_ready) = channel_bridge.map(|bridge| bridge.readiness.ready) {
         let ready_key = "plugin_channel_bridge_ready".to_owned();
         let ready_value = channel_bridge_ready.to_string();
         metadata.insert(ready_key, ready_value);
@@ -403,7 +387,9 @@ fn insert_plugin_channel_bridge_metadata(
     upsert_or_remove_json_string_list_metadata(
         metadata,
         "plugin_channel_bridge_missing_fields_json",
-        &snapshot.channel_bridge_missing_fields,
+        &channel_bridge
+            .map(|bridge| bridge.readiness.missing_fields.clone())
+            .unwrap_or_default(),
     );
 }
 
