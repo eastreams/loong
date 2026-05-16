@@ -447,6 +447,13 @@ const QQBOT_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] =
         description: "official gateway conversation peer id",
     }];
 
+const WECOM_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] =
+    &[ChannelPluginBridgeStableTarget {
+        template: "wecom:<account>:conversation:<conversation_id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "AIBot conversation id for enterprise chat routing",
+    }];
+
 const WHATSAPP_PERSONAL_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
     ChannelPluginBridgeStableTarget {
         template: "whatsapp-personal:<account>:contact:<e164-or-jid>",
@@ -656,6 +663,7 @@ pub(super) fn plugin_bridge_stable_targets_for_channel_id(
     match channel_id {
         "weixin" => WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS,
         "qqbot" => QQBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
+        "wecom" => WECOM_PLUGIN_BRIDGE_STABLE_TARGETS,
         "onebot" => ONEBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
         "whatsapp-personal" => WHATSAPP_PERSONAL_PLUGIN_BRIDGE_STABLE_TARGETS,
         _ => EMPTY_PLUGIN_BRIDGE_STABLE_TARGETS,
