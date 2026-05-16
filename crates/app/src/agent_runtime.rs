@@ -27,7 +27,6 @@ pub enum AgentTurnMode {
     #[default]
     Oneshot,
     Delegate,
-    Acp,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -842,7 +841,6 @@ fn kernel_scope_for_turn_mode(turn_mode: AgentTurnMode) -> &'static str {
         AgentTurnMode::Interactive => "agent-runtime-interactive",
         AgentTurnMode::Oneshot => "agent-runtime-oneshot",
         AgentTurnMode::Delegate => "agent-runtime-delegate",
-        AgentTurnMode::Acp => "agent-runtime-oneshot",
     }
 }
 

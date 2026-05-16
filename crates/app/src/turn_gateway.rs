@@ -155,7 +155,7 @@ mod tests {
             address,
             message: "hello".to_owned(),
             metadata: BTreeMap::from([("trace".to_owned(), "abc".to_owned())]),
-            turn_mode: AgentTurnMode::Acp,
+            turn_mode: AgentTurnMode::Oneshot,
             acp_routing_intent: crate::acp::AcpRoutingIntent::Explicit,
             acp_event_stream: true,
             acp_bootstrap_mcp_servers: vec!["mcp-1".to_owned()],
@@ -171,7 +171,7 @@ mod tests {
         let built = build_agent_turn_request(&request).expect("build turn gateway request");
 
         assert_eq!(built.message, "hello");
-        assert_eq!(built.turn_mode, AgentTurnMode::Acp);
+        assert_eq!(built.turn_mode, AgentTurnMode::Oneshot);
         assert_eq!(built.channel_id.as_deref(), Some("telegram"));
         assert_eq!(built.conversation_id.as_deref(), Some("chat-42"));
         assert_eq!(built.account_id.as_deref(), Some("ops-bot"));
