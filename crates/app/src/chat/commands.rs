@@ -284,7 +284,7 @@ pub(super) async fn process_cli_chat_input(
     };
     let turn_options = crate::agent_runtime::TurnExecutionOptions {
         event_sink,
-        acp_routing_intent: if runtime.explicit_acp_request {
+        acp_routing_intent: if options.requests_explicit_acp() {
             crate::acp::AcpRoutingIntent::Explicit
         } else {
             crate::acp::AcpRoutingIntent::Automatic

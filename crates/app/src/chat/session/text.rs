@@ -91,7 +91,7 @@ pub(super) fn fallback_startup_summary(session_id: &str) -> ops::CliChatStartupS
         allowed_channels: Vec::new(),
         acp_backend_id: "-".to_owned(),
         acp_backend_source: "-".to_owned(),
-        explicit_acp_request: false,
+        acp_overrides_requested: false,
         event_stream_enabled: false,
         bootstrap_mcp_servers: Vec::new(),
         working_directory: None,

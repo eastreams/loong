@@ -297,7 +297,6 @@ pub(crate) struct CliTurnRuntime {
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
     pub(crate) runtime_kernel: crate::runtime_bridge::RuntimeKernelOwner,
-    pub(crate) explicit_acp_request: bool,
     pub(crate) effective_bootstrap_mcp_servers: Vec<String>,
     pub(crate) effective_working_directory: Option<PathBuf>,
     pub(crate) memory_label: String,
@@ -648,7 +647,10 @@ pub(crate) async fn run_cli_turn_with_address_and_ingress_and_error_mode_outcome
     acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
 ) -> CliResult<crate::conversation::ConversationTurnOutcome> {
     let turn_config = reload_cli_turn_config(&runtime.config, runtime.resolved_path.as_path())?;
-    let acp_options = if runtime.explicit_acp_request {
+    let acp_options = if event_sink.is_some()
+        || !runtime.effective_bootstrap_mcp_servers.is_empty()
+        || runtime.effective_working_directory.is_some()
+    {
         AcpConversationTurnOptions::explicit()
     } else {
         AcpConversationTurnOptions::automatic()

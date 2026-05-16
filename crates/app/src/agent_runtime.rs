@@ -180,11 +180,10 @@ impl<'a> RuntimeTurnExecutionService<'a> {
             let runtime = self.runtime;
             let message = request.message.as_str();
             let turn_address = resolved_session_address(runtime, request);
-            let explicit_acp_request = runtime.explicit_acp_request
-                || matches!(
-                    options.acp_routing_intent,
-                    crate::acp::AcpRoutingIntent::Explicit
-                );
+            let explicit_acp_request = matches!(
+                options.acp_routing_intent,
+                crate::acp::AcpRoutingIntent::Explicit
+            );
 
             if explicit_acp_request {
                 let turn_config = load_runtime_turn_config(runtime)?;
@@ -513,12 +512,14 @@ impl AgentRuntime {
             provenance,
             provider_error_mode,
             retry_progress: None,
-            acp_routing_intent: if runtime.explicit_acp_request {
+            acp_routing_intent: if !runtime.effective_bootstrap_mcp_servers.is_empty()
+                || runtime.effective_working_directory.is_some()
+            {
                 crate::acp::AcpRoutingIntent::Explicit
             } else {
                 crate::acp::AcpRoutingIntent::Automatic
             },
-            acp_event_stream: runtime.explicit_acp_request,
+            acp_event_stream: false,
             acp_bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
             acp_working_directory: runtime.effective_working_directory.clone(),
         };
@@ -798,16 +799,14 @@ fn resolved_session_address(
 }
 
 fn acp_turn_options_from_runtime<'a>(
-    runtime: &'a crate::chat::CliTurnRuntime,
+    _runtime: &'a crate::chat::CliTurnRuntime,
     event_sink: Option<&'a dyn AcpTurnEventSink>,
     metadata: Option<&'a BTreeMap<String, String>>,
     routing_intent: crate::acp::AcpRoutingIntent,
     additional_bootstrap_mcp_servers: &'a [String],
     working_directory: Option<&'a std::path::Path>,
 ) -> crate::acp::AcpConversationTurnOptions<'a> {
-    let base = if runtime.explicit_acp_request
-        || matches!(routing_intent, crate::acp::AcpRoutingIntent::Explicit)
-    {
+    let base = if matches!(routing_intent, crate::acp::AcpRoutingIntent::Explicit) {
         crate::acp::AcpConversationTurnOptions::explicit()
     } else {
         crate::acp::AcpConversationTurnOptions::automatic()

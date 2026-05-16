@@ -1469,7 +1469,9 @@ impl ChatSessionSurface {
         };
         let turn_options = crate::agent_runtime::TurnExecutionOptions {
             observer: Some(observer),
-            acp_routing_intent: if self.runtime.explicit_acp_request {
+            acp_routing_intent: if !self.runtime.effective_bootstrap_mcp_servers.is_empty()
+                || self.runtime.effective_working_directory.is_some()
+            {
                 crate::acp::AcpRoutingIntent::Explicit
             } else {
                 crate::acp::AcpRoutingIntent::Automatic

@@ -116,7 +116,6 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     kernel_ctx: crate::KernelContext,
     session_requirement: CliSessionRequirement,
 ) -> CliResult<CliTurnRuntime> {
-    let explicit_acp_request = options.requests_explicit_acp();
     let effective_bootstrap_mcp_servers = config
         .acp
         .dispatch
@@ -158,7 +157,6 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
         runtime_kernel,
-        explicit_acp_request,
         effective_bootstrap_mcp_servers,
         effective_working_directory,
         memory_label,

@@ -24,7 +24,7 @@ pub(super) struct CliChatStartupSummary {
     pub(super) allowed_channels: Vec<String>,
     pub(super) acp_backend_id: String,
     pub(super) acp_backend_source: String,
-    pub(super) explicit_acp_request: bool,
+    pub(super) acp_overrides_requested: bool,
     pub(super) event_stream_enabled: bool,
     pub(super) bootstrap_mcp_servers: Vec<String>,
     pub(super) working_directory: Option<String>,
@@ -64,7 +64,7 @@ pub(super) fn build_cli_chat_startup_summary(
         allowed_channels: runtime.config.acp.dispatch.allowed_channel_ids()?,
         acp_backend_id: acp_selection.id.to_owned(),
         acp_backend_source: acp_selection.source.as_str().to_owned(),
-        explicit_acp_request: runtime.explicit_acp_request,
+        acp_overrides_requested: options.requests_explicit_acp(),
         event_stream_enabled: options.acp_event_stream,
         bootstrap_mcp_servers: runtime.effective_bootstrap_mcp_servers.clone(),
         working_directory: runtime

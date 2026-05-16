@@ -96,7 +96,7 @@ pub(super) fn build_cli_chat_runtime_sections(
     };
     let mut sections = vec![session_section, runtime_section, continuity_section];
 
-    if summary.explicit_acp_request
+    if summary.acp_overrides_requested
         || summary.event_stream_enabled
         || !summary.bootstrap_mcp_servers.is_empty()
         || summary.working_directory.is_some()
@@ -108,7 +108,7 @@ pub(super) fn build_cli_chat_runtime_sections(
         };
         let working_directory = summary.working_directory.as_deref().unwrap_or("-");
         let override_lines = vec![
-            format!("explicit request: {}", summary.explicit_acp_request),
+            format!("explicit request: {}", summary.acp_overrides_requested),
             format!("event stream: {}", summary.event_stream_enabled),
             format!("bootstrap MCP servers: {bootstrap_label}"),
             format!("working directory: {working_directory}"),
