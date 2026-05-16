@@ -5950,56 +5950,6 @@ fn onboard_prompt_addendum_screen_explains_keep_and_clear_behavior() {
 }
 
 #[test]
-fn onboard_memory_profile_screen_shows_supported_profiles() {
-    let mut config = mvp::config::LoongConfig::default();
-    config.memory.profile = mvp::config::MemoryProfile::ProfilePlusWindow;
-
-    let lines = crate::onboard_cli::render_memory_profile_selection_screen_lines(&config, 80);
-
-    assert_compact_loong_header(&lines, "memory-profile screen");
-    assert!(
-        lines.iter().any(|line| line == "choose memory profile"),
-        "memory-profile screen should use a focused title: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line == "step 6 of 8 · memory profile"),
-        "memory-profile screen should surface the native prompt-pack progress step: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("profile_plus_window)")),
-        "memory-profile screen should keep the canonical profile_plus_window selector visible without bracket syntax: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .all(|line| !line.contains("[profile_plus_window]")),
-        "memory-profile screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("only load the recent conversation turns")),
-        "memory-profile screen should explain the lightest profile in plain language: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("plus a short summary of earlier context")),
-        "memory-profile screen should explain the summary profile in plain language: {lines:#?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("plus durable profile notes")),
-        "memory-profile screen should explain the durable profile option in plain language: {lines:#?}"
-    );
-}
-
-#[test]
 fn onboard_provider_selection_uses_imported_provider_config_for_selected_choice() {
     let recommended = import_candidate_with_kind(
         loong_daemon::migration::types::ImportSourceKind::RecommendedPlan,
@@ -7302,7 +7252,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn onboard_current_setup_adjustments_capture_personality_and_memory_profile() {
+async fn onboard_current_setup_adjustments_leave_memory_profile_to_personalize() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("current-adjusted-personality-memory-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
@@ -7351,20 +7301,21 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
         None,
     )
     .await
-    .expect("run scripted current-setup onboarding with personality and memory profile changes");
+    .expect("run scripted current-setup onboarding with personality changes");
 
     let joined = transcript.join("\n");
     assert!(
-        joined.contains("step 4 of 8 · personality"),
+        joined.contains("step 4 of 7 · personality"),
         "guided current-setup adjustments should expose a dedicated personality step: {transcript:#?}"
     );
     assert!(
-        joined.contains("step 5 of 8 · prompt addendum"),
+        joined.contains("step 5 of 7 · prompt addendum"),
         "guided current-setup adjustments should expose a dedicated prompt-addendum step: {transcript:#?}"
     );
     assert!(
-        joined.contains("step 6 of 8 · memory profile"),
-        "guided current-setup adjustments should expose a dedicated memory-profile step: {transcript:#?}"
+        !joined.contains("step 6 of 7 · memory profile")
+            && !joined.contains("step 5 of 6 · memory profile"),
+        "guided onboarding should stop owning a dedicated memory-profile step once `personalize` owns that preference surface: {transcript:#?}"
     );
 
     let (_, config) = mvp::config::load(output_path.to_str())
@@ -7375,7 +7326,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
     );
     assert_eq!(
         config.memory.profile,
-        mvp::config::MemoryProfile::ProfilePlusWindow
+        mvp::config::MemoryProfile::WindowOnly
     );
 }
 

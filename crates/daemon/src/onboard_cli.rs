@@ -185,24 +185,6 @@ fn provider_model_probe_failure_check(
     crate::onboard_preflight::provider_model_probe_failure_check(config, error)
 }
 
-const MEMORY_PROFILE_CHOICES: [(mvp::config::MemoryProfile, &str, &str); 3] = [
-    (
-        mvp::config::MemoryProfile::WindowOnly,
-        "recent turns only",
-        "only load the recent conversation turns",
-    ),
-    (
-        mvp::config::MemoryProfile::WindowPlusSummary,
-        "window plus summary",
-        "load recent turns plus a short summary of earlier context",
-    ),
-    (
-        mvp::config::MemoryProfile::ProfilePlusWindow,
-        "profile plus window",
-        "load recent turns plus durable profile notes",
-    ),
-];
-
 trait OnboardPromptLineReader {
     fn read_blocking_line(&mut self) -> CliResult<OnboardPromptRead>;
     fn read_pending_line(&mut self) -> CliResult<Option<String>>;
@@ -806,8 +788,8 @@ enum GuidedPromptPath {
 impl GuidedPromptPath {
     const fn total_steps(self) -> usize {
         match self {
-            GuidedPromptPath::NativePromptPack => 8,
-            GuidedPromptPath::InlineOverride => 7,
+            GuidedPromptPath::NativePromptPack => 7,
+            GuidedPromptPath::InlineOverride => 6,
         }
     }
 
@@ -818,15 +800,13 @@ impl GuidedPromptPath {
             (_, GuidedOnboardStep::CredentialEnv) => 3,
             (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Personality) => 4,
             (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::PromptCustomization) => 5,
-            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::MemoryProfile) => 6,
             (_, GuidedOnboardStep::WebSearchProvider) => match self {
-                GuidedPromptPath::NativePromptPack => 7,
-                GuidedPromptPath::InlineOverride => 6,
+                GuidedPromptPath::NativePromptPack => 6,
+                GuidedPromptPath::InlineOverride => 5,
             },
-            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Review) => 8,
+            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Review) => 7,
             (GuidedPromptPath::InlineOverride, GuidedOnboardStep::PromptCustomization) => 4,
-            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::MemoryProfile) => 5,
-            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Review) => 7,
+            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Review) => 6,
             (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Personality) => 4,
         }
     }
@@ -841,7 +821,6 @@ impl GuidedPromptPath {
                 GuidedPromptPath::NativePromptPack => "prompt addendum",
                 GuidedPromptPath::InlineOverride => "system prompt",
             },
-            GuidedOnboardStep::MemoryProfile => "memory profile",
             GuidedOnboardStep::WebSearchProvider => "web search",
             GuidedOnboardStep::Review => "review",
         }
@@ -855,7 +834,6 @@ enum GuidedOnboardStep {
     CredentialEnv,
     Personality,
     PromptCustomization,
-    MemoryProfile,
     WebSearchProvider,
     Review,
 }
@@ -1126,8 +1104,14 @@ pub async fn run_onboard_cli_with_ui(
             }
         }
 
-        config.memory.profile =
-            resolve_memory_profile_selection(&options, &config, guided_prompt_path, ui, context)?;
+        if let Some(profile_raw) = options.memory_profile.as_deref() {
+            config.memory.profile = parse_memory_profile(profile_raw).ok_or_else(|| {
+                format!(
+                    "unsupported --memory-profile value \"{profile_raw}\". supported: {}",
+                    supported_memory_profile_list()
+                )
+            })?;
+        }
 
         let selected_web_search_provider = resolve_web_search_provider_selection(
             &options,
@@ -2353,63 +2337,6 @@ fn resolve_system_prompt_selection(
         return Ok(SystemPromptSelection::KeepCurrent);
     }
     Ok(SystemPromptSelection::Set(trimmed.to_owned()))
-}
-
-fn resolve_memory_profile_selection(
-    options: &OnboardCommandOptions,
-    config: &mvp::config::LoongConfig,
-    guided_prompt_path: GuidedPromptPath,
-    ui: &mut impl OnboardUi,
-    context: &OnboardRuntimeContext,
-) -> CliResult<mvp::config::MemoryProfile> {
-    if options.non_interactive {
-        if let Some(profile_raw) = options.memory_profile.as_deref() {
-            return parse_memory_profile(profile_raw).ok_or_else(|| {
-                format!(
-                    "unsupported --memory-profile value \"{profile_raw}\". supported: {}",
-                    supported_memory_profile_list()
-                )
-            });
-        }
-        return Ok(config.memory.profile);
-    }
-
-    let default_profile = options
-        .memory_profile
-        .as_deref()
-        .and_then(parse_memory_profile)
-        .unwrap_or(config.memory.profile);
-    let select_options: Vec<SelectOption> = MEMORY_PROFILE_CHOICES
-        .iter()
-        .map(|(p, label, desc)| SelectOption {
-            label: label.to_string(),
-            slug: memory_profile_id(*p).to_owned(),
-            description: desc.to_string(),
-            recommended: *p == default_profile,
-        })
-        .collect();
-    let default_idx = MEMORY_PROFILE_CHOICES
-        .iter()
-        .position(|(p, _, _)| *p == default_profile);
-
-    print_lines(
-        ui,
-        render_memory_profile_selection_header_lines(
-            config,
-            guided_prompt_path,
-            context.render_width,
-        ),
-    )?;
-    let idx = ui.select_one(
-        "Memory profile",
-        &select_options,
-        default_idx,
-        SelectInteractionMode::List,
-    )?;
-    let (profile, _, _) = MEMORY_PROFILE_CHOICES
-        .get(idx)
-        .ok_or_else(|| format!("memory profile selection index {idx} out of range"))?;
-    Ok(*profile)
 }
 
 async fn resolve_web_search_provider_selection(
@@ -4851,78 +4778,6 @@ fn render_prompt_addendum_selection_screen_lines_with_style(
             ONBOARD_SINGLE_LINE_INPUT_HINT.to_owned(),
         ],
         color_enabled,
-    )
-}
-
-pub fn render_memory_profile_selection_screen_lines(
-    config: &mvp::config::LoongConfig,
-    width: usize,
-) -> Vec<String> {
-    render_memory_profile_selection_screen_lines_with_style(
-        config,
-        config.memory.profile,
-        GuidedPromptPath::NativePromptPack,
-        width,
-        false,
-    )
-}
-
-fn render_memory_profile_selection_screen_lines_with_style(
-    config: &mvp::config::LoongConfig,
-    default_profile: mvp::config::MemoryProfile,
-    guided_prompt_path: GuidedPromptPath,
-    width: usize,
-    color_enabled: bool,
-) -> Vec<String> {
-    let options = MEMORY_PROFILE_CHOICES
-        .into_iter()
-        .map(|(profile, label, detail)| OnboardScreenOption {
-            key: memory_profile_id(profile).to_owned(),
-            label: label.to_owned(),
-            detail_lines: vec![detail.to_owned()],
-            recommended: profile == default_profile,
-        })
-        .collect::<Vec<_>>();
-
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
-        width,
-        "choose how much memory context Loong should inject",
-        "choose memory profile",
-        Some((GuidedOnboardStep::MemoryProfile, guided_prompt_path)),
-        vec![format!(
-            "- current profile: {}",
-            memory_profile_id(config.memory.profile)
-        )],
-        options,
-        vec![render_default_choice_footer_line(
-            memory_profile_id(default_profile),
-            "the current memory profile",
-        )],
-        true,
-        color_enabled,
-    )
-}
-
-fn render_memory_profile_selection_header_lines(
-    config: &mvp::config::LoongConfig,
-    guided_prompt_path: GuidedPromptPath,
-    width: usize,
-) -> Vec<String> {
-    render_onboard_choice_screen(
-        OnboardHeaderStyle::Compact,
-        width,
-        "choose how much memory context Loong should inject",
-        "choose memory profile",
-        Some((GuidedOnboardStep::MemoryProfile, guided_prompt_path)),
-        vec![format!(
-            "- current profile: {}",
-            memory_profile_id(config.memory.profile)
-        )],
-        vec![],
-        vec![],
-        true,
-        true,
     )
 }
 
