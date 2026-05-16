@@ -250,52 +250,6 @@ pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
     Ok(())
 }
 
-/// Run a single daemon-managed turn through the task supervisor/harness path.
-///
-/// Unlike `chat`/`ask`, this exercises the same kernel-supervised dispatch lane
-/// that daemon tasks use in production: the CLI request is wrapped as a
-/// `TaskIntent`, routed through `EmbeddedAgentHarness`, and then decoded back
-/// into an `AgentTurnResult` for presentation.
-pub(crate) async fn run_turn_cli(
-    config_path: Option<&str>,
-    session_hint: Option<&str>,
-    message: &str,
-    acp: bool,
-    acp_event_stream: bool,
-    acp_bootstrap_mcp_server: &[String],
-    acp_cwd: Option<&str>,
-) -> CliResult<()> {
-    if message.trim().is_empty() {
-        return Err("turn message must not be empty".to_owned());
-    }
-    let turn_service = loong_app::agent_runtime::load_turn_execution_service(config_path)?;
-    let config = turn_service.config();
-    if !config.cli.enabled {
-        return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
-    }
-
-    let turn_request = loong_app::agent_runtime::AgentTurnRequest {
-        message: message.to_owned(),
-        turn_mode: if acp {
-            loong_app::agent_runtime::AgentTurnMode::Acp
-        } else {
-            loong_app::agent_runtime::AgentTurnMode::Oneshot
-        },
-        metadata: std::collections::BTreeMap::new(),
-        acp,
-        acp_event_stream,
-        acp_bootstrap_mcp_servers: acp_bootstrap_mcp_server.to_vec(),
-        acp_cwd: acp_cwd.map(ToOwned::to_owned),
-        ..Default::default()
-    };
-    let turn_options = loong_app::agent_runtime::TurnExecutionOptions::default();
-    let result = turn_service
-        .execute(session_hint, &turn_request, turn_options)
-        .await?;
-    println!("{}", result.output_text);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

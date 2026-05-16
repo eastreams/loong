@@ -63,7 +63,7 @@ pub async fn run_ask_cli(
     acp_bootstrap_mcp_server: &[String],
     acp_cwd: Option<&str>,
 ) -> CliResult<()> {
-    crate::task_execution::run_turn_cli(
+    run_spine_oneshot_cli(
         config_path,
         session,
         message,
@@ -84,6 +84,27 @@ pub async fn run_turn_run_cli(
     acp_bootstrap_mcp_server: &[String],
     acp_cwd: Option<&str>,
 ) -> CliResult<()> {
+    run_spine_oneshot_cli(
+        config_path,
+        session,
+        message,
+        acp,
+        acp_event_stream,
+        acp_bootstrap_mcp_server,
+        acp_cwd,
+    )
+    .await
+}
+
+async fn run_spine_oneshot_cli(
+    config_path: Option<&str>,
+    session: Option<&str>,
+    message: &str,
+    acp: bool,
+    acp_event_stream: bool,
+    acp_bootstrap_mcp_server: &[String],
+    acp_cwd: Option<&str>,
+) -> CliResult<()> {
     let protocol_request = OneshotTurnRequest {
         config_path: config_path.map(ToOwned::to_owned),
         session_hint: session.map(ToOwned::to_owned),
@@ -94,7 +115,7 @@ pub async fn run_turn_run_cli(
         acp_cwd: acp_cwd.map(ToOwned::to_owned),
     };
     let (resolved_path, config) = mvp::config::load(config_path)?;
-    let executor = LegacyTurnRunExecutor::new(resolved_path, config);
+    let executor = LegacyOneshotExecutor::new(resolved_path, config);
     let workspace = migrated_turn_workspace_context(executor.config())?;
     let execution = execute_oneshot_turn(&protocol_request, workspace, &executor).await?;
     println!("{}", render_oneshot_turn_output(&execution));
@@ -122,12 +143,12 @@ pub fn build_cli_chat_options(
 // Delete condition: once `loong-runtime` owns the real one-shot executor
 // without calling back into `loong-app`, remove this daemon-side bridge and
 // route `turn run` directly through the runtime-owned implementation.
-struct LegacyTurnRunExecutor {
+struct LegacyOneshotExecutor {
     resolved_path: PathBuf,
     config: mvp::config::LoongConfig,
 }
 
-impl LegacyTurnRunExecutor {
+impl LegacyOneshotExecutor {
     fn new(resolved_path: PathBuf, config: mvp::config::LoongConfig) -> Self {
         Self {
             resolved_path,
@@ -141,7 +162,7 @@ impl LegacyTurnRunExecutor {
 }
 
 #[async_trait]
-impl AppProtocolOneshotExecutor for LegacyTurnRunExecutor {
+impl AppProtocolOneshotExecutor for LegacyOneshotExecutor {
     async fn execute(
         &self,
         request: AppProtocolRuntimeExecutorRequest,
