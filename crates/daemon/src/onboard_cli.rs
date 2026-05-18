@@ -1043,43 +1043,69 @@ pub async fn run_onboard_cli_with_ui(
             apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
         }
 
-        if options.non_interactive {
-            match guided_prompt_path {
-                GuidedPromptPath::NativePromptPack => {
-                    if let Some(personality_raw) = options.personality.as_deref() {
-                        let personality = parse_prompt_personality(personality_raw).ok_or_else(
-                            || {
-                                format!(
-                                    "unsupported --personality value \"{personality_raw}\". supported: {}",
-                                    supported_personality_list()
-                                )
-                            },
-                        )?;
-                        config.cli.prompt_pack_id =
-                            Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                        config.cli.personality = Some(personality);
-                        config.cli.refresh_native_system_prompt();
-                    }
+        match guided_prompt_path {
+            GuidedPromptPath::NativePromptPack => {
+                if options.non_interactive
+                    && let Some(personality_raw) = options.personality.as_deref()
+                {
+                    let personality = parse_prompt_personality(personality_raw).ok_or_else(|| {
+                        format!(
+                            "unsupported --personality value \"{personality_raw}\". supported: {}",
+                            supported_personality_list()
+                        )
+                    })?;
+                    config.cli.prompt_pack_id =
+                        Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+                    config.cli.personality = Some(personality);
+                    config.cli.refresh_native_system_prompt();
                 }
-                GuidedPromptPath::InlineOverride => {
-                    if let Some(system_prompt) = options.system_prompt.as_deref() {
-                        if is_explicit_onboard_clear_input(system_prompt) {
-                            config.cli.prompt_pack_id =
-                                Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                            config.cli.personality =
-                                Some(mvp::prompt::PromptPersonality::default());
-                            config.cli.system_prompt_addendum = None;
-                            config.cli.refresh_native_system_prompt();
-                        } else {
-                            let trimmed = system_prompt.trim();
-                            if !trimmed.is_empty() {
-                                config.cli.prompt_pack_id = Some(String::new());
-                                config.cli.personality = None;
-                                config.cli.system_prompt_addendum = None;
-                                config.cli.system_prompt = trimmed.to_owned();
-                            }
-                        }
+            }
+            GuidedPromptPath::InlineOverride => {
+                if options.non_interactive {
+                    if let Some(system_prompt) = options.system_prompt.clone() {
+                        let selected_system_prompt =
+                            if is_explicit_onboard_clear_input(system_prompt.as_str()) {
+                                Some(String::new())
+                            } else {
+                                Some(system_prompt)
+                            };
+                        apply_selected_system_prompt(&mut config, selected_system_prompt);
                     }
+                } else {
+                    let prompt_default = options
+                        .system_prompt
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            if config.cli.uses_native_prompt_pack() {
+                                String::new()
+                            } else {
+                                config.cli.system_prompt.clone()
+                            }
+                        });
+                    print_lines(
+                        ui,
+                        render_system_prompt_selection_screen_lines_with_style(
+                            &config,
+                            prompt_default.as_str(),
+                            guided_prompt_path,
+                            context.render_width,
+                            true,
+                        ),
+                    )?;
+                    let value = ui.prompt_with_default("System prompt", prompt_default.as_str())?;
+                    let selected_system_prompt = if is_explicit_onboard_clear_input(&value) {
+                        Some(String::new())
+                    } else {
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed.to_owned())
+                        }
+                    };
+                    apply_selected_system_prompt(&mut config, selected_system_prompt);
                 }
             }
         }
@@ -1324,11 +1350,7 @@ fn resolve_guided_prompt_path(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongConfig,
 ) -> GuidedPromptPath {
-    if options
-        .system_prompt
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
+    if options.system_prompt.is_some() {
         return GuidedPromptPath::InlineOverride;
     }
     if options
@@ -2169,19 +2191,22 @@ fn apply_selected_api_key_env(
     }
 }
 
-#[cfg(test)]
 fn apply_selected_system_prompt(
     config: &mut mvp::config::LoongConfig,
     system_prompt: Option<String>,
 ) {
-    if let Some(system_prompt) = system_prompt {
-        config.cli.system_prompt = system_prompt;
-    } else {
-        config.cli.system_prompt = if config.cli.uses_native_prompt_pack() {
-            config.cli.rendered_native_system_prompt()
-        } else {
-            mvp::config::CliChannelConfig::default().system_prompt
-        };
+    match system_prompt.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => {
+            config.cli.prompt_pack_id = Some(String::new());
+            config.cli.personality = None;
+            config.cli.system_prompt_addendum = None;
+            config.cli.system_prompt = value.to_owned();
+        }
+        _ => {
+            config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+            config.cli.personality = Some(mvp::prompt::PromptPersonality::default());
+            config.cli.refresh_native_system_prompt();
+        }
     }
 }
 

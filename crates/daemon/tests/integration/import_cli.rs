@@ -776,7 +776,7 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
     );
     assert!(
         lines.iter().any(|line| {
-            line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
+            line == "- inspect Telegram: loong channels --config '/tmp/loong-config.toml'"
         }),
         "apply summary should continue surfacing registry-driven channel handoff commands after ask/chat: {lines:#?}"
     );
@@ -807,7 +807,7 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
     );
     assert!(
         rendered.contains(
-            "- Telegram: loong channels serve telegram --config '/tmp/loong'\"'\"'s config.toml'"
+            "- inspect Telegram: loong channels --config '/tmp/loong'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in channel handoff commands: {lines:#?}"
     );
@@ -828,7 +828,7 @@ fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
 
     assert!(
         lines.iter().any(|line| {
-            line == "- Telegram: loong channels serve telegram --config '/tmp/loong-config.toml'"
+            line == "- inspect Telegram: loong channels --config '/tmp/loong-config.toml'"
         }),
         "apply summary should not hand users to CLI chat when the imported config has cli disabled: {lines:#?}"
     );
@@ -895,10 +895,7 @@ fn import_cli_apply_summary_prefers_managed_bridge_doctor_handoff_when_preflight
 
     assert!(
         lines.iter().any(|line| {
-            line == &format!(
-                "- verify weixin managed bridge: {} doctor --config '/tmp/loong-config.toml'",
-                super::active_cli_command_name()
-            )
+            line == "- review Weixin bridge: loong channels --config '/tmp/loong-config.toml'"
         }),
         "managed bridge doctor handoff should become the primary next step when plugin bridge preflight is unresolved: {lines:#?}"
     );

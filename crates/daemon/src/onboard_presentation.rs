@@ -16,7 +16,7 @@ pub struct ReviewFlowCopy {
 pub const fn review_flow_copy(kind: ReviewFlowKind) -> ReviewFlowCopy {
     match kind {
         ReviewFlowKind::Guided => ReviewFlowCopy {
-            progress_line: "step 8 of 8 · review",
+            progress_line: "step 6 of 7 · review",
             header_subtitle: "review setup",
         },
         ReviewFlowKind::QuickCurrentSetup => ReviewFlowCopy {

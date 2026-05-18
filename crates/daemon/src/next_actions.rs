@@ -409,7 +409,7 @@ mod tests {
             .find(|action| action.kind == SetupNextActionKind::Channel)
             .expect("channel action");
 
-        assert_eq!(channel_action.label, "review Weixin bridge");
+        assert_eq!(channel_action.label, "inspect Weixin bridge");
         assert_eq!(
             channel_action.command,
             "loong channels --config '/tmp/loong.toml'"
@@ -442,7 +442,7 @@ mod tests {
             .find(|action| action.kind == SetupNextActionKind::Channel)
             .expect("channel action");
 
-        assert_eq!(channel_action.label, "review configured bridges");
+        assert_eq!(channel_action.label, "review configured channels");
         assert_eq!(
             channel_action.command,
             "loong channels --config '/tmp/loong.toml'"
