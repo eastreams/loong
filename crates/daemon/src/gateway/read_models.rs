@@ -2003,7 +2003,8 @@ mod tests {
     }
 
     #[test]
-    fn operator_channel_surface_read_model_keeps_non_plugin_backed_summary_empty() {
+    fn operator_channel_surface_read_model_keeps_plugin_bridge_summary_empty_without_discovery_context()
+     {
         let mut config = mvp::config::LoongConfig::default();
         config.telegram.enabled = true;
         config.telegram.bot_token = Some(loong_contracts::SecretRef::Inline(
@@ -2024,7 +2025,7 @@ mod tests {
         );
 
         assert_eq!(operator_surface.channel_id, "telegram");
-        assert_eq!(operator_surface.implementation_status, "runtime_backed");
+        assert_eq!(operator_surface.implementation_status, "plugin_backed");
         assert_eq!(operator_surface.conversation_gated_account_count, 1);
         assert_eq!(operator_surface.sender_gated_account_count, 0);
         assert_eq!(operator_surface.runtime_attention_account_count, 0);

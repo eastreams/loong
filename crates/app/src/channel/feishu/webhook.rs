@@ -830,6 +830,8 @@ async fn handle_feishu_inbound_event(
                 parent_message_id: event.parent_id,
                 resources: event.resources,
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: state.config.feishu.acp.bootstrap_mcp_servers.clone(),
+                acp_working_directory: state.config.feishu.acp.resolved_working_directory(),
             },
         };
         let reply_target = &channel_message.reply_target;
@@ -1216,6 +1218,8 @@ fn build_feishu_card_callback_inbound_message(
                 operator_open_id: event.principal.as_ref().map(|value| value.open_id.clone()),
                 deferred_context_id: Some(event.event_id.clone()),
             }),
+            acp_bootstrap_mcp_servers: Vec::new(),
+            acp_working_directory: None,
         },
     }
 }

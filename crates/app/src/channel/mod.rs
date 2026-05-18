@@ -544,6 +544,8 @@ mod tests {
                 parent_message_id: None,
                 resources: Vec::new(),
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         };
 
@@ -577,6 +579,8 @@ mod tests {
                 parent_message_id: None,
                 resources: Vec::new(),
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         }];
 
@@ -638,6 +642,8 @@ mod tests {
                 parent_message_id: None,
                 resources: Vec::new(),
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         };
         let runtime = ChannelTraceRuntime::default();
@@ -705,6 +711,8 @@ mod tests {
                 parent_message_id: None,
                 resources: Vec::new(),
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         };
         let runtime = ChannelTraceRuntime::default();
@@ -967,6 +975,8 @@ mod tests {
                     },
                 ],
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         };
 
@@ -1041,6 +1051,8 @@ mod tests {
                     operator_open_id: Some("ou_operator_1".to_owned()),
                     deferred_context_id: Some("evt_callback_2".to_owned()),
                 }),
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         };
 

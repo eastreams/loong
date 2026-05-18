@@ -15,8 +15,7 @@ use crate::{
 };
 
 use super::{
-    ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage, ChannelPlatform,
-    ChannelSession,
+    ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage, ChannelSession,
     runtime::turn_feedback::{ChannelTurnFeedbackCapture, ChannelTurnFeedbackPolicy},
     types::ChannelResolvedAcpTurnHints,
 };
@@ -35,7 +34,10 @@ fn prepare_channel_inbound_turn(
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<PreparedChannelInboundTurn> {
     let address = resolve_channel_conversation_address(config, &message.session)?;
-    let acp_turn_hints = resolve_channel_acp_turn_hints(config, &message.session)?;
+    let acp_turn_hints = ChannelResolvedAcpTurnHints {
+        bootstrap_mcp_servers: message.delivery.acp_bootstrap_mcp_servers.clone(),
+        working_directory: message.delivery.acp_working_directory.clone(),
+    };
     let ingress = channel_message_ingress_context(message);
     let feedback_capture = ChannelTurnFeedbackCapture::new(feedback_policy);
 
@@ -402,7 +404,7 @@ async fn maybe_reset_channel_session(
         && config.acp.dispatch_enabled()
         && let Some(binding) = prior_binding.as_ref()
     {
-        let manager = crate::acp::shared_acp_session_manager(config)?;
+        let manager = crate::acp::acquire_shared_acp_session_manager(config)?;
         let active_address = build_effective_channel_conversation_address(
             binding.active_session_id.as_str(),
             &message.session,
@@ -464,65 +466,6 @@ pub(super) fn reload_channel_turn_config(
     match resolved_path {
         Some(path) => config.reload_provider_runtime_state_from_path(path),
         None => Ok(config.clone()),
-    }
-}
-
-fn resolve_channel_acp_turn_hints(
-    config: &LoongConfig,
-    session: &ChannelSession,
-) -> CliResult<ChannelResolvedAcpTurnHints> {
-    match session.platform {
-        ChannelPlatform::Telegram => {
-            let resolved = config
-                .telegram
-                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
-            let acp = resolved.acp;
-            let working_directory = acp.resolved_working_directory();
-            Ok(ChannelResolvedAcpTurnHints {
-                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
-                working_directory,
-            })
-        }
-        ChannelPlatform::Feishu => {
-            let resolved = config
-                .feishu
-                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
-            let acp = resolved.acp;
-            let working_directory = acp.resolved_working_directory();
-            Ok(ChannelResolvedAcpTurnHints {
-                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
-                working_directory,
-            })
-        }
-        ChannelPlatform::Line => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::Matrix => {
-            let resolved = config
-                .matrix
-                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
-            let acp = resolved.acp;
-            let working_directory = acp.resolved_working_directory();
-            Ok(ChannelResolvedAcpTurnHints {
-                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
-                working_directory,
-            })
-        }
-        ChannelPlatform::Wecom => {
-            let resolved = config
-                .wecom
-                .resolve_account_for_session_account_id(session.account_id.as_deref())?;
-            let acp = resolved.acp;
-            let working_directory = acp.resolved_working_directory();
-            Ok(ChannelResolvedAcpTurnHints {
-                bootstrap_mcp_servers: acp.bootstrap_mcp_servers,
-                working_directory,
-            })
-        }
-        ChannelPlatform::Webhook => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::Weixin => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::Qqbot => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::Onebot => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::WhatsApp => Ok(ChannelResolvedAcpTurnHints::default()),
-        ChannelPlatform::Irc => Ok(ChannelResolvedAcpTurnHints::default()),
     }
 }
 

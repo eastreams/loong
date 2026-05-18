@@ -281,7 +281,7 @@ const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     label: "bridge serve",
     command: "channels serve telegram",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: TELEGRAM_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -412,7 +412,7 @@ const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     label: "bridge serve",
     command: "channels serve feishu",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: FEISHU_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::MessageReply],
@@ -646,7 +646,7 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     label: "bridge serve",
     command: "channels serve qqbot",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: QQBOT_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -702,7 +702,7 @@ const MATRIX_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     label: "bridge serve",
     command: "channels serve matrix",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: MATRIX_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -738,7 +738,7 @@ const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     label: "bridge serve",
     command: "channels serve wecom",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: WECOM_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
@@ -1169,7 +1169,7 @@ const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     label: "bridge serve",
     command: "channels serve line",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: LINE_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -1507,7 +1507,7 @@ const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     label: "bridge serve",
     command: "channels serve whatsapp",
     availability: ChannelCatalogOperationAvailability::ManagedBridge,
-    tracks_runtime: false,
+    tracks_runtime: true,
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
     default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -6185,8 +6185,8 @@ mod tests {
         assert_eq!(lark.runtime.channel_id, "feishu");
         assert_eq!(lark.runtime.platform, ChannelPlatform::Feishu);
         assert_eq!(lark.catalog, lark_catalog);
-        assert_eq!(lark.catalog.send.command, "feishu send");
-        assert_eq!(lark.catalog.serve.command, "feishu serve");
+        assert_eq!(lark.catalog.send.command, "channels send feishu");
+        assert_eq!(lark.catalog.serve.command, "channels serve feishu");
         assert_eq!(
             lark.catalog.send.default_target_kind(),
             Some(lark.catalog.default_send_target_kind)
@@ -6203,7 +6203,7 @@ mod tests {
     fn resolve_channel_operation_descriptor_combines_catalog_and_doctor_metadata() {
         let lark_serve = resolve_channel_operation_descriptor("lark", CHANNEL_OPERATION_SERVE_ID)
             .expect("lark serve descriptor");
-        assert_eq!(lark_serve.operation.command, "feishu serve");
+        assert_eq!(lark_serve.operation.command, "channels serve feishu");
         assert_eq!(
             lark_serve
                 .doctor
@@ -6280,22 +6280,19 @@ mod tests {
 
         assert_eq!(
             telegram.onboarding.strategy,
-            ChannelOnboardingStrategy::ManualConfig
+            ChannelOnboardingStrategy::PluginBridge
         );
         assert_eq!(telegram.onboarding.status_command, "loong doctor");
-        assert_eq!(
-            telegram.onboarding.repair_command,
-            Some("loong doctor --fix")
-        );
-        assert!(telegram.onboarding.setup_hint.contains("loong.toml"));
+        assert_eq!(telegram.onboarding.repair_command, None);
+        assert!(telegram.onboarding.setup_hint.contains("bridge plugin"));
 
         assert_eq!(
             lark.onboarding.strategy,
-            ChannelOnboardingStrategy::QrRegistration
+            ChannelOnboardingStrategy::PluginBridge
         );
         assert_eq!(lark.onboarding.status_command, "loong doctor");
-        assert_eq!(lark.onboarding.repair_command, Some("loong feishu onboard"));
-        assert!(lark.onboarding.setup_hint.contains("QR"));
+        assert_eq!(lark.onboarding.repair_command, None);
+        assert!(lark.onboarding.setup_hint.contains("bridge plugin"));
 
         assert_eq!(
             discord.onboarding.strategy,
@@ -6326,7 +6323,7 @@ mod tests {
                 .contains("loong weixin onboard")
         );
 
-        assert_eq!(qqbot.onboarding.strategy.as_str(), "manual_config");
+        assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
         assert_eq!(qqbot.onboarding.status_command, "loong doctor");
         assert_eq!(qqbot.onboarding.repair_command, None);
         assert!(qqbot.onboarding.setup_hint.contains("qqbot"));
@@ -6494,8 +6491,8 @@ mod tests {
         );
         assert_eq!(feishu.aliases, vec!["lark"]);
         assert_eq!(feishu.operations.len(), 2);
-        assert_eq!(feishu.operations[0].command, "feishu send");
-        assert_eq!(feishu.operations[1].command, "feishu serve");
+        assert_eq!(feishu.operations[0].command, "channels send feishu");
+        assert_eq!(feishu.operations[1].command, "channels serve feishu");
         assert_eq!(
             encoded
                 .get("operations")
@@ -6507,7 +6504,7 @@ mod tests {
                         .filter_map(serde_json::Value::as_str)
                         .collect::<Vec<_>>()
                 }),
-            Some(vec!["implemented", "implemented"])
+            Some(vec!["managed_bridge", "managed_bridge"])
         );
     }
 
@@ -6539,9 +6536,12 @@ mod tests {
         assert_eq!(telegram.operations[1].command, "channels serve telegram");
         assert_eq!(
             matrix.implementation_status,
-            ChannelCatalogImplementationStatus::RuntimeBacked
+            ChannelCatalogImplementationStatus::PluginBacked
         );
-        assert_eq!(matrix.transport, "matrix_client_server_sync");
+        assert_eq!(
+            matrix.transport,
+            "matrix_client_server_sync_or_plugin_bridge"
+        );
         assert!(matrix.aliases.is_empty());
         assert_eq!(matrix.operations.len(), 2);
         assert_eq!(matrix.operations[0].command, "channels send matrix");
@@ -6578,7 +6578,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 }),
             Some(vec![
-                "runtime_backed",
+                "plugin_backed",
                 "multi_account",
                 "send",
                 "serve",
@@ -6597,7 +6597,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 }),
             Some(vec![
-                "runtime_backed",
+                "plugin_backed",
                 "multi_account",
                 "send",
                 "serve",

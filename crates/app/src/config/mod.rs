@@ -265,7 +265,7 @@ mod tests {
             feishu.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(feishu.serve_subcommand, Some("feishu serve"));
+        assert_eq!(feishu.serve_subcommand, Some("channels serve feishu"));
 
         let wecom = channel_descriptor("wecom").expect("wecom descriptor");
         assert_eq!(wecom.id, "wecom");
@@ -295,7 +295,7 @@ mod tests {
             qqbot.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(qqbot.serve_subcommand, Some("qqbot-serve"));
+        assert_eq!(qqbot.serve_subcommand, Some("channels serve qqbot"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
         assert_eq!(onebot.id, "onebot");

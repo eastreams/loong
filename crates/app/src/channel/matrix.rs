@@ -378,6 +378,8 @@ pub(super) fn parse_matrix_sync_response(
                     parent_message_id: None,
                     resources: Vec::new(),
                     feishu_callback: None,
+                    acp_bootstrap_mcp_servers: Vec::new(),
+                    acp_working_directory: None,
                 },
             });
         }

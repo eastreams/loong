@@ -49,8 +49,8 @@ fn resolve_channel_catalog_command_family_descriptor_includes_runtime_and_stub_c
     );
 
     assert_eq!(lark.channel_id, "feishu");
-    assert_eq!(lark.send.command, "feishu send");
-    assert_eq!(lark.serve.command, "feishu serve");
+    assert_eq!(lark.send.command, "channels send feishu");
+    assert_eq!(lark.serve.command, "channels serve feishu");
     assert_eq!(
         lark.default_send_target_kind,
         ChannelCatalogTargetKind::ReceiveId
@@ -479,7 +479,7 @@ fn channel_inventory_exposes_grouped_channel_surfaces() {
         .expect("line surface");
     assert_eq!(
         line.catalog.implementation_status,
-        ChannelCatalogImplementationStatus::RuntimeBacked
+        ChannelCatalogImplementationStatus::PluginBacked
     );
     assert_eq!(line.configured_accounts.len(), 1);
     assert_eq!(
@@ -495,7 +495,7 @@ fn channel_inventory_exposes_grouped_channel_surfaces() {
         .expect("wecom surface");
     assert_eq!(
         wecom.catalog.implementation_status,
-        ChannelCatalogImplementationStatus::RuntimeBacked
+        ChannelCatalogImplementationStatus::PluginBacked
     );
     assert_eq!(wecom.configured_accounts.len(), 1);
     assert_eq!(

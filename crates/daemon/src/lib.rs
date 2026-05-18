@@ -1018,17 +1018,18 @@ fn parse_multi_channel_serve_channel_account(
         ));
     }
 
-    let supported_channel_ids = supported_multi_channel_serve_channel_ids();
-    let supported_channels = supported_channel_ids.join(", ");
-    let runtime_descriptor = mvp::channel::resolve_channel_runtime_command_descriptor(channel_token)
+    let normalized_channel_id = mvp::channel::normalize_channel_catalog_id(channel_token)
         .ok_or_else(|| {
+            let supported_channels = supported_multi_channel_serve_channel_ids().join(", ");
             format!(
                 "unrecognized multi-channel service channel `{channel_token}` (available runtime-backed channels: {supported_channels})"
             )
         })?;
-    let runtime_channel_id = runtime_descriptor.channel_id;
+    let supported_channel_ids = supported_multi_channel_serve_channel_ids();
+    let runtime_channel_id = normalized_channel_id;
     let runtime_is_supported = supported_channel_ids.contains(&runtime_channel_id);
     if !runtime_is_supported {
+        let supported_channels = supported_channel_ids.join(", ");
         return Err(format!(
             "multi-channel service channel `{channel_token}` resolves to `{runtime_channel_id}` but is not supported in this build (expected one of: {supported_channels})"
         ));
@@ -1042,7 +1043,7 @@ fn parse_multi_channel_serve_channel_account(
     }
 
     Ok(MultiChannelServeChannelAccount {
-        channel_id: runtime_descriptor.channel_id.to_owned(),
+        channel_id: runtime_channel_id.to_owned(),
         account_id: account_token.to_owned(),
     })
 }

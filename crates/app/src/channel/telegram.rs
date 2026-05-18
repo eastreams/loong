@@ -934,6 +934,8 @@ pub(super) fn parse_telegram_updates(
                 parent_message_id: None,
                 resources: Vec::new(),
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         });
     }

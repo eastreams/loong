@@ -511,6 +511,8 @@ async fn process_line_event(
                 parent_message_id: None,
                 resources: Vec::new(),
                 feishu_callback: None,
+                acp_bootstrap_mcp_servers: Vec::new(),
+                acp_working_directory: None,
             },
         };
         let reply = process_inbound_with_provider(
