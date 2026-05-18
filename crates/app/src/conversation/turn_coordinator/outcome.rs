@@ -2,7 +2,7 @@ use super::*;
 
 #[allow(dead_code)]
 impl ConversationTurnCoordinator {
-    pub(crate) async fn handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome<
+    pub(crate) async fn handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome<
         R: ConversationRuntime + ?Sized,
     >(
         &self,
@@ -11,12 +11,10 @@ impl ConversationTurnCoordinator {
         user_input: &str,
         error_mode: ProviderErrorMode,
         runtime: &R,
-        acp_options: &AcpConversationTurnOptions<'_>,
         binding: ConversationRuntimeBinding<'_>,
         ingress: Option<&ConversationIngressContext>,
         observer: Option<ConversationTurnObserverHandle>,
         retry_progress: crate::provider::ProviderRetryProgressCallback,
-        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<ConversationTurnOutcome> {
         let turn_result: CliResult<(ConversationTurnOutcome, bool)> = async {
             let session_id = address.session_id.as_str();
@@ -58,48 +56,6 @@ impl ConversationTurnCoordinator {
             );
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
-
-            let acp_entry_decision =
-                evaluate_acp_conversation_turn_entry_for_address(config, address, acp_options)?;
-            match acp_entry_decision {
-                AcpConversationTurnEntryDecision::RejectExplicitWhenDisabled => {
-                    let error = "ACP is disabled by policy (`acp.enabled=false`)".to_owned();
-                    let turn_result = match error_mode {
-                        ProviderErrorMode::Propagate => Err(error),
-                        ProviderErrorMode::InlineMessage => {
-                            let synthetic = format_provider_error_reply(&error);
-                            persist_reply_turns_raw_with_mode(
-                                runtime,
-                                session_id,
-                                user_input,
-                                &synthetic,
-                                ReplyPersistenceMode::InlineProviderError,
-                                binding,
-                            )
-                            .await?;
-                            Ok(synthetic)
-                        }
-                    };
-                    let reply = turn_result?;
-                    return Ok((ConversationTurnOutcome { reply, usage: None }, true));
-                }
-                AcpConversationTurnEntryDecision::RouteViaAcp => {
-                    let reply = self
-                        .handle_turn_via_acp_with_manager(
-                            config,
-                            address,
-                            user_input,
-                            error_mode,
-                            runtime,
-                            acp_options,
-                            binding,
-                            acp_manager.clone(),
-                        )
-                        .await?;
-                    return Ok((ConversationTurnOutcome { reply, usage: None }, true));
-                }
-                AcpConversationTurnEntryDecision::StayOnProvider => {}
-            }
 
             if let Some(kernel_ctx) = binding.kernel_context() {
                 runtime.bootstrap(config, session_id, kernel_ctx).await?;

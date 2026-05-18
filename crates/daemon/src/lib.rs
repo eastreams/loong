@@ -260,9 +260,7 @@ pub use session_cli::{
 use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
-pub use turn_cli::{
-    TurnCommands, build_cli_chat_options, run_ask_cli, run_chat_cli, run_turn_run_cli,
-};
+pub use turn_cli::{TurnCommands, run_ask_cli, run_chat_cli, run_turn_run_cli};
 pub use update_cli::run_update_cli;
 #[rustfmt::skip]
 use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};

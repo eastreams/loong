@@ -1,4 +1,9 @@
 use super::*;
+use loong_app_protocol::{
+    AppProtocolWorkspaceContext, ProductionRoutedOneshotExecutor, RoutedOneshotTurnRequest,
+    RuntimeExecutorConfig, execute_routed_oneshot_turn,
+};
+use std::path::PathBuf;
 
 pub(super) async fn turn_submit(
     headers: HeaderMap,
@@ -72,36 +77,41 @@ pub(super) async fn turn_submit(
             registry: turn_registry.clone(),
             turn_id: spawned_turn_id.clone(),
         };
-        let projection_request = crate::mvp::turn_gateway::build_turn_gateway_request(
-            crate::build_acp_dispatch_address(
-                session_id.as_str(),
-                channel_id.as_deref(),
-                conversation_id.as_deref(),
-                account_id.as_deref(),
-                request.participant_id.as_deref(),
-                thread_id.as_deref(),
-            )
-            .expect("validated control-plane turn target"),
-            input.clone(),
-            metadata,
-            mvp::agent_runtime::AgentTurnMode::Oneshot,
-            crate::mvp::acp::AcpRoutingIntent::Explicit,
-            true,
-            Vec::new(),
-            working_directory.clone(),
-            false,
+        let runtime_executor_config = RuntimeExecutorConfig {
+            requested_config_path: Some(resolved_path.display().to_string()),
+            resolved_config_path: resolved_path.clone(),
+            runtime_workspace_root: std::env::current_dir().ok(),
+            latest_session_selector: Some("latest".to_owned()),
+        };
+        let host = crate::mvp::runtime_protocol_host::LoongAppRuntimeProtocolHost::new()
+            .with_acp_manager(acp_manager)
+            .with_loaded_config(config.clone())
+            .with_event_sink(&event_forwarder);
+        let executor = ProductionRoutedOneshotExecutor::new(&host, runtime_executor_config);
+        let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let workspace = AppProtocolWorkspaceContext::new(
+            workspace_root.clone(),
+            workspace_root.clone(),
+            workspace_root.clone(),
+            workspace_root,
+            "unknown".to_owned(),
         );
-        let turn_service =
-            crate::mvp::agent_runtime::TurnExecutionService::new(resolved_path, config)
-                .with_acp_manager(acp_manager)
-                .without_runtime_environment_init();
-        let execution_result = crate::mvp::turn_gateway::execute_projected_turn_gateway_request(
-            &turn_service,
-            Some(session_id.as_str()),
-            &projection_request,
-            Some(&event_forwarder),
-        )
-        .await;
+        let routed_request = RoutedOneshotTurnRequest {
+            config_path: Some(resolved_path.display().to_string()),
+            session_hint: Some(session_id.clone()),
+            message: input.clone(),
+            channel_id,
+            account_id,
+            conversation_id,
+            participant_id: request.participant_id.clone(),
+            thread_id,
+            working_directory: working_directory.clone(),
+            metadata,
+            acp_requested: true,
+            acp_event_stream: true,
+        };
+        let execution_result =
+            execute_routed_oneshot_turn(&routed_request, workspace, &executor).await;
 
         match execution_result {
             Ok(result) => {

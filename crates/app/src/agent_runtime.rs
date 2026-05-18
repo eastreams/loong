@@ -240,17 +240,8 @@ impl<'a> RuntimeTurnExecutionService<'a> {
                 .await;
             }
 
-            let (effective_ingress, effective_provenance) =
+            let (effective_ingress, _effective_provenance) =
                 effective_turn_context(ingress, provenance);
-            let acp_options = acp_turn_options_from_runtime(
-                runtime,
-                event_sink,
-                Some(&request.metadata),
-                options.acp_routing_intent,
-                acp_bootstrap_mcp_servers.as_slice(),
-                acp_working_directory.as_deref(),
-            )
-            .with_provenance(effective_provenance);
             let turn_config = load_runtime_turn_config(runtime)?;
             #[cfg(feature = "memory-sqlite")]
             let memory_config =
@@ -268,23 +259,20 @@ impl<'a> RuntimeTurnExecutionService<'a> {
             #[cfg(not(feature = "memory-sqlite"))]
             let hosted_runtime =
                 crate::conversation::DefaultConversationRuntime::from_config_or_env(&turn_config)?;
-            let turn_outcome =
-                runtime
-                    .turn_coordinator
-                    .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
-                        &turn_config,
-                        &turn_address,
-                        message,
-                        provider_error_mode,
-                        &hosted_runtime,
-                        &acp_options,
-                        runtime.conversation_binding(),
-                        effective_ingress,
-                        observer,
-                        retry_progress,
-                        acp_manager,
-                    )
-                    .await?;
+            let turn_outcome = runtime
+                .turn_coordinator
+                .handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome(
+                    &turn_config,
+                    &turn_address,
+                    message,
+                    provider_error_mode,
+                    &hosted_runtime,
+                    runtime.conversation_binding(),
+                    effective_ingress,
+                    observer,
+                    retry_progress,
+                )
+                .await?;
             let prompt_frame_summary = load_runtime_prompt_frame_summary(runtime).await;
             let (prompt_assembly, prompt_cache) = build_prompt_plans(&prompt_frame_summary);
 

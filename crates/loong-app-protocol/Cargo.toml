@@ -16,6 +16,7 @@ loong-runtime = { path = "../loong-runtime" }
 serde.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+dunce = "1"
 
 [dev-dependencies]
 tokio.workspace = true

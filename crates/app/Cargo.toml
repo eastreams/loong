@@ -54,6 +54,7 @@ tool-websearch = []
 test-support = []
 
 [dependencies]
+loong-app-protocol = { package = "loong-app-protocol", version = "0.1.2-alpha.1", path = "../loong-app-protocol" }
 loong-contracts = { package = "loong-contracts", version = "0.1.2-alpha.1", path = "../contracts" }
 loong-kernel = { package = "loong-kernel", version = "0.1.2-alpha.1", path = "../kernel" }
 bytes = "1"

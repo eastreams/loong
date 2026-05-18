@@ -2,6 +2,76 @@ use super::*;
 
 #[allow(dead_code)]
 impl ConversationTurnCoordinator {
+    async fn handle_acp_entry_decision<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongConfig,
+        address: &ConversationSessionAddress,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        runtime: &R,
+        acp_options: &AcpConversationTurnOptions<'_>,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
+        acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
+    ) -> CliResult<Option<String>> {
+        let acp_entry_decision =
+            evaluate_acp_conversation_turn_entry_for_address(config, address, acp_options)?;
+        match acp_entry_decision {
+            AcpConversationTurnEntryDecision::RejectExplicitWhenDisabled => {
+                #[cfg(feature = "memory-sqlite")]
+                persist_task_progress_event_best_effort(
+                    config,
+                    address.session_id.as_str(),
+                    "turn_started",
+                    active_task_progress_record(config, address.session_id.as_str(), user_input),
+                );
+                observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
+                let error = "ACP is disabled by policy (`acp.enabled=false`)".to_owned();
+                let reply = match error_mode {
+                    ProviderErrorMode::Propagate => return Err(error),
+                    ProviderErrorMode::InlineMessage => {
+                        let synthetic = format_provider_error_reply(&error);
+                        persist_reply_turns_raw_with_mode(
+                            runtime,
+                            address.session_id.as_str(),
+                            user_input,
+                            &synthetic,
+                            ReplyPersistenceMode::InlineProviderError,
+                            binding,
+                        )
+                        .await?;
+                        synthetic
+                    }
+                };
+                Ok(Some(reply))
+            }
+            AcpConversationTurnEntryDecision::RouteViaAcp => {
+                #[cfg(feature = "memory-sqlite")]
+                persist_task_progress_event_best_effort(
+                    config,
+                    address.session_id.as_str(),
+                    "turn_started",
+                    active_task_progress_record(config, address.session_id.as_str(), user_input),
+                );
+                observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
+                let reply = self
+                    .handle_turn_via_acp_with_manager(
+                        config,
+                        address,
+                        user_input,
+                        error_mode,
+                        runtime,
+                        acp_options,
+                        binding,
+                        acp_manager,
+                    )
+                    .await?;
+                Ok(Some(reply))
+            }
+            AcpConversationTurnEntryDecision::StayOnProvider => Ok(None),
+        }
+    }
+
     async fn handle_turn_with_session_and_acp_options_and_ingress(
         &self,
         config: &LoongConfig,
@@ -293,18 +363,34 @@ impl ConversationTurnCoordinator {
         retry_progress: crate::provider::ProviderRetryProgressCallback,
         acp_manager: Option<Arc<crate::acp::AcpSessionManager>>,
     ) -> CliResult<String> {
-        self.handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer_outcome(
+        if let Some(reply) = self
+            .handle_acp_entry_decision(
+                config,
+                address,
+                user_input,
+                error_mode,
+                runtime,
+                acp_options,
+                binding,
+                observer.as_ref(),
+                acp_manager,
+            )
+            .await?
+        {
+            observe_non_provider_turn_terminal_success_phases(observer.as_ref());
+            return Ok(reply);
+        }
+
+        self.handle_turn_with_runtime_and_address_and_ingress_and_observer_outcome(
             config,
             address,
             user_input,
             error_mode,
             runtime,
-            acp_options,
             binding,
             ingress,
             observer,
             retry_progress,
-            acp_manager,
         )
         .await
         .map(|outcome| outcome.reply)

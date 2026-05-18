@@ -20,6 +20,7 @@ pub mod provider;
 pub mod runtime_bridge;
 pub mod runtime_env;
 mod runtime_identity;
+pub mod runtime_protocol_host;
 mod runtime_self;
 mod runtime_self_continuity;
 pub(crate) mod search_text;

@@ -86,20 +86,12 @@ pub struct RuntimeOneshotRequest {
     pub session_hint: Option<String>,
     pub message: String,
     pub workspace: WorkspaceContext,
-    pub acp: bool,
-    pub acp_event_stream: bool,
-    pub acp_bootstrap_mcp_servers: Vec<String>,
-    pub acp_cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeExecutorRequest {
     pub session_hint: Option<String>,
     pub message: String,
-    pub acp: bool,
-    pub acp_event_stream: bool,
-    pub acp_bootstrap_mcp_servers: Vec<String>,
-    pub acp_cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +100,7 @@ pub struct RuntimeExecutorResult {
     pub output_text: String,
     pub state: Option<String>,
     pub stop_reason: Option<String>,
+    pub usage: Option<Value>,
     pub event_count: usize,
 }
 
@@ -144,6 +137,7 @@ pub struct RuntimeOneshotExecution {
     pub output_text: String,
     pub state: Option<String>,
     pub stop_reason: Option<String>,
+    pub usage: Option<Value>,
     pub event_count: usize,
 }
 
@@ -159,10 +153,6 @@ pub async fn execute_oneshot_turn<E: RuntimeOneshotExecutor>(
         .execute(RuntimeExecutorRequest {
             session_hint: request.session_hint.clone(),
             message: request.message.clone(),
-            acp: request.acp,
-            acp_event_stream: request.acp_event_stream,
-            acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
-            acp_cwd: request.acp_cwd.clone(),
         })
         .await?;
 
@@ -171,8 +161,17 @@ pub async fn execute_oneshot_turn<E: RuntimeOneshotExecutor>(
     let mut session = Session::new(
         session_id.clone(),
         request.workspace.clone(),
-        SessionBudgetOverlay::default(),
+        SessionBudgetOverlay {
+            max_total_artifacts: Some(1),
+            ..SessionBudgetOverlay::default()
+        },
     );
+    session.record_artifact(ExecutionArtifact::new(
+        "session-output-text",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: executor_result.output_text.clone(),
+        },
+    ));
     session
         .spawn_task(
             task_id.as_str(),
@@ -220,6 +219,7 @@ pub async fn execute_oneshot_turn<E: RuntimeOneshotExecutor>(
         output_text: executor_result.output_text,
         state: executor_result.state,
         stop_reason: executor_result.stop_reason,
+        usage: executor_result.usage,
         event_count: executor_result.event_count,
     })
 }
@@ -228,19 +228,11 @@ pub async fn execute_oneshot_turn<E: RuntimeOneshotExecutor>(
 pub struct RuntimeInteractiveRequest {
     pub session_hint: Option<String>,
     pub workspace: WorkspaceContext,
-    pub acp: bool,
-    pub acp_event_stream: bool,
-    pub acp_bootstrap_mcp_servers: Vec<String>,
-    pub acp_cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeInteractiveExecutorRequest {
     pub session_hint: Option<String>,
-    pub acp: bool,
-    pub acp_event_stream: bool,
-    pub acp_bootstrap_mcp_servers: Vec<String>,
-    pub acp_cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,10 +292,6 @@ pub async fn execute_interactive_shell<E: RuntimeInteractiveExecutor>(
     let executor_result = executor
         .run_interactive(RuntimeInteractiveExecutorRequest {
             session_hint: request.session_hint.clone(),
-            acp: request.acp,
-            acp_event_stream: request.acp_event_stream,
-            acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
-            acp_cwd: request.acp_cwd.clone(),
         })
         .await?;
 
@@ -532,6 +520,7 @@ mod tests {
                 output_text: self.output_text.clone(),
                 state: Some("ok".to_owned()),
                 stop_reason: Some("completed".to_owned()),
+                usage: None,
                 event_count: 0,
             })
         }
@@ -550,10 +539,6 @@ mod tests {
             session_hint: Some("latest".to_owned()),
             message: "Summarize this repository.".to_owned(),
             workspace: workspace.clone(),
-            acp: false,
-            acp_event_stream: false,
-            acp_bootstrap_mcp_servers: Vec::new(),
-            acp_cwd: None,
         };
         let executor = MockExecutor {
             session_id: "resolved-session".to_owned(),
@@ -575,9 +560,13 @@ mod tests {
         assert_eq!(execution.task.current_turn_id.as_deref(), Some("turn-1"));
         assert_eq!(execution.task.artifact_count, 1);
         assert_eq!(execution.output_text, "phase3 migrated reply");
+        assert_eq!(execution.usage, None);
         assert!(matches!(
             execution.session_events.as_slice(),
-            [SessionEvent::SessionCreated { .. }]
+            [
+                SessionEvent::SessionCreated { .. },
+                SessionEvent::ArtifactRecorded { .. }
+            ]
         ));
         assert!(
             execution
@@ -617,10 +606,6 @@ mod tests {
         let request = RuntimeInteractiveRequest {
             session_hint: Some("latest".to_owned()),
             workspace: workspace.clone(),
-            acp: false,
-            acp_event_stream: false,
-            acp_bootstrap_mcp_servers: Vec::new(),
-            acp_cwd: None,
         };
         let executor = MockInteractiveExecutor {
             session_id: "chat-session".to_owned(),

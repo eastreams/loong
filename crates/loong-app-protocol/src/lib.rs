@@ -6,15 +6,19 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub use loong_runtime::WorkspaceContext as AppProtocolWorkspaceContext;
 use loong_runtime::{
-    ChildBudgetPolicy, ExecutionArtifact, RuntimeExecutorRequest, RuntimeExecutorResult,
-    RuntimeInteractiveExecution, RuntimeInteractiveExecutor, RuntimeInteractiveExecutorRequest,
-    RuntimeInteractiveExecutorResult, RuntimeInteractiveRequest, RuntimeOneshotExecution,
-    RuntimeOneshotExecutor, RuntimeTaskStatusExecution, RuntimeTaskStatusExecutor,
-    RuntimeTaskStatusExecutorResult, RuntimeTaskStatusRequest, Session, SessionEvent, Task,
-    TaskBudget, TaskEvent, TaskExecutionMode, TaskLifecycle, WorkspaceContext,
+    ChildBudgetPolicy, ExecutionArtifact, ExecutionArtifactKind, RuntimeExecutorRequest,
+    RuntimeExecutorResult, RuntimeInteractiveExecution, RuntimeInteractiveExecutor,
+    RuntimeInteractiveExecutorRequest, RuntimeInteractiveExecutorResult, RuntimeInteractiveRequest,
+    RuntimeOneshotExecution, RuntimeOneshotExecutor, RuntimeSessionDescriptor,
+    RuntimeTaskDescriptor, RuntimeTaskStatusExecution, RuntimeTaskStatusExecutor,
+    RuntimeTaskStatusExecutorResult, RuntimeTaskStatusRequest, Session, SessionBudgetOverlay,
+    SessionEvent, Task, TaskBudget, TaskEvent, TaskExecutionMode, TaskLifecycle, TurnStatus,
+    WorkspaceContext,
 };
 pub use loong_runtime::{
     RuntimeExecutorRequest as AppProtocolRuntimeExecutorRequest,
@@ -168,10 +172,23 @@ pub struct OneshotTurnRequest {
     pub config_path: Option<String>,
     pub session_hint: Option<String>,
     pub message: String,
-    pub acp: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutedOneshotTurnRequest {
+    pub config_path: Option<String>,
+    pub session_hint: Option<String>,
+    pub message: String,
+    pub channel_id: Option<String>,
+    pub account_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub participant_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub working_directory: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+    pub acp_requested: bool,
     pub acp_event_stream: bool,
-    pub acp_bootstrap_mcp_servers: Vec<String>,
-    pub acp_cwd: Option<String>,
 }
 
 #[async_trait]
@@ -194,10 +211,141 @@ pub fn build_runtime_oneshot_request(
         session_hint: request.session_hint.clone(),
         message: request.message.clone(),
         workspace,
-        acp: request.acp,
-        acp_event_stream: request.acp_event_stream,
-        acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
-        acp_cwd: request.acp_cwd.clone(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeRoutedExecutorRequest {
+    pub session_hint: Option<String>,
+    pub message: String,
+    pub channel_id: Option<String>,
+    pub account_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub participant_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub working_directory: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+    pub acp_requested: bool,
+    pub acp_event_stream: bool,
+}
+
+#[async_trait]
+pub trait AppProtocolRoutedOneshotExecutor: Send + Sync {
+    async fn execute_routed(
+        &self,
+        request: RuntimeRoutedExecutorRequest,
+    ) -> Result<RuntimeExecutorResult, String>;
+}
+
+pub fn build_runtime_routed_oneshot_request(
+    request: &RoutedOneshotTurnRequest,
+    workspace: WorkspaceContext,
+) -> Result<loong_runtime::RuntimeOneshotRequest, String> {
+    if request.message.trim().is_empty() {
+        return Err("turn message must not be empty".to_owned());
+    }
+
+    Ok(loong_runtime::RuntimeOneshotRequest {
+        session_hint: request.session_hint.clone(),
+        message: request.message.clone(),
+        workspace,
+    })
+}
+
+pub async fn execute_routed_oneshot_turn<E: AppProtocolRoutedOneshotExecutor>(
+    request: &RoutedOneshotTurnRequest,
+    workspace: WorkspaceContext,
+    executor: &E,
+) -> Result<RuntimeOneshotExecution, String> {
+    if request.message.trim().is_empty() {
+        return Err("turn message must not be empty".to_owned());
+    }
+
+    let executor_result = executor
+        .execute_routed(RuntimeRoutedExecutorRequest {
+            session_hint: request.session_hint.clone(),
+            message: request.message.clone(),
+            channel_id: request.channel_id.clone(),
+            account_id: request.account_id.clone(),
+            conversation_id: request.conversation_id.clone(),
+            participant_id: request.participant_id.clone(),
+            thread_id: request.thread_id.clone(),
+            working_directory: request.working_directory.clone(),
+            metadata: request.metadata.clone(),
+            acp_requested: request.acp_requested,
+            acp_event_stream: request.acp_event_stream,
+        })
+        .await?;
+
+    let session_id = executor_result.session_id.clone();
+    let task_id = format!("turn-run:{session_id}");
+    let mut session = Session::new(
+        session_id.clone(),
+        workspace,
+        SessionBudgetOverlay {
+            max_total_artifacts: Some(1),
+            ..SessionBudgetOverlay::default()
+        },
+    );
+    session.record_artifact(ExecutionArtifact::new(
+        "session-output-text",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: executor_result.output_text.clone(),
+        },
+    ));
+    session
+        .spawn_task(
+            task_id.as_str(),
+            request.message.as_str(),
+            TaskBudget::default(),
+            TaskExecutionMode::RemoteControlledAttached,
+        )
+        .map_err(|error| error.to_string())?;
+    let task = session
+        .task_mut(task_id.as_str())
+        .ok_or_else(|| "migrated runtime task missing after spawn".to_owned())?;
+    task.transition_to(TaskLifecycle::Running)
+        .map_err(|error| error.to_string())?;
+    task.begin_turn(
+        "turn-1",
+        "execute routed one-shot turn through the additive spine",
+    )
+    .map_err(|error| error.to_string())?;
+    task.record_artifact(ExecutionArtifact::new(
+        "artifact-output-text",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: executor_result.output_text.clone(),
+        },
+    ));
+    task.finish_current_turn(TurnStatus::Completed);
+    task.transition_to(TaskLifecycle::Completed)
+        .map_err(|error| error.to_string())?;
+
+    let task = session
+        .task(task_id.as_str())
+        .ok_or_else(|| "migrated runtime task missing after completion".to_owned())?;
+
+    Ok(RuntimeOneshotExecution {
+        session: RuntimeSessionDescriptor {
+            session_id,
+            workspace: session.workspace().clone(),
+        },
+        task: RuntimeTaskDescriptor {
+            task_id: task.task_id.clone(),
+            objective: task.objective.clone(),
+            lifecycle: task.lifecycle().clone(),
+            execution_mode: task.execution_mode.clone(),
+            current_turn_id: task.current_turn().map(|turn| turn.turn_id.clone()),
+            artifact_count: task.artifacts().len(),
+        },
+        session_events: session.session_events().to_vec(),
+        task_events: task.fact_events().to_vec(),
+        output_text: executor_result.output_text,
+        state: executor_result.state,
+        stop_reason: executor_result.stop_reason,
+        usage: executor_result.usage,
+        event_count: executor_result.event_count,
     })
 }
 
@@ -236,10 +384,6 @@ pub fn render_oneshot_turn_output(execution: &RuntimeOneshotExecution) -> &str {
 pub struct InteractiveShellRequest {
     pub config_path: Option<String>,
     pub session_hint: Option<String>,
-    pub acp: bool,
-    pub acp_event_stream: bool,
-    pub acp_bootstrap_mcp_servers: Vec<String>,
-    pub acp_cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,6 +398,174 @@ pub trait AppProtocolInteractiveExecutor: Send + Sync {
         &self,
         request: RuntimeInteractiveExecutorRequest,
     ) -> Result<RuntimeInteractiveExecutorResult, String>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeExecutorConfig {
+    pub requested_config_path: Option<String>,
+    pub resolved_config_path: PathBuf,
+    pub runtime_workspace_root: Option<PathBuf>,
+    pub latest_session_selector: Option<String>,
+}
+
+impl RuntimeExecutorConfig {
+    pub fn preserve_requested_path_for_interactive_missing_config(
+        requested_config_path: Option<String>,
+        resolved_config_path: PathBuf,
+    ) -> Self {
+        Self {
+            requested_config_path,
+            resolved_config_path,
+            runtime_workspace_root: None,
+            latest_session_selector: None,
+        }
+    }
+}
+
+#[async_trait]
+pub trait AppProtocolRuntimeHost: Send + Sync {
+    async fn execute_oneshot_request(
+        &self,
+        config: &RuntimeExecutorConfig,
+        request: RuntimeExecutorRequest,
+    ) -> Result<RuntimeExecutorResult, String>;
+
+    async fn execute_routed_oneshot_request(
+        &self,
+        config: &RuntimeExecutorConfig,
+        request: RuntimeRoutedExecutorRequest,
+    ) -> Result<RuntimeExecutorResult, String>;
+
+    async fn execute_interactive_request(
+        &self,
+        config: &RuntimeExecutorConfig,
+        request: RuntimeInteractiveExecutorRequest,
+    ) -> Result<RuntimeInteractiveExecutorResult, String>;
+
+    async fn resolve_latest_root_session_id(
+        &self,
+        config: &RuntimeExecutorConfig,
+    ) -> Result<Option<String>, String>;
+}
+
+pub struct ProductionOneshotExecutor<'a, H> {
+    host: &'a H,
+    config: RuntimeExecutorConfig,
+}
+
+impl<'a, H> ProductionOneshotExecutor<'a, H> {
+    pub fn new(host: &'a H, config: RuntimeExecutorConfig) -> Self {
+        Self { host, config }
+    }
+}
+
+pub struct ProductionRoutedOneshotExecutor<'a, H> {
+    host: &'a H,
+    config: RuntimeExecutorConfig,
+}
+
+impl<'a, H> ProductionRoutedOneshotExecutor<'a, H> {
+    pub fn new(host: &'a H, config: RuntimeExecutorConfig) -> Self {
+        Self { host, config }
+    }
+}
+
+#[async_trait]
+impl<H> AppProtocolOneshotExecutor for ProductionOneshotExecutor<'_, H>
+where
+    H: AppProtocolRuntimeHost,
+{
+    async fn execute(
+        &self,
+        request: RuntimeExecutorRequest,
+    ) -> Result<RuntimeExecutorResult, String> {
+        self.host
+            .execute_oneshot_request(&self.config, request)
+            .await
+    }
+}
+
+#[async_trait]
+impl<H> AppProtocolRoutedOneshotExecutor for ProductionRoutedOneshotExecutor<'_, H>
+where
+    H: AppProtocolRuntimeHost,
+{
+    async fn execute_routed(
+        &self,
+        request: RuntimeRoutedExecutorRequest,
+    ) -> Result<RuntimeExecutorResult, String> {
+        self.host
+            .execute_routed_oneshot_request(&self.config, request)
+            .await
+    }
+}
+
+pub struct ProductionInteractiveExecutor<'a, H> {
+    host: &'a H,
+    config: RuntimeExecutorConfig,
+}
+
+impl<'a, H> ProductionInteractiveExecutor<'a, H> {
+    pub fn new(host: &'a H, config: RuntimeExecutorConfig) -> Self {
+        Self { host, config }
+    }
+}
+
+#[async_trait]
+impl<H> AppProtocolInteractiveExecutor for ProductionInteractiveExecutor<'_, H>
+where
+    H: AppProtocolRuntimeHost,
+{
+    async fn run_interactive(
+        &self,
+        request: RuntimeInteractiveExecutorRequest,
+    ) -> Result<RuntimeInteractiveExecutorResult, String> {
+        self.host
+            .execute_interactive_request(&self.config, request)
+            .await
+    }
+}
+
+pub fn load_runtime_executor_config(
+    requested_config_path: Option<&str>,
+) -> Result<RuntimeExecutorConfig, String> {
+    let resolved_config_path = requested_config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(default_config_path);
+    resolved_config_path.try_exists().map_err(|error| {
+        format!(
+            "failed to access config path {}: {error}",
+            resolved_config_path.display()
+        )
+    })?;
+    let requested_config_path = requested_config_path.map(ToOwned::to_owned);
+    let requested_path_for_interactive = requested_config_path;
+
+    Ok(RuntimeExecutorConfig {
+        requested_config_path: requested_path_for_interactive,
+        resolved_config_path,
+        runtime_workspace_root: Some(current_runtime_workspace_root()),
+        latest_session_selector: Some("latest".to_owned()),
+    })
+}
+
+fn current_runtime_workspace_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn default_config_path() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".loong").join("config.toml")
+}
+
+pub fn executor_requested_config_path(config: &RuntimeExecutorConfig) -> Option<&str> {
+    config.requested_config_path.as_deref()
+}
+
+pub fn executor_resolved_config_path(config: &RuntimeExecutorConfig) -> &Path {
+    config.resolved_config_path.as_path()
 }
 
 struct RuntimeInteractiveExecutorAdapter<'a, E> {
@@ -280,10 +592,6 @@ pub fn build_runtime_interactive_request(
     RuntimeInteractiveRequest {
         session_hint: request.session_hint.clone(),
         workspace,
-        acp: request.acp,
-        acp_event_stream: request.acp_event_stream,
-        acp_bootstrap_mcp_servers: request.acp_bootstrap_mcp_servers.clone(),
-        acp_cwd: request.acp_cwd.clone(),
     }
 }
 
@@ -353,16 +661,12 @@ mod tests {
         ) -> Result<RuntimeExecutorResult, String> {
             assert_eq!(request.session_hint.as_deref(), Some("latest"));
             assert_eq!(request.message, "summarize via protocol");
-            assert!(request.acp_event_stream);
-            assert_eq!(
-                request.acp_bootstrap_mcp_servers,
-                vec!["filesystem".to_owned()]
-            );
             Ok(RuntimeExecutorResult {
                 session_id: "resolved-session".to_owned(),
                 output_text: "protocol result".to_owned(),
                 state: Some("ok".to_owned()),
                 stop_reason: Some("completed".to_owned()),
+                usage: None,
                 event_count: 1,
             })
         }
@@ -422,10 +726,6 @@ mod tests {
             config_path: None,
             session_hint: Some("latest".to_owned()),
             message: "summarize via protocol".to_owned(),
-            acp: false,
-            acp_event_stream: true,
-            acp_bootstrap_mcp_servers: vec!["filesystem".to_owned()],
-            acp_cwd: Some("/tmp/project".to_owned()),
         };
         let workspace = WorkspaceContext::new(
             "/tmp/project",
@@ -451,10 +751,6 @@ mod tests {
         let request = InteractiveShellRequest {
             config_path: None,
             session_hint: Some("latest".to_owned()),
-            acp: false,
-            acp_event_stream: false,
-            acp_bootstrap_mcp_servers: Vec::new(),
-            acp_cwd: None,
         };
         let workspace = WorkspaceContext::new(
             "/tmp/chat",

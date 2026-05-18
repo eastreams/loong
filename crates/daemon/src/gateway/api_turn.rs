@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::control::{GatewayControlAppState, authorize_request_from_state};
+use loong_app_protocol::{
+    AppProtocolWorkspaceContext, ProductionRoutedOneshotExecutor, RoutedOneshotTurnRequest,
+    RuntimeExecutorConfig, execute_routed_oneshot_turn,
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct GatewayHttpTurnRequest {
@@ -40,21 +44,6 @@ pub(crate) struct GatewayHttpTurnResponse {
     pub stop_reason: Option<String>,
     pub usage: Option<Value>,
     pub event_count: usize,
-}
-
-impl GatewayHttpTurnResponse {
-    fn from_agent_turn_result(result: &crate::mvp::agent_runtime::AgentTurnResult) -> Self {
-        Self {
-            output_text: result.output_text.clone(),
-            state: result
-                .state
-                .clone()
-                .unwrap_or_else(|| "completed".to_owned()),
-            stop_reason: result.stop_reason.clone(),
-            usage: result.usage.clone(),
-            event_count: result.event_count,
-        }
-    }
 }
 
 type TurnJsonResponse = (StatusCode, Json<Value>);
@@ -92,7 +81,7 @@ pub(crate) async fn handle_turn(
         );
     }
 
-    let address = match crate::build_acp_dispatch_address(
+    let _address = match crate::build_acp_dispatch_address(
         turn_request.session_id.as_str(),
         turn_request.channel_id.as_deref(),
         turn_request.conversation_id.as_deref(),
@@ -109,7 +98,7 @@ pub(crate) async fn handle_turn(
         }
     };
 
-    let (Some(acp_manager), Some(config)) = (&app_state.acp_manager, &app_state.config) else {
+    let (Some(_acp_manager), Some(config)) = (&app_state.acp_manager, &app_state.config) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "ACP session manager not available"})),
@@ -130,32 +119,52 @@ pub(crate) async fn handle_turn(
         .map(ToOwned::to_owned);
 
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
-    let execution = crate::mvp::turn_gateway::TurnGatewayExecution {
-        resolved_path: PathBuf::from(app_state.config_path.clone()),
-        config: config.clone(),
-        kernel_ctx: None,
-        acp_manager: Some(acp_manager.clone()),
-        event_sink: event_sink
-            .as_ref()
-            .map(|sink| sink as &dyn crate::mvp::acp::AcpTurnEventSink),
-        initialize_runtime_environment: false,
+    let runtime_executor_config = RuntimeExecutorConfig {
+        requested_config_path: Some(app_state.config_path.clone()),
+        resolved_config_path: PathBuf::from(app_state.config_path.clone()),
+        runtime_workspace_root: std::env::current_dir().ok(),
+        latest_session_selector: Some("latest".to_owned()),
     };
-    let turn_request = crate::mvp::turn_gateway::build_turn_gateway_request(
-        address,
-        turn_request.input.clone(),
-        turn_request.metadata.clone(),
-        crate::mvp::agent_runtime::AgentTurnMode::Oneshot,
-        crate::mvp::acp::AcpRoutingIntent::Explicit,
-        event_sink.is_some(),
-        Vec::new(),
-        working_directory,
-        false,
+    let host = crate::mvp::runtime_protocol_host::LoongAppRuntimeProtocolHost::new()
+        .with_acp_manager(_acp_manager.clone())
+        .with_loaded_config(config.clone());
+    let host = match event_sink.as_ref() {
+        Some(sink) => host.with_event_sink(sink),
+        None => host,
+    };
+    let executor = ProductionRoutedOneshotExecutor::new(&host, runtime_executor_config);
+    let workspace = AppProtocolWorkspaceContext::new(
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        "unknown".to_owned(),
     );
-    let result = crate::mvp::turn_gateway::run_turn_gateway(execution, turn_request).await;
+    let routed_request = RoutedOneshotTurnRequest {
+        config_path: Some(app_state.config_path.clone()),
+        session_hint: Some(turn_request.session_id.clone()),
+        message: turn_request.input.clone(),
+        channel_id: turn_request.channel_id.clone(),
+        account_id: turn_request.account_id.clone(),
+        conversation_id: turn_request.conversation_id.clone(),
+        participant_id: turn_request.participant_id.clone(),
+        thread_id: turn_request.thread_id.clone(),
+        working_directory,
+        metadata: turn_request.metadata.clone(),
+        acp_requested: true,
+        acp_event_stream: event_sink.is_some(),
+    };
+    let result = execute_routed_oneshot_turn(&routed_request, workspace, &executor).await;
 
     match result {
         Ok(turn_result) => {
-            let response = GatewayHttpTurnResponse::from_agent_turn_result(&turn_result);
+            let response = GatewayHttpTurnResponse {
+                output_text: turn_result.output_text,
+                state: turn_result.state.unwrap_or_else(|| "completed".to_owned()),
+                stop_reason: turn_result.stop_reason,
+                usage: turn_result.usage,
+                event_count: turn_result.event_count,
+            };
             match serde_json::to_value(response) {
                 Ok(value) => (StatusCode::OK, Json(value)),
                 Err(error) => (
