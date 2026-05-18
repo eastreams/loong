@@ -142,7 +142,10 @@ pub(crate) fn bridge_provider_tool_call_with_scope(
     turn_id: Option<&str>,
 ) -> (String, Value) {
     let canonical_name = canonical_tool_name(tool_name).to_owned();
-    if let Some(direct_tool_name) = direct_tool_name_for_hidden_tool(canonical_name.as_str()) {
+    let preserve_hidden_shell_exec = canonical_name == SHELL_EXEC_TOOL_NAME;
+    if !preserve_hidden_shell_exec
+        && let Some(direct_tool_name) = direct_tool_name_for_hidden_tool(canonical_name.as_str())
+    {
         return (direct_tool_name.to_owned(), args_json);
     }
     let Some(entry) = catalog::find_tool_catalog_entry(canonical_name.as_str()) else {

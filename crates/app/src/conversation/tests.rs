@@ -10920,10 +10920,25 @@ async fn handle_turn_with_runtime_repairable_shell_failure_followup_includes_fai
                     .get("content")
                     .and_then(Value::as_str)
                     .is_some_and(|content| {
-                        content.starts_with("[tool_failure]\n") && content.contains("NetworkEgress")
+                        content.starts_with("[tool_failure]\n")
+                            && content.contains("shell.exec payload.command `/bin/echo`")
                     })
         }),
-        "completion followup should include the capability denial reason: {followup_messages:?}"
+        "completion followup should include the shell failure reason: {followup_messages:?}"
+    );
+    assert!(
+        followup_messages.iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| {
+                        content.contains("Repair guidance for bash:")
+                            && content.contains("Use a bare lowercase executable name")
+                            && content.contains("The failed request used `/bin/echo`")
+                    })
+        }),
+        "completion followup should include the shell repair guidance: {followup_messages:?}"
     );
 }
 
@@ -11001,8 +11016,8 @@ async fn handle_turn_with_runtime_multi_intent_shell_failure_followup_uses_faile
                     .is_some_and(|content| {
                         content.starts_with("[tool_request]\n")
                             && content.contains("\"name\":\"bash\"")
-                            && content.contains("\"command\":\"ls\"")
-                            && !content.contains("\"command\":\"/bin/echo\"")
+                            && content.contains("\"command\":\"/bin/echo\"")
+                            && !content.contains("\"command\":\"ls\"")
                     })
         }),
         "completion followup should include only the failed bash request: {followup_messages:?}"
@@ -21328,7 +21343,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
     let requests = repo
         .list_approval_requests_for_session("root-session", None)
         .expect("list approval requests");
-    let approval_key = "tool:bash";
+    let approval_key = "tool:shell.exec";
 
     assert!(
         reply.contains("[tool_approval_required]"),
@@ -21340,7 +21355,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
     );
     assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].tool_name, "bash");
+    assert_eq!(requests[0].tool_name, "shell.exec");
     assert_eq!(requests[0].approval_key, approval_key);
     assert!(
         reply.contains(requests[0].approval_request_id.as_str()),
@@ -21358,7 +21373,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
         .expect("request payload command");
     let trust_event = &stored.request_payload_json["trust_event"];
 
-    assert_eq!(payload_tool_name, "bash");
+    assert_eq!(payload_tool_name, "shell.exec");
     assert_eq!(payload_command, command);
     assert_eq!(trust_event["event_kind"], "approval_required");
     assert_eq!(trust_event["actor_kind"], "conversation_runtime");
@@ -21531,30 +21546,26 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
         crate::context::bootstrap_kernel_context_with_config("shell-approval-always", 60, &config)
             .expect("bootstrap kernel context");
     let (command, args, expected_stdout) = shell_exec_test_command();
-    let granted_command = if args.is_empty() {
-        command.to_owned()
-    } else {
-        format!("{command} {}", args.join(" "))
-    };
     let command_payload = json!({
-        "command": granted_command
+        "command": command,
+        "args": args
     });
     let args_json = command_payload.clone();
-    let approval_key = "tool:bash".to_owned();
+    let approval_key = shell_exec_approval_key(command);
 
     repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
         approval_request_id: "apr-shell-always".to_owned(),
         session_id: "root-session".to_owned(),
         turn_id: "turn-shell-parent".to_owned(),
         tool_call_id: "call-shell-parent".to_owned(),
-        tool_name: "bash".to_owned(),
+        tool_name: "shell.exec".to_owned(),
         approval_key: approval_key.clone(),
         request_payload_json: json!({
             "session_id": "root-session",
             "parent_session_id": Value::Null,
             "turn_id": "turn-shell-parent",
             "tool_call_id": "call-shell-parent",
-            "tool_name": "bash",
+            "tool_name": "shell.exec",
             "args_json": args_json,
             "source": "provider_tool_call",
             "execution_kind": "core"
@@ -21565,7 +21576,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
             "approval_mode": "policy_driven",
             "rule_id": "shell_exec_requires_approval",
             "reason": format!(
-                "operator approval required before running shell command `{command}` via `bash`"
+                "operator approval required before running shell command `{command}` via `shell.exec`"
             )
         }),
     })
@@ -21636,7 +21647,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
             Ok(ProviderTurn {
                 assistant_text: "running granted shell command".to_owned(),
                 tool_intents: vec![provider_tool_intent(
-                    "bash",
+                    "shell.exec",
                     command_payload,
                     "root-session",
                     "turn-after-grant",

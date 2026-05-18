@@ -209,8 +209,8 @@ fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() 
             .expect("provider shell request should prepare successfully")
     });
 
-    assert_eq!(prepared_intent.request.tool_name, "bash");
-    assert_eq!(prepared_intent.intent.tool_name, "bash");
+    assert_eq!(prepared_intent.request.tool_name, "shell.exec");
+    assert_eq!(prepared_intent.intent.tool_name, "shell.exec");
     assert_eq!(
         prepared_intent.intent.args_json,
         json!({
@@ -1007,8 +1007,8 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
 
     let approval_request_id = match result {
         TurnResult::NeedsApproval(requirement) => {
-            assert_eq!(requirement.tool_name.as_deref(), Some("bash"));
-            assert_eq!(requirement.approval_key.as_deref(), Some("tool:bash"));
+            assert_eq!(requirement.tool_name.as_deref(), Some("shell.exec"));
+            assert_eq!(requirement.approval_key.as_deref(), Some("tool:shell.exec"));
             requirement
                 .approval_request_id
                 .expect("approval request id should be present")
@@ -1028,11 +1028,11 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
         .expect("load approval request")
         .expect("approval request row");
     assert_eq!(stored.status, ApprovalRequestStatus::Pending);
-    assert_eq!(stored.tool_name, "bash");
+    assert_eq!(stored.tool_name, "shell.exec");
     assert_eq!(stored.turn_id, "turn-shell-discovered");
     assert_eq!(stored.tool_call_id, "call-shell-discovered");
-    assert_eq!(stored.approval_key, "tool:bash");
-    assert_eq!(stored.request_payload_json["tool_name"], "bash");
+    assert_eq!(stored.approval_key, "tool:shell.exec");
+    assert_eq!(stored.request_payload_json["tool_name"], "shell.exec");
     assert_eq!(stored.request_payload_json["execution_kind"], "core");
     assert_eq!(
         stored.request_payload_json["args_json"],

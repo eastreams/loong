@@ -74,8 +74,11 @@ impl TurnEngine {
                     ));
                 };
 
-                if descriptor.is_provider_exposed()
-                    || crate::tools::direct_tool_name_for_hidden_tool(descriptor.name).is_some()
+                let wrapped_shell_exec = descriptor.name == crate::tools::SHELL_EXEC_TOOL_NAME;
+                if !wrapped_shell_exec
+                    && (descriptor.is_provider_exposed()
+                        || crate::tools::direct_tool_name_for_hidden_tool(descriptor.name)
+                            .is_some())
                 {
                     let reason = provider_tool_denial_reason(
                         "tool_not_found: tool.invoke",
