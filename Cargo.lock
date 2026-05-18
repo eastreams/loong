@@ -3079,7 +3079,6 @@ dependencies = [
  "jieba-rs",
  "lettre",
  "libc",
- "loong-app-protocol",
  "loong-contracts",
  "loong-kernel",
  "prost",

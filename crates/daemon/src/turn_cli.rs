@@ -73,7 +73,7 @@ async fn run_spine_chat_cli(
     };
     let runtime_executor_config = load_runtime_executor_config(config_path)?;
     let (_resolved_path, config) = load_chat_protocol_config(config_path)?;
-    let host = mvp::runtime_protocol_host::LoongAppRuntimeProtocolHost::new();
+    let host = crate::runtime_protocol_host::LoongAppRuntimeProtocolHost::new();
     let executor = ProductionInteractiveExecutor::new(&host, runtime_executor_config);
     let workspace = migrated_turn_workspace_context(&config)?;
     let _execution = execute_interactive_shell(&protocol_request, workspace, &executor).await?;
@@ -157,7 +157,7 @@ async fn run_spine_oneshot_cli(
         message: message.to_owned(),
     };
     let (resolved_path, config) = mvp::config::load(config_path)?;
-    let host = mvp::runtime_protocol_host::LoongAppRuntimeProtocolHost::new();
+    let host = crate::runtime_protocol_host::LoongAppRuntimeProtocolHost::new();
     let runtime_executor_config = loong_app_protocol::RuntimeExecutorConfig {
         requested_config_path: config_path.map(ToOwned::to_owned),
         resolved_config_path: resolved_path,

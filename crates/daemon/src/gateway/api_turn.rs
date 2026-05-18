@@ -125,7 +125,7 @@ pub(crate) async fn handle_turn(
         runtime_workspace_root: std::env::current_dir().ok(),
         latest_session_selector: Some("latest".to_owned()),
     };
-    let host = crate::mvp::runtime_protocol_host::LoongAppRuntimeProtocolHost::new()
+    let host = crate::runtime_protocol_host::LoongAppRuntimeProtocolHost::new()
         .with_acp_manager(_acp_manager.clone())
         .with_loaded_config(config.clone());
     let host = match event_sink.as_ref() {

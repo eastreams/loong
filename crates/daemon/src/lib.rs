@@ -180,6 +180,7 @@ mod runtime_access;
 pub mod runtime_capability_cli;
 pub mod runtime_cli;
 pub mod runtime_experiment_cli;
+mod runtime_protocol_host;
 pub mod runtime_restore_cli;
 mod runtime_snapshot_compaction_assessment;
 mod runtime_snapshot_compaction_hygiene;
