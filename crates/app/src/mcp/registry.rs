@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -8,14 +8,12 @@ use crate::config::{AcpxBackendConfig, AcpxMcpServerConfig, LoongConfig};
 use super::config::{McpServerConfig, McpServerTransportConfig};
 use super::types::{
     McpAuthStatus, McpRuntimeServerSnapshot, McpRuntimeSnapshot, McpServerOrigin,
-    McpServerOriginKind, McpServerStatus, McpServerStatusKind, McpStdioServerLaunchSpec,
-    McpTransportSnapshot,
+    McpServerOriginKind, McpServerStatus, McpServerStatusKind, McpTransportSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct McpRegistryEntry {
     snapshot: McpRuntimeServerSnapshot,
-    stdio_launch_spec: Option<McpStdioServerLaunchSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -82,7 +80,7 @@ impl McpRegistry {
         let mut count = 0;
 
         for entry in self.servers.values() {
-            let is_stdio = entry.stdio_launch_spec.is_some();
+            let is_stdio = matches!(entry.snapshot.transport, McpTransportSnapshot::Stdio { .. });
             let is_enabled = entry.snapshot.enabled;
             let status_kind = entry.snapshot.status.kind;
             let is_launchable = matches!(
@@ -97,108 +95,6 @@ impl McpRegistry {
 
         count
     }
-
-    pub fn resolve_selected_server_names(
-        &self,
-        requested_names: &[String],
-    ) -> CliResult<Vec<String>> {
-        let mut selected_names = Vec::new();
-        let mut seen_names = BTreeSet::new();
-        let mut missing_names = Vec::new();
-
-        for raw_name in requested_names {
-            let normalized_name = canonical_server_name(raw_name)?;
-            let inserted = seen_names.insert(normalized_name.clone());
-
-            if !inserted {
-                continue;
-            }
-
-            let contains_server = self.servers.contains_key(&normalized_name);
-
-            if contains_server {
-                selected_names.push(normalized_name);
-                continue;
-            }
-
-            missing_names.push(normalized_name);
-        }
-
-        if missing_names.is_empty() {
-            return Ok(selected_names);
-        }
-
-        let rendered_names = missing_names.join(", ");
-        let message = format!(
-            "ACPX requested mcp_servers are not configured in the shared MCP registry ([mcp.servers] or [acp.backends.acpx.mcp_servers]): {rendered_names}"
-        );
-
-        Err(message)
-    }
-
-    pub fn resolve_injectable_stdio_launch_specs(
-        &self,
-        selected_names: &[String],
-    ) -> CliResult<Vec<McpStdioServerLaunchSpec>> {
-        let mut launch_specs = Vec::new();
-
-        for name in selected_names {
-            let maybe_entry = self.servers.get(name);
-
-            let Some(entry) = maybe_entry else {
-                let message = format!(
-                    "ACPX requested mcp_servers are not configured in the shared MCP registry ([mcp.servers] or [acp.backends.acpx.mcp_servers]): {name}"
-                );
-
-                return Err(message);
-            };
-
-            let is_enabled = entry.snapshot.enabled;
-
-            if !is_enabled {
-                let message = format!(
-                    "ACPX requested mcp_server `{name}` exists, but it is disabled in the shared MCP registry"
-                );
-
-                return Err(message);
-            }
-
-            let status_kind = entry.snapshot.status.kind;
-            let launchable_status = matches!(
-                status_kind,
-                McpServerStatusKind::Pending | McpServerStatusKind::Connected
-            );
-            if !launchable_status {
-                let last_error = entry
-                    .snapshot
-                    .status
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "mcp_server_not_launchable".to_owned());
-                let message = format!(
-                    "ACPX requested mcp_server `{name}` exists, but it is not launchable in the shared MCP registry: {last_error}"
-                );
-
-                return Err(message);
-            }
-
-            let maybe_launch_spec = entry.stdio_launch_spec.clone();
-
-            let Some(launch_spec) = maybe_launch_spec else {
-                let transport_kind = transport_kind_label(&entry.snapshot.transport);
-                let message = format!(
-                    "ACPX requested mcp_server `{name}` exists, but its transport `{transport_kind}` is not compatible with ACPX injection; only stdio MCP servers can be proxied"
-                );
-
-                return Err(message);
-            };
-
-            launch_specs.push(launch_spec);
-        }
-
-        Ok(launch_specs)
-    }
-
     fn ingest_acpx_profile(&mut self, profile: &AcpxBackendConfig) -> CliResult<()> {
         for (raw_name, server) in &profile.mcp_servers {
             let name = canonical_server_name(raw_name)?;
@@ -266,12 +162,7 @@ fn registry_entry_from_config(
         tool_timeout_ms: server.tool_timeout_ms,
     };
 
-    let stdio_launch_spec = stdio_launch_spec_from_config(&snapshot, &server.transport);
-
-    McpRegistryEntry {
-        snapshot,
-        stdio_launch_spec,
-    }
+    McpRegistryEntry { snapshot }
 }
 
 fn registry_entry_from_acpx_profile(
@@ -286,7 +177,7 @@ fn registry_entry_from_acpx_profile(
     };
 
     let snapshot = McpRuntimeServerSnapshot {
-        name: name.clone(),
+        name,
         enabled: true,
         required: false,
         selected_for_acp_bootstrap: false,
@@ -302,20 +193,7 @@ fn registry_entry_from_acpx_profile(
         tool_timeout_ms: None,
     };
 
-    let stdio_launch_spec = McpStdioServerLaunchSpec {
-        name,
-        command: server.command.clone(),
-        args: server.args.clone(),
-        env: server.env.clone(),
-        cwd: None,
-        startup_timeout_ms: None,
-        tool_timeout_ms: None,
-    };
-
-    McpRegistryEntry {
-        snapshot,
-        stdio_launch_spec: Some(stdio_launch_spec),
-    }
+    McpRegistryEntry { snapshot }
 }
 
 fn mcp_server_status_from_config(server: &McpServerConfig) -> McpServerStatus {
@@ -878,42 +756,6 @@ fn redact_transport_url(raw: &str) -> String {
     parsed.to_string()
 }
 
-fn transport_kind_label(transport: &McpTransportSnapshot) -> &'static str {
-    match transport {
-        McpTransportSnapshot::Stdio { .. } => "stdio",
-        McpTransportSnapshot::StreamableHttp { .. } => "streamable_http",
-    }
-}
-
-fn stdio_launch_spec_from_config(
-    snapshot: &McpRuntimeServerSnapshot,
-    transport: &McpServerTransportConfig,
-) -> Option<McpStdioServerLaunchSpec> {
-    let McpServerTransportConfig::Stdio {
-        command,
-        args,
-        env,
-        cwd,
-    } = transport
-    else {
-        return None;
-    };
-
-    let cwd_string = cwd.as_ref().map(|value| value.display().to_string());
-
-    let launch_spec = McpStdioServerLaunchSpec {
-        name: snapshot.name.clone(),
-        command: command.clone(),
-        args: args.clone(),
-        env: env.clone(),
-        cwd: cwd_string,
-        startup_timeout_ms: snapshot.startup_timeout_ms,
-        tool_timeout_ms: snapshot.tool_timeout_ms,
-    };
-
-    Some(launch_spec)
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -1224,108 +1066,11 @@ mod tests {
             .iter()
             .find(|server| server.name == "shared")
             .expect("shared server");
-        let selected_names = vec!["shared".to_owned()];
-        let error = registry
-            .resolve_injectable_stdio_launch_specs(&selected_names)
-            .expect_err("config transport should remain authoritative");
 
         assert!(matches!(
             server.transport,
             McpTransportSnapshot::StreamableHttp { .. }
         ));
-        assert!(error.contains("streamable_http"), "error={error}");
-    }
-
-    #[test]
-    fn registry_resolves_injectable_stdio_launch_specs_from_shared_mcp_config() {
-        let expected_command = existing_test_command();
-        let config = LoongConfig {
-            mcp: McpConfig {
-                servers: BTreeMap::from([("Docs".to_owned(), configured_stdio_server())]),
-            },
-            ..LoongConfig::default()
-        };
-
-        let registry = McpRegistry::from_config(&config).expect("registry");
-        let requested_names = vec![" docs ".to_owned(), "docs".to_owned()];
-        let selected_names = registry
-            .resolve_selected_server_names(&requested_names)
-            .expect("selected names");
-        let launch_specs = registry
-            .resolve_injectable_stdio_launch_specs(&selected_names)
-            .expect("launch specs");
-
-        assert_eq!(selected_names, vec!["docs".to_owned()]);
-        assert_eq!(launch_specs.len(), 1);
-        assert_eq!(launch_specs[0].name, "docs");
-        assert_eq!(launch_specs[0].command, expected_command);
-        assert_eq!(launch_specs[0].args, vec!["context7-mcp".to_owned()]);
-        assert_eq!(
-            launch_specs[0].env,
-            BTreeMap::from([("API_TOKEN".to_owned(), "secret".to_owned())])
-        );
-    }
-
-    #[test]
-    fn registry_rejects_disabled_servers_for_acpx_injection() {
-        let disabled_server = McpServerConfig {
-            enabled: false,
-            ..configured_stdio_server()
-        };
-        let config = LoongConfig {
-            mcp: McpConfig {
-                servers: BTreeMap::from([("docs".to_owned(), disabled_server)]),
-            },
-            ..LoongConfig::default()
-        };
-
-        let registry = McpRegistry::from_config(&config).expect("registry");
-        let requested_names = vec!["docs".to_owned()];
-        let selected_names = registry
-            .resolve_selected_server_names(&requested_names)
-            .expect("selected names");
-        let error = registry
-            .resolve_injectable_stdio_launch_specs(&selected_names)
-            .expect_err("disabled server must be rejected for ACPX injection");
-
-        assert!(error.contains("disabled"), "error={error}");
-    }
-
-    #[test]
-    fn registry_rejects_non_stdio_servers_for_acpx_injection() {
-        let config = LoongConfig {
-            mcp: McpConfig {
-                servers: BTreeMap::from([(
-                    "remote".to_owned(),
-                    McpServerConfig {
-                        transport: McpServerTransportConfig::StreamableHttp {
-                            url: "https://mcp.example.com".to_owned(),
-                            bearer_token_env_var: Some("MCP_TOKEN".to_owned()),
-                            http_headers: BTreeMap::new(),
-                            env_http_headers: BTreeMap::new(),
-                        },
-                        enabled: true,
-                        required: false,
-                        startup_timeout_ms: None,
-                        tool_timeout_ms: None,
-                        enabled_tools: Vec::new(),
-                        disabled_tools: Vec::new(),
-                    },
-                )]),
-            },
-            ..LoongConfig::default()
-        };
-
-        let registry = McpRegistry::from_config(&config).expect("registry");
-        let requested_names = vec!["remote".to_owned()];
-        let selected_names = registry
-            .resolve_selected_server_names(&requested_names)
-            .expect("selected names");
-        let error = registry
-            .resolve_injectable_stdio_launch_specs(&selected_names)
-            .expect_err("http server must be rejected for ACPX injection");
-
-        assert!(error.contains("streamable_http"), "error={error}");
     }
 
     #[test]
@@ -1784,30 +1529,6 @@ mod tests {
             last_error.contains("stdio_command_not_found"),
             "last_error={last_error}"
         );
-    }
-
-    #[test]
-    fn registry_rejects_failed_stdio_servers_for_acpx_injection() {
-        let missing_command = missing_test_command_path("loong-mcp-injection-missing-command");
-        let server = configured_stdio_server_with_command(missing_command);
-        let config = LoongConfig {
-            mcp: McpConfig {
-                servers: BTreeMap::from([("docs".to_owned(), server)]),
-            },
-            ..LoongConfig::default()
-        };
-
-        let registry = McpRegistry::from_config(&config).expect("registry");
-        let requested_names = vec!["docs".to_owned()];
-        let selected_names = registry
-            .resolve_selected_server_names(&requested_names)
-            .expect("selected names");
-        let error = registry
-            .resolve_injectable_stdio_launch_specs(&selected_names)
-            .expect_err("failed stdio servers must be rejected for ACPX injection");
-
-        assert!(error.contains("not launchable"), "error={error}");
-        assert!(error.contains("stdio_command_not_found"), "error={error}");
     }
 
     #[test]

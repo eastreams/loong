@@ -213,7 +213,7 @@ pub async fn run_acp_status_cli(
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let resolved_session_key =
         resolve_acp_status_session_key(&config, session_key, conversation_id, route_session_id)?;
-    let manager = mvp::acp::shared_acp_session_manager(&config)?;
+    let manager = mvp::acp::acquire_shared_acp_session_manager(&config)?;
     let status = manager
         .get_status(&config, resolved_session_key.as_str())
         .await?;
@@ -270,7 +270,7 @@ pub async fn run_acp_status_cli(
 
 pub async fn run_acp_observability_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
-    let manager = mvp::acp::shared_acp_session_manager(&config)?;
+    let manager = mvp::acp::acquire_shared_acp_session_manager(&config)?;
     let snapshot = manager.observability_snapshot(&config).await?;
 
     if as_json {

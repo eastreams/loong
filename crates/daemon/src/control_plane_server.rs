@@ -444,7 +444,7 @@ impl ControlPlaneTurnRuntime {
         resolved_path: std::path::PathBuf,
         config: mvp::config::LoongConfig,
     ) -> Result<Self, String> {
-        let acp_manager = mvp::acp::shared_acp_session_manager(&config)?;
+        let acp_manager = mvp::acp::acquire_shared_acp_session_manager(&config)?;
         Ok(Self::with_manager(resolved_path, config, acp_manager))
     }
 

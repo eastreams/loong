@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,17 +72,6 @@ pub struct McpRuntimeServerSnapshot {
     pub transport: McpTransportSnapshot,
     pub enabled_tools: Vec<String>,
     pub disabled_tools: Vec<String>,
-    pub startup_timeout_ms: Option<u64>,
-    pub tool_timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct McpStdioServerLaunchSpec {
-    pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub env: BTreeMap<String, String>,
-    pub cwd: Option<String>,
     pub startup_timeout_ms: Option<u64>,
     pub tool_timeout_ms: Option<u64>,
 }

@@ -6,31 +6,25 @@ use crate::config::AcpConfig;
 use crate::config::LoongConfig;
 
 #[tokio::test]
-async fn doctor_reports_invalid_mcp_registry_config() {
+async fn doctor_reports_invalid_acpx_backend_mcp_config() {
     let backend = AcpxCliProbeBackend;
     let config = LoongConfig {
         acp: AcpConfig {
             allow_mcp_server_injection: true,
+            backends: crate::config::AcpBackendProfilesConfig {
+                acpx: Some(crate::config::AcpxBackendConfig {
+                    mcp_servers: BTreeMap::from([(
+                        "".to_owned(),
+                        crate::config::AcpxMcpServerConfig {
+                            command: "uvx".to_owned(),
+                            args: vec!["context7-mcp".to_owned()],
+                            env: BTreeMap::new(),
+                        },
+                    )]),
+                    ..crate::config::AcpxBackendConfig::default()
+                }),
+            },
             ..AcpConfig::default()
-        },
-        mcp: crate::mcp::McpConfig {
-            servers: BTreeMap::from([(
-                "".to_owned(),
-                crate::mcp::McpServerConfig {
-                    transport: crate::mcp::McpServerTransportConfig::Stdio {
-                        command: "uvx".to_owned(),
-                        args: vec!["context7-mcp".to_owned()],
-                        env: BTreeMap::new(),
-                        cwd: None,
-                    },
-                    enabled: true,
-                    required: false,
-                    startup_timeout_ms: None,
-                    tool_timeout_ms: None,
-                    enabled_tools: Vec::new(),
-                    disabled_tools: Vec::new(),
-                },
-            )]),
         },
         ..LoongConfig::default()
     };
