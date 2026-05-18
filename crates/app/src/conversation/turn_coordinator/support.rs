@@ -291,6 +291,39 @@ pub(super) fn active_task_progress_record(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub(super) fn queued_async_task_progress_record(
+    config: &LoongConfig,
+    session_id: &str,
+    user_input: &str,
+) -> TaskProgressRecord {
+    let updated_at = unix_ts_now();
+    let task_id = resolve_canonical_task_id(config, session_id);
+    TaskProgressRecord {
+        task_id,
+        owner_kind: "background_task_host".to_owned(),
+        status: TaskProgressStatus::Active,
+        intent_summary: summarize_task_progress_intent(user_input),
+        verification_state: Some(TaskVerificationState::NotStarted),
+        active_handles: vec![TaskActiveHandleRecord {
+            handle_kind: "background_task_host".to_owned(),
+            handle_id: session_id.to_owned(),
+            state: "queued".to_owned(),
+            last_event_at: Some(updated_at),
+            stop_condition: "delegate_child_terminal_or_recovery".to_owned(),
+        }],
+        resume_recipe: Some(TaskResumeRecipeRecord {
+            recommended_tool: "task_wait".to_owned(),
+            task_session_id: session_id.to_owned(),
+            note: Some(
+                "Use task_wait for the durable queued background task, or task_status/task_history to inspect progress."
+                    .to_owned(),
+            ),
+        }),
+        updated_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub(super) fn verifying_task_progress_record(
     config: &LoongConfig,
     session_id: &str,

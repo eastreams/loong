@@ -12,7 +12,7 @@ use tokio::time::{Duration, Instant, timeout};
 #[cfg(feature = "memory-sqlite")]
 use crate::acp::{
     AcpSessionMetadata, AcpSessionStatus, AcpSessionStore, AcpSqliteSessionStore,
-    shared_acp_session_manager,
+    acquire_shared_acp_session_manager,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::config::LoongConfig;
@@ -2452,7 +2452,7 @@ impl ControlPlaneAcpView {
             ));
         }
 
-        let manager = shared_acp_session_manager(&self.config)?;
+        let manager = acquire_shared_acp_session_manager(&self.config)?;
         let status = match manager.get_status(&self.config, session_key).await {
             Ok(status) => status,
             Err(error) => {

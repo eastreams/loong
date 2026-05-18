@@ -704,6 +704,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_summary_projection() {
+        let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+        let _guard = durable_flush_lock.lock().await;
         let capabilities = std::collections::BTreeSet::from([
             loong_contracts::Capability::InvokeTool,
             loong_contracts::Capability::FilesystemRead,
@@ -722,7 +724,9 @@ mod tests {
         config.memory.sqlite_path = sqlite_path_text.clone();
 
         let memory_config =
-            crate::session::store::session_store_config_from_memory_config(&config.memory);
+            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &config.memory,
+            );
 
         crate::session::store::append_session_turn_direct(
             session_id,
@@ -785,6 +789,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_profile_projection() {
+        let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+        let _guard = durable_flush_lock.lock().await;
         let capabilities = std::collections::BTreeSet::from([
             loong_contracts::Capability::InvokeTool,
             loong_contracts::Capability::FilesystemRead,
@@ -805,7 +811,9 @@ mod tests {
         config.memory.sqlite_path = sqlite_path_text.clone();
 
         let memory_config =
-            crate::session::store::session_store_config_from_memory_config(&config.memory);
+            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &config.memory,
+            );
 
         crate::session::store::append_session_turn_direct(
             session_id,
@@ -926,7 +934,9 @@ mod tests {
         config.memory.system_id = Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
 
         let memory_config =
-            crate::session::store::session_store_config_from_memory_config(&config.memory);
+            crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+                &config.memory,
+            );
         crate::session::store::append_session_turn_direct(
             session_id,
             "user",
@@ -983,6 +993,8 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
+        let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+        let _guard = durable_flush_lock.lock().await;
         let capabilities = std::collections::BTreeSet::from([
             loong_contracts::Capability::InvokeTool,
             loong_contracts::Capability::FilesystemRead,

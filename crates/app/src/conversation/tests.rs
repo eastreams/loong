@@ -56,6 +56,15 @@ fn session_store_config_from_config(config: &LoongConfig) -> SessionStoreConfig 
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn session_store_config_from_config_without_env_overrides(
+    config: &LoongConfig,
+) -> SessionStoreConfig {
+    crate::session::store::session_store_config_from_memory_config_without_env_overrides(
+        &config.memory,
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn append_session_turn_direct(
     session_id: &str,
     role: &str,
@@ -2476,7 +2485,7 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
     ));
     let _ = std::fs::remove_file(&db_path);
     config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = session_store_config_from_config(&config);
+    let memory_config = session_store_config_from_config_without_env_overrides(&config);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
     repo.create_session(crate::session::repository::NewSessionRecord {
@@ -20216,6 +20225,8 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
 #[tokio::test]
 async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() {
     let _announce_lock = delegate_announce_test_lock().lock().await;
+    let _home =
+        crate::test_support::ScopedLoongHome::new("conversation-delegate-approval-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate-approval", "normal-lane")
@@ -20333,6 +20344,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
 #[tokio::test]
 async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
     let _announce_lock = delegate_announce_test_lock().lock().await;
+    let _home = crate::test_support::ScopedLoongHome::new("conversation-delegate-normal-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "normal-lane")
@@ -20490,6 +20502,8 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
 #[tokio::test]
 async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks() {
     let _announce_lock = delegate_announce_test_lock().lock().await;
+    let _home =
+        crate::test_support::ScopedLoongHome::new("conversation-delegate-kernel-lifecycle-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "kernel-lifecycle")
@@ -20617,6 +20631,8 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_spawn_fails() {
     let _announce_lock = delegate_announce_test_lock().lock().await;
+    let _home =
+        crate::test_support::ScopedLoongHome::new("conversation-delegate-prepare-failure-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "prepare-failure")
@@ -20698,6 +20714,8 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_completion() {
     let _announce_lock = delegate_announce_test_lock().lock().await;
+    let _home =
+        crate::test_support::ScopedLoongHome::new("conversation-delegate-end-hook-failure-home");
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "end-hook-failure")
@@ -22469,6 +22487,34 @@ async fn spawn_background_delegate_with_runtime_creates_missing_root_session_sco
             .any(|event| event.event_kind == "delegate_queued"),
         "queued child should persist a delegate_queued event"
     );
+    let task_progress_event = repo
+        .load_latest_event_by_kind(
+            &child_session_id,
+            crate::task_progress::TASK_PROGRESS_EVENT_KIND,
+        )
+        .expect("load task progress event")
+        .expect("queued task progress event");
+    let task_progress =
+        crate::task_progress::task_progress_from_event_payload(&task_progress_event.payload_json)
+            .expect("decode queued task progress");
+    assert_eq!(task_progress.owner_kind, "background_task_host");
+    assert_eq!(
+        task_progress.status,
+        crate::task_progress::TaskProgressStatus::Active
+    );
+    assert_eq!(task_progress.active_handles.len(), 1);
+    assert_eq!(
+        task_progress.active_handles[0].handle_kind,
+        "background_task_host"
+    );
+    assert_eq!(task_progress.active_handles[0].state, "queued");
+    assert_eq!(
+        task_progress
+            .resume_recipe
+            .as_ref()
+            .map(|value| value.recommended_tool.as_str()),
+        Some("task_wait")
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -23134,7 +23180,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
     let events = repo
         .list_recent_events(&child.session_id, 10)
         .expect("list child events");
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     assert_eq!(events[0].event_kind, "delegate_queued");
     assert_eq!(
         events[0].payload_json["trust_event"]["event_kind"],
@@ -23151,6 +23197,21 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
     assert_eq!(
         events[0].payload_json["trust_event"]["provenance_ref"],
         "root-session"
+    );
+    assert_eq!(
+        events[1].event_kind,
+        crate::task_progress::TASK_PROGRESS_EVENT_KIND
+    );
+    let queued_task_progress =
+        crate::task_progress::task_progress_from_event_payload(&events[1].payload_json)
+            .expect("decode queued task progress");
+    assert_eq!(queued_task_progress.owner_kind, "background_task_host");
+    assert_eq!(
+        queued_task_progress
+            .resume_recipe
+            .as_ref()
+            .map(|value| value.recommended_tool.as_str()),
+        Some("task_wait")
     );
     assert!(
         repo.load_terminal_outcome(&child.session_id)

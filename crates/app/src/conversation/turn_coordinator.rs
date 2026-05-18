@@ -206,6 +206,8 @@ type DefaultTurnRuntime = DefaultConversationRuntime<Box<dyn ConversationContext
 use self::support::active_task_progress_record;
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use self::support::emit_async_delegate_child_terminal_event;
+#[cfg(feature = "memory-sqlite")]
+use self::support::queued_async_task_progress_record;
 use self::support::{
     ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
     checkpoint_requires_verification_phase, checkpoint_waits_for_external_resolution,
