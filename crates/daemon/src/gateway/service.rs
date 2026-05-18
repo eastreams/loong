@@ -393,7 +393,7 @@ pub(crate) fn default_gateway_owner_status(runtime_dir: &Path) -> GatewayOwnerSt
 fn build_gateway_acp_session_manager(
     config: &crate::mvp::config::LoongConfig,
 ) -> CliResult<Arc<AcpSessionManager>> {
-    let manager = crate::mvp::acp::shared_acp_session_manager(config)?;
+    let manager = crate::mvp::acp::acquire_shared_acp_session_manager(config)?;
     Ok(manager)
 }
 

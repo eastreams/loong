@@ -12,7 +12,9 @@ use super::{
 };
 
 pub(super) fn resolve_profile(config: &LoongConfig) -> CliResult<ResolvedAcpxProfile> {
-    let profile = config.acp.acpx_profile().cloned().unwrap_or_default();
+    let mut profile = config.acp.acpx_profile().cloned().unwrap_or_default();
+    let normalized_mcp_servers =
+        normalize_profile_mcp_servers(std::mem::take(&mut profile.mcp_servers))?;
     let command = profile
         .command()
         .unwrap_or_else(|| ACPX_DEFAULT_COMMAND.to_owned());
@@ -55,8 +57,29 @@ pub(super) fn resolve_profile(config: &LoongConfig) -> CliResult<ResolvedAcpxPro
         non_interactive_permissions,
         timeout_seconds,
         queue_owner_ttl_seconds,
-        mcp_servers: profile.mcp_servers,
+        mcp_servers: normalized_mcp_servers,
     })
+}
+
+fn normalize_profile_mcp_servers(
+    raw_servers: BTreeMap<String, crate::config::AcpxMcpServerConfig>,
+) -> CliResult<BTreeMap<String, crate::config::AcpxMcpServerConfig>> {
+    let mut normalized_servers = BTreeMap::new();
+
+    for (raw_name, server) in raw_servers {
+        let Some(normalized_name) = normalized_non_empty(raw_name.as_str()) else {
+            return Err("ACPX mcp_servers keys must not be empty".to_owned());
+        };
+        let normalized_name = normalized_name.to_ascii_lowercase();
+        let previous = normalized_servers.insert(normalized_name.clone(), server);
+        if previous.is_some() {
+            return Err(format!(
+                "ACPX mcp_servers contains duplicate canonical server name `{normalized_name}`"
+            ));
+        }
+    }
+
+    Ok(normalized_servers)
 }
 
 pub(super) fn validate_requested_mcp_servers(
@@ -81,6 +104,7 @@ pub(super) fn validate_requested_mcp_servers(
         let Some(name) = normalized_non_empty(raw_name.as_str()) else {
             return Err("ACPX bootstrap mcp_servers entries must not be empty".to_owned());
         };
+        let name = name.to_ascii_lowercase();
         if !profile.mcp_servers.contains_key(&name) {
             missing.push(name);
             continue;

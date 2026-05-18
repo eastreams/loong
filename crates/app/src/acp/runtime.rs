@@ -867,6 +867,12 @@ pub fn shared_acp_session_manager(config: &LoongConfig) -> CliResult<Arc<AcpSess
     }
 }
 
+pub fn acquire_shared_acp_session_manager(
+    config: &LoongConfig,
+) -> CliResult<Arc<AcpSessionManager>> {
+    shared_acp_session_manager(config)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};

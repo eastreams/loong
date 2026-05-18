@@ -503,16 +503,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         if let Some(cwd) = cwd.clone() {
             diagnostics.insert("cwd".to_owned(), cwd);
         }
-        if config.acp.allow_mcp_server_injection
-            && let Err(error) = crate::mcp::McpRegistry::from_config(config)
-        {
-            diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
-            diagnostics.insert("error".to_owned(), error);
-            return Ok(Some(AcpDoctorReport {
-                healthy: false,
-                diagnostics,
-            }));
-        }
         if let Err(error) = resolve_profile(config) {
             diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
             diagnostics.insert("error".to_owned(), error);
@@ -1113,6 +1103,77 @@ mod tests {
         let error = derive_agent_id(&config, "agent:claude:session-1", &metadata)
             .expect_err("mismatched ACP agent metadata must fail");
         assert!(error.contains("does not match"));
+    }
+
+    #[test]
+    fn resolve_profile_normalizes_mcp_server_names() {
+        let config = LoongConfig {
+            acp: AcpConfig {
+                backends: AcpBackendProfilesConfig {
+                    acpx: Some(AcpxBackendConfig {
+                        mcp_servers: BTreeMap::from([(
+                            " Filesystem ".to_owned(),
+                            AcpxMcpServerConfig {
+                                command: "npx".to_owned(),
+                                args: vec!["@modelcontextprotocol/server-filesystem".to_owned()],
+                                env: BTreeMap::new(),
+                            },
+                        )]),
+                        ..AcpxBackendConfig::default()
+                    }),
+                },
+                ..AcpConfig::default()
+            },
+            ..LoongConfig::default()
+        };
+
+        let profile = resolve_profile(&config).expect("resolve ACPX profile");
+        assert!(profile.mcp_servers.contains_key("filesystem"));
+        assert_eq!(profile.mcp_servers.len(), 1);
+    }
+
+    #[test]
+    fn resolve_profile_rejects_duplicate_canonical_mcp_server_names() {
+        let config = LoongConfig {
+            acp: AcpConfig {
+                backends: AcpBackendProfilesConfig {
+                    acpx: Some(AcpxBackendConfig {
+                        mcp_servers: BTreeMap::from([
+                            (
+                                "Docs".to_owned(),
+                                AcpxMcpServerConfig {
+                                    command: "npx".to_owned(),
+                                    args: vec![
+                                        "@modelcontextprotocol/server-filesystem".to_owned(),
+                                    ],
+                                    env: BTreeMap::new(),
+                                },
+                            ),
+                            (
+                                " docs ".to_owned(),
+                                AcpxMcpServerConfig {
+                                    command: "npx".to_owned(),
+                                    args: vec![
+                                        "@modelcontextprotocol/server-filesystem".to_owned(),
+                                    ],
+                                    env: BTreeMap::new(),
+                                },
+                            ),
+                        ]),
+                        ..AcpxBackendConfig::default()
+                    }),
+                },
+                ..AcpConfig::default()
+            },
+            ..LoongConfig::default()
+        };
+
+        let error = resolve_profile(&config)
+            .expect_err("duplicate canonical ACPX mcp server names must fail");
+        assert!(
+            error.contains("duplicate canonical server name"),
+            "error={error}"
+        );
     }
 
     #[tokio::test]

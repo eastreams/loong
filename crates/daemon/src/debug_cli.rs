@@ -752,7 +752,7 @@ async fn collect_acp_observability(
     config: &mvp::config::LoongConfig,
     resolved_config_path: &str,
 ) -> CliResult<Value> {
-    let manager = mvp::acp::shared_acp_session_manager(config)?;
+    let manager = mvp::acp::acquire_shared_acp_session_manager(config)?;
     let snapshot = manager.observability_snapshot(config).await?;
     let read_model = crate::gateway::read_models::build_acp_observability_read_model(
         resolved_config_path,
