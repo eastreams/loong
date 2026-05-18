@@ -325,6 +325,12 @@ async fn build_delegate_async_enqueue_request<R: ConversationRuntime + ?Sized>(
         delegate_policy.timeout_seconds,
     );
     inject_delegate_workspace_metadata(&mut outcome, &execution, None, None);
+    persist_task_progress_event_best_effort(
+        config,
+        &request.child_session_id,
+        "delegate_async_queued",
+        queued_async_task_progress_record(config, &request.child_session_id, &request.task),
+    );
 
     Ok(PreparedAsyncDelegateEnqueue {
         memory_config,

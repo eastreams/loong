@@ -234,7 +234,7 @@ async fn collect_status_cli_acp_read_model(
         };
     }
 
-    let manager_result = mvp::acp::shared_acp_session_manager(config);
+    let manager_result = mvp::acp::acquire_shared_acp_session_manager(config);
     let manager = match manager_result {
         Ok(manager) => manager,
         Err(error) => {

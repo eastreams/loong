@@ -92,12 +92,14 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCon
     fs::create_dir_all(root).expect("create fixture root");
     let workspace_root = root.join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace fixture root");
+    let sqlite_path = root.join("memory.sqlite3");
     let mcp_command = std::env::current_exe()
         .expect("current executable path for MCP fixture")
         .display()
         .to_string();
 
     let mut config = mvp::config::LoongConfig::default();
+    config.memory.sqlite_path = sqlite_path.display().to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.shell_allow = vec!["git".to_owned(), "cargo".to_owned()];
     config.tools.browser.enabled = true;
@@ -614,8 +616,12 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("posture=idle"));
     let has_empty_diagnostics_coverage = rendered.contains("diagnostics_coverage=0/0 (-)");
     let has_zero_of_one_diagnostics_coverage = rendered.contains("diagnostics_coverage=0/1 (0.0%)");
+    let has_zero_of_many_diagnostics_coverage =
+        rendered.contains("diagnostics_coverage=0/8 (0.0%)");
     assert!(
-        has_empty_diagnostics_coverage || has_zero_of_one_diagnostics_coverage,
+        has_empty_diagnostics_coverage
+            || has_zero_of_one_diagnostics_coverage
+            || has_zero_of_many_diagnostics_coverage,
         "unexpected diagnostics coverage line: {rendered}"
     );
     assert!(rendered.contains("failed_open_rate=0/0 (-)"));
@@ -655,11 +661,8 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("runtime_backed_enabled=-"));
     assert!(rendered.contains("plugin_backed_enabled=-"));
     assert!(rendered.contains("outbound_only_enabled=-"));
-    assert!(
-        rendered.contains(
-            "surfaces=29 runtime_backed=8 config_backed=15 plugin_backed=3 catalog_only=3"
-        )
-    );
+    assert!(rendered.contains("surfaces=29 runtime_backed=0 config_backed=15 plugin_backed=11"));
+    assert!(rendered.contains("catalog_only=3"));
     assert!(rendered.contains("acp_mcp docs status=pending"));
     assert!(rendered.contains("tool_runtime access ordinary_network_enabled="));
     assert!(rendered.contains("query_search_default_provider=duckduckgo"));

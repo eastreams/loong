@@ -1027,6 +1027,9 @@ async fn build_task_detail(
     let task_status = build_task_status_payload(
         &session,
         &delegate,
+        workflow.get("task_progress").unwrap_or(&Value::Null),
+        &terminal_outcome_state,
+        &recovery,
         &approval_requests,
         &approval_attention_summary,
         &tool_policy,
@@ -1204,6 +1207,9 @@ struct ResolvedCliTaskTarget {
 fn build_task_status_payload(
     session: &Value,
     delegate: &Value,
+    task_progress: &Value,
+    terminal_outcome_state: &Value,
+    recovery: &Value,
     approval_requests: &Value,
     approval_attention_summary: &Value,
     tool_policy: &Value,
@@ -1233,12 +1239,34 @@ fn build_task_status_payload(
     let approval_primary_action = primary_approval_action(approval_requests).map(ToOwned::to_owned);
     let recovered = recent_events_contains_kind(recent_events, "delegate_recovery_applied");
     let tool_narrowing_active = task_tool_narrowing_active(tool_policy);
+    let task_progress_status = task_progress
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let task_progress_handle_state = task_progress
+        .get("active_handles")
+        .and_then(Value::as_array)
+        .and_then(|handles| handles.first())
+        .and_then(|handle| handle.get("state"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let terminal_outcome_state = terminal_outcome_state
+        .as_str()
+        .filter(|value| !value.trim().is_empty());
+    let recovery_kind = recovery
+        .get("kind")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
     let kind = derive_task_status_kind(
         session_state,
         phase,
         staleness_state,
         cancellation_state,
         has_approval_attention,
+        task_progress_status,
+        task_progress_handle_state,
+        terminal_outcome_state,
+        recovery_kind,
     );
     let display = render_task_status_display(kind, recovered);
     let blocked = task_status_is_blocked(kind);
@@ -1292,7 +1320,40 @@ fn derive_task_status_kind(
     staleness_state: Option<&str>,
     cancellation_state: Option<&str>,
     has_approval_attention: bool,
+    task_progress_status: Option<&str>,
+    task_progress_handle_state: Option<&str>,
+    terminal_outcome_state: Option<&str>,
+    recovery_kind: Option<&str>,
 ) -> &'static str {
+    if let Some(task_progress_status) = task_progress_status {
+        return match task_progress_status {
+            "completed" => "completed",
+            "failed" => "failed",
+            "blocked" => {
+                if terminal_outcome_state == Some("present") || recovery_kind.is_some() {
+                    "failed"
+                } else {
+                    "blocked"
+                }
+            }
+            "waiting" => "waiting",
+            "verifying" | "active" => {
+                if task_progress_handle_state == Some("queued") {
+                    "queued"
+                } else if terminal_outcome_state == Some("present") {
+                    match session_state {
+                        "completed" => "completed",
+                        "failed" | "timed_out" => "failed",
+                        _ => "running",
+                    }
+                } else {
+                    "running"
+                }
+            }
+            _ => "running",
+        };
+    }
+
     if session_state == "completed" {
         return "completed";
     }
@@ -2396,6 +2457,7 @@ mod tests {
     fn build_task_payload(
         session_state: &str,
         phase: &str,
+        task_progress_status: Option<&str>,
         approval_primary_action: Option<&str>,
         tool_narrowing_active: bool,
         recovered: bool,
@@ -2451,9 +2513,28 @@ mod tests {
         let session = json!({
             "state": session_state,
         });
+        let task_progress = task_progress_status
+            .map(|status| json!({ "status": status }))
+            .unwrap_or(Value::Null);
+        let terminal_outcome_state = if session_state == "completed"
+            || session_state == "failed"
+            || session_state == "timed_out"
+        {
+            json!("present")
+        } else {
+            Value::Null
+        };
+        let recovery = if recovered {
+            json!({ "kind": "delegate_terminal_finalize_persist_failed" })
+        } else {
+            Value::Null
+        };
         let task_status = build_task_status_payload(
             &session,
             &delegate,
+            &task_progress,
+            &terminal_outcome_state,
+            &recovery,
             &json!(approval_requests),
             &approval_summary,
             &tool_policy,
@@ -2468,6 +2549,9 @@ mod tests {
             "label": "Release Check",
             "session_state": session_state,
             "phase": phase,
+            "workflow": {
+                "task_progress": task_progress,
+            },
             "timeout_seconds": 60,
             "last_error": Value::Null,
             "approval": {
@@ -2476,6 +2560,8 @@ mod tests {
             },
             "tool_policy": tool_policy,
             "task_status": task_status,
+            "terminal_outcome_state": terminal_outcome_state,
+            "recovery": recovery,
         })
     }
 
@@ -2484,6 +2570,7 @@ mod tests {
         let task = build_task_payload(
             "ready",
             "queued",
+            None,
             Some("resolve_request"),
             true,
             false,
@@ -2509,7 +2596,7 @@ mod tests {
 
     #[test]
     fn build_task_status_payload_marks_failed_task_as_recovered_when_event_present() {
-        let task = build_task_payload("failed", "failed", None, false, true, None);
+        let task = build_task_payload("failed", "failed", Some("failed"), None, false, true, None);
         let task_status = &task["task_status"];
 
         assert_eq!(task_status["status"], "failed");
@@ -2522,7 +2609,15 @@ mod tests {
 
     #[test]
     fn build_task_status_payload_marks_overdue_task_recoverable() {
-        let task = build_task_payload("running", "running", None, false, false, Some("overdue"));
+        let task = build_task_payload(
+            "running",
+            "running",
+            None,
+            None,
+            false,
+            false,
+            Some("overdue"),
+        );
         let task_status = &task["task_status"];
 
         assert_eq!(task_status["kind"], "overdue");
@@ -2533,10 +2628,62 @@ mod tests {
     }
 
     #[test]
+    fn build_task_status_payload_prefers_queued_task_progress_handle_over_session_phase_guess() {
+        let approval_requests = Vec::<Value>::new();
+        let approval_summary = json!({
+            "needs_attention_count": 0_u64,
+        });
+        let tool_policy = json!({
+            "base_tool_ids": ["read"],
+            "effective_tool_ids": ["read"],
+            "effective_runtime_narrowing": Value::Null,
+        });
+        let recent_events = json!([]);
+        let delegate = json!({
+            "phase": "running",
+            "staleness": Value::Null,
+            "cancellation": Value::Null,
+        });
+        let session = json!({
+            "state": "running",
+        });
+        let task_progress = json!({
+            "status": "active",
+            "active_handles": [
+                {
+                    "handle_kind": "background_task_host",
+                    "state": "queued",
+                }
+            ],
+            "resume_recipe": {
+                "recommended_tool": "task_wait",
+                "task_session_id": "task-owner",
+            }
+        });
+
+        let task_status = build_task_status_payload(
+            &session,
+            &delegate,
+            &task_progress,
+            &Value::Null,
+            &Value::Null,
+            &json!(approval_requests),
+            &approval_summary,
+            &tool_policy,
+            &recent_events,
+        );
+
+        assert_eq!(task_status["kind"], "queued");
+        assert_eq!(task_status["status"], "queued");
+        assert_eq!(task_status["next_action"], "wait");
+    }
+
+    #[test]
     fn render_task_detail_lines_surface_task_status_summary() {
         let task = build_task_payload(
             "ready",
             "queued",
+            None,
             Some("resolve_request"),
             true,
             false,
@@ -2559,6 +2706,7 @@ mod tests {
         let task = build_task_payload(
             "ready",
             "queued",
+            None,
             Some("resolve_request"),
             false,
             false,
@@ -2774,8 +2922,20 @@ mod tests {
                     status: mvp::task_progress::TaskProgressStatus::Active,
                     intent_summary: Some("Cancel queued task".to_owned()),
                     verification_state: Some(mvp::task_progress::TaskVerificationState::NotStarted),
-                    active_handles: Vec::new(),
-                    resume_recipe: None,
+                    active_handles: vec![mvp::task_progress::TaskActiveHandleRecord {
+                        handle_kind: "background_task_host".to_owned(),
+                        handle_id: "task-owner".to_owned(),
+                        state: "queued".to_owned(),
+                        last_event_at: Some(123),
+                        stop_condition: "delegate_child_terminal_or_recovery".to_owned(),
+                    }],
+                    resume_recipe: Some(mvp::task_progress::TaskResumeRecipeRecord {
+                        recommended_tool: "task_wait".to_owned(),
+                        task_session_id: "task-owner".to_owned(),
+                        note: Some(
+                            "Use task_wait for the durable queued background task.".to_owned(),
+                        ),
+                    }),
                     updated_at: 123,
                 },
             ),
@@ -2845,8 +3005,20 @@ mod tests {
                     status: mvp::task_progress::TaskProgressStatus::Blocked,
                     intent_summary: Some("Recover overdue task".to_owned()),
                     verification_state: Some(mvp::task_progress::TaskVerificationState::Pending),
-                    active_handles: Vec::new(),
-                    resume_recipe: None,
+                    active_handles: vec![mvp::task_progress::TaskActiveHandleRecord {
+                        handle_kind: "background_task_host".to_owned(),
+                        handle_id: "task-owner".to_owned(),
+                        state: "queued".to_owned(),
+                        last_event_at: Some(123),
+                        stop_condition: "delegate_child_terminal_or_recovery".to_owned(),
+                    }],
+                    resume_recipe: Some(mvp::task_progress::TaskResumeRecipeRecord {
+                        recommended_tool: "task_wait".to_owned(),
+                        task_session_id: "task-owner".to_owned(),
+                        note: Some(
+                            "Use task_wait for the durable queued background task.".to_owned(),
+                        ),
+                    }),
                     updated_at: 123,
                 },
             ),

@@ -1,5 +1,7 @@
 #[cfg(test)]
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::BTreeMap,
     env,
@@ -531,8 +533,10 @@ pub fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 thread_local! {
     static DEFAULT_LOONG_HOME_OVERRIDE: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-    static DEFAULT_LOONG_HOME_ENV_OVERRIDE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
+
+#[cfg(test)]
+static DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
 fn default_loong_home_override_for_tests() -> Option<PathBuf> {
@@ -541,7 +545,7 @@ fn default_loong_home_override_for_tests() -> Option<PathBuf> {
 
 #[cfg(test)]
 fn default_loong_home_uses_explicit_env_override_for_tests() -> bool {
-    DEFAULT_LOONG_HOME_ENV_OVERRIDE_DEPTH.with(|depth| depth.get() > 0)
+    DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.load(Ordering::Relaxed) > 0
 }
 
 #[cfg(test)]
@@ -576,16 +580,19 @@ pub(crate) fn pop_default_loong_home_override_for_tests() {
 
 pub(crate) fn push_default_loong_home_env_override_for_tests() {
     #[cfg(test)]
-    DEFAULT_LOONG_HOME_ENV_OVERRIDE_DEPTH.with(|depth| {
-        depth.set(depth.get().saturating_add(1));
-    });
+    {
+        DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub(crate) fn pop_default_loong_home_env_override_for_tests() {
     #[cfg(test)]
-    DEFAULT_LOONG_HOME_ENV_OVERRIDE_DEPTH.with(|depth| {
-        depth.set(depth.get().saturating_sub(1));
-    });
+    {
+        let current = DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.load(Ordering::Relaxed);
+        if current > 0 {
+            DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
 }
 
 pub(super) fn default_loong_home() -> PathBuf {
