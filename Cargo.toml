@@ -52,6 +52,9 @@ which = "8"
 tracing = "0.1"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+opentelemetry = { version = "0.29", features = ["trace", "futures"] }
+opentelemetry_sdk = { version = "0.29", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.29", features = ["trace", "http-proto"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]

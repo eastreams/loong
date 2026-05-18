@@ -235,7 +235,7 @@ pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
-pub use observability::{debug_variant_name, init_tracing, summarize_error};
+pub use observability::{debug_variant_name, init_otel, init_tracing, summarize_error};
 use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
 use runtime_snapshot_compaction_hygiene::collect_runtime_snapshot_compaction_hygiene_state;
 pub use runtime_snapshot_render::render_runtime_snapshot_text;

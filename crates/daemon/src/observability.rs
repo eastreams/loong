@@ -2,6 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::io::{self, IsTerminal, Write};
 
+use opentelemetry::trace::{Span, Tracer, TracerProvider};
+use opentelemetry::{KeyValue, global};
+use opentelemetry_otlp::{OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, SpanExporter};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
@@ -332,6 +337,70 @@ fn structured_json_field_value(field_name: &str, value: &str) -> Option<(&'stati
     parsed.is_array().then_some((PAYLOAD_KEYS_FIELD, parsed))
 }
 
+pub struct OtelGuard {
+    provider: Option<SdkTracerProvider>,
+}
+
+impl Drop for OtelGuard {
+    fn drop(&mut self) {
+        if let Some(provider) = self.provider.take()
+            && let Err(e) = provider.shutdown()
+        {
+            let mut stderr = io::stderr();
+            let _ = writeln!(stderr, "loong.daemon otel shutdown error: {e}");
+        }
+    }
+}
+
+fn otel_traces_export_is_enabled() -> bool {
+    let generic_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let traces_endpoint = std::env::var(OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).ok();
+
+    endpoint_env_is_present(generic_endpoint.as_deref())
+        || endpoint_env_is_present(traces_endpoint.as_deref())
+}
+
+fn endpoint_env_is_present(value: Option<&str>) -> bool {
+    value.is_some_and(|entry| !entry.trim().is_empty())
+}
+
+pub fn init_otel() -> OtelGuard {
+    if !otel_traces_export_is_enabled() {
+        return OtelGuard { provider: None };
+    }
+
+    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "loong".to_owned());
+
+    let exporter = match SpanExporter::builder().with_http().build() {
+        Ok(e) => e,
+        Err(e) => {
+            let mut stderr = io::stderr();
+            let _ = writeln!(stderr, "loong.daemon otel exporter init failed: {e}");
+            return OtelGuard { provider: None };
+        }
+    };
+
+    let resource = Resource::builder()
+        .with_attributes([KeyValue::new("service.name", service_name)])
+        .build();
+
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(resource)
+        .build();
+
+    global::set_tracer_provider(provider.clone());
+
+    let tracer = provider.tracer("loong");
+    let mut startup_span = tracer.span_builder("loong.init").start(&tracer);
+    startup_span.set_attribute(KeyValue::new("otel.status", "initialized"));
+    startup_span.end();
+
+    OtelGuard {
+        provider: Some(provider),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -451,6 +520,16 @@ mod tests {
         let filter = build_env_filter("[broken");
         let rendered = filter.to_string();
         assert_eq!(rendered, "warn");
+    }
+
+    #[test]
+    fn endpoint_env_is_present_rejects_empty_values() {
+        assert!(super::endpoint_env_is_present(Some(
+            "http://localhost:4318"
+        )));
+        assert!(!super::endpoint_env_is_present(Some("")));
+        assert!(!super::endpoint_env_is_present(Some("   ")));
+        assert!(!super::endpoint_env_is_present(None));
     }
 
     #[test]
