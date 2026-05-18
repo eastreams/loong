@@ -233,6 +233,7 @@ struct FeishuWebhookPostResponseDispatch {
 
 struct FeishuRetryStatusHandle {
     tx: mpsc::UnboundedSender<FeishuRetryStatusCommand>,
+    last_progress: Arc<Mutex<Option<crate::provider::ProviderRetryProgress>>>,
 }
 
 enum FeishuRetryStatusCommand {
@@ -242,6 +243,7 @@ enum FeishuRetryStatusCommand {
     },
     FinalFailure {
         message: String,
+        retry_progress: Option<crate::provider::ProviderRetryProgress>,
         ack: oneshot::Sender<bool>,
     },
 }
@@ -329,6 +331,7 @@ impl FeishuParsedActionResponse {
 impl FeishuRetryStatusHandle {
     fn new(adapter: Arc<Mutex<FeishuAdapter>>, reply_target: ChannelOutboundTarget) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let last_progress = Arc::new(Mutex::new(None));
         tokio::spawn(async move {
             let mut state = FeishuRetryStatusState::default();
             while let Some(command) = rx.recv().await {
@@ -363,8 +366,25 @@ impl FeishuRetryStatusHandle {
                             let _ = ack.send(());
                         }
                     }
-                    FeishuRetryStatusCommand::FinalFailure { message, ack } => {
+                    FeishuRetryStatusCommand::FinalFailure {
+                        message,
+                        retry_progress,
+                        ack,
+                    } => {
                         state.finalized = true;
+                        if state.message_id.is_none()
+                            && let Some(progress) = retry_progress.as_ref()
+                            && state.latest_attempt != Some(progress.next_attempt)
+                            && upsert_feishu_retry_status_message(
+                                &adapter,
+                                &reply_target,
+                                &mut state,
+                                render_feishu_retry_progress_message(progress),
+                            )
+                            .await
+                        {
+                            state.latest_attempt = Some(progress.next_attempt);
+                        }
                         let handled = if state.message_id.is_some() {
                             upsert_feishu_retry_status_message(
                                 &adapter,
@@ -381,12 +401,16 @@ impl FeishuRetryStatusHandle {
                 }
             }
         });
-        Self { tx }
+        Self { tx, last_progress }
     }
 
     fn callback(&self) -> crate::provider::ProviderRetryProgressCallback {
         let tx = self.tx.clone();
+        let last_progress = Arc::clone(&self.last_progress);
         Some(Arc::new(move |progress| {
+            if let Ok(mut slot) = last_progress.try_lock() {
+                *slot = Some(progress.clone());
+            }
             if tx.send(FeishuRetryStatusCommand::Retry(progress)).is_err() {
                 tracing::debug!(
                     target: "loong.channel.feishu",
@@ -406,8 +430,13 @@ impl FeishuRetryStatusHandle {
     }
 
     async fn finalize_failure(&self, message: String) -> bool {
+        let retry_progress = self.last_progress.lock().await.clone();
         self.send_with_ack(
-            |ack| FeishuRetryStatusCommand::FinalFailure { message, ack },
+            |ack| FeishuRetryStatusCommand::FinalFailure {
+                message,
+                retry_progress,
+                ack,
+            },
             false,
             "final failure",
         )
