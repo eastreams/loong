@@ -197,7 +197,7 @@ fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
             .any(|entry| {
                 let id = entry.get("id").and_then(Value::as_str);
                 let status = entry.get("implementation_status").and_then(Value::as_str);
-                id == Some("telegram") && status == Some("runtime_backed")
+                id == Some("telegram") && status == Some("plugin_backed")
             })
     );
 }

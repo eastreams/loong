@@ -255,6 +255,8 @@ fn build_qqbot_inbound_message(
             parent_message_id: None,
             resources: Vec::new(),
             feishu_callback: None,
+            acp_bootstrap_mcp_servers: Vec::new(),
+            acp_working_directory: None,
         },
     })
 }

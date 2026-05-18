@@ -521,6 +521,8 @@ fn parse_wecom_inbound_message(
         parent_message_id: None,
         resources,
         feishu_callback: None,
+        acp_bootstrap_mcp_servers: resolved.acp.bootstrap_mcp_servers.clone(),
+        acp_working_directory: resolved.acp.resolved_working_directory(),
     };
     let message = ChannelInboundMessage {
         session,

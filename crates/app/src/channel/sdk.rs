@@ -516,6 +516,11 @@ fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
         return ChannelRuntimeKind::Interactive;
     }
 
+    let has_native_service_surface =
+        find_channel_integration(channel_id).is_some_and(|integration| {
+            integration.background_runtime.is_some()
+                || integration.gateway_ingress_is_enabled.is_some()
+        });
     let implementation_status = resolve_channel_catalog_entry(channel_id)
         .map(|entry| entry.implementation_status)
         .unwrap_or(crate::channel::ChannelCatalogImplementationStatus::ConfigBacked);
@@ -525,7 +530,11 @@ fn channel_runtime_kind(channel_id: &str) -> ChannelRuntimeKind {
             ChannelRuntimeKind::RuntimeBacked
         }
         crate::channel::ChannelCatalogImplementationStatus::PluginBacked => {
-            ChannelRuntimeKind::PluginBacked
+            if has_native_service_surface {
+                ChannelRuntimeKind::RuntimeBacked
+            } else {
+                ChannelRuntimeKind::PluginBacked
+            }
         }
         crate::channel::ChannelCatalogImplementationStatus::ConfigBacked => {
             ChannelRuntimeKind::OutboundOnly
@@ -1308,7 +1317,7 @@ mod tests {
             qqbot.operational_model,
             ChannelOperationalModel::GatewaySupervised
         );
-        assert_eq!(qqbot.serve_subcommand, Some("qqbot-serve"));
+        assert_eq!(qqbot.serve_subcommand, Some("channels serve qqbot"));
 
         let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
         assert_eq!(onebot.id, "onebot");

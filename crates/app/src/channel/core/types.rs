@@ -86,6 +86,10 @@ pub struct ChannelDelivery {
     pub resources: Vec<ChannelDeliveryResource>,
     #[allow(dead_code)]
     pub feishu_callback: Option<ChannelDeliveryFeishuCallback>,
+    #[allow(dead_code)]
+    pub acp_bootstrap_mcp_servers: Vec<String>,
+    #[allow(dead_code)]
+    pub acp_working_directory: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

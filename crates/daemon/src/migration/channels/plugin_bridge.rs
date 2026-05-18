@@ -75,6 +75,7 @@ fn configured_plugin_bridge_surfaces(
 
 fn surface_uses_plugin_bridge(surface: &mvp::channel::ChannelSurface) -> bool {
     surface.catalog.plugin_bridge_contract.is_some()
+        && !super::registered_channel_ids().contains(&surface.catalog.id)
 }
 
 fn surface_is_materially_configured(surface: &mvp::channel::ChannelSurface) -> bool {

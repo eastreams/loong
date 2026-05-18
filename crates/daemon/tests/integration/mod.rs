@@ -854,21 +854,21 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(rendered.contains("config=/tmp/loong.toml"));
     assert!(rendered.contains("Telegram [telegram]"));
     assert!(
-        rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
+        rendered.contains("capabilities=plugin_backed,multi_account,send,serve,runtime_tracking")
     );
     assert!(rendered.contains(&format!(
         "op send ({}) ready: ready target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("telegram")
     )));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
-    assert!(rendered.contains("implementation_status=runtime_backed"));
+    assert!(rendered.contains("implementation_status=plugin_backed"));
     assert!(
-        rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
+        rendered.contains("capabilities=plugin_backed,multi_account,send,serve,runtime_tracking")
     );
     assert!(rendered.contains(
-        "onboarding strategy=manual_config status_command=\"loong doctor\" repair_command=\"loong doctor --fix\""
+        "onboarding strategy=plugin_bridge status_command=\"loong doctor\" repair_command=-"
     ));
-    assert!(rendered.contains("setup_hint=\"configure telegram bot credentials"));
+    assert!(rendered.contains("setup_hint=\"install and configure a Telegram bridge plugin"));
     assert!(rendered.contains("target_kinds=receive_id,message_reply"));
     assert!(rendered.contains("configured_accounts=1"));
     assert!(rendered.contains("aliases=lark"));
@@ -1009,7 +1009,6 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     );
 
     assert!(rendered.contains(expected_summary.as_str()));
-    assert!(rendered.contains("runtime-backed channels:"));
     assert!(rendered.contains("config-backed channels:"));
     assert!(rendered.contains("plugin-backed channels:"));
     assert!(rendered.contains("catalog-only channels:"));
@@ -1039,7 +1038,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
-        "WhatsApp [whatsapp] implementation_status=runtime_backed selection_order=90 selection_label=\"business messaging app\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
+        "WhatsApp [whatsapp] implementation_status=plugin_backed selection_order=90 selection_label=\"business messaging app\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api_or_plugin_bridge target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id",
@@ -1050,7 +1049,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("whatsapp")
     )));
     assert!(rendered.contains(
-        "LINE [line] implementation_status=runtime_backed selection_order=60 selection_label=\"consumer messaging bot\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=line-bot transport=line_messaging_api target_kinds=address configured_accounts=1 default_configured_account=default"
+        "LINE [line] implementation_status=plugin_backed selection_order=60 selection_label=\"consumer messaging bot\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=line-bot transport=line_messaging_api_or_plugin_bridge target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
         "DingTalk [dingtalk] implementation_status=config_backed selection_order=80 selection_label=\"group webhook bot\" capabilities=multi_account,send aliases=ding,ding-bot transport=dingtalk_custom_robot_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
@@ -1126,7 +1125,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("imessage")
     )));
     assert!(rendered.contains(
-        "Webhook [webhook] implementation_status=runtime_backed selection_order=110 selection_label=\"generic http integration\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=http-webhook transport=generic_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+        "Webhook [webhook] implementation_status=plugin_backed selection_order=110 selection_label=\"generic http integration\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=http-webhook transport=generic_webhook_or_plugin_bridge target_kinds=endpoint configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
         "WebChat [webchat] implementation_status=stub selection_order=230 selection_label=\"embedded web inbox\""
@@ -1140,7 +1139,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("webhook")
     )));
     assert!(rendered.contains(
-        "onboarding strategy=manual_config status_command=\"loong doctor\" repair_command=\"loong doctor --fix\""
+        "onboarding strategy=plugin_bridge status_command=\"loong doctor\" repair_command=\"loong doctor --fix\""
     ));
     assert!(rendered.contains(
         "setup_hint=\"configure discord bot credentials in loong.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned\""
@@ -1659,7 +1658,7 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("strategy"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("manual_config")
+                        == Some("plugin_bridge")
                     && entry
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("status_command"))
@@ -1669,7 +1668,7 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("repair_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loong doctor --fix")
+                        .is_none()
             })
     );
 
@@ -2231,7 +2230,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -2254,7 +2253,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -2277,7 +2276,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -2373,7 +2372,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)

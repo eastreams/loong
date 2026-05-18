@@ -124,7 +124,7 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("strategy"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("manual_config")
+                        == Some("plugin_bridge")
                     && entry
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("status_command"))
@@ -134,7 +134,7 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("repair_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loong doctor --fix")
+                        .is_none()
             })
     );
 
@@ -263,7 +263,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -286,7 +286,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -309,7 +309,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -405,7 +405,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("runtime_backed")
+                        == Some("plugin_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)

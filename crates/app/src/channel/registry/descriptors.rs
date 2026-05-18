@@ -14,7 +14,9 @@ use super::*;
 pub(super) const TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "telegram",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_telegram_snapshots),
         selection_order: 10,
         selection_label: "personal and group chat bot",
@@ -31,7 +33,9 @@ pub(super) const TELEGRAM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor
 pub(super) const FEISHU_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "feishu",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_feishu_snapshots),
         selection_order: 20,
         selection_label: "enterprise chat app",
@@ -48,7 +52,9 @@ pub(super) const FEISHU_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const MATRIX_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "matrix",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_matrix_snapshots),
         selection_order: 30,
         selection_label: "federated room sync bot",
@@ -65,7 +71,9 @@ pub(super) const MATRIX_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const WECOM_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "wecom",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: WECOM_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_wecom_snapshots),
         selection_order: 35,
         selection_label: "enterprise aibot",
@@ -116,7 +124,9 @@ pub(super) const SLACK_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const LINE_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "line",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: LINE_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_line_snapshots),
         selection_order: 60,
         selection_label: "consumer messaging bot",
@@ -133,7 +143,9 @@ pub(super) const LINE_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(super) const WHATSAPP_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "whatsapp",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_whatsapp_snapshots),
         selection_order: 90,
         selection_label: "business messaging app",
@@ -232,7 +244,9 @@ const EMAIL_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegi
 
 const WEBHOOK_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegistryDescriptor {
     id: "webhook",
-    runtime: None,
+    runtime: Some(ChannelRuntimeDescriptor {
+        family: WEBHOOK_COMMAND_FAMILY_DESCRIPTOR,
+    }),
     snapshot_builder: Some(build_webhook_snapshots),
     selection_order: 110,
     selection_label: "generic http integration",
@@ -364,7 +378,12 @@ const NOSTR_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor = ChannelRegi
 pub(crate) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "qqbot",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: ChannelCommandFamilyDescriptor {
+                runtime: QQBOT_RUNTIME_COMMAND_DESCRIPTOR,
+                catalog: QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+            },
+        }),
         snapshot_builder: Some(build_qqbot_snapshots),
         selection_order: 36,
         selection_label: "qq gateway bot",
