@@ -22,6 +22,22 @@ pub struct Task {
 }
 
 impl Task {
+    fn push_event(&mut self, event: TaskEvent) {
+        self.events.push(event);
+        self.enforce_event_retention();
+    }
+
+    fn enforce_event_retention(&mut self) {
+        let Some(max_records) = self.budget.event_retention.max_records else {
+            return;
+        };
+        if self.events.len() <= max_records {
+            return;
+        }
+        let drop_count = self.events.len() - max_records;
+        self.events.drain(0..drop_count);
+    }
+
     pub fn new(
         task_id: impl Into<String>,
         objective: impl Into<String>,
@@ -64,7 +80,7 @@ impl Task {
             },
         ];
 
-        Self {
+        let mut task = Self {
             task_id,
             parent_task_id,
             objective,
@@ -76,7 +92,9 @@ impl Task {
             subtasks: Vec::new(),
             artifacts: ExecutionArtifacts::default(),
             events,
-        }
+        };
+        task.enforce_event_retention();
+        task
     }
 
     pub fn lifecycle(&self) -> &TaskLifecycle {
@@ -132,7 +150,7 @@ impl Task {
             to: next.clone(),
         };
         self.lifecycle = next;
-        self.events.push(event.clone());
+        self.push_event(event.clone());
         Ok(event)
     }
 
@@ -157,7 +175,7 @@ impl Task {
             status: turn.status.clone(),
         };
         self.turns.push(turn);
-        self.events.push(event.clone());
+        self.push_event(event.clone());
         Ok(event)
     }
 
@@ -169,7 +187,7 @@ impl Task {
             turn_id: turn.turn_id.clone(),
             status,
         };
-        self.events.push(event.clone());
+        self.push_event(event.clone());
         Some(event)
     }
 
@@ -180,8 +198,9 @@ impl Task {
             kind: artifact.kind.clone(),
             durability: artifact.durability.clone(),
         };
-        self.artifacts.record(artifact);
-        self.events.push(event.clone());
+        self.artifacts
+            .record_bounded(artifact, self.budget.artifact_retention.max_records);
+        self.push_event(event.clone());
         event
     }
 
@@ -203,7 +222,7 @@ impl Task {
             cancellation: CancellationPolicy::CascadeFromParent,
         };
         self.subtasks.push(lineage);
-        self.events.push(TaskEvent::SubtaskRegistered {
+        self.push_event(TaskEvent::SubtaskRegistered {
             parent_task_id: self.task_id.clone(),
             child_task_id: child_task_id.clone(),
             budget_policy: budget_policy.clone(),

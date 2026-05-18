@@ -105,6 +105,11 @@ impl ExecutionArtifacts {
         self.records.push(artifact);
     }
 
+    pub fn record_bounded(&mut self, artifact: ExecutionArtifact, max_records: Option<usize>) {
+        self.records.push(artifact);
+        self.enforce_max_records(max_records);
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &ExecutionArtifact> {
         self.records.iter()
     }
@@ -133,5 +138,16 @@ impl ExecutionArtifacts {
         self.records
             .iter()
             .filter(|artifact| artifact.durability == ArtifactDurabilityClass::DerivedProjection)
+    }
+
+    pub fn enforce_max_records(&mut self, max_records: Option<usize>) {
+        let Some(max_records) = max_records else {
+            return;
+        };
+        if self.records.len() <= max_records {
+            return;
+        }
+        let drop_count = self.records.len() - max_records;
+        self.records.drain(0..drop_count);
     }
 }

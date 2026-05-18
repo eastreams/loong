@@ -11,6 +11,12 @@ pub enum SessionEvent {
         session_id: String,
         workspace: WorkspaceContext,
     },
+    ArtifactRecorded {
+        session_id: String,
+        artifact_id: String,
+        kind: ExecutionArtifactKind,
+        durability: ArtifactDurabilityClass,
+    },
     WorktreeSwitched {
         session_id: String,
         previous_workspace: WorkspaceContext,

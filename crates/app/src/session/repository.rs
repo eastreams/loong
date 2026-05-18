@@ -614,12 +614,46 @@ pub struct TransitionSessionWithEventResult {
 #[derive(Debug, Clone)]
 pub struct SessionRepository {
     db_path: PathBuf,
+    max_total_artifacts: Option<usize>,
 }
 
 impl SessionRepository {
     pub fn new(config: &SessionStoreConfig) -> Result<Self, String> {
         let db_path = store::ensure_session_store_ready(config.sqlite_path.clone(), config)?;
-        Ok(Self { db_path })
+        Ok(Self {
+            db_path,
+            max_total_artifacts: None,
+        })
+    }
+
+    pub fn with_max_total_artifacts(mut self, max_total_artifacts: Option<usize>) -> Self {
+        self.max_total_artifacts = max_total_artifacts;
+        self
+    }
+
+    fn enforce_session_artifact_retention_with_conn(
+        &self,
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let Some(max_records) = self.max_total_artifacts else {
+            return Ok(());
+        };
+
+        conn.execute(
+            "DELETE FROM session_artifacts
+             WHERE session_id = ?1
+               AND artifact_id NOT IN (
+                    SELECT artifact_id
+                    FROM session_artifacts
+                    WHERE session_id = ?1
+                    ORDER BY created_at DESC, artifact_id DESC
+                    LIMIT ?2
+               )",
+            params![session_id, max_records as i64],
+        )
+        .map_err(|error| format!("delete excess session artifacts failed: {error}"))?;
+        Ok(())
     }
 
     pub(crate) fn with_read_snapshot<T, F>(&self, operation: F) -> Result<T, String>
@@ -1311,6 +1345,7 @@ impl SessionRepository {
             ],
         )
         .map_err(|error| format!("insert session artifact failed: {error}"))?;
+        self.enforce_session_artifact_retention_with_conn(&tx, &session_id)?;
         tx.commit()
             .map_err(|error| format!("commit session artifact transaction failed: {error}"))?;
 
@@ -5057,6 +5092,43 @@ mod tests {
             Some("Branch Summary A")
         );
         assert_eq!(artifacts[0].payload_json["exclusive_node_count"], 1);
+    }
+
+    #[test]
+    fn create_session_artifact_enforces_overlay_retention_to_latest_records() {
+        let config = isolated_memory_config("session-artifact-overlay-retention");
+        let repo = SessionRepository::new(&config)
+            .expect("repository")
+            .with_max_total_artifacts(Some(2));
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "hello");
+
+        for (artifact_id, label) in [
+            ("artifact-1", "Checkpoint A"),
+            ("artifact-2", "Checkpoint B"),
+            ("artifact-3", "Checkpoint C"),
+        ] {
+            repo.create_session_artifact(NewSessionArtifactRecord {
+                artifact_id: artifact_id.to_owned(),
+                session_id: "root-session".to_owned(),
+                kind: SessionArtifactKind::Checkpoint,
+                head_name: Some(ACTIVE_SESSION_HEAD_NAME.to_owned()),
+                anchor_node_id: Some("session-turn:root-session:1".to_owned()),
+                source_start_node_id: Some("session-turn:root-session:1".to_owned()),
+                source_end_node_id: Some("session-turn:root-session:1".to_owned()),
+                payload_json: json!({ "label": label }),
+                summary_text: Some(label.to_owned()),
+            })
+            .expect("create session artifact");
+        }
+
+        let retained_ids = repo
+            .list_session_artifacts("root-session")
+            .expect("list artifacts")
+            .into_iter()
+            .map(|artifact| artifact.artifact_id)
+            .collect::<Vec<_>>();
+        assert_eq!(retained_ids, vec!["artifact-2", "artifact-3"]);
     }
 
     #[test]

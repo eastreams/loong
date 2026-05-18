@@ -19,4 +19,10 @@ pub enum CoreModelError {
     RepositoryMismatch { expected: PathBuf, actual: PathBuf },
     #[error("task {task_id} already has an active turn")]
     ActiveTurnAlreadyOpen { task_id: String },
+    #[error("session {session_id} exceeded max_parallel_tasks limit {limit}")]
+    SessionParallelTaskBudgetExceeded { session_id: String, limit: usize },
+    #[error("session {session_id} exceeded max_parallel_child_tasks limit {limit}")]
+    SessionParallelChildTaskBudgetExceeded { session_id: String, limit: usize },
+    #[error("task {task_id} exceeded max_child_tasks limit {limit}")]
+    TaskChildBudgetExceeded { task_id: String, limit: usize },
 }

@@ -2403,6 +2403,11 @@ fn execute_task_recover(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn session_mutation_repository(config: &SessionStoreConfig) -> Result<SessionRepository, String> {
+    SessionRepository::new(config).map(|repo| repo.with_max_total_artifacts(Some(1)))
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn execute_session_create_checkpoint(
     payload: Value,
     current_session_id: &str,
@@ -2413,7 +2418,7 @@ fn execute_session_create_checkpoint(
     let label = required_payload_string(&payload, "label", "session tool")?;
     let explicit_node_id = optional_payload_string(&payload, "node_id");
     let checkpoint_head_name = format!("checkpoint/{label}");
-    let repo = SessionRepository::new(config)?;
+    let repo = session_mutation_repository(config)?;
     ensure_visible(
         &repo,
         current_session_id,
@@ -2490,7 +2495,7 @@ fn execute_session_create_branch_summary(
     let head_name = required_payload_string(&payload, "head_name", "session tool")?;
     let summary_text = required_payload_string(&payload, "summary_text", "session tool")?;
     let explicit_anchor_node_id = optional_payload_string(&payload, "anchor_node_id");
-    let repo = SessionRepository::new(config)?;
+    let repo = session_mutation_repository(config)?;
     ensure_visible(
         &repo,
         current_session_id,
@@ -6613,13 +6618,10 @@ mod tests {
     };
 
     fn isolated_memory_config(test_name: &str) -> SessionStoreConfig {
-        let base = std::env::temp_dir().join(format!(
-            "loong-session-tools-{test_name}-{}",
-            std::process::id()
-        ));
-        let _ = fs::create_dir_all(&base);
+        let base =
+            crate::test_support::unique_temp_dir(&format!("loong-session-tools-{test_name}"));
+        fs::create_dir_all(&base).expect("create session tool test root");
         let db_path = base.join("memory.sqlite3");
-        let _ = fs::remove_file(&db_path);
         SessionStoreConfig {
             sqlite_path: Some(db_path),
             runtime_config: None,

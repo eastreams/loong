@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChildBudgetPolicy, CoreModelError, SessionBudgetOverlay, SessionEvent, Task, TaskBudget,
-    TaskEvent, TaskExecutionMode, WorkspaceContext,
+    ChildBudgetPolicy, CoreModelError, ExecutionArtifact, ExecutionArtifacts, SessionBudgetOverlay,
+    SessionEvent, Task, TaskBudget, TaskEvent, TaskExecutionMode, WorkspaceContext,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,10 +13,56 @@ pub struct Session {
     workspace: WorkspaceContext,
     pub overlay_budget: SessionBudgetOverlay,
     tasks: BTreeMap<String, Task>,
+    artifacts: ExecutionArtifacts,
     events: Vec<SessionEvent>,
 }
 
 impl Session {
+    fn push_event(&mut self, event: SessionEvent) {
+        self.events.push(event);
+        self.enforce_event_retention();
+    }
+
+    fn enforce_event_retention(&mut self) {
+        let Some(max_records) = self.overlay_budget.max_total_events else {
+            return;
+        };
+        if self.events.len() <= max_records {
+            return;
+        }
+        let drop_count = self.events.len() - max_records;
+        self.events.drain(0..drop_count);
+    }
+
+    fn record_shared_artifact_bounded(&mut self, artifact: ExecutionArtifact) {
+        self.artifacts
+            .record_bounded(artifact, self.overlay_budget.max_total_artifacts);
+    }
+
+    fn active_task_count(&self) -> usize {
+        self.tasks
+            .values()
+            .filter(|task| !task.lifecycle().is_terminal())
+            .count()
+    }
+
+    fn active_child_task_count(&self) -> usize {
+        self.tasks
+            .values()
+            .filter(|task| task.parent_task_id.is_some() && !task.lifecycle().is_terminal())
+            .count()
+    }
+
+    fn active_child_task_count_for_parent(&self, parent_task_id: &str) -> usize {
+        self.tasks
+            .values()
+            .filter(|task| {
+                task.parent_task_id.as_deref() == Some(parent_task_id)
+                    && !task.lifecycle().is_terminal()
+            })
+            .count()
+    }
+
     pub fn new(
         session_id: impl Into<String>,
         workspace: WorkspaceContext,
@@ -28,6 +74,7 @@ impl Session {
             workspace: workspace.clone(),
             overlay_budget,
             tasks: BTreeMap::new(),
+            artifacts: ExecutionArtifacts::default(),
             events: vec![SessionEvent::SessionCreated {
                 session_id,
                 workspace,
@@ -55,6 +102,22 @@ impl Session {
         &self.events
     }
 
+    pub fn artifacts(&self) -> &ExecutionArtifacts {
+        &self.artifacts
+    }
+
+    pub fn record_artifact(&mut self, artifact: ExecutionArtifact) -> SessionEvent {
+        let event = SessionEvent::ArtifactRecorded {
+            session_id: self.session_id.clone(),
+            artifact_id: artifact.artifact_id.clone(),
+            kind: artifact.kind.clone(),
+            durability: artifact.durability.clone(),
+        };
+        self.record_shared_artifact_bounded(artifact);
+        self.push_event(event.clone());
+        event
+    }
+
     pub fn spawn_task(
         &mut self,
         task_id: impl Into<String>,
@@ -67,6 +130,12 @@ impl Session {
             return Err(CoreModelError::DuplicateTask {
                 session_id: self.session_id.clone(),
                 task_id,
+            });
+        }
+        if self.active_task_count() >= self.overlay_budget.max_parallel_tasks {
+            return Err(CoreModelError::SessionParallelTaskBudgetExceeded {
+                session_id: self.session_id.clone(),
+                limit: self.overlay_budget.max_parallel_tasks,
             });
         }
         let task = Task::new(
@@ -94,6 +163,27 @@ impl Session {
             return Err(CoreModelError::DuplicateTask {
                 session_id: self.session_id.clone(),
                 task_id: child_task_id,
+            });
+        }
+        if self.active_child_task_count() >= self.overlay_budget.max_parallel_child_tasks {
+            return Err(CoreModelError::SessionParallelChildTaskBudgetExceeded {
+                session_id: self.session_id.clone(),
+                limit: self.overlay_budget.max_parallel_child_tasks,
+            });
+        }
+        let parent_child_limit = self
+            .tasks
+            .get(parent_task_id)
+            .ok_or_else(|| CoreModelError::UnknownTask {
+                session_id: self.session_id.clone(),
+                task_id: parent_task_id.to_owned(),
+            })?
+            .budget()
+            .max_child_tasks;
+        if self.active_child_task_count_for_parent(parent_task_id) >= parent_child_limit {
+            return Err(CoreModelError::TaskChildBudgetExceeded {
+                task_id: parent_task_id.to_owned(),
+                limit: parent_child_limit,
             });
         }
 
@@ -127,7 +217,7 @@ impl Session {
         }
         let previous_workspace = self.workspace.clone();
         self.workspace = workspace.clone();
-        self.events.push(SessionEvent::WorktreeSwitched {
+        self.push_event(SessionEvent::WorktreeSwitched {
             session_id: self.session_id.clone(),
             previous_workspace,
             next_workspace: workspace,

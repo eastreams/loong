@@ -231,3 +231,411 @@ fn execution_artifacts_preserve_durability_contracts() {
         .count();
     assert_eq!(artifact_events, 4);
 }
+
+#[test]
+fn session_shared_artifacts_preserve_durability_contracts() {
+    let mut session = Session::new(
+        "session-artifacts",
+        workspace("feat/session-artifacts", "session-artifacts"),
+        SessionBudgetOverlay::default(),
+    );
+
+    session.record_artifact(ExecutionArtifact::new(
+        "session-patch-1",
+        ExecutionArtifactKind::PatchEditRecord {
+            paths: vec![PathBuf::from("crates/loong-core/src/session.rs")],
+            summary: "add shared session artifact storage".to_owned(),
+        },
+    ));
+    session.record_artifact(ExecutionArtifact::new(
+        "session-assistant-1",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "retained session summary".to_owned(),
+        },
+    ));
+    session.record_artifact(ExecutionArtifact::with_durability(
+        "session-cache-1",
+        ExecutionArtifactKind::GeneratedArtifactReference {
+            location: PathBuf::from("/tmp/session-preview.txt"),
+            description: "scratch session preview".to_owned(),
+        },
+        ArtifactDurabilityClass::DiscardableCache,
+    ));
+
+    assert_eq!(session.artifacts().len(), 3);
+    assert_eq!(session.artifacts().durable_truth().count(), 1);
+    assert_eq!(session.artifacts().derived_projection().count(), 1);
+    assert_eq!(session.artifacts().discardable_cache().count(), 1);
+
+    let artifact_events = session
+        .session_events()
+        .iter()
+        .filter(|event| matches!(event, SessionEvent::ArtifactRecorded { .. }))
+        .count();
+    assert_eq!(artifact_events, 3);
+}
+
+#[test]
+fn session_overlay_budget_caps_parallel_root_tasks() {
+    let overlay = SessionBudgetOverlay {
+        max_parallel_tasks: 1,
+        ..SessionBudgetOverlay::default()
+    };
+    let mut session = Session::new(
+        "session-budget",
+        workspace("feat/budget", "budget"),
+        overlay,
+    );
+
+    session
+        .spawn_task(
+            "task-1",
+            "first active task",
+            TaskBudget::default(),
+            TaskExecutionMode::InteractiveAttached,
+        )
+        .expect("first task should fit overlay budget");
+
+    let error = session
+        .spawn_task(
+            "task-2",
+            "second active task",
+            TaskBudget::default(),
+            TaskExecutionMode::InteractiveAttached,
+        )
+        .expect_err("parallel root task limit should be enforced");
+    assert!(
+        error
+            .to_string()
+            .contains("exceeded max_parallel_tasks limit 1"),
+        "unexpected error: {error}"
+    );
+
+    let task = session.task_mut("task-1").expect("task-1 present");
+    task.transition_to(TaskLifecycle::Running)
+        .expect("running transition should succeed");
+    task.transition_to(TaskLifecycle::Completed)
+        .expect("terminal transition should succeed");
+    session
+        .spawn_task(
+            "task-2",
+            "second task after completion",
+            TaskBudget::default(),
+            TaskExecutionMode::InteractiveAttached,
+        )
+        .expect("completed root tasks should free overlay capacity");
+}
+
+#[test]
+fn task_budget_caps_parallel_child_tasks_per_parent() {
+    let mut session = Session::new(
+        "session-child-budget",
+        workspace("feat/child-budget", "child-budget"),
+        SessionBudgetOverlay::default(),
+    );
+    let parent_budget = TaskBudget {
+        max_child_tasks: 1,
+        ..TaskBudget::default()
+    };
+    session
+        .spawn_task(
+            "parent",
+            "parent task",
+            parent_budget,
+            TaskExecutionMode::InteractiveAttached,
+        )
+        .expect("parent task should spawn");
+
+    session
+        .spawn_subtask(
+            "parent",
+            "child-1",
+            "first child",
+            TaskExecutionMode::DelegatedChild,
+            ChildBudgetPolicy::Inherit,
+            None,
+        )
+        .expect("first child should fit task budget");
+
+    let error = session
+        .spawn_subtask(
+            "parent",
+            "child-2",
+            "second child",
+            TaskExecutionMode::DelegatedChild,
+            ChildBudgetPolicy::Inherit,
+            None,
+        )
+        .expect_err("parent child-task limit should be enforced");
+    assert!(
+        error
+            .to_string()
+            .contains("exceeded max_child_tasks limit 1"),
+        "unexpected error: {error}"
+    );
+
+    let child = session.task_mut("child-1").expect("child-1 present");
+    child
+        .transition_to(TaskLifecycle::Running)
+        .expect("running transition should succeed");
+    child
+        .transition_to(TaskLifecycle::Completed)
+        .expect("terminal transition should succeed");
+    session
+        .spawn_subtask(
+            "parent",
+            "child-2",
+            "second child after completion",
+            TaskExecutionMode::DelegatedChild,
+            ChildBudgetPolicy::Inherit,
+            None,
+        )
+        .expect("completed child tasks should free task-local capacity");
+}
+
+#[test]
+fn session_overlay_budget_caps_parallel_child_tasks_across_parents() {
+    let overlay = SessionBudgetOverlay {
+        max_parallel_child_tasks: 1,
+        ..SessionBudgetOverlay::default()
+    };
+    let mut session = Session::new(
+        "session-overlay-child-budget",
+        workspace("feat/session-child-budget", "session-child-budget"),
+        overlay,
+    );
+    let parent_budget = TaskBudget {
+        max_child_tasks: 4,
+        ..TaskBudget::default()
+    };
+    session
+        .spawn_task(
+            "parent-1",
+            "first parent",
+            parent_budget.clone(),
+            TaskExecutionMode::InteractiveAttached,
+        )
+        .expect("first parent should spawn");
+    session
+        .spawn_task(
+            "parent-2",
+            "second parent",
+            parent_budget,
+            TaskExecutionMode::InteractiveAttached,
+        )
+        .expect("second parent should spawn");
+
+    session
+        .spawn_subtask(
+            "parent-1",
+            "child-1",
+            "first child",
+            TaskExecutionMode::DelegatedChild,
+            ChildBudgetPolicy::Inherit,
+            None,
+        )
+        .expect("first child should fit session overlay");
+
+    let error = session
+        .spawn_subtask(
+            "parent-2",
+            "child-2",
+            "second child",
+            TaskExecutionMode::DelegatedChild,
+            ChildBudgetPolicy::Inherit,
+            None,
+        )
+        .expect_err("session-wide child overlay limit should be enforced");
+    assert!(
+        error
+            .to_string()
+            .contains("exceeded max_parallel_child_tasks limit 1"),
+        "unexpected error: {error}"
+    );
+
+    let child = session.task_mut("child-1").expect("child-1 present");
+    child
+        .transition_to(TaskLifecycle::Running)
+        .expect("running transition should succeed");
+    child
+        .transition_to(TaskLifecycle::Completed)
+        .expect("terminal transition should succeed");
+    session
+        .spawn_subtask(
+            "parent-2",
+            "child-2",
+            "second child after completion",
+            TaskExecutionMode::DelegatedChild,
+            ChildBudgetPolicy::Inherit,
+            None,
+        )
+        .expect("completed child tasks should free session overlay capacity");
+}
+
+#[test]
+fn task_budget_caps_artifact_retention_to_latest_records() {
+    let budget = TaskBudget {
+        artifact_retention: loong_core::RetentionBudget {
+            max_records: Some(2),
+        },
+        ..TaskBudget::default()
+    };
+    let mut task = Task::new(
+        "task-retention-artifacts",
+        "retain only the latest artifacts",
+        workspace("feat/retention", "retention-artifacts"),
+        budget,
+        TaskExecutionMode::DetachedBackground,
+    );
+
+    task.record_artifact(ExecutionArtifact::new(
+        "artifact-1",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "first".to_owned(),
+        },
+    ));
+    task.record_artifact(ExecutionArtifact::new(
+        "artifact-2",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "second".to_owned(),
+        },
+    ));
+    task.record_artifact(ExecutionArtifact::new(
+        "artifact-3",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "third".to_owned(),
+        },
+    ));
+
+    let artifact_ids = task
+        .artifacts()
+        .iter()
+        .map(|artifact| artifact.artifact_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_ids, vec!["artifact-2", "artifact-3"]);
+}
+
+#[test]
+fn task_budget_caps_event_retention_to_latest_records() {
+    let budget = TaskBudget {
+        event_retention: loong_core::RetentionBudget {
+            max_records: Some(3),
+        },
+        ..TaskBudget::default()
+    };
+    let mut task = Task::new(
+        "task-retention-events",
+        "retain only the latest events",
+        workspace("feat/retention", "retention-events"),
+        budget,
+        TaskExecutionMode::InteractiveAttached,
+    );
+
+    task.transition_to(TaskLifecycle::Running)
+        .expect("running transition should succeed");
+    task.begin_turn("turn-1", "retained turn").unwrap();
+    task.record_artifact(ExecutionArtifact::new(
+        "artifact-1",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "retained".to_owned(),
+        },
+    ));
+
+    let retained_kinds = task
+        .fact_events()
+        .iter()
+        .map(|event| match event {
+            TaskEvent::TaskCreated { .. } => "task_created",
+            TaskEvent::WorkspaceBound { .. } => "workspace_bound",
+            TaskEvent::LifecycleChanged { .. } => "lifecycle_changed",
+            TaskEvent::TurnUpdated { .. } => "turn_updated",
+            TaskEvent::ArtifactRecorded { .. } => "artifact_recorded",
+            TaskEvent::SubtaskRegistered { .. } => "subtask_registered",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retained_kinds,
+        vec!["lifecycle_changed", "turn_updated", "artifact_recorded"]
+    );
+}
+
+#[test]
+fn session_overlay_budget_caps_event_retention_to_latest_records() {
+    let first_workspace = workspace("feat/session-retention", "session-retention-a");
+    let second_workspace = workspace("feat/session-retention", "session-retention-b");
+    let third_workspace = workspace("feat/session-retention", "session-retention-c");
+    let overlay = SessionBudgetOverlay {
+        max_total_events: Some(2),
+        ..SessionBudgetOverlay::default()
+    };
+    let mut session = Session::new("session-retention", first_workspace.clone(), overlay);
+
+    session
+        .switch_worktree(second_workspace.clone())
+        .expect("first switch should succeed");
+    session
+        .switch_worktree(third_workspace.clone())
+        .expect("second switch should succeed");
+
+    let retained_events = session.session_events();
+    assert_eq!(retained_events.len(), 2);
+    assert!(matches!(
+        &retained_events[0],
+        SessionEvent::WorktreeSwitched {
+            session_id,
+            previous_workspace,
+            next_workspace,
+        } if session_id == "session-retention"
+            && previous_workspace == &first_workspace
+            && next_workspace == &second_workspace
+    ));
+    assert!(matches!(
+        &retained_events[1],
+        SessionEvent::WorktreeSwitched {
+            session_id,
+            previous_workspace,
+            next_workspace,
+        } if session_id == "session-retention"
+            && previous_workspace == &second_workspace
+            && next_workspace == &third_workspace
+    ));
+}
+
+#[test]
+fn session_overlay_budget_caps_artifact_retention_to_latest_records() {
+    let overlay = SessionBudgetOverlay {
+        max_total_artifacts: Some(2),
+        ..SessionBudgetOverlay::default()
+    };
+    let mut session = Session::new(
+        "session-artifact-retention",
+        workspace("feat/session-retention", "session-retention-artifacts"),
+        overlay,
+    );
+
+    session.record_artifact(ExecutionArtifact::new(
+        "artifact-1",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "first".to_owned(),
+        },
+    ));
+    session.record_artifact(ExecutionArtifact::new(
+        "artifact-2",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "second".to_owned(),
+        },
+    ));
+    session.record_artifact(ExecutionArtifact::new(
+        "artifact-3",
+        ExecutionArtifactKind::AssistantTextOutput {
+            text: "third".to_owned(),
+        },
+    ));
+
+    let artifact_ids = session
+        .artifacts()
+        .iter()
+        .map(|artifact| artifact.artifact_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_ids, vec!["artifact-2", "artifact-3"]);
+}
