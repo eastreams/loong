@@ -1516,6 +1516,20 @@ data: [DONE]\n\n",
         requests.lock().await.clone()
     }
 
+    async fn wait_for_request_match(
+        requests: &Arc<Mutex<Vec<MockRequest>>>,
+        predicate: impl Fn(&MockRequest) -> bool,
+    ) -> Vec<MockRequest> {
+        for _ in 0..50 {
+            let snapshot = requests.lock().await.clone();
+            if snapshot.iter().any(&predicate) {
+                return snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        requests.lock().await.clone()
+    }
+
     async fn spawn_mock_provider_server(
         requests: Arc<Mutex<Vec<MockRequest>>>,
     ) -> (String, tokio::task::JoinHandle<()>) {
@@ -2500,7 +2514,12 @@ data: [DONE]\n\n",
             &json!({"code": 0, "msg": "duplicate_event"})
         );
 
-        let feishu_requests = wait_for_request_count(&feishu_requests, 4).await;
+        let feishu_requests = wait_for_request_match(&feishu_requests, |request| {
+            request.path == "/open-apis/im/v1/messages/om_inbound_timeout_terminal_1/reply"
+                && request.body.contains("attempt 2/2")
+                && !request.body.contains("[provider_error]")
+        })
+        .await;
         assert_eq!(
             feishu_requests
                 .iter()
