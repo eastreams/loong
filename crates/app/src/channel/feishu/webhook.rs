@@ -233,7 +233,7 @@ struct FeishuWebhookPostResponseDispatch {
 
 struct FeishuRetryStatusHandle {
     tx: mpsc::UnboundedSender<FeishuRetryStatusCommand>,
-    last_progress: Arc<Mutex<Option<crate::provider::ProviderRetryProgress>>>,
+    last_progress: Arc<std::sync::Mutex<Option<crate::provider::ProviderRetryProgress>>>,
 }
 
 enum FeishuRetryStatusCommand {
@@ -331,7 +331,7 @@ impl FeishuParsedActionResponse {
 impl FeishuRetryStatusHandle {
     fn new(adapter: Arc<Mutex<FeishuAdapter>>, reply_target: ChannelOutboundTarget) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let last_progress = Arc::new(Mutex::new(None));
+        let last_progress = Arc::new(std::sync::Mutex::new(None));
         tokio::spawn(async move {
             let mut state = FeishuRetryStatusState::default();
             while let Some(command) = rx.recv().await {
@@ -408,9 +408,11 @@ impl FeishuRetryStatusHandle {
         let tx = self.tx.clone();
         let last_progress = Arc::clone(&self.last_progress);
         Some(Arc::new(move |progress| {
-            if let Ok(mut slot) = last_progress.try_lock() {
-                *slot = Some(progress.clone());
-            }
+            let mut slot = match last_progress.lock() {
+                Ok(slot) => slot,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *slot = Some(progress.clone());
             if tx.send(FeishuRetryStatusCommand::Retry(progress)).is_err() {
                 tracing::debug!(
                     target: "loong.channel.feishu",
@@ -430,7 +432,13 @@ impl FeishuRetryStatusHandle {
     }
 
     async fn finalize_failure(&self, message: String) -> bool {
-        let retry_progress = self.last_progress.lock().await.clone();
+        let retry_progress = {
+            let slot = match self.last_progress.lock() {
+                Ok(slot) => slot,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            slot.clone()
+        };
         self.send_with_ack(
             |ack| FeishuRetryStatusCommand::FinalFailure {
                 message,
