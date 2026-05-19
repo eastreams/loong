@@ -2,10 +2,21 @@ use super::bridge::{
     ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
     WHATSAPP_PERSONAL_CHANNEL_REGISTRY_DESCRIPTOR,
 };
+use super::config_backed::{
+    build_dingtalk_snapshots, build_discord_snapshots, build_email_snapshots,
+    build_google_chat_snapshots, build_imessage_snapshots, build_irc_snapshots,
+    build_mattermost_snapshots, build_nextcloud_talk_snapshots, build_signal_snapshots,
+    build_slack_snapshots, build_synology_chat_snapshots, build_teams_snapshots,
+    build_webhook_snapshots,
+};
 use super::nostr_impl::{NOSTR_ONBOARDING_DESCRIPTOR, NOSTR_OPERATIONS, build_nostr_snapshots};
 use super::planned::{
     WEBCHAT_CHANNEL_REGISTRY_DESCRIPTOR, ZALO_CHANNEL_REGISTRY_DESCRIPTOR,
     ZALO_PERSONAL_CHANNEL_REGISTRY_DESCRIPTOR,
+};
+use super::runtime_backed::{
+    build_feishu_snapshots, build_line_snapshots, build_matrix_snapshots, build_qqbot_snapshots,
+    build_telegram_snapshots, build_wecom_snapshots, build_whatsapp_snapshots,
 };
 use super::tlon::TLON_CHANNEL_REGISTRY_DESCRIPTOR;
 use super::twitch::{TWITCH_ONBOARDING_DESCRIPTOR, TWITCH_OPERATIONS, build_twitch_snapshots};

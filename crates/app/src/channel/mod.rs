@@ -214,7 +214,17 @@ use crate::CliResult;
 use crate::conversation::ConversationIngressPrivateContext;
 pub use background_runtime::run_background_channel_with_stop;
 #[cfg(test)]
+#[cfg(feature = "channel-matrix")]
+use commands::accounts::validate_matrix_security_config;
+#[cfg(test)]
+#[cfg(feature = "channel-feishu")]
+use commands::accounts::{build_feishu_command_context, validate_feishu_security_config};
+#[cfg(test)]
+#[cfg(feature = "channel-telegram")]
+use commands::accounts::{build_telegram_command_context, validate_telegram_security_config};
+#[cfg(test)]
 use commands::context::render_channel_route_notice;
+pub(crate) use commands::session_send::send_text_to_known_session;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -236,16 +246,6 @@ pub use dispatch::run_telegram_channel_with_stop;
 pub use dispatch::run_wecom_channel_with_stop;
 #[cfg(feature = "channel-whatsapp")]
 pub use dispatch::run_whatsapp_channel_with_stop;
-pub(crate) use dispatch::send_text_to_known_session;
-#[cfg(test)]
-#[cfg(feature = "channel-matrix")]
-use dispatch::validate_matrix_security_config;
-#[cfg(test)]
-#[cfg(feature = "channel-feishu")]
-use dispatch::{build_feishu_command_context, validate_feishu_security_config};
-#[cfg(test)]
-#[cfg(feature = "channel-telegram")]
-use dispatch::{build_telegram_command_context, validate_telegram_security_config};
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_dingtalk_send,
     run_discord_send, run_email_send, run_feishu_channel, run_feishu_send, run_google_chat_send,
