@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::FeishuChannelServeMode;
+use crate::channel::registry::runtime_backed::TELEGRAM_ONBOARDING_DESCRIPTOR;
 
 #[test]
 fn normalize_channel_platform_maps_lark_alias_to_feishu() {

@@ -3,6 +3,11 @@ use std::path::Path;
 use crate::channel::runtime::state;
 use crate::config::ChannelDefaultAccountSelectionSource;
 
+use super::runtime_backed::{
+    FEISHU_SEND_OPERATION, FEISHU_SERVE_OPERATION, MATRIX_SEND_OPERATION, MATRIX_SERVE_OPERATION,
+    TELEGRAM_SEND_OPERATION, TELEGRAM_SERVE_OPERATION, WECOM_SEND_OPERATION,
+    WECOM_SERVE_OPERATION,
+};
 use super::{
     ChannelCatalogOperation, ChannelOperationHealth, ChannelOperationRuntime,
     ChannelOperationStatus, ChannelPlatform, ChannelRegistryDescriptor, ChannelStatusSnapshot,
@@ -236,8 +241,8 @@ pub(super) fn build_invalid_telegram_snapshot(
         is_default_account,
         default_account_source,
         error,
-        super::TELEGRAM_SEND_OPERATION,
-        super::TELEGRAM_SERVE_OPERATION,
+        TELEGRAM_SEND_OPERATION,
+        TELEGRAM_SERVE_OPERATION,
         "channel-telegram",
     )
 }
@@ -257,8 +262,8 @@ pub(super) fn build_invalid_feishu_snapshot(
         is_default_account,
         default_account_source,
         error,
-        super::FEISHU_SEND_OPERATION,
-        super::FEISHU_SERVE_OPERATION,
+        FEISHU_SEND_OPERATION,
+        FEISHU_SERVE_OPERATION,
         "channel-feishu",
     )
 }
@@ -278,8 +283,8 @@ pub(super) fn build_invalid_matrix_snapshot(
         is_default_account,
         default_account_source,
         error,
-        super::MATRIX_SEND_OPERATION,
-        super::MATRIX_SERVE_OPERATION,
+        MATRIX_SEND_OPERATION,
+        MATRIX_SERVE_OPERATION,
         "channel-matrix",
     )
 }
@@ -299,8 +304,8 @@ pub(super) fn build_invalid_wecom_snapshot(
         is_default_account,
         default_account_source,
         error,
-        super::WECOM_SEND_OPERATION,
-        super::WECOM_SERVE_OPERATION,
+        WECOM_SEND_OPERATION,
+        WECOM_SERVE_OPERATION,
         "channel-wecom",
     )
 }

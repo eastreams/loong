@@ -11,7 +11,623 @@ use super::status_support::{
     build_invalid_feishu_snapshot, build_invalid_line_snapshot, build_invalid_matrix_snapshot,
     build_invalid_telegram_snapshot, build_invalid_wecom_snapshot, build_invalid_whatsapp_snapshot,
 };
+use crate::config::{
+    FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
+    FEISHU_VERIFICATION_TOKEN_ENV, MATRIX_ACCESS_TOKEN_ENV, QQBOT_APP_ID_ENV,
+    QQBOT_CLIENT_SECRET_ENV, TELEGRAM_BOT_TOKEN_ENV,
+};
+
 use super::*;
+
+pub(super) const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "bridge send",
+    command: "channels send telegram",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
+    requirements: TELEGRAM_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub(super) const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bridge serve",
+    command: "channels serve telegram",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: true,
+    requirements: TELEGRAM_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub const TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "telegram",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: TELEGRAM_SEND_OPERATION,
+        serve: TELEGRAM_SERVE_OPERATION,
+    };
+
+pub const TELEGRAM_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const TELEGRAM_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["telegram.enabled", "telegram.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TELEGRAM_BOT_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "bot_token",
+        label: "bot token",
+        config_paths: &[
+            "telegram.bot_token",
+            "telegram.accounts.<account>.bot_token",
+        ],
+        env_pointer_paths: &[
+            "telegram.bot_token_env",
+            "telegram.accounts.<account>.bot_token_env",
+        ],
+        default_env_var: Some(TELEGRAM_BOT_TOKEN_ENV),
+    };
+const TELEGRAM_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_chat_ids",
+        label: "allowed chat ids",
+        config_paths: &[
+            "telegram.allowed_chat_ids",
+            "telegram.accounts.<account>.allowed_chat_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TELEGRAM_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "telegram.allowed_sender_ids",
+            "telegram.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TELEGRAM_REQUIRE_MENTION_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "require_mention",
+        label: "require explicit bot mention outside private chats",
+        config_paths: &[
+            "telegram.require_mention",
+            "telegram.accounts.<account>.require_mention",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const TELEGRAM_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] =
+    &[TELEGRAM_ENABLED_REQUIREMENT, TELEGRAM_BOT_TOKEN_REQUIREMENT];
+const TELEGRAM_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    TELEGRAM_ENABLED_REQUIREMENT,
+    TELEGRAM_BOT_TOKEN_REQUIREMENT,
+    TELEGRAM_ALLOWED_CHAT_IDS_REQUIREMENT,
+    TELEGRAM_ALLOWED_SENDER_IDS_REQUIREMENT,
+    TELEGRAM_REQUIRE_MENTION_REQUIREMENT,
+];
+
+const TELEGRAM_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "telegram channel",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "telegram channel runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+pub(super) const TELEGRAM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
+        doctor_checks: &[],
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
+        doctor_checks: TELEGRAM_SERVE_DOCTOR_CHECKS,
+    },
+];
+pub(super) const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a Telegram bridge plugin that declares setup.surface=channel plus telegram bot credentials, allowed chat ids, and optional mention gating before serving the managed bridge surface",
+    status_command: "loong doctor",
+    repair_command: None,
+};
+
+pub(super) const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "bridge send",
+    command: "channels send feishu",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
+    requirements: FEISHU_SEND_REQUIREMENTS,
+    default_target_kind: Some(ChannelCatalogTargetKind::ReceiveId),
+    supported_target_kinds: &[
+        ChannelCatalogTargetKind::ReceiveId,
+        ChannelCatalogTargetKind::MessageReply,
+    ],
+};
+
+pub(super) const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bridge serve",
+    command: "channels serve feishu",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: true,
+    requirements: FEISHU_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::MessageReply],
+};
+
+pub const FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "feishu",
+        default_send_target_kind: ChannelCatalogTargetKind::ReceiveId,
+        send: FEISHU_SEND_OPERATION,
+        serve: FEISHU_SERVE_OPERATION,
+    };
+
+pub const FEISHU_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: FEISHU_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const FEISHU_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["feishu.enabled", "feishu.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const FEISHU_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_id",
+        label: "app id",
+        config_paths: &["feishu.app_id", "feishu.accounts.<account>.app_id"],
+        env_pointer_paths: &["feishu.app_id_env", "feishu.accounts.<account>.app_id_env"],
+        default_env_var: Some(FEISHU_APP_ID_ENV),
+    };
+const FEISHU_APP_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_secret",
+        label: "app secret",
+        config_paths: &["feishu.app_secret", "feishu.accounts.<account>.app_secret"],
+        env_pointer_paths: &[
+            "feishu.app_secret_env",
+            "feishu.accounts.<account>.app_secret_env",
+        ],
+        default_env_var: Some(FEISHU_APP_SECRET_ENV),
+    };
+const FEISHU_ALLOWED_CHAT_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_chat_ids",
+        label: "allowed chat ids",
+        config_paths: &[
+            "feishu.allowed_chat_ids",
+            "feishu.accounts.<account>.allowed_chat_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const FEISHU_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "feishu.allowed_sender_ids",
+            "feishu.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const FEISHU_MODE_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "mode",
+        label: "serve mode",
+        config_paths: &["feishu.mode", "feishu.accounts.<account>.mode"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const FEISHU_VERIFICATION_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "verification_token",
+        label: "verification token (webhook mode only)",
+        config_paths: &[
+            "feishu.verification_token",
+            "feishu.accounts.<account>.verification_token",
+        ],
+        env_pointer_paths: &[
+            "feishu.verification_token_env",
+            "feishu.accounts.<account>.verification_token_env",
+        ],
+        default_env_var: Some(FEISHU_VERIFICATION_TOKEN_ENV),
+    };
+const FEISHU_ENCRYPT_KEY_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "encrypt_key",
+        label: "encrypt key (webhook mode only)",
+        config_paths: &[
+            "feishu.encrypt_key",
+            "feishu.accounts.<account>.encrypt_key",
+        ],
+        env_pointer_paths: &[
+            "feishu.encrypt_key_env",
+            "feishu.accounts.<account>.encrypt_key_env",
+        ],
+        default_env_var: Some(FEISHU_ENCRYPT_KEY_ENV),
+    };
+const FEISHU_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    FEISHU_ENABLED_REQUIREMENT,
+    FEISHU_APP_ID_REQUIREMENT,
+    FEISHU_APP_SECRET_REQUIREMENT,
+];
+const FEISHU_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    FEISHU_ENABLED_REQUIREMENT,
+    FEISHU_APP_ID_REQUIREMENT,
+    FEISHU_APP_SECRET_REQUIREMENT,
+    FEISHU_MODE_REQUIREMENT,
+    FEISHU_ALLOWED_CHAT_IDS_REQUIREMENT,
+    FEISHU_ALLOWED_SENDER_IDS_REQUIREMENT,
+    FEISHU_VERIFICATION_TOKEN_REQUIREMENT,
+    FEISHU_ENCRYPT_KEY_REQUIREMENT,
+];
+
+const FEISHU_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "feishu channel",
+    trigger: ChannelDoctorCheckTrigger::OperationHealth,
+}];
+const FEISHU_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "feishu inbound transport",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "feishu serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+pub(super) const FEISHU_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
+        doctor_checks: FEISHU_SEND_DOCTOR_CHECKS,
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
+        doctor_checks: FEISHU_SERVE_DOCTOR_CHECKS,
+    },
+];
+pub(super) const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a Feishu/Lark bridge plugin that declares setup.surface=channel plus app credentials, allowed chat ids, serve mode, and any webhook verification inputs before serving the managed bridge surface",
+    status_command: "loong doctor",
+    repair_command: None,
+};
+
+pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "qqbot",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: QQBOT_SEND_OPERATION,
+        serve: QQBOT_SERVE_OPERATION,
+    };
+
+const QQBOT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["qqbot.enabled", "qqbot.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const QQBOT_APP_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "app_id",
+        label: "qq bot app id",
+        config_paths: &["qqbot.app_id", "qqbot.accounts.<account>.app_id"],
+        env_pointer_paths: &["qqbot.app_id_env", "qqbot.accounts.<account>.app_id_env"],
+        default_env_var: Some(QQBOT_APP_ID_ENV),
+    };
+
+const QQBOT_CLIENT_SECRET_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "client_secret",
+        label: "qq bot client secret",
+        config_paths: &[
+            "qqbot.client_secret",
+            "qqbot.accounts.<account>.client_secret",
+        ],
+        env_pointer_paths: &[
+            "qqbot.client_secret_env",
+            "qqbot.accounts.<account>.client_secret_env",
+        ],
+        default_env_var: Some(QQBOT_CLIENT_SECRET_ENV),
+    };
+
+const QQBOT_ALLOWED_PEER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_peer_ids",
+        label: "allowed peer ids",
+        config_paths: &[
+            "qqbot.allowed_peer_ids",
+            "qqbot.accounts.<account>.allowed_peer_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+
+const QQBOT_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    QQBOT_ENABLED_REQUIREMENT,
+    QQBOT_APP_ID_REQUIREMENT,
+    QQBOT_CLIENT_SECRET_REQUIREMENT,
+];
+
+const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    QQBOT_ENABLED_REQUIREMENT,
+    QQBOT_APP_ID_REQUIREMENT,
+    QQBOT_CLIENT_SECRET_REQUIREMENT,
+    QQBOT_ALLOWED_PEER_IDS_REQUIREMENT,
+];
+
+pub(super) const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "bridge send",
+    command: "channels send qqbot",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
+    requirements: QQBOT_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub(super) const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bridge serve",
+    command: "channels serve qqbot",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: true,
+    requirements: QQBOT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "qqbot channel",
+    trigger: ChannelDoctorCheckTrigger::OperationHealth,
+}];
+
+const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "qqbot channel",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "qqbot serve runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+
+pub(super) const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: QQBOT_SEND_OPERATION,
+        doctor_checks: QQBOT_SEND_DOCTOR_CHECKS,
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: QQBOT_SERVE_OPERATION,
+        doctor_checks: QQBOT_SERVE_DOCTOR_CHECKS,
+    },
+];
+
+pub(super) const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a QQBot bridge plugin that declares setup.surface=channel plus qqbot app_id, client_secret, and allowed_peer_ids requirements before serving the managed bridge surface",
+    status_command: "loong doctor",
+    repair_command: None,
+};
+
+pub(super) const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "bridge send",
+    command: "channels send matrix",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
+    requirements: MATRIX_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub(super) const MATRIX_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bridge serve",
+    command: "channels serve matrix",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: true,
+    requirements: MATRIX_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub const MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "matrix",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: MATRIX_SEND_OPERATION,
+        serve: MATRIX_SERVE_OPERATION,
+    };
+
+pub const MATRIX_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+pub(super) const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SEND_ID,
+    label: "bridge send",
+    command: "channels send wecom",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: false,
+    requirements: WECOM_SEND_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub(super) const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
+    id: CHANNEL_OPERATION_SERVE_ID,
+    label: "bridge serve",
+    command: "channels serve wecom",
+    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    tracks_runtime: true,
+    requirements: WECOM_SERVE_REQUIREMENTS,
+    default_target_kind: None,
+    supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
+};
+
+pub const WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
+    ChannelCatalogCommandFamilyDescriptor {
+        channel_id: "wecom",
+        default_send_target_kind: ChannelCatalogTargetKind::Conversation,
+        send: WECOM_SEND_OPERATION,
+        serve: WECOM_SERVE_OPERATION,
+    };
+
+pub const WECOM_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
+const MATRIX_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "enabled",
+        label: "channel enabled",
+        config_paths: &["matrix.enabled", "matrix.accounts.<account>.enabled"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_ACCESS_TOKEN_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "access_token",
+        label: "access token",
+        config_paths: &[
+            "matrix.access_token",
+            "matrix.accounts.<account>.access_token",
+        ],
+        env_pointer_paths: &[
+            "matrix.access_token_env",
+            "matrix.accounts.<account>.access_token_env",
+        ],
+        default_env_var: Some(MATRIX_ACCESS_TOKEN_ENV),
+    };
+const MATRIX_BASE_URL_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "base_url",
+        label: "homeserver base url",
+        config_paths: &["matrix.base_url", "matrix.accounts.<account>.base_url"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_ALLOWED_ROOM_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_room_ids",
+        label: "allowed room ids",
+        config_paths: &[
+            "matrix.allowed_room_ids",
+            "matrix.accounts.<account>.allowed_room_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_ALLOWED_SENDER_IDS_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "allowed_sender_ids",
+        label: "allowed sender ids",
+        config_paths: &[
+            "matrix.allowed_sender_ids",
+            "matrix.accounts.<account>.allowed_sender_ids",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_REQUIRE_MENTION_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "require_mention",
+        label: "require explicit mention in synced rooms",
+        config_paths: &[
+            "matrix.require_mention",
+            "matrix.accounts.<account>.require_mention",
+        ],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_USER_ID_REQUIREMENT: ChannelCatalogOperationRequirement =
+    ChannelCatalogOperationRequirement {
+        id: "user_id",
+        label: "user id when ignore_self_messages is enabled",
+        config_paths: &["matrix.user_id", "matrix.accounts.<account>.user_id"],
+        env_pointer_paths: &[],
+        default_env_var: None,
+    };
+const MATRIX_SEND_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    MATRIX_ENABLED_REQUIREMENT,
+    MATRIX_ACCESS_TOKEN_REQUIREMENT,
+    MATRIX_BASE_URL_REQUIREMENT,
+];
+const MATRIX_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
+    MATRIX_ENABLED_REQUIREMENT,
+    MATRIX_ACCESS_TOKEN_REQUIREMENT,
+    MATRIX_BASE_URL_REQUIREMENT,
+    MATRIX_ALLOWED_ROOM_IDS_REQUIREMENT,
+    MATRIX_ALLOWED_SENDER_IDS_REQUIREMENT,
+    MATRIX_REQUIRE_MENTION_REQUIREMENT,
+    MATRIX_USER_ID_REQUIREMENT,
+];
+
+const MATRIX_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "matrix channel",
+    trigger: ChannelDoctorCheckTrigger::OperationHealth,
+}];
+const MATRIX_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[
+    ChannelDoctorCheckSpec {
+        name: "matrix room sync",
+        trigger: ChannelDoctorCheckTrigger::OperationHealth,
+    },
+    ChannelDoctorCheckSpec {
+        name: "matrix channel runtime",
+        trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+    },
+];
+pub(super) const MATRIX_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
+    ChannelRegistryOperationDescriptor {
+        operation: MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
+        doctor_checks: MATRIX_SEND_DOCTOR_CHECKS,
+    },
+    ChannelRegistryOperationDescriptor {
+        operation: MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
+        doctor_checks: MATRIX_SERVE_DOCTOR_CHECKS,
+    },
+];
+pub(super) const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
+    strategy: ChannelOnboardingStrategy::PluginBridge,
+    setup_hint: "install and configure a Matrix bridge plugin that declares setup.surface=channel plus matrix access tokens, homeserver base url, allowed room ids, and optional mention gating before serving the managed bridge surface",
+    status_command: "loong doctor",
+    repair_command: None,
+};
 
 pub(super) fn build_telegram_snapshots(
     descriptor: &ChannelRegistryDescriptor,
