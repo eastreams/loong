@@ -69,5 +69,8 @@
 
 ## Commit-Shape Note
 
-- The work is currently present as an uncommitted lane-local change set.
-- The architectural claim is single-lane only: channel system physical shrink and ownership deepening after the plugin-bridge shift.
+- Implementation commit:
+  - `6b1e0ba2 refactor(channel): shrink registry and dispatch ownership`
+- The architectural claim is single-lane only:
+  - channel system physical shrink
+  - ownership deepening after the plugin-bridge shift
