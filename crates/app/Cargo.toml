@@ -68,7 +68,7 @@ serde_json.workspace = true
 serde_yaml = "0.9"
 toml = { workspace = true, optional = true }
 reqwest.workspace = true
-scraper = { version = "0.26", optional = true }
+scraper = { version = "0.27", optional = true }
 sha2.workspace = true
 hmac = "0.13"
 hex = "0.4"
