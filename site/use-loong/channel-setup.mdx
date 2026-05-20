@@ -73,6 +73,7 @@ These are the shipped reply-loop surfaces that can join `gateway run` or
 | Feishu / Lark | app credentials, trusted chats, and the selected inbound transport | `loong feishu serve` |
 | Telegram | bot token and trusted chat ids | `loong channels serve telegram` |
 | Matrix | homeserver base URL, access token, and trusted room ids | `loong channels serve matrix` |
+| QQ Bot | app id, client secret, and trusted peer ids | `loong channels serve qqbot` |
 | WhatsApp Cloud API | Cloud API credentials plus verified webhook material | `loong channels serve whatsapp` |
 | WeCom | bot id, secret, and trusted conversation ids | `loong channels serve wecom` |
 
@@ -94,7 +95,6 @@ and upstream session lifecycle stay in an external bridge or managed plugin.
 | Surface | What you configure first | Current operator path |
 | --- | --- | --- |
 | Weixin | `weixin.enabled`, `bridge_url`, `bridge_access_token`, `allowed_contact_ids` | `loong weixin onboard`, `loong doctor`, `loong channels`, `loong channels send weixin`, `loong channels serve weixin`, managed bridge discovery |
-| QQ Bot | `qqbot.enabled`, `app_id`, `client_secret`, `allowed_peer_ids` | `loong doctor`, `loong channels`, `loong channels send qqbot`, `loong channels serve qqbot`, managed bridge discovery |
 | OneBot | `onebot.enabled`, `websocket_url`, `access_token`, `allowed_group_ids` | `loong doctor`, `loong channels`, `loong channels send onebot`, `loong channels serve onebot`, managed bridge discovery |
 | WhatsApp Personal | `whatsapp_personal.enabled`, `bridge_url`, `auth_dir`, `allowed_chat_ids` | `loong whatsapp-personal bridge run`, `loong doctor`, `loong channels`, `loong channels send whatsapp-personal`, `loong channels serve whatsapp-personal`, managed bridge discovery |
 
@@ -190,17 +190,13 @@ Weixin is a bridge-first surface:
 
 ### QQ Bot
 
-QQ Bot is the explicit Tencent gateway / bridge lane:
+QQ Bot is the explicit Tencent gateway runtime lane:
 
 - configure `app_id` plus `client_secret`
 - use `allowed_peer_ids` to keep the trusted conversation boundary explicit
-- add `managed_bridge_plugin_id` only when several compatible managed bridges exist and you need one exact selection
 - keep openids and account ids stable so direct, group, and guild routes do not drift between bridge implementations
 - use `loong channels send qqbot --target c2c:<openid>`, `group:<openid>`, or `channel:<id>` for proactive sends
-- use `loong channels serve qqbot` to run the selected managed bridge reply loop under Loong supervision
-- use `loong channels serve qqbot --stop` to request cooperative shutdown for the selected managed bridge runtime owner
-- Loong automatically asks older duplicate owners to stop when it can identify one clear preferred runtime owner
-- use `loong channels serve qqbot --stop-duplicates` as the operator fallback to keep the preferred live runtime owner and cooperatively drain the duplicate owners
+- use `loong channels serve qqbot` to run the native QQ gateway reply loop under Loong supervision
 
 ### OneBot
 

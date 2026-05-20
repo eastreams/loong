@@ -1,9 +1,11 @@
+pub(in crate::channel) mod accounts;
 pub(in crate::channel) mod context;
 mod send;
 mod serve;
+pub(crate) mod session_send;
 
-pub(super) use context::ChannelCommandContext;
-pub(super) use send::{ChannelSendCommandSpec, run_channel_send_command};
+pub(in crate::channel) use context::ChannelCommandContext;
+pub(in crate::channel) use send::{ChannelSendCommandSpec, run_channel_send_command};
 #[cfg(any(
     feature = "channel-plugin-bridge",
     feature = "channel-telegram",
@@ -15,4 +17,4 @@ pub(super) use send::{ChannelSendCommandSpec, run_channel_send_command};
     feature = "channel-whatsapp",
     feature = "channel-webhook"
 ))]
-pub(super) use serve::{ChannelServeCommandSpec, run_channel_serve_command_with_stop};
+pub(in crate::channel) use serve::{ChannelServeCommandSpec, run_channel_serve_command_with_stop};

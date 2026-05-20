@@ -2,10 +2,26 @@ use super::bridge::{
     ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
     WHATSAPP_PERSONAL_CHANNEL_REGISTRY_DESCRIPTOR,
 };
+use super::config_backed::{
+    build_dingtalk_snapshots, build_discord_snapshots, build_email_snapshots,
+    build_google_chat_snapshots, build_imessage_snapshots, build_irc_snapshots,
+    build_mattermost_snapshots, build_nextcloud_talk_snapshots, build_signal_snapshots,
+    build_slack_snapshots, build_synology_chat_snapshots, build_teams_snapshots,
+    build_webhook_snapshots,
+};
 use super::nostr_impl::{NOSTR_ONBOARDING_DESCRIPTOR, NOSTR_OPERATIONS, build_nostr_snapshots};
 use super::planned::{
     WEBCHAT_CHANNEL_REGISTRY_DESCRIPTOR, ZALO_CHANNEL_REGISTRY_DESCRIPTOR,
     ZALO_PERSONAL_CHANNEL_REGISTRY_DESCRIPTOR,
+};
+use super::runtime_backed::{
+    FEISHU_COMMAND_FAMILY_DESCRIPTOR, FEISHU_ONBOARDING_DESCRIPTOR, FEISHU_OPERATIONS,
+    MATRIX_COMMAND_FAMILY_DESCRIPTOR, MATRIX_ONBOARDING_DESCRIPTOR, MATRIX_OPERATIONS,
+    QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, QQBOT_ONBOARDING_DESCRIPTOR, QQBOT_OPERATIONS,
+    TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_ONBOARDING_DESCRIPTOR, TELEGRAM_OPERATIONS,
+    WECOM_COMMAND_FAMILY_DESCRIPTOR, build_feishu_snapshots, build_line_snapshots,
+    build_matrix_snapshots, build_qqbot_snapshots, build_telegram_snapshots, build_wecom_snapshots,
+    build_whatsapp_snapshots,
 };
 use super::tlon::TLON_CHANNEL_REGISTRY_DESCRIPTOR;
 use super::twitch::{TWITCH_ONBOARDING_DESCRIPTOR, TWITCH_OPERATIONS, build_twitch_snapshots};
@@ -387,9 +403,9 @@ pub(crate) const QQBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         snapshot_builder: Some(build_qqbot_snapshots),
         selection_order: 36,
         selection_label: "qq gateway bot",
-        blurb: "Plugin-backed QQBot surface for official gateway bridges that externalize send and reply-loop contract ownership into a managed bridge plugin.",
-        implementation_status: ChannelCatalogImplementationStatus::PluginBacked,
-        capabilities: PLUGIN_BACKED_CHANNEL_CAPABILITIES,
+        blurb: "Shipped QQ Bot runtime surface for the official QQ gateway protocol with direct send plus Loong-owned reply-loop runtime behavior.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: RUNTIME_BACKED_CHANNEL_CAPABILITIES,
         label: "QQ Bot",
         aliases: &["qq", "qq-bot", "tencent-qq"],
         transport: "qq_official_bot_gateway_or_plugin_bridge",

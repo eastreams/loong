@@ -16,7 +16,7 @@ use super::{
 
 #[cfg(feature = "channel-feishu")]
 use super::{
-    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, dispatch::validate_feishu_security_config,
+    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, commands::accounts::validate_feishu_security_config,
     feishu::build_gateway_feishu_ingress_router,
 };
 

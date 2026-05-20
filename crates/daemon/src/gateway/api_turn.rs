@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::control::{GatewayControlAppState, authorize_request_from_state};
-use loong_app_protocol::{
-    AppProtocolWorkspaceContext, ProductionRoutedOneshotExecutor, RoutedOneshotTurnRequest,
-    RuntimeExecutorConfig, execute_routed_oneshot_turn,
+use loong_app::{
+    acp::AcpRoutingIntent,
+    agent_runtime::AgentTurnMode,
+    turn_gateway::{TurnGatewayExecution, build_turn_gateway_request, run_turn_gateway},
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -118,43 +119,47 @@ pub(crate) async fn handle_turn(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
-    let runtime_executor_config = RuntimeExecutorConfig {
-        requested_config_path: Some(app_state.config_path.clone()),
-        resolved_config_path: PathBuf::from(app_state.config_path.clone()),
-        runtime_workspace_root: std::env::current_dir().ok(),
-        latest_session_selector: Some("latest".to_owned()),
-    };
-    let host = crate::runtime_protocol_host::LoongAppRuntimeProtocolHost::new()
-        .with_acp_manager(_acp_manager.clone())
-        .with_loaded_config(config.clone());
-    let host = match event_sink.as_ref() {
-        Some(sink) => host.with_event_sink(sink),
-        None => host,
-    };
-    let executor = ProductionRoutedOneshotExecutor::new(&host, runtime_executor_config);
-    let workspace = AppProtocolWorkspaceContext::new(
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        "unknown".to_owned(),
+    let mut address = loong_app::conversation::ConversationSessionAddress::from_session_id(
+        &turn_request.session_id,
     );
-    let routed_request = RoutedOneshotTurnRequest {
-        config_path: Some(app_state.config_path.clone()),
-        session_hint: Some(turn_request.session_id.clone()),
-        message: turn_request.input.clone(),
-        channel_id: turn_request.channel_id.clone(),
-        account_id: turn_request.account_id.clone(),
-        conversation_id: turn_request.conversation_id.clone(),
-        participant_id: turn_request.participant_id.clone(),
-        thread_id: turn_request.thread_id.clone(),
-        working_directory,
-        metadata: turn_request.metadata.clone(),
-        acp_requested: true,
-        acp_event_stream: event_sink.is_some(),
+    if let (Some(channel_id), Some(conversation_id)) = (
+        turn_request.channel_id.as_deref(),
+        turn_request.conversation_id.as_deref(),
+    ) {
+        address = address.with_channel_scope(channel_id, conversation_id);
+    }
+    if let Some(account_id) = turn_request.account_id.as_deref() {
+        address = address.with_account_id(account_id);
+    }
+    if let Some(participant_id) = turn_request.participant_id.as_deref() {
+        address = address.with_participant_id(participant_id);
+    }
+    if let Some(thread_id) = turn_request.thread_id.as_deref() {
+        address = address.with_thread_id(thread_id);
+    }
+    let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
+    let execution = TurnGatewayExecution {
+        resolved_path: PathBuf::from(app_state.config_path.clone()),
+        config: config.clone(),
+        kernel_ctx: None,
+        acp_manager: Some(_acp_manager.clone()),
+        event_sink: event_sink
+            .as_ref()
+            .map(|sink| sink as &dyn loong_app::acp::AcpTurnEventSink),
+        initialize_runtime_environment: false,
     };
-    let result = execute_routed_oneshot_turn(&routed_request, workspace, &executor).await;
+    let gateway_request = build_turn_gateway_request(
+        address,
+        turn_request.input.clone(),
+        turn_request.metadata.clone(),
+        AgentTurnMode::Oneshot,
+        AcpRoutingIntent::Explicit,
+        event_sink.is_some(),
+        Vec::new(),
+        working_directory,
+        false,
+    );
+    let result = run_turn_gateway(execution, gateway_request).await;
 
     match result {
         Ok(turn_result) => {

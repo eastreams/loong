@@ -36,7 +36,7 @@ pub struct GatewayChannelInventoryReadModel {
     pub summary: GatewayChannelInventorySummaryReadModel,
     pub channels: Vec<mvp::channel::ChannelStatusSnapshot>,
     pub catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
-    pub channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
+    pub channel_catalog: Vec<GatewayChannelCatalogEntryReadModel>,
     pub channel_surfaces: Vec<GatewayChannelSurfaceReadModel>,
     pub channel_access_policies: Vec<mvp::channel::ChannelConfiguredAccountAccessPolicy>,
 }
@@ -44,11 +44,38 @@ pub struct GatewayChannelInventoryReadModel {
 pub type ChannelsCliJsonPayload = GatewayChannelInventoryReadModel;
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GatewayChannelCatalogEntryReadModel {
+    #[serde(flatten)]
+    pub catalog: mvp::channel::ChannelCatalogEntry,
+    pub runtime_kind: String,
+    pub operational_model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GatewayChannelSurfaceReadModel {
     #[serde(flatten)]
     pub surface: mvp::channel::ChannelSurface,
+    pub runtime_kind: String,
+    pub operational_model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_bridge_account_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayChannelRuntimeKindCountsReadModel {
+    pub runtime_backed: usize,
+    pub plugin_backed: usize,
+    pub outbound_only: usize,
+    pub catalog_only: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayChannelOperationalModelCountsReadModel {
+    pub gateway_supervised: usize,
+    pub standalone_runtime: usize,
+    pub plugin_backed: usize,
+    pub outbound_only: usize,
+    pub catalog_only: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +85,8 @@ pub struct GatewayChannelInventorySummaryReadModel {
     pub config_backed_surface_count: usize,
     pub plugin_backed_surface_count: usize,
     pub catalog_only_surface_count: usize,
+    pub runtime_kind_counts: GatewayChannelRuntimeKindCountsReadModel,
+    pub operational_model_counts: GatewayChannelOperationalModelCountsReadModel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -328,6 +357,8 @@ pub struct GatewayOperatorChannelSurfaceReadModel {
     pub channel_id: String,
     pub label: String,
     pub implementation_status: String,
+    pub runtime_kind: String,
+    pub operational_model: String,
     pub configured_account_count: usize,
     pub enabled_account_count: usize,
     pub misconfigured_account_count: usize,
@@ -364,6 +395,8 @@ pub struct GatewayOperatorChannelsSummaryReadModel {
     pub config_backed_channel_count: usize,
     pub plugin_backed_channel_count: usize,
     pub catalog_only_channel_count: usize,
+    pub gateway_supervised_channel_count: usize,
+    pub standalone_runtime_channel_count: usize,
     pub enabled_runtime_backed_channel_count: usize,
     pub enabled_plugin_backed_channel_count: usize,
     pub enabled_outbound_only_channel_count: usize,
@@ -549,7 +582,12 @@ pub fn build_channel_inventory_read_model(
     };
     let channels = inventory.channels.clone();
     let catalog_only_channels = inventory.catalog_only_channels.clone();
-    let channel_catalog = inventory.channel_catalog.clone();
+    let channel_catalog = inventory
+        .channel_catalog
+        .iter()
+        .cloned()
+        .map(build_channel_catalog_entry_read_model)
+        .collect();
     let summary = build_channel_inventory_summary_read_model(&inventory.channel_surfaces);
     let channel_surfaces = inventory
         .channel_surfaces
@@ -571,13 +609,28 @@ pub fn build_channel_inventory_read_model(
     }
 }
 
+fn build_channel_catalog_entry_read_model(
+    catalog: mvp::channel::ChannelCatalogEntry,
+) -> GatewayChannelCatalogEntryReadModel {
+    let classification = channel_classification_by_id(catalog.id);
+
+    GatewayChannelCatalogEntryReadModel {
+        catalog,
+        runtime_kind: classification.runtime_kind.to_owned(),
+        operational_model: classification.operational_model.to_owned(),
+    }
+}
+
 fn build_channel_surface_read_model(
     surface: mvp::channel::ChannelSurface,
 ) -> GatewayChannelSurfaceReadModel {
     let plugin_bridge_account_summary = plugin_bridge_account_summary(&surface);
+    let classification = channel_classification_by_id(surface.catalog.id);
 
     GatewayChannelSurfaceReadModel {
         surface,
+        runtime_kind: classification.runtime_kind.to_owned(),
+        operational_model: classification.operational_model.to_owned(),
         plugin_bridge_account_summary,
     }
 }
@@ -588,32 +641,64 @@ fn build_channel_inventory_summary_read_model(
     let total_surface_count = channel_surfaces.len();
     let runtime_backed_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "runtime_backed")
         .count();
     let config_backed_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "outbound_only")
         .count();
     let plugin_backed_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "plugin_backed")
         .count();
     let catalog_only_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "catalog_only")
         .count();
+    let runtime_kind_counts = GatewayChannelRuntimeKindCountsReadModel {
+        runtime_backed: channel_surfaces
+            .iter()
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "runtime_backed")
+            .count(),
+        plugin_backed: channel_surfaces
+            .iter()
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "plugin_backed")
+            .count(),
+        outbound_only: channel_surfaces
+            .iter()
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "outbound_only")
+            .count(),
+        catalog_only: channel_surfaces
+            .iter()
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "catalog_only")
+            .count(),
+    };
+    let operational_model_counts = GatewayChannelOperationalModelCountsReadModel {
+        gateway_supervised: channel_surfaces
+            .iter()
+            .filter(|surface| {
+                channel_operational_model_text(surface.catalog.id) == "gateway_supervised"
+            })
+            .count(),
+        standalone_runtime: channel_surfaces
+            .iter()
+            .filter(|surface| {
+                channel_operational_model_text(surface.catalog.id) == "standalone_runtime"
+            })
+            .count(),
+        plugin_backed: channel_surfaces
+            .iter()
+            .filter(|surface| channel_operational_model_text(surface.catalog.id) == "plugin_backed")
+            .count(),
+        outbound_only: channel_surfaces
+            .iter()
+            .filter(|surface| channel_operational_model_text(surface.catalog.id) == "outbound_only")
+            .count(),
+        catalog_only: channel_surfaces
+            .iter()
+            .filter(|surface| channel_operational_model_text(surface.catalog.id) == "catalog_only")
+            .count(),
+    };
 
     GatewayChannelInventorySummaryReadModel {
         total_surface_count,
@@ -621,7 +706,51 @@ fn build_channel_inventory_summary_read_model(
         config_backed_surface_count,
         plugin_backed_surface_count,
         catalog_only_surface_count,
+        runtime_kind_counts,
+        operational_model_counts,
     }
+}
+
+struct ChannelClassification<'a> {
+    runtime_kind: &'a str,
+    operational_model: &'a str,
+}
+
+fn channel_classification_by_id(channel_id: &str) -> ChannelClassification<'static> {
+    if let Some(descriptor) = mvp::channel::channel_descriptor(channel_id) {
+        return ChannelClassification {
+            runtime_kind: descriptor.runtime_kind.as_str(),
+            operational_model: descriptor.operational_model.as_str(),
+        };
+    }
+
+    let runtime_kind = match mvp::channel::resolve_channel_catalog_entry(channel_id)
+        .map(|entry| entry.implementation_status)
+    {
+        Some(mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked) => "runtime_backed",
+        Some(mvp::channel::ChannelCatalogImplementationStatus::PluginBacked) => "plugin_backed",
+        Some(mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked) => "outbound_only",
+        Some(mvp::channel::ChannelCatalogImplementationStatus::Stub) | None => "catalog_only",
+    };
+    let operational_model = match runtime_kind {
+        "runtime_backed" => "standalone_runtime",
+        "plugin_backed" => "plugin_backed",
+        "outbound_only" => "outbound_only",
+        _ => "catalog_only",
+    };
+
+    ChannelClassification {
+        runtime_kind,
+        operational_model,
+    }
+}
+
+fn channel_runtime_kind_text(channel_id: &str) -> &'static str {
+    channel_classification_by_id(channel_id).runtime_kind
+}
+
+fn channel_operational_model_text(channel_id: &str) -> &'static str {
+    channel_classification_by_id(channel_id).operational_model
 }
 
 pub fn build_acp_session_list_read_model(
@@ -1242,33 +1371,35 @@ fn build_operator_channels_summary_read_model(
     let runtime_backed_channel_count = channel_inventory
         .channel_catalog
         .iter()
-        .filter(|channel| {
-            channel.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-        })
+        .filter(|channel| channel.runtime_kind == "runtime_backed")
         .count();
     let config_backed_channel_count = channel_inventory
         .channel_catalog
         .iter()
-        .filter(|channel| {
-            channel.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
-        })
+        .filter(|channel| channel.runtime_kind == "outbound_only")
         .count();
     let plugin_backed_channel_count = channel_inventory
         .channel_catalog
         .iter()
         .filter(|channel| {
-            channel.implementation_status
+            channel.catalog.implementation_status
                 == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
         })
         .count();
     let catalog_only_channel_count = channel_inventory
         .channel_catalog
         .iter()
-        .filter(|channel| {
-            channel.implementation_status == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        })
+        .filter(|channel| channel.runtime_kind == "catalog_only")
+        .count();
+    let gateway_supervised_channel_count = channel_inventory
+        .channel_catalog
+        .iter()
+        .filter(|channel| channel.operational_model == "gateway_supervised")
+        .count();
+    let standalone_runtime_channel_count = channel_inventory
+        .channel_catalog
+        .iter()
+        .filter(|channel| channel.operational_model == "standalone_runtime")
         .count();
     let enabled_runtime_backed_channel_ids =
         &runtime_snapshot.channels.enabled_runtime_backed_channel_ids;
@@ -1337,6 +1468,8 @@ fn build_operator_channels_summary_read_model(
         config_backed_channel_count,
         plugin_backed_channel_count,
         catalog_only_channel_count,
+        gateway_supervised_channel_count,
+        standalone_runtime_channel_count,
         enabled_runtime_backed_channel_count,
         enabled_plugin_backed_channel_count,
         enabled_outbound_only_channel_count,
@@ -1382,6 +1515,8 @@ fn build_operator_channel_surface_read_model(
     let channel_id = surface.catalog.id.to_owned();
     let label = surface.catalog.label.to_owned();
     let implementation_status = surface.catalog.implementation_status.as_str().to_owned();
+    let runtime_kind = channel_surface.runtime_kind.clone();
+    let operational_model = channel_surface.operational_model.clone();
     let configured_account_count = surface.configured_accounts.len();
     let enabled_account_count = surface
         .configured_accounts
@@ -1470,6 +1605,8 @@ fn build_operator_channel_surface_read_model(
         channel_id,
         label,
         implementation_status,
+        runtime_kind,
+        operational_model,
         configured_account_count,
         enabled_account_count,
         misconfigured_account_count,
@@ -2406,6 +2543,19 @@ mod tests {
                         config_backed_surface_count: 0,
                         plugin_backed_surface_count: 0,
                         catalog_only_surface_count: 0,
+                        runtime_kind_counts: GatewayChannelRuntimeKindCountsReadModel {
+                            runtime_backed: 0,
+                            plugin_backed: 0,
+                            outbound_only: 0,
+                            catalog_only: 0,
+                        },
+                        operational_model_counts: GatewayChannelOperationalModelCountsReadModel {
+                            gateway_supervised: 0,
+                            standalone_runtime: 0,
+                            plugin_backed: 0,
+                            outbound_only: 0,
+                            catalog_only: 0,
+                        },
                     },
                     channels: vec![],
                     catalog_only_channels: vec![],

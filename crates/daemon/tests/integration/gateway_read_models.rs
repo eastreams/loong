@@ -29,29 +29,34 @@ fn legacy_channel_inventory_json(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
 ) -> Value {
+    let public_payload =
+        gateway::read_models::build_channel_inventory_read_model(config_path, inventory);
     let total_surface_count = inventory.channel_surfaces.len();
     let runtime_backed_surface_count = inventory
         .channel_surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+            mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                descriptor.runtime_kind == mvp::channel::ChannelRuntimeKind::RuntimeBacked
+            })
         })
         .count();
     let config_backed_surface_count = inventory
         .channel_surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+            mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                descriptor.runtime_kind == mvp::channel::ChannelRuntimeKind::OutboundOnly
+            })
         })
         .count();
     let plugin_backed_surface_count = inventory
         .channel_surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+            mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                descriptor.runtime_kind == mvp::channel::ChannelRuntimeKind::PluginBacked
+            })
         })
         .count();
     let catalog_only_surface_count = inventory
@@ -77,11 +82,24 @@ fn legacy_channel_inventory_json(
             "config_backed_surface_count": config_backed_surface_count,
             "plugin_backed_surface_count": plugin_backed_surface_count,
             "catalog_only_surface_count": catalog_only_surface_count,
+            "runtime_kind_counts": {
+                "runtime_backed": mvp::channel::runtime_backed_channel_descriptors().len(),
+                "plugin_backed": mvp::channel::plugin_backed_channel_descriptors().len(),
+                "outbound_only": mvp::channel::outbound_only_channel_descriptors().len(),
+                "catalog_only": mvp::channel::catalog_only_channel_descriptors().len(),
+            },
+            "operational_model_counts": {
+                "gateway_supervised": mvp::channel::gateway_supervised_channel_descriptors().len(),
+                "standalone_runtime": mvp::channel::standalone_runtime_channel_descriptors().len(),
+                "plugin_backed": mvp::channel::plugin_backed_channel_descriptors().len(),
+                "outbound_only": mvp::channel::outbound_only_channel_descriptors().len(),
+                "catalog_only": mvp::channel::catalog_only_channel_descriptors().len(),
+            },
         },
         "channels": inventory.channels,
         "catalog_only_channels": inventory.catalog_only_channels,
-        "channel_catalog": inventory.channel_catalog,
-        "channel_surfaces": inventory.channel_surfaces,
+        "channel_catalog": public_payload.channel_catalog,
+        "channel_surfaces": public_payload.channel_surfaces,
         "channel_access_policies": inventory.channel_access_policies,
     })
 }
@@ -179,12 +197,22 @@ fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
             .channel_surfaces
             .iter()
             .filter(|surface| {
-                surface.catalog.implementation_status
-                    == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+                mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                    descriptor.runtime_kind == mvp::channel::ChannelRuntimeKind::RuntimeBacked
+                })
             })
             .count()
     );
-    assert_eq!(encoded, legacy);
+    assert_eq!(encoded["schema"], legacy["schema"]);
+    assert_eq!(encoded["summary"], legacy["summary"]);
+    assert_eq!(
+        encoded["channel_catalog"].as_array().map(Vec::len),
+        legacy["channel_catalog"].as_array().map(Vec::len)
+    );
+    assert_eq!(
+        encoded["channel_surfaces"].as_array().map(Vec::len),
+        legacy["channel_surfaces"].as_array().map(Vec::len)
+    );
     assert_eq!(
         encoded["channel_surfaces"].as_array().map(Vec::len),
         Some(inventory.channel_surfaces.len())
@@ -197,7 +225,12 @@ fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
             .any(|entry| {
                 let id = entry.get("id").and_then(Value::as_str);
                 let status = entry.get("implementation_status").and_then(Value::as_str);
-                id == Some("telegram") && status == Some("plugin_backed")
+                let runtime_kind = entry.get("runtime_kind").and_then(Value::as_str);
+                let operational_model = entry.get("operational_model").and_then(Value::as_str);
+                id == Some("telegram")
+                    && status == Some("plugin_backed")
+                    && runtime_kind == Some("runtime_backed")
+                    && operational_model == Some("gateway_supervised")
             })
     );
 }
@@ -670,7 +703,7 @@ fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups()
             .channel_catalog
             .iter()
             .filter(|channel| {
-                channel.implementation_status
+                channel.catalog.implementation_status
                     == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
             })
             .count()

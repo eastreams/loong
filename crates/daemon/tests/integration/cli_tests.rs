@@ -307,7 +307,9 @@ fn grouped_channels_serve_native_surfaces_fail_with_account_configuration_errors
     let config_path = write_empty_config("loong-cli-native-serve-empty");
     let config_path_text = config_path.to_str().expect("config path should be utf-8");
 
-    for channel in ["telegram", "matrix", "whatsapp", "wecom", "line", "webhook"] {
+    for channel in [
+        "telegram", "matrix", "qqbot", "whatsapp", "wecom", "line", "webhook",
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_loong"))
             .arg("channels")
             .arg("serve")

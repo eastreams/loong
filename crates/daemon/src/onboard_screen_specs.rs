@@ -1,4 +1,7 @@
 use super::*;
+use crate::onboard_cli::onboard_cli_render::{
+    onboard_display_line, render_shortcut_default_choice_footer_line,
+};
 
 pub(super) fn render_onboarding_risk_screen_lines_with_style(
     width: usize,

@@ -468,6 +468,20 @@ fn seeded_repository_view(test_name: &str) -> Arc<mvp::control_plane::ControlPla
                 "workspace_root": "/tmp/loong/control-plane/child-session",
                 "kernel_bound": false,
                 "runtime_narrowing": {}
+            },
+            "runtime_self_continuity": {
+                "runtime_self": {
+                    "standing_instructions": ["Stay concise."],
+                    "tool_usage_policy": ["Prefer visible evidence."],
+                    "soul_guidance": ["Keep continuity explicit."],
+                    "identity_context": ["# Identity\n- Name: Child"],
+                    "user_context": ["Operator prefers concise technical summaries."]
+                },
+                "resolved_identity": {
+                    "source": "workspace_self",
+                    "content": "# Identity\n- Name: Child"
+                },
+                "session_profile_projection": "## Session Profile\nOperator prefers concise technical summaries."
             }
         }),
     })
@@ -2097,6 +2111,14 @@ async fn session_list_returns_visible_repository_sessions() {
             .mode,
         "advisory_only"
     );
+    let continuity = child
+        .workflow
+        .runtime_self_continuity
+        .as_ref()
+        .expect("runtime self continuity");
+    assert!(continuity.present);
+    assert!(continuity.resolved_identity_present);
+    assert!(continuity.session_profile_projection_present);
     assert!(
         !sessions
             .sessions
@@ -2158,6 +2180,16 @@ async fn session_read_returns_repository_observation_for_visible_session() {
             .execution_surface,
         "delegate.async"
     );
+    let continuity = session
+        .observation
+        .session
+        .workflow
+        .runtime_self_continuity
+        .as_ref()
+        .expect("runtime self continuity");
+    assert!(continuity.present);
+    assert!(continuity.resolved_identity_present);
+    assert!(continuity.session_profile_projection_present);
     assert_eq!(session.observation.recent_events.len(), 1);
     assert_eq!(
         session.observation.recent_events[0].event_kind,

@@ -80,10 +80,19 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             });
         }
     }
-    let channel_setup_actions = channel_actions
-        .into_iter()
-        .map(channel_next_action_to_setup_action);
-    actions.extend(channel_setup_actions);
+    if channel_actions.len() > 1 {
+        actions.push(SetupNextAction {
+            kind: SetupNextActionKind::Channel,
+            channel_action_id: Some(crate::migration::channels::CONFIGURED_CHANNELS_ACTION_ID),
+            label: "review configured channels".to_owned(),
+            command: crate::cli_handoff::format_subcommand_with_config("channels", config_path),
+        });
+    } else {
+        let channel_setup_actions = channel_actions
+            .into_iter()
+            .map(channel_next_action_to_setup_action);
+        actions.extend(channel_setup_actions);
+    }
     if actions.is_empty() {
         actions.push(SetupNextAction {
             kind: SetupNextActionKind::Doctor,

@@ -1,9 +1,9 @@
 use super::*;
-use loong_app_protocol::{
-    AppProtocolWorkspaceContext, ProductionRoutedOneshotExecutor, RoutedOneshotTurnRequest,
-    RuntimeExecutorConfig, execute_routed_oneshot_turn,
+use loong_app::{
+    acp::AcpRoutingIntent,
+    agent_runtime::AgentTurnMode,
+    turn_gateway::{TurnGatewayExecution, build_turn_gateway_request, run_turn_gateway},
 };
-use std::path::PathBuf;
 
 pub(super) async fn turn_submit(
     headers: HeaderMap,
@@ -77,41 +77,42 @@ pub(super) async fn turn_submit(
             registry: turn_registry.clone(),
             turn_id: spawned_turn_id.clone(),
         };
-        let runtime_executor_config = RuntimeExecutorConfig {
-            requested_config_path: Some(resolved_path.display().to_string()),
-            resolved_config_path: resolved_path.clone(),
-            runtime_workspace_root: std::env::current_dir().ok(),
-            latest_session_selector: Some("latest".to_owned()),
+        let mut address =
+            loong_app::conversation::ConversationSessionAddress::from_session_id(&session_id);
+        if let (Some(channel_id), Some(conversation_id)) =
+            (channel_id.as_deref(), conversation_id.as_deref())
+        {
+            address = address.with_channel_scope(channel_id, conversation_id);
+        }
+        if let Some(account_id) = account_id.as_deref() {
+            address = address.with_account_id(account_id);
+        }
+        if let Some(participant_id) = request.participant_id.as_deref() {
+            address = address.with_participant_id(participant_id);
+        }
+        if let Some(thread_id) = thread_id.as_deref() {
+            address = address.with_thread_id(thread_id);
+        }
+        let execution = TurnGatewayExecution {
+            resolved_path: resolved_path.clone(),
+            config: config.clone(),
+            kernel_ctx: None,
+            acp_manager: Some(acp_manager),
+            event_sink: Some(&event_forwarder),
+            initialize_runtime_environment: false,
         };
-        let host = crate::runtime_protocol_host::LoongAppRuntimeProtocolHost::new()
-            .with_acp_manager(acp_manager)
-            .with_loaded_config(config.clone())
-            .with_event_sink(&event_forwarder);
-        let executor = ProductionRoutedOneshotExecutor::new(&host, runtime_executor_config);
-        let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let workspace = AppProtocolWorkspaceContext::new(
-            workspace_root.clone(),
-            workspace_root.clone(),
-            workspace_root.clone(),
-            workspace_root,
-            "unknown".to_owned(),
-        );
-        let routed_request = RoutedOneshotTurnRequest {
-            config_path: Some(resolved_path.display().to_string()),
-            session_hint: Some(session_id.clone()),
-            message: input.clone(),
-            channel_id,
-            account_id,
-            conversation_id,
-            participant_id: request.participant_id.clone(),
-            thread_id,
-            working_directory: working_directory.clone(),
+        let turn_request = build_turn_gateway_request(
+            address,
+            input.clone(),
             metadata,
-            acp_requested: true,
-            acp_event_stream: true,
-        };
-        let execution_result =
-            execute_routed_oneshot_turn(&routed_request, workspace, &executor).await;
+            AgentTurnMode::Oneshot,
+            AcpRoutingIntent::Explicit,
+            true,
+            Vec::new(),
+            working_directory.clone(),
+            false,
+        );
+        let execution_result = run_turn_gateway(execution, turn_request).await;
 
         match execution_result {
             Ok(result) => {

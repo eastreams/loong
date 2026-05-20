@@ -57,6 +57,24 @@ pub(crate) async fn execute_daemon_task_with_supervisor<P: PolicyEngine>(
     }
 }
 
+pub(crate) async fn execute_daemon_turn_gateway_request(
+    turn_service: &loong_app::agent_runtime::TurnExecutionService,
+    session_hint: Option<&str>,
+    mut request: loong_app::turn_gateway::TurnGatewayRequest,
+    observer: Option<loong_app::conversation::ConversationTurnObserverHandle>,
+    provider_error_mode: loong_app::conversation::ProviderErrorMode,
+) -> CliResult<loong_app::agent_runtime::AgentTurnResult> {
+    request.observer = observer;
+    request.provider_error_mode = provider_error_mode;
+    loong_app::turn_gateway::execute_projected_turn_gateway_request(
+        turn_service,
+        session_hint,
+        &request,
+        None,
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 struct DaemonTurnTaskPayload {
@@ -113,11 +131,12 @@ impl HarnessAdapter for EmbeddedAgentHarness {
         let turn_service =
             loong_app::agent_runtime::load_turn_execution_service(payload.config_path.as_deref())
                 .map_err(HarnessError::Execution)?;
-        let turn_result = loong_app::turn_gateway::execute_projected_turn_gateway_request(
+        let turn_result = execute_daemon_turn_gateway_request(
             &turn_service,
             payload.session_hint.as_deref(),
-            &projection_request,
+            projection_request,
             None,
+            loong_app::conversation::ProviderErrorMode::InlineMessage,
         )
         .await
         .map_err(HarnessError::Execution)?;
@@ -409,5 +428,52 @@ mod tests {
             error.contains("invalid_turn_payload"),
             "expected unified runtime harness failure, got: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn shared_daemon_turn_executor_preserves_propagated_provider_errors() {
+        let resolved_path = std::env::temp_dir().join("loong-daemon-turn-propagate.toml");
+        let config = loong_app::config::LoongConfig::default();
+        loong_app::config::write(
+            Some(resolved_path.to_string_lossy().as_ref()),
+            &config,
+            true,
+        )
+        .expect("write test config");
+        let turn_service =
+            loong_app::agent_runtime::TurnExecutionService::new(resolved_path.clone(), config)
+                .without_runtime_environment_init();
+        let request = loong_app::turn_gateway::build_turn_gateway_request(
+            loong_app::conversation::ConversationSessionAddress::from_session_id("turn-propagate"),
+            "hello".to_owned(),
+            BTreeMap::new(),
+            loong_app::agent_runtime::AgentTurnMode::Oneshot,
+            loong_app::acp::AcpRoutingIntent::Automatic,
+            false,
+            Vec::new(),
+            None,
+            false,
+        );
+
+        let error = execute_daemon_turn_gateway_request(
+            &turn_service,
+            Some("turn-propagate"),
+            request,
+            None,
+            loong_app::conversation::ProviderErrorMode::Propagate,
+        )
+        .await
+        .expect_err("missing provider credentials should propagate");
+
+        assert!(
+            error.contains("OPENAI_API_KEY")
+                || error.contains("ANTHROPIC_API_KEY")
+                || error.contains("API key")
+                || error.contains("unsupported_country_region_territory")
+                || error.contains("provider model-list returned status"),
+            "expected propagated provider configuration failure, got: {error}"
+        );
+
+        let _ = std::fs::remove_file(resolved_path);
     }
 }

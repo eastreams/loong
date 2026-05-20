@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::config::ResolvedNostrChannelConfig;
+
 use super::*;
 
 pub(super) const NOSTR_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
