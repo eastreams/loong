@@ -99,25 +99,6 @@ use crate::config::ResolvedTelegramChannelConfig;
 #[cfg(feature = "channel-wecom")]
 use crate::config::ResolvedWecomChannelConfig;
 
-#[cfg(feature = "channel-feishu")]
-use super::commands::accounts::{
-    build_feishu_command_context, load_feishu_command_context, validate_feishu_security_config,
-};
-#[cfg(feature = "channel-line")]
-use super::commands::accounts::{build_line_command_context, load_line_command_context};
-#[cfg(feature = "channel-matrix")]
-use super::commands::accounts::{
-    build_matrix_command_context, load_matrix_command_context, validate_matrix_security_config,
-};
-#[cfg(feature = "channel-telegram")]
-use super::commands::accounts::{
-    build_telegram_command_context, load_telegram_command_context,
-    validate_telegram_security_config,
-};
-#[cfg(feature = "channel-wecom")]
-use super::commands::accounts::{
-    build_wecom_command_context, load_wecom_command_context, validate_wecom_security_config,
-};
 #[cfg(feature = "channel-dingtalk")]
 use super::commands::accounts::load_dingtalk_command_context;
 #[cfg(feature = "channel-discord")]
@@ -148,6 +129,25 @@ use super::commands::accounts::load_teams_command_context;
 use super::commands::accounts::load_webhook_command_context;
 #[cfg(feature = "channel-whatsapp")]
 use super::commands::accounts::load_whatsapp_command_context;
+#[cfg(feature = "channel-feishu")]
+use super::commands::accounts::{
+    build_feishu_command_context, load_feishu_command_context, validate_feishu_security_config,
+};
+#[cfg(feature = "channel-line")]
+use super::commands::accounts::{build_line_command_context, load_line_command_context};
+#[cfg(feature = "channel-matrix")]
+use super::commands::accounts::{
+    build_matrix_command_context, load_matrix_command_context, validate_matrix_security_config,
+};
+#[cfg(feature = "channel-telegram")]
+use super::commands::accounts::{
+    build_telegram_command_context, load_telegram_command_context,
+    validate_telegram_security_config,
+};
+#[cfg(feature = "channel-wecom")]
+use super::commands::accounts::{
+    build_wecom_command_context, load_wecom_command_context, validate_wecom_security_config,
+};
 pub(super) use super::commands::{
     ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
