@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 
 use crate::CliResult;
 use crate::config::{
-    LoongConfig, ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig,
-    ResolvedWeixinChannelConfig, ResolvedWhatsappPersonalChannelConfig,
+    LoongConfig, ResolvedOnebotChannelConfig, ResolvedWeixinChannelConfig,
+    ResolvedWhatsappPersonalChannelConfig,
 };
 
 use super::{ChannelPlatform, normalize_channel_catalog_id};
@@ -380,7 +380,6 @@ fn select_runtime_candidate<'a>(
 fn configured_plugin_id(config: &LoongConfig, channel_id: &str) -> Option<String> {
     let raw_plugin_id = match channel_id {
         "weixin" => config.weixin.managed_bridge_plugin_id.as_deref(),
-        "qqbot" => config.qqbot.managed_bridge_plugin_id.as_deref(),
         "onebot" => config.onebot.managed_bridge_plugin_id.as_deref(),
         "whatsapp-personal" => config.whatsapp_personal.managed_bridge_plugin_id.as_deref(),
         _ => None,
@@ -405,10 +404,6 @@ fn resolve_runtime_account(
         "weixin" => {
             let resolved = config.weixin.resolve_account(requested_account_id)?;
             Ok(resolve_weixin_account(resolved))
-        }
-        "qqbot" => {
-            let resolved = config.qqbot.resolve_account(requested_account_id)?;
-            Ok(resolve_qqbot_account(resolved))
         }
         "onebot" => {
             let resolved = config.onebot.resolve_account(requested_account_id)?;
@@ -461,42 +456,6 @@ fn resolve_weixin_account(
         account_id: resolved.account.id,
         account_label: resolved.account.label,
         endpoint_override: bridge_url,
-        runtime_context,
-    }
-}
-
-fn resolve_qqbot_account(
-    resolved: ResolvedQqbotChannelConfig,
-) -> ManagedPluginBridgeResolvedAccount {
-    let mut config_map = Map::new();
-    let app_id = resolved.app_id();
-    if let Some(app_id) = app_id {
-        config_map.insert("app_id".to_owned(), Value::String(app_id));
-    }
-
-    let client_secret = resolved.client_secret();
-    if let Some(client_secret) = client_secret {
-        config_map.insert("client_secret".to_owned(), Value::String(client_secret));
-    }
-
-    let allowed_peer_ids =
-        serde_json::to_value(&resolved.allowed_peer_ids).unwrap_or(Value::Array(Vec::new()));
-    config_map.insert("allowed_peer_ids".to_owned(), allowed_peer_ids);
-
-    let runtime_context = build_channel_runtime_context(
-        &resolved.configured_account_id,
-        &resolved.configured_account_label,
-        &resolved.account.id,
-        &resolved.account.label,
-        Value::Object(config_map),
-    );
-
-    ManagedPluginBridgeResolvedAccount {
-        configured_account_id: resolved.configured_account_id,
-        configured_account_label: resolved.configured_account_label,
-        account_id: resolved.account.id,
-        account_label: resolved.account.label,
-        endpoint_override: None,
         runtime_context,
     }
 }
@@ -923,64 +882,6 @@ mod tests {
         assert!(binding.supports_operation(CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION));
     }
 
-    #[test]
-    fn resolve_managed_bridge_runtime_binding_requires_allowlisted_process_command() {
-        let root = TempDir::new().expect("create runtime plugin root");
-        let manifest = sample_manifest(
-            "qqbot-bridge-runtime",
-            "qqbot",
-            "process_stdio",
-            vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
-        );
-        write_manifest(root.path(), "qqbot-bridge-runtime", &manifest);
-
-        let mut config = LoongConfig::default();
-        config.runtime_plugins.enabled = true;
-        config.runtime_plugins.roots = vec![root.path().display().to_string()];
-        config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
-        config.qqbot.enabled = true;
-        config.qqbot.app_id = Some(loong_contracts::SecretRef::Inline("10001".to_owned()));
-        config.qqbot.client_secret = Some(loong_contracts::SecretRef::Inline(
-            "client-secret".to_owned(),
-        ));
-
-        let error = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
-            .expect_err("process_stdio binding should require allowlisted command");
-
-        assert!(error.contains("runtime_plugins.allowed_process_commands"));
-    }
-
-    #[test]
-    fn resolve_managed_bridge_runtime_binding_accepts_entrypoint_when_command_is_missing() {
-        let root = TempDir::new().expect("create runtime plugin root");
-        let mut manifest = sample_manifest(
-            "qqbot-bridge-runtime",
-            "qqbot",
-            "process_stdio",
-            vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
-        );
-        manifest.metadata.remove("command");
-        manifest
-            .metadata
-            .insert("entrypoint".to_owned(), "node".to_owned());
-        write_manifest(root.path(), "qqbot-bridge-runtime", &manifest);
-
-        let mut config = LoongConfig::default();
-        config.runtime_plugins.enabled = true;
-        config.runtime_plugins.roots = vec![root.path().display().to_string()];
-        config.runtime_plugins.supported_bridges = vec!["process_stdio".to_owned()];
-        config.runtime_plugins.allowed_process_commands = vec!["node".to_owned()];
-        config.qqbot.enabled = true;
-        config.qqbot.app_id = Some(loong_contracts::SecretRef::Inline("10001".to_owned()));
-        config.qqbot.client_secret = Some(loong_contracts::SecretRef::Inline(
-            "client-secret".to_owned(),
-        ));
-
-        let binding = resolve_managed_plugin_bridge_runtime_binding(&config, "qqbot", None)
-            .expect("entrypoint-backed process bridge should resolve");
-
-        assert_eq!(binding.plugin.plugin_id, "qqbot-bridge-runtime");
-    }
 
     #[test]
     fn process_command_is_allowed_rejects_path_spoofing() {

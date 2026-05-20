@@ -1,3 +1,4 @@
+
 use super::*;
 use crate::config::FeishuChannelServeMode;
 use crate::channel::registry::runtime_backed::TELEGRAM_ONBOARDING_DESCRIPTOR;
@@ -311,11 +312,11 @@ fn resolve_channel_catalog_entry_exposes_onboarding_contracts() {
             .contains("loong weixin onboard")
     );
 
-    assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
+    assert_eq!(qqbot.onboarding.strategy.as_str(), "manual_config");
     assert_eq!(qqbot.onboarding.status_command, "loong doctor");
-    assert_eq!(qqbot.onboarding.repair_command, None);
+    assert_eq!(qqbot.onboarding.repair_command, Some("loong doctor --fix"));
     assert!(qqbot.onboarding.setup_hint.contains("qqbot"));
-    assert!(qqbot.onboarding.setup_hint.contains("client_secret"));
+    assert!(qqbot.onboarding.setup_hint.contains("app credentials"));
     assert!(qqbot.onboarding.setup_hint.contains("allowed_peer_ids"));
 
     let qqbot_send_requirements = qqbot
@@ -2020,7 +2021,7 @@ fn channel_inventory_exposes_grouped_channel_surfaces() {
         .expect("qqbot surface");
     assert_eq!(
         qqbot.catalog.implementation_status,
-        ChannelCatalogImplementationStatus::PluginBacked
+        ChannelCatalogImplementationStatus::RuntimeBacked
     );
     assert_eq!(qqbot.configured_accounts.len(), 1);
     assert_eq!(

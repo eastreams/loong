@@ -265,6 +265,14 @@ const PLUGIN_BACKED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::RuntimeTracking,
 ];
 
+const RUNTIME_BACKED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
+
 const PLUGIN_BRIDGE_REQUIRED_SETUP_SURFACE: &str = "channel";
 const PLUGIN_BRIDGE_RUNTIME_OWNER: &str = "external_plugin";
 const PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS: &[&str] = &[

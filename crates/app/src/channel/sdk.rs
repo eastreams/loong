@@ -37,6 +37,18 @@ pub enum ChannelRuntimeKind {
     CatalogOnly,
 }
 
+impl ChannelRuntimeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::RuntimeBacked => "runtime_backed",
+            Self::PluginBacked => "plugin_backed",
+            Self::OutboundOnly => "outbound_only",
+            Self::CatalogOnly => "catalog_only",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelOperationalModel {
     Interactive,

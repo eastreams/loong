@@ -386,9 +386,9 @@ const QQBOT_SERVE_REQUIREMENTS: &[ChannelCatalogOperationRequirement] = &[
 
 pub(super) const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
-    label: "bridge send",
+    label: "gateway send",
     command: "channels send qqbot",
-    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: QQBOT_SEND_REQUIREMENTS,
     default_target_kind: None,
@@ -397,9 +397,9 @@ pub(super) const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogO
 
 pub(super) const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SERVE_ID,
-    label: "bridge serve",
+    label: "gateway serve",
     command: "channels serve qqbot",
-    availability: ChannelCatalogOperationAvailability::ManagedBridge,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: QQBOT_SERVE_REQUIREMENTS,
     default_target_kind: None,
@@ -434,10 +434,10 @@ pub(super) const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 ];
 
 pub(super) const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "install and configure a QQBot bridge plugin that declares setup.surface=channel plus qqbot app_id, client_secret, and allowed_peer_ids requirements before serving the managed bridge surface",
+    strategy: ChannelOnboardingStrategy::ManualConfig,
+    setup_hint: "configure qqbot app credentials plus allowed_peer_ids in loong.toml; Loong owns the native QQ gateway runtime and serves it directly through `channels serve qqbot`",
     status_command: "loong doctor",
-    repair_command: None,
+    repair_command: Some("loong doctor --fix"),
 };
 
 pub(super) const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
