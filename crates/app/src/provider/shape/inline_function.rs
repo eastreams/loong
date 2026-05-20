@@ -3,9 +3,9 @@ use std::{collections::BTreeMap, sync::OnceLock};
 use serde_json::Value;
 
 use super::{
-    attach_provider_parse_telemetry, build_provider_tool_intent, is_inside_markdown_fence,
-    is_inside_markdown_indented_code_block, is_standalone_block_end, is_standalone_block_start,
-    decode_inline_xml_text, normalize_text, ProviderToolBridgeContext,
+    ProviderToolBridgeContext, attach_provider_parse_telemetry, build_provider_tool_intent,
+    decode_inline_xml_text, is_inside_markdown_fence, is_inside_markdown_indented_code_block,
+    is_standalone_block_end, is_standalone_block_start, normalize_text,
 };
 use crate::conversation::turn_engine::ToolIntent;
 use crate::tools;
@@ -447,8 +447,8 @@ fn inline_parameter_schema_type(
         .copied()
 }
 
-fn inline_parameter_schema_types(
-) -> &'static BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>> {
+fn inline_parameter_schema_types()
+-> &'static BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>> {
     static SCHEMA_TYPES: OnceLock<BTreeMap<String, BTreeMap<String, InlineParameterSchemaType>>> =
         OnceLock::new();
 

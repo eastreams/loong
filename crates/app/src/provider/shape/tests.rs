@@ -286,12 +286,9 @@ fn extract_provider_turn_supports_responses_function_calls() {
         ]
     });
     let messages = discovery_followup_messages("read", "lease-responses");
-    let turn = extract_provider_turn_with_scope(
-        &body,
-        Some("session-responses"),
-        Some("turn-responses"),
-    )
-    .expect("responses turn without search context should stay direct");
+    let turn =
+        extract_provider_turn_with_scope(&body, Some("session-responses"), Some("turn-responses"))
+            .expect("responses turn without search context should stay direct");
     assert_eq!(turn.assistant_text, "Reading the file.");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "read");
@@ -356,8 +353,8 @@ fn extract_provider_turn_parses_inline_shell_function_block() {
     });
     let messages = discovery_followup_messages("exec", "lease-shell-inline");
 
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(
         turn.assistant_text,
         "sorry, that command failed. let me retry with a simpler approach:"
@@ -417,8 +414,8 @@ fn extract_provider_turn_prefers_direct_surface_for_function_call_followups_afte
     });
     let messages = discovery_followup_messages("read", "lease-invoke-followup");
 
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(turn.assistant_text, "now i'll read the file.");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "read");
@@ -436,8 +433,8 @@ fn extract_provider_turn_prefers_direct_surface_for_plain_json_followups_after_s
     });
     let messages = discovery_followup_messages("read", "lease-json-followup");
 
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(turn.assistant_text, "now i'll read the file.");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "read");
@@ -455,8 +452,8 @@ fn extract_provider_turn_accepts_legacy_request_wrapper_for_browse_followups() {
     });
     let messages = discovery_followup_messages("browse", "browse-wrapper-followup");
 
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(turn.assistant_text, "now i'll open the page.");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "browse");
@@ -477,8 +474,8 @@ fn extract_provider_turn_repairs_misordered_browse_wrapper_after_search() {
     });
     let messages = discovery_followup_messages("browse", "browse-misordered-followup");
 
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(turn.assistant_text, "open the page.");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "browse");
@@ -941,8 +938,8 @@ fn extract_provider_turn_supports_anthropic_native_content_blocks() {
         ]
     });
     let messages = discovery_followup_messages("read", "lease-anthropic");
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "read");
@@ -975,8 +972,8 @@ fn extract_provider_turn_supports_bedrock_converse_content_blocks() {
         "stopReason": "tool_use"
     });
     let messages = discovery_followup_messages("read", "lease-bedrock");
-    let turn = extract_provider_turn_with_scope_and_messages(&body, None, None, &messages)
-        .expect("turn");
+    let turn =
+        extract_provider_turn_with_scope_and_messages(&body, None, None, &messages).expect("turn");
     assert_eq!(turn.assistant_text, "checking");
     assert_eq!(turn.tool_intents.len(), 1);
     assert_eq!(turn.tool_intents[0].tool_name, "read");
