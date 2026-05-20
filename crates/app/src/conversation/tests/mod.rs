@@ -12183,7 +12183,7 @@ fn binding_first_approval_boundary_turn_engine_source_does_not_expose_optional_k
     // It intentionally guards the exact optional-kernel seams that used to
     // exist in turn_engine.rs. If these strings move during a refactor, update
     // this test or replace it with a stronger semantic boundary check.
-    let source = include_str!("turn_engine.rs");
+    let source = include_str!("../turn_engine.rs");
 
     assert!(
         !source.contains("async fn maybe_require_approval("),
@@ -12201,7 +12201,7 @@ fn binding_first_approval_boundary_coordinator_source_does_not_reconstruct_bindi
     // This source-level check protects the approval-boundary contract itself:
     // benign refactors may move code around, but the coordinator must not
     // reintroduce an optional-kernel approval seam or rebuild binding from it.
-    let source = include_str!("turn_coordinator.rs");
+    let source = include_str!("../turn_coordinator.rs");
 
     assert!(
         !source.contains("async fn maybe_require_approval("),
