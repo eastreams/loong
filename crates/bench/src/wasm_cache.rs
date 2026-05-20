@@ -368,7 +368,9 @@ pub fn copy_benchmark_file(source: &Path, destination: &Path) -> CliResult<()> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn benchmark_copy_strategy_from_env(_raw_input: Option<String>) -> BenchmarkCopyStrategy {
+pub(crate) fn benchmark_copy_strategy_from_env(
+    _raw_input: Option<String>,
+) -> BenchmarkCopyStrategy {
     #[cfg(target_os = "macos")]
     {
         if _raw_input
