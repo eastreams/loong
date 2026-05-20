@@ -1,11 +1,11 @@
 ---
 title: QQ Bot
-description: Configure the QQ Bot plugin-backed bridge surface in Loong.
+description: Configure the QQ Bot channel surface in Loong.
 ---
 
 # QQ Bot
 
-This is a shipped plugin-backed bridge surface. Loong owns the surface id, config contract, and discovery UX, while the active QQ gateway or bridge owns the upstream runtime.
+This is a shipped runtime-backed surface: direct sends are implemented, the reply-loop runtime is implemented, and Loong owns the QQ gateway session directly through `channels serve qqbot`.
 
 ## At A Glance
 
@@ -13,11 +13,11 @@ This is a shipped plugin-backed bridge surface. Loong owns the surface id, confi
 | --- | --- |
 | Catalog id | `qqbot` |
 | Config key | `qqbot` |
-| Implementation status | `plugin_backed` |
+| Implementation status | `runtime_backed` |
 | Transport | `qq_official_bot_gateway_or_plugin_bridge` |
 | Aliases | `qq`, `qq-bot`, `tencent-qq` |
 | Default send target kind | `conversation` |
-| Runtime owner | external plugin |
+| Runtime owner | `gateway run` or direct `channels serve qqbot` |
 
 ## Minimal Config
 
@@ -29,41 +29,29 @@ client_secret_env = "QQBOT_CLIENT_SECRET"
 allowed_peer_ids = ["openid_alice"]
 ```
 
-When several compatible managed bridges are installed, pin the one Loong should trust:
-
-```toml
-[qqbot]
-enabled = true
-managed_bridge_plugin_id = "qqbot-bridge-guided"
-app_id_env = "QQBOT_APP_ID"
-client_secret_env = "QQBOT_CLIENT_SECRET"
-allowed_peer_ids = ["openid_alice"]
-```
-
 ## Smoke Test
 
 ```bash
-loong channels
-loong channels --json
-loong doctor
+loong channels send qqbot --target "c2c:openid_alice" --text "hello from loong"
+loong channels serve qqbot
 ```
 
 What success looks like:
 
-- `QQ Bot [qqbot]` appears in the plugin-backed section
-- managed bridge discovery shows one compatible plugin or a concrete ambiguity/remediation detail
-- doctor keeps bridge-send / bridge-serve contract checks visible and actionable
+- `QQ Bot [qqbot]` appears in the gateway-supervised runtime set
+- `channels serve qqbot` starts a native Loong-owned runtime instead of a managed plugin selection flow
+- doctor keeps direct send / serve readiness checks visible and actionable
 
 ## Current Command Surface
 
 | Operation | Current path | Usage or status |
 | --- | --- | --- |
-| managed bridge contract check | `loong doctor` | current readiness and remediation surface |
-| inventory + discovery inspection | `loong channels` | current operator inventory surface |
-| bridge-backed send | `channels send qqbot` | executes through the selected managed bridge runtime; target contract stays `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, or `qqbot:<account>:channel:<id>` |
-| bridge-backed serve | `channels serve qqbot` | starts the selected managed bridge reply loop; upstream session ownership still stays in the external bridge |
+| send | `channels send qqbot` | executes directly against the QQ gateway contract; target contract stays `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, or `qqbot:<account>:channel:<id>` |
+| serve | `channels serve qqbot` | starts the native Loong-owned QQ gateway reply loop |
+| health check | `loong doctor` | current readiness and remediation surface |
+| inventory | `loong channels` | current operator inventory surface |
 
-## Required Fields For Bridge Send Contract
+## Required Fields For Send
 
 | Requirement | Config paths | Env pointer paths | Default env |
 | --- | --- | --- | --- |
@@ -71,7 +59,7 @@ What success looks like:
 | qq bot app id | `qqbot.app_id`<br/>`qqbot.accounts.<account>.app_id` | `qqbot.app_id_env`<br/>`qqbot.accounts.<account>.app_id_env` | `QQBOT_APP_ID` |
 | qq bot client secret | `qqbot.client_secret`<br/>`qqbot.accounts.<account>.client_secret` | `qqbot.client_secret_env`<br/>`qqbot.accounts.<account>.client_secret_env` | `QQBOT_CLIENT_SECRET` |
 
-## Required Fields For Bridge Reply Contract
+## Required Fields For Serve
 
 | Requirement | Config paths | Env pointer paths | Default env |
 | --- | --- | --- | --- |
@@ -92,31 +80,25 @@ What success looks like:
 
 QQ Bot openids are scoped to the selected account. Keep account ids stable so route meaning does not drift when you rotate gateway credentials or bridge implementations.
 
-## Managed Bridge Discovery Notes
+## Runtime Notes
 
-- Compatible managed bridges can advertise required config keys and setup docs URLs that Loong then surfaces through `doctor`.
-- Managed bridge execution also requires `[runtime_plugins].enabled = true` plus one or more `runtime_plugins.roots`.
-- If discovery finds several compatible bridges, `managed_bridge_plugin_id` is the correct tie-breaker.
-- If bridge metadata is incomplete, Loong keeps the surface visible and reports the missing fields instead of flattening everything into one generic placeholder.
+- QQ Bot no longer depends on managed bridge discovery for its main shipped runtime path.
+- The native runtime uses the configured QQ gateway credentials directly.
 
 ## Gateway And Ownership
 
-This surface does **not** join `gateway run` or `gateway run` today. The official QQ gateway or compatible bridge remains the runtime owner.
+This surface can run directly through `channels serve qqbot`, or under [Gateway And Supervision](/use-loong/gateway-and-supervision) when the QQ Bot lane should join a larger supervised runtime set.
 
 ## Operator Notes
 
 - Keep `allowed_peer_ids` explicit and narrow.
-- Loong validates `allowed_peer_ids` locally before forwarding a managed bridge send, so a mistyped openid is rejected before it reaches the external bridge.
-- `channels serve qqbot` retries transient managed bridge runtime failures with bounded backoff; repeated failures still bubble up as a hard error for operator inspection.
-- `channels serve qqbot --stop` requests a cooperative shutdown for the currently selected managed bridge runtime owner.
-- When duplicate runtime owners appear, Loong automatically keeps the preferred live runtime owner and requests cooperative shutdown for the older duplicates when the winner is clear.
-- `channels serve qqbot --stop-duplicates` remains the operator fallback when duplicate runtime owners persist and you want Loong to keep the preferred live runtime owner while draining the others.
-- While it is retrying, `loong doctor` and `loong channels` surface the current failure count and last bridge error.
+- Loong validates `allowed_peer_ids` locally before forwarding a QQ send, so a mistyped openid is rejected before it reaches the upstream gateway.
+- `channels serve qqbot` owns the runtime loop directly; failures belong to the native runtime path instead of an external managed-plugin selection layer.
 - Treat QQ Bot as a multi-account surface from the start if you expect separate direct, group, or guild identities.
-- Prefer one selected managed bridge per environment rather than leaving ambiguity unresolved.
 
 ## Related Docs
 
 - Continue to [Weixin](/use-loong/channel-guides/weixin) for the WeChat bridge-first lane.
 - Continue to [OneBot](/use-loong/channel-guides/onebot) when the upstream bridge already speaks OneBot v11.
+- Continue to [Gateway And Supervision](/use-loong/gateway-and-supervision) when QQ Bot should join a longer-lived supervised runtime.
 - Continue to [Channel Setup](/use-loong/channel-setup) for the shared public setup contract.

@@ -661,8 +661,9 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("runtime_backed_enabled=-"));
     assert!(rendered.contains("plugin_backed_enabled=-"));
     assert!(rendered.contains("outbound_only_enabled=-"));
-    assert!(rendered.contains("surfaces=29 runtime_backed=0 config_backed=15 plugin_backed=11"));
+    assert!(rendered.contains("surfaces=29 runtime_backed=8 config_backed=15 plugin_backed=3"));
     assert!(rendered.contains("catalog_only=3"));
+    assert!(rendered.contains("runtime_kind=runtime_backed operational_model=gateway_supervised"));
     assert!(rendered.contains("acp_mcp docs status=pending"));
     assert!(rendered.contains("tool_runtime access ordinary_network_enabled="));
     assert!(rendered.contains("query_search_default_provider=duckduckgo"));

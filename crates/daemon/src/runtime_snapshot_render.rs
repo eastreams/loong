@@ -13,6 +13,18 @@ use crate::{
     push_channel_surface_managed_plugin_bridge_discovery, render_string_list,
 };
 
+fn channel_runtime_kind_text(channel_id: &str) -> &'static str {
+    mvp::channel::channel_descriptor(channel_id)
+        .map(|descriptor| descriptor.runtime_kind.as_str())
+        .unwrap_or("catalog_only")
+}
+
+fn channel_operational_model_text(channel_id: &str) -> &'static str {
+    mvp::channel::channel_descriptor(channel_id)
+        .map(|descriptor| descriptor.operational_model.as_str())
+        .unwrap_or("catalog_only")
+}
+
 pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
     let mut lines = vec![
         format!("config={}", snapshot.config),
@@ -180,37 +192,25 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         .channels
         .channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "runtime_backed")
         .count();
     let config_backed_surface_count = snapshot
         .channels
         .channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "outbound_only")
         .count();
     let plugin_backed_surface_count = snapshot
         .channels
         .channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "plugin_backed")
         .count();
     let catalog_only_surface_count = snapshot
         .channels
         .channel_surfaces
         .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::Stub
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "catalog_only")
         .count();
     lines.push(format!(
         "channels enabled={} runtime_backed_enabled={} service_enabled={} plugin_backed_enabled={} outbound_only_enabled={} configured_accounts={} surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
@@ -248,9 +248,11 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
     ));
     for surface in &snapshot.channels.channel_surfaces {
         lines.push(format!(
-            "  channel {} implementation_status={} configured_accounts={} default_configured_account={} aliases={}",
+            "  channel {} implementation_status={} runtime_kind={} operational_model={} configured_accounts={} default_configured_account={} aliases={}",
             surface.catalog.id,
             surface.catalog.implementation_status.as_str(),
+            channel_runtime_kind_text(surface.catalog.id),
+            channel_operational_model_text(surface.catalog.id),
             surface.configured_accounts.len(),
             surface
                 .default_configured_account_id

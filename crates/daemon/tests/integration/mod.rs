@@ -852,6 +852,7 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     );
     assert!(rendered.contains("channels"));
     assert!(rendered.contains("config=/tmp/loong.toml"));
+    assert!(rendered.contains("gateway-supervised channels:"));
     assert!(rendered.contains("Telegram [telegram]"));
     assert!(
         rendered.contains("capabilities=plugin_backed,multi_account,send,serve,runtime_tracking")
@@ -862,6 +863,8 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     )));
     assert!(rendered.contains("Feishu/Lark [feishu]"));
     assert!(rendered.contains("implementation_status=plugin_backed"));
+    assert!(rendered.contains("runtime_kind=runtime_backed"));
+    assert!(rendered.contains("operational_model=gateway_supervised"));
     assert!(
         rendered.contains("capabilities=plugin_backed,multi_account,send,serve,runtime_tracking")
     );
@@ -972,30 +975,46 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     let inventory = mvp::channel::channel_inventory(&config);
     let rendered = render_channel_surfaces_text("/tmp/loong.toml", &inventory);
     let expected_summary = format!(
-        "summary total_surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
+        "summary total_surfaces={} gateway_supervised={} standalone_runtime={} plugin_backed={} outbound_only={} catalog_only={}",
         inventory.channel_surfaces.len(),
         inventory
             .channel_surfaces
             .iter()
             .filter(|surface| {
-                surface.catalog.implementation_status
-                    == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+                mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                    descriptor.operational_model
+                        == mvp::channel::ChannelOperationalModel::GatewaySupervised
+                })
             })
             .count(),
         inventory
             .channel_surfaces
             .iter()
             .filter(|surface| {
-                surface.catalog.implementation_status
-                    == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+                mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                    descriptor.operational_model
+                        == mvp::channel::ChannelOperationalModel::StandaloneRuntime
+                })
             })
             .count(),
         inventory
             .channel_surfaces
             .iter()
             .filter(|surface| {
-                surface.catalog.implementation_status
-                    == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+                mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                    descriptor.operational_model
+                        == mvp::channel::ChannelOperationalModel::PluginBacked
+                })
+            })
+            .count(),
+        inventory
+            .channel_surfaces
+            .iter()
+            .filter(|surface| {
+                mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                    descriptor.operational_model
+                        == mvp::channel::ChannelOperationalModel::OutboundOnly
+                })
             })
             .count(),
         inventory
@@ -1009,11 +1028,13 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
     );
 
     assert!(rendered.contains(expected_summary.as_str()));
-    assert!(rendered.contains("config-backed channels:"));
-    assert!(rendered.contains("plugin-backed channels:"));
+    assert!(rendered.contains("gateway-supervised channels:"));
+    assert!(rendered.contains("standalone native-serve channels:"));
+    assert!(rendered.contains("plugin-backed bridge channels:"));
+    assert!(rendered.contains("outbound-only channels:"));
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
-        "Discord [discord] implementation_status=config_backed selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send aliases=discord-bot transport=discord_http_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+        "Discord [discord] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send aliases=discord-bot transport=discord_http_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
         "blurb: Shipped Discord outbound message surface with config-backed direct sends; inbound gateway/runtime support remains planned."
@@ -1027,7 +1048,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("discord")
     )));
     assert!(rendered.contains(
-        "Slack [slack] implementation_status=config_backed selection_order=50 selection_label=\"workspace event bot\" capabilities=multi_account,send aliases=slack-bot transport=slack_web_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+        "Slack [slack] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=50 selection_label=\"workspace event bot\" capabilities=multi_account,send aliases=slack-bot transport=slack_web_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by slack account configuration target_kinds=conversation requirements=enabled,bot_token",
@@ -1038,7 +1059,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
-        "WhatsApp [whatsapp] implementation_status=plugin_backed selection_order=90 selection_label=\"business messaging app\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api_or_plugin_bridge target_kinds=address configured_accounts=1 default_configured_account=default"
+        "WhatsApp [whatsapp] implementation_status=plugin_backed runtime_kind=runtime_backed operational_model=gateway_supervised selection_order=90 selection_label=\"business messaging app\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api_or_plugin_bridge target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id",
@@ -1049,13 +1070,13 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("whatsapp")
     )));
     assert!(rendered.contains(
-        "LINE [line] implementation_status=plugin_backed selection_order=60 selection_label=\"consumer messaging bot\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=line-bot transport=line_messaging_api_or_plugin_bridge target_kinds=address configured_accounts=1 default_configured_account=default"
+        "LINE [line] implementation_status=plugin_backed runtime_kind=runtime_backed operational_model=standalone_runtime selection_order=60 selection_label=\"consumer messaging bot\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=line-bot transport=line_messaging_api_or_plugin_bridge target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
-        "DingTalk [dingtalk] implementation_status=config_backed selection_order=80 selection_label=\"group webhook bot\" capabilities=multi_account,send aliases=ding,ding-bot transport=dingtalk_custom_robot_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+        "DingTalk [dingtalk] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=80 selection_label=\"group webhook bot\" capabilities=multi_account,send aliases=ding,ding-bot transport=dingtalk_custom_robot_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
-        "Google Chat [google-chat] implementation_status=config_backed selection_order=120 selection_label=\"workspace space webhook\" capabilities=multi_account,send aliases=gchat,googlechat transport=google_chat_incoming_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+        "Google Chat [google-chat] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=120 selection_label=\"workspace space webhook\" capabilities=multi_account,send aliases=gchat,googlechat transport=google_chat_incoming_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by dingtalk account configuration target_kinds=endpoint requirements=enabled,webhook_url",
@@ -1070,7 +1091,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("google-chat")
     )));
     assert!(rendered.contains(
-        "Signal [signal] implementation_status=config_backed selection_order=130 selection_label=\"private messenger bridge\" capabilities=multi_account,send aliases=signal-cli transport=signal_cli_rest_api target_kinds=address configured_accounts=1 default_configured_account=default"
+        "Signal [signal] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=130 selection_label=\"private messenger bridge\" capabilities=multi_account,send aliases=signal-cli transport=signal_cli_rest_api target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by signal account configuration target_kinds=address requirements=enabled,service_url,account",
@@ -1081,7 +1102,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("signal")
     )));
     assert!(rendered.contains(
-        "Microsoft Teams [teams] implementation_status=config_backed selection_order=140 selection_label=\"workspace webhook bot\" capabilities=multi_account,send aliases=msteams,ms-teams transport=microsoft_teams_incoming_webhook target_kinds=endpoint,conversation configured_accounts=1 default_configured_account=default"
+        "Microsoft Teams [teams] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=140 selection_label=\"workspace webhook bot\" capabilities=multi_account,send aliases=msteams,ms-teams transport=microsoft_teams_incoming_webhook target_kinds=endpoint,conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by teams account configuration target_kinds=endpoint requirements=enabled,webhook_url",
@@ -1092,7 +1113,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("teams")
     )));
     assert!(rendered.contains(
-        "Nextcloud Talk [nextcloud-talk] implementation_status=config_backed selection_order=160 selection_label=\"self-hosted room bot\" capabilities=multi_account,send aliases=nextcloud,nextcloudtalk transport=nextcloud_talk_bot_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+        "Nextcloud Talk [nextcloud-talk] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=160 selection_label=\"self-hosted room bot\" capabilities=multi_account,send aliases=nextcloud,nextcloudtalk transport=nextcloud_talk_bot_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by nextcloud_talk account configuration target_kinds=conversation requirements=enabled,server_url,shared_secret",
@@ -1103,7 +1124,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("nextcloud-talk")
     )));
     assert!(rendered.contains(
-        "Synology Chat [synology-chat] implementation_status=config_backed selection_order=165 selection_label=\"nas webhook bot\" capabilities=multi_account,send aliases=synologychat,synochat transport=synology_chat_outgoing_incoming_webhooks target_kinds=address configured_accounts=1 default_configured_account=default"
+        "Synology Chat [synology-chat] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=165 selection_label=\"nas webhook bot\" capabilities=multi_account,send aliases=synologychat,synochat transport=synology_chat_outgoing_incoming_webhooks target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by synology_chat account configuration target_kinds=address requirements=enabled,incoming_url",
@@ -1114,7 +1135,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("synology-chat")
     )));
     assert!(rendered.contains(
-        "iMessage [imessage] implementation_status=config_backed selection_order=180 selection_label=\"apple message bridge\" capabilities=multi_account,send aliases=bluebubbles,blue-bubbles transport=imessage_bridge_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+        "iMessage [imessage] implementation_status=config_backed runtime_kind=outbound_only operational_model=outbound_only selection_order=180 selection_label=\"apple message bridge\" capabilities=multi_account,send aliases=bluebubbles,blue-bubbles transport=imessage_bridge_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by imessage account configuration target_kinds=conversation requirements=enabled,bridge_url,bridge_token",
@@ -1125,10 +1146,10 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("imessage")
     )));
     assert!(rendered.contains(
-        "Webhook [webhook] implementation_status=plugin_backed selection_order=110 selection_label=\"generic http integration\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=http-webhook transport=generic_webhook_or_plugin_bridge target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+        "Webhook [webhook] implementation_status=plugin_backed runtime_kind=runtime_backed operational_model=standalone_runtime selection_order=110 selection_label=\"generic http integration\" capabilities=plugin_backed,multi_account,send,serve,runtime_tracking aliases=http-webhook transport=generic_webhook_or_plugin_bridge target_kinds=endpoint configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(
-        "WebChat [webchat] implementation_status=stub selection_order=230 selection_label=\"embedded web inbox\""
+        "WebChat [webchat] implementation_status=stub runtime_kind=catalog_only operational_model=catalog_only selection_order=230 selection_label=\"embedded web inbox\""
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by webhook account configuration target_kinds=endpoint requirements=enabled,endpoint_url",
@@ -1153,7 +1174,7 @@ fn render_channel_surfaces_text_groups_plugin_backed_channels_into_their_own_sec
     let rendered = render_channel_surfaces_text("/tmp/loong.toml", &inventory);
 
     let plugin_section = rendered
-        .split("plugin-backed channels:")
+        .split("plugin-backed bridge channels:")
         .nth(1)
         .expect("plugin-backed channels section should exist");
     let plugin_section = plugin_section
@@ -2193,15 +2214,20 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
     assert_eq!(
         encoded
             .get("summary")
-            .and_then(|summary| summary.get("plugin_backed_surface_count"))
+            .and_then(|summary| summary.get("runtime_kind_counts"))
+            .and_then(|counts| counts.get("runtime_backed"))
             .and_then(serde_json::Value::as_u64),
         Some(
             inventory
                 .channel_surfaces
                 .iter()
                 .filter(|surface| {
-                    surface.catalog.implementation_status
-                        == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+                    mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(
+                        |descriptor| {
+                            descriptor.runtime_kind
+                                == mvp::channel::ChannelRuntimeKind::RuntimeBacked
+                        },
+                    )
                 })
                 .count() as u64
         )
@@ -2232,6 +2258,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
                     && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
+                    && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
                         .map(|items| {
@@ -2255,6 +2289,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
                     && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
+                    && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
                         .map(|items| {
@@ -2277,6 +2319,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
+                    && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -2374,6 +2424,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
                     && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
+                    && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
                         .map(|items| {
@@ -2396,6 +2454,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .iter()
             .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("webhook")
+                    && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("standalone_runtime")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)

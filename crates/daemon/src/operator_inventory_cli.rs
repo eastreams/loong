@@ -1,6 +1,6 @@
 use super::*;
 
-pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 2;
+pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 3;
 pub const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
 
 pub fn run_channels_cli(
@@ -101,28 +101,32 @@ fn build_channel_surfaces_body_lines(
 
     let grouped_surfaces = [
         (
-            "runtime-backed channels:",
-            mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked,
+            "gateway-supervised channels:",
+            mvp::channel::ChannelOperationalModel::GatewaySupervised,
         ),
         (
-            "config-backed channels:",
-            mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked,
+            "standalone native-serve channels:",
+            mvp::channel::ChannelOperationalModel::StandaloneRuntime,
         ),
         (
-            "plugin-backed channels:",
-            mvp::channel::ChannelCatalogImplementationStatus::PluginBacked,
+            "plugin-backed bridge channels:",
+            mvp::channel::ChannelOperationalModel::PluginBacked,
+        ),
+        (
+            "outbound-only channels:",
+            mvp::channel::ChannelOperationalModel::OutboundOnly,
         ),
         (
             "catalog-only channels:",
-            mvp::channel::ChannelCatalogImplementationStatus::Stub,
+            mvp::channel::ChannelOperationalModel::CatalogOnly,
         ),
     ];
 
-    for (section_title, implementation_status) in grouped_surfaces {
+    for (section_title, operational_model) in grouped_surfaces {
         let grouped = inventory
             .channel_surfaces
             .iter()
-            .filter(|surface| surface.catalog.implementation_status == implementation_status)
+            .filter(|surface| channel_operational_model(surface) == operational_model)
             .collect::<Vec<_>>();
         if grouped.is_empty() {
             continue;
@@ -137,43 +141,74 @@ fn build_channel_surfaces_body_lines(
 }
 
 fn render_channel_surface_summary_line(surfaces: &[mvp::channel::ChannelSurface]) -> String {
-    let runtime_backed = surfaces
+    let gateway_supervised = surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+            channel_operational_model(surface)
+                == mvp::channel::ChannelOperationalModel::GatewaySupervised
         })
         .count();
-    let config_backed = surfaces
+    let standalone_runtime = surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+            channel_operational_model(surface)
+                == mvp::channel::ChannelOperationalModel::StandaloneRuntime
         })
         .count();
     let plugin_backed = surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+            channel_operational_model(surface)
+                == mvp::channel::ChannelOperationalModel::PluginBacked
+        })
+        .count();
+    let outbound_only = surfaces
+        .iter()
+        .filter(|surface| {
+            channel_operational_model(surface)
+                == mvp::channel::ChannelOperationalModel::OutboundOnly
         })
         .count();
     let catalog_only = surfaces
         .iter()
         .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::Stub
+            channel_operational_model(surface)
+                == mvp::channel::ChannelOperationalModel::CatalogOnly
         })
         .count();
 
     format!(
-        "summary total_surfaces={} runtime_backed={} config_backed={} plugin_backed={} catalog_only={}",
+        "summary total_surfaces={} gateway_supervised={} standalone_runtime={} plugin_backed={} outbound_only={} catalog_only={}",
         surfaces.len(),
-        runtime_backed,
-        config_backed,
+        gateway_supervised,
+        standalone_runtime,
         plugin_backed,
+        outbound_only,
         catalog_only
     )
+}
+
+fn channel_operational_model(
+    surface: &mvp::channel::ChannelSurface,
+) -> mvp::channel::ChannelOperationalModel {
+    if let Some(descriptor) = mvp::channel::channel_descriptor(surface.catalog.id) {
+        return descriptor.operational_model;
+    }
+
+    match surface.catalog.implementation_status {
+        mvp::channel::ChannelCatalogImplementationStatus::Stub => {
+            mvp::channel::ChannelOperationalModel::CatalogOnly
+        }
+        mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked => {
+            mvp::channel::ChannelOperationalModel::OutboundOnly
+        }
+        mvp::channel::ChannelCatalogImplementationStatus::PluginBacked => {
+            mvp::channel::ChannelOperationalModel::PluginBacked
+        }
+        mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked => {
+            mvp::channel::ChannelOperationalModel::StandaloneRuntime
+        }
+    }
 }
 
 fn push_channel_surface_block(
@@ -326,6 +361,13 @@ pub fn push_channel_surface_header(
     lines: &mut Vec<String>,
     surface: &mvp::channel::ChannelSurface,
 ) {
+    let descriptor = mvp::channel::channel_descriptor(surface.catalog.id);
+    let runtime_kind = descriptor
+        .map(|descriptor| descriptor.runtime_kind.as_str())
+        .unwrap_or("catalog_only");
+    let operational_model = descriptor
+        .map(|descriptor| descriptor.operational_model.as_str())
+        .unwrap_or("catalog_only");
     let aliases = if surface.catalog.aliases.is_empty() {
         "-".to_owned()
     } else {
@@ -344,10 +386,12 @@ pub fn push_channel_surface_header(
     };
     let target_kinds = render_channel_target_kind_ids(&surface.catalog.supported_target_kinds);
     lines.push(format!(
-        "{} [{}] implementation_status={} selection_order={} selection_label=\"{}\" capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
+        "{} [{}] implementation_status={} runtime_kind={} operational_model={} selection_order={} selection_label=\"{}\" capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
         surface.catalog.label,
         surface.catalog.id,
         surface.catalog.implementation_status.as_str(),
+        runtime_kind,
+        operational_model,
         surface.catalog.selection_order,
         surface.catalog.selection_label,
         capabilities,

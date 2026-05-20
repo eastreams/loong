@@ -82,6 +82,8 @@ fn all_service_channels_loaded_config_fixture() -> LoadedSupervisorConfig {
     config.feishu.enabled = true;
     config.matrix.enabled = true;
     config.wecom.enabled = true;
+    config.qqbot.enabled = true;
+    config.whatsapp.enabled = true;
     LoadedSupervisorConfig {
         resolved_path: PathBuf::from("/tmp/loong.toml"),
         config,
@@ -119,6 +121,8 @@ fn hooks(
     let feishu_runner = Arc::new(run_feishu);
     let matrix_runner = idle_background_channel_runner();
     let wecom_runner = idle_background_channel_runner();
+    let qqbot_runner = idle_background_channel_runner();
+    let whatsapp_runner = idle_background_channel_runner();
     let background_channel_runners = background_channel_runner_registry(vec![
         (
             mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
@@ -133,6 +137,11 @@ fn hooks(
             matrix_runner,
         ),
         (mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, wecom_runner),
+        (mvp::channel::QQBOT_RUNTIME_COMMAND_DESCRIPTOR, qqbot_runner),
+        (
+            mvp::channel::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+            whatsapp_runner,
+        ),
     ]);
 
     SupervisorRuntimeHooks {
@@ -222,6 +231,14 @@ fn wecom_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
     BackgroundChannelSurface::new(mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, account_id)
 }
 
+fn qqbot_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+    BackgroundChannelSurface::new(mvp::channel::QQBOT_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+}
+
+fn whatsapp_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
+    BackgroundChannelSurface::new(mvp::channel::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels() {
     let log = EventLog::default();
@@ -293,6 +310,40 @@ async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels(
             })
         })
     };
+    let qqbot_runner = {
+        let log = log.clone();
+        Arc::new(move |request: BackgroundChannelRunnerRequest| {
+            let log = log.clone();
+            boxed_cli_result(async move {
+                log.push(format!(
+                    "qqbot-start account={}",
+                    request.account_id.as_deref().unwrap_or("-")
+                ));
+                while !request.stop.is_requested() {
+                    tokio::task::yield_now().await;
+                }
+                log.push("qqbot-stop");
+                Ok(())
+            })
+        })
+    };
+    let whatsapp_runner = {
+        let log = log.clone();
+        Arc::new(move |request: BackgroundChannelRunnerRequest| {
+            let log = log.clone();
+            boxed_cli_result(async move {
+                log.push(format!(
+                    "whatsapp-start account={}",
+                    request.account_id.as_deref().unwrap_or("-")
+                ));
+                while !request.stop.is_requested() {
+                    tokio::task::yield_now().await;
+                }
+                log.push("whatsapp-stop");
+                Ok(())
+            })
+        })
+    };
     let background_channel_runners = background_channel_runner_registry(vec![
         (
             mvp::channel::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
@@ -307,6 +358,11 @@ async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels(
             matrix_runner,
         ),
         (mvp::channel::WECOM_RUNTIME_COMMAND_DESCRIPTOR, wecom_runner),
+        (mvp::channel::QQBOT_RUNTIME_COMMAND_DESCRIPTOR, qqbot_runner),
+        (
+            mvp::channel::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+            whatsapp_runner,
+        ),
     ]);
     let state = run_multi_channel_serve_with_hooks_for_test(
         None,
@@ -316,6 +372,8 @@ async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels(
             ("feishu", "alerts"),
             ("matrix", "bridge-sync"),
             ("wecom", "robot-prod"),
+            ("qqbot", "official-prod"),
+            ("whatsapp", "wa-prod"),
         ]),
         SupervisorRuntimeHooks {
             load_config: {
@@ -374,6 +432,20 @@ async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels(
             .phase,
         SurfacePhase::Stopped
     );
+    assert_eq!(
+        state
+            .surface_state(&qqbot_surface(Some("official-prod")))
+            .expect("qqbot tracked")
+            .phase,
+        SurfacePhase::Stopped
+    );
+    assert_eq!(
+        state
+            .surface_state(&whatsapp_surface(Some("wa-prod")))
+            .expect("whatsapp tracked")
+            .phase,
+        SurfacePhase::Stopped
+    );
 
     let events = log.snapshot();
     assert_eq!(events.first().map(String::as_str), Some("load-config"));
@@ -399,6 +471,18 @@ async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels(
         events
             .iter()
             .any(|event| event == "wecom-start account=robot-prod"),
+        "events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "qqbot-start account=official-prod"),
+        "events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "whatsapp-start account=wa-prod"),
         "events: {events:?}"
     );
 }

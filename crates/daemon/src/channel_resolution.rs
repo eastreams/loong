@@ -13,6 +13,8 @@ pub struct ChannelResolveOutput {
 pub struct ChannelCatalogResolutionDetails {
     pub canonical_channel_id: String,
     pub catalog: mvp::channel::ChannelCatalogEntry,
+    pub runtime_kind: Option<String>,
+    pub operational_model: Option<String>,
     pub surface: Option<mvp::channel::ChannelSurface>,
 }
 
@@ -20,6 +22,8 @@ pub struct ChannelCatalogResolutionDetails {
 pub struct ChannelSessionResolutionDetails {
     pub route_session_id: String,
     pub target: mvp::channel::ResolvedKnownChannelSessionTarget,
+    pub runtime_kind: Option<String>,
+    pub operational_model: Option<String>,
     pub surface: Option<mvp::channel::ChannelSurface>,
     pub matched_configured_account_id: Option<String>,
     pub matched_account: Option<mvp::channel::ChannelStatusSnapshot>,
@@ -80,6 +84,14 @@ pub fn build_channel_resolution(
                 ChannelSessionResolutionDetails {
                     route_session_id: trimmed_input.to_owned(),
                     target,
+                    runtime_kind: surface.as_ref().and_then(|surface| {
+                        mvp::channel::channel_descriptor(surface.catalog.id)
+                            .map(|descriptor| descriptor.runtime_kind.as_str().to_owned())
+                    }),
+                    operational_model: surface.as_ref().and_then(|surface| {
+                        mvp::channel::channel_descriptor(surface.catalog.id)
+                            .map(|descriptor| descriptor.operational_model.as_str().to_owned())
+                    }),
                     surface,
                     matched_configured_account_id,
                     matched_account,
@@ -105,6 +117,14 @@ pub fn build_channel_resolution(
         resolution: ChannelResolveReadModel::Catalog(Box::new(ChannelCatalogResolutionDetails {
             canonical_channel_id,
             catalog,
+            runtime_kind: surface.as_ref().and_then(|surface| {
+                mvp::channel::channel_descriptor(surface.catalog.id)
+                    .map(|descriptor| descriptor.runtime_kind.as_str().to_owned())
+            }),
+            operational_model: surface.as_ref().and_then(|surface| {
+                mvp::channel::channel_descriptor(surface.catalog.id)
+                    .map(|descriptor| descriptor.operational_model.as_str().to_owned())
+            }),
             surface,
         })),
     })
@@ -127,6 +147,14 @@ pub fn render_channel_resolution_text(resolution: &ChannelResolveOutput) -> Stri
             lines.push(format!(
                 "implementation_status={}",
                 catalog.implementation_status.as_str()
+            ));
+            lines.push(format!(
+                "runtime_kind={}",
+                details.runtime_kind.as_deref().unwrap_or("-")
+            ));
+            lines.push(format!(
+                "operational_model={}",
+                details.operational_model.as_deref().unwrap_or("-")
             ));
             lines.push(format!("transport={}", catalog.transport));
             lines.push(format!("selection_order={}", catalog.selection_order));
@@ -220,6 +248,14 @@ pub fn render_channel_resolution_text(resolution: &ChannelResolveOutput) -> Stri
                 lines.push(format!(
                     "implementation_status={}",
                     surface.catalog.implementation_status.as_str()
+                ));
+                lines.push(format!(
+                    "runtime_kind={}",
+                    details.runtime_kind.as_deref().unwrap_or("-")
+                ));
+                lines.push(format!(
+                    "operational_model={}",
+                    details.operational_model.as_deref().unwrap_or("-")
                 ));
             }
             if let Some(matched_account) = matched_account {
@@ -355,6 +391,8 @@ mod tests {
         assert!(rendered.contains("channel_id=telegram"));
         assert!(rendered.contains("session_shape=telegram_chat"));
         assert!(rendered.contains("matched_configured_account=ops"));
+        assert!(rendered.contains("runtime_kind=runtime_backed"));
+        assert!(rendered.contains("operational_model=gateway_supervised"));
         assert!(rendered.contains("send_command=channels send telegram"));
     }
 }

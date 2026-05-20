@@ -226,15 +226,20 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
     assert_eq!(
         encoded
             .get("summary")
-            .and_then(|summary| summary.get("plugin_backed_surface_count"))
+            .and_then(|summary| summary.get("runtime_kind_counts"))
+            .and_then(|counts| counts.get("runtime_backed"))
             .and_then(serde_json::Value::as_u64),
         Some(
             inventory
                 .channel_surfaces
                 .iter()
                 .filter(|surface| {
-                    surface.catalog.implementation_status
-                        == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+                    mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(
+                        |descriptor| {
+                            descriptor.runtime_kind
+                                == mvp::channel::ChannelRuntimeKind::RuntimeBacked
+                        },
+                    )
                 })
                 .count() as u64
         )
@@ -265,6 +270,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
                     && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
+                    && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
                         .map(|items| {
@@ -282,11 +295,54 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .expect("channel catalog array")
             .iter()
             .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("qqbot")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(36)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("matrix")
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
+                    && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -310,6 +366,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
+                    && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -407,6 +471,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                         .and_then(serde_json::Value::as_str)
                         == Some("plugin_backed")
                     && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("gateway_supervised")
+                    && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
                         .map(|items| {
@@ -429,6 +501,14 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .iter()
             .any(|entry| {
                 entry.get("id").and_then(serde_json::Value::as_str) == Some("webhook")
+                    && entry
+                        .get("runtime_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("runtime_backed")
+                    && entry
+                        .get("operational_model")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("standalone_runtime")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -629,6 +709,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(serde_json::Value::as_str)
             == Some("telegram")
             && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_backed")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("gateway_supervised")
+            && surface
                 .get("default_configured_account_id")
                 .and_then(serde_json::Value::as_str)
                 == Some("default")
@@ -660,6 +748,48 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                 .map(Vec::len)
                 == Some(1)
     }));
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("qqbot")
+            && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_backed")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("gateway_supervised")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("qqbot"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("qqbot"))
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
 
     assert!(surfaces.iter().any(|surface| {
         surface
@@ -667,6 +797,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(|catalog| catalog.get("id"))
             .and_then(serde_json::Value::as_str)
             == Some("slack")
+            && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("outbound_only")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("outbound_only")
             && surface
                 .get("catalog")
                 .and_then(|catalog| catalog.get("capabilities"))
@@ -708,6 +846,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(serde_json::Value::as_str)
             == Some("whatsapp")
             && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_backed")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("gateway_supervised")
+            && surface
                 .get("catalog")
                 .and_then(|catalog| catalog.get("capabilities"))
                 .and_then(serde_json::Value::as_array)
@@ -747,6 +893,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(|catalog| catalog.get("id"))
             .and_then(serde_json::Value::as_str)
             == Some("signal")
+            && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("outbound_only")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("outbound_only")
             && surface
                 .get("catalog")
                 .and_then(|catalog| catalog.get("capabilities"))
@@ -788,6 +942,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(serde_json::Value::as_str)
             == Some("wecom")
             && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_backed")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("gateway_supervised")
+            && surface
                 .get("default_configured_account_id")
                 .and_then(serde_json::Value::as_str)
                 == Some("default")
@@ -827,6 +989,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(serde_json::Value::as_str)
             == Some("matrix")
             && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_backed")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("gateway_supervised")
+            && surface
                 .get("default_configured_account_id")
                 .and_then(serde_json::Value::as_str)
                 == Some("default")
@@ -865,6 +1035,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(|catalog| catalog.get("id"))
             .and_then(serde_json::Value::as_str)
             == Some("discord")
+            && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("outbound_only")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("outbound_only")
             && surface
                 .get("catalog")
                 .and_then(|catalog| catalog.get("capabilities"))
@@ -906,6 +1084,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(serde_json::Value::as_str)
             == Some("webhook")
             && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("runtime_backed")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("standalone_runtime")
+            && surface
                 .get("catalog")
                 .and_then(|catalog| catalog.get("supported_target_kinds"))
                 .and_then(serde_json::Value::as_array)
@@ -929,6 +1115,14 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
             .and_then(|catalog| catalog.get("id"))
             .and_then(serde_json::Value::as_str)
             == Some("webchat")
+            && surface
+                .get("runtime_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("catalog_only")
+            && surface
+                .get("operational_model")
+                .and_then(serde_json::Value::as_str)
+                == Some("catalog_only")
             && surface
                 .get("catalog")
                 .and_then(|catalog| catalog.get("selection_order"))
