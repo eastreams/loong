@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::*;
 use super::super::{
     benchmark_temp_root, resolve_memory_context_benchmark_temp_root,
     resolve_memory_context_benchmark_temp_root_with_exe,
 };
+use super::*;
 
 #[derive(Debug, Clone)]
 struct PromptContextReadObservation {
@@ -584,8 +584,7 @@ fn memory_context_benchmark_report_emits_prompt_efficiency_signals() {
         summary_append_cold_overflow_rss_deltas_kib: vec![32.0, 32.0],
         summary_append_saturated_rss_deltas_kib: vec![16.0, 16.0],
         summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-        summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
-        ),
+        summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(),
         summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
         window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
         window_only_shape,
@@ -690,10 +689,9 @@ fn memory_context_benchmark_report_tracks_append_window_only_baselines() {
             summary_append_cold_overflow_rss_deltas_kib: vec![32.0, 32.0],
             summary_append_saturated_rss_deltas_kib: vec![16.0, 16.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -730,10 +728,9 @@ fn memory_context_benchmark_report_tracks_append_window_only_baselines() {
             summary_append_cold_overflow_rss_deltas_kib: vec![32.0, 48.0],
             summary_append_saturated_rss_deltas_kib: vec![16.0, 16.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -790,9 +787,8 @@ fn memory_context_benchmark_report_tracks_append_window_only_baselines() {
         report_json
             .get("flattened_sample_ratios")
             .and_then(|value| {
-                value.get(
-                    "summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95",
-                )
+                value
+                    .get("summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95")
             })
             .is_some()
     );
@@ -800,18 +796,15 @@ fn memory_context_benchmark_report_tracks_append_window_only_baselines() {
         report_json
             .get("aggregated_ratios")
             .and_then(|value| {
-                value.get(
-                    "summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95",
-                )
+                value
+                    .get("summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95")
             })
             .is_some()
     );
     assert!(
         report_json
             .get("flattened_sample_ratios")
-            .and_then(|value| {
-                value.get("summary_append_pre_overflow_vs_window_only_ratio_p95")
-            })
+            .and_then(|value| { value.get("summary_append_pre_overflow_vs_window_only_ratio_p95") })
             .is_some()
     );
     assert!(
@@ -837,9 +830,7 @@ fn memory_context_benchmark_report_tracks_append_window_only_baselines() {
     assert!(
         report_json
             .get("aggregated_ratios")
-            .and_then(|value| {
-                value.get("summary_append_pre_overflow_vs_window_only_ratio_p95")
-            })
+            .and_then(|value| { value.get("summary_append_pre_overflow_vs_window_only_ratio_p95") })
             .is_some()
     );
     assert!(
@@ -888,10 +879,9 @@ fn memory_context_benchmark_report_separates_flattened_and_aggregated_ratio_view
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -928,10 +918,9 @@ fn memory_context_benchmark_report_separates_flattened_and_aggregated_ratio_view
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1025,10 +1014,9 @@ fn memory_context_benchmark_report_uses_aggregated_ratio_view_for_soft_warnings(
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0, 0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0, 0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1155,10 +1143,9 @@ fn memory_context_benchmark_report_emits_suite_p95_summaries_for_noise_analysis(
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1195,10 +1182,9 @@ fn memory_context_benchmark_report_emits_suite_p95_summaries_for_noise_analysis(
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1288,10 +1274,7 @@ fn memory_context_benchmark_report_emits_suite_stability_summary() {
                 summary_metadata_realign,
             ],
             summary_steady_state_samples: vec![summary_steady_state, summary_steady_state],
-            window_shrink_catch_up_samples: vec![
-                window_shrink_catch_up,
-                window_shrink_catch_up,
-            ],
+            window_shrink_catch_up_samples: vec![window_shrink_catch_up, window_shrink_catch_up],
             window_only_append_pre_overflow_samples: vec![1.0, 1.0],
             window_only_append_cold_overflow_samples: vec![1.0, 1.0],
             summary_append_pre_overflow_samples: vec![1.0, 1.0],
@@ -1310,10 +1293,9 @@ fn memory_context_benchmark_report_emits_suite_stability_summary() {
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1419,8 +1401,7 @@ fn memory_context_benchmark_report_warns_when_speedup_ratio_is_suite_noisy() {
         summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
         summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
         summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-        summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
-        ),
+        summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(),
         summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
         window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
         window_only_shape: shape,
@@ -1499,10 +1480,9 @@ fn memory_context_benchmark_report_qualifies_cover_warning_under_suite_noise() {
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1598,10 +1578,9 @@ fn memory_context_benchmark_report_qualifies_metadata_realign_warning_under_suit
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1658,63 +1637,61 @@ fn memory_context_benchmark_report_qualifies_metadata_realign_warning_under_suit
 
 #[test]
 fn memory_context_benchmark_report_suppresses_speedup_warning_when_copy_noise_dominates_clear_wins()
- {
+{
     let shape = MemoryContextShape {
         entry_count: 2,
         turn_entries: 2,
         summary_chars: 64,
         payload_chars: 128,
     };
-    let make_suite = |summary_rebuild: f64,
-                      summary_steady_state: f64,
-                      copy_db_ms: f64,
-                      target_load_ms: f64| {
-        MemoryContextBenchmarkSuiteSamples {
-            seed_db_bytes: 512,
-            window_only_samples: vec![1.0, 1.0],
-            summary_window_cover_samples: vec![1.0, 1.0],
-            summary_rebuild_samples: vec![summary_rebuild, summary_rebuild],
-            summary_rebuild_budget_change_samples: vec![2.0, 2.0],
-            summary_metadata_realign_samples: vec![1.0, 1.0],
-            summary_steady_state_samples: vec![summary_steady_state, summary_steady_state],
-            window_shrink_catch_up_samples: vec![2.0, 2.0],
-            window_only_append_pre_overflow_samples: vec![1.0, 1.0],
-            window_only_append_cold_overflow_samples: vec![1.0, 1.0],
-            summary_append_pre_overflow_samples: vec![1.0, 1.0],
-            summary_append_cold_overflow_samples: vec![1.0, 1.0],
-            summary_append_saturated_samples: vec![1.0, 1.0],
-            window_only_rss_deltas_kib: vec![0.0, 0.0],
-            summary_window_cover_rss_deltas_kib: vec![0.0, 0.0],
-            summary_rebuild_rss_deltas_kib: vec![0.0, 0.0],
-            summary_rebuild_budget_change_rss_deltas_kib: vec![0.0, 0.0],
-            summary_metadata_realign_rss_deltas_kib: vec![0.0, 0.0],
-            summary_steady_state_rss_deltas_kib: vec![0.0, 0.0],
-            window_shrink_catch_up_rss_deltas_kib: vec![0.0, 0.0],
-            window_only_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            window_only_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            summary_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
-            summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples {
-                copy_db_ms: vec![copy_db_ms, copy_db_ms],
-                target_load_ms: vec![target_load_ms, target_load_ms],
-                target_load_summary_rebuild_ms: vec![target_load_ms, target_load_ms],
-                ..MemoryContextColdPathPhaseSamples::default()
-            },
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
-            ),
-            window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            window_only_shape: shape,
-            summary_window_cover_shape: shape,
-            summary_rebuild_shape: shape,
-            summary_rebuild_budget_change_shape: shape,
-            summary_metadata_realign_shape: shape,
-            summary_steady_state_shape: shape,
-            window_shrink_catch_up_shape: shape,
-        }
-    };
+    let make_suite =
+        |summary_rebuild: f64, summary_steady_state: f64, copy_db_ms: f64, target_load_ms: f64| {
+            MemoryContextBenchmarkSuiteSamples {
+                seed_db_bytes: 512,
+                window_only_samples: vec![1.0, 1.0],
+                summary_window_cover_samples: vec![1.0, 1.0],
+                summary_rebuild_samples: vec![summary_rebuild, summary_rebuild],
+                summary_rebuild_budget_change_samples: vec![2.0, 2.0],
+                summary_metadata_realign_samples: vec![1.0, 1.0],
+                summary_steady_state_samples: vec![summary_steady_state, summary_steady_state],
+                window_shrink_catch_up_samples: vec![2.0, 2.0],
+                window_only_append_pre_overflow_samples: vec![1.0, 1.0],
+                window_only_append_cold_overflow_samples: vec![1.0, 1.0],
+                summary_append_pre_overflow_samples: vec![1.0, 1.0],
+                summary_append_cold_overflow_samples: vec![1.0, 1.0],
+                summary_append_saturated_samples: vec![1.0, 1.0],
+                window_only_rss_deltas_kib: vec![0.0, 0.0],
+                summary_window_cover_rss_deltas_kib: vec![0.0, 0.0],
+                summary_rebuild_rss_deltas_kib: vec![0.0, 0.0],
+                summary_rebuild_budget_change_rss_deltas_kib: vec![0.0, 0.0],
+                summary_metadata_realign_rss_deltas_kib: vec![0.0, 0.0],
+                summary_steady_state_rss_deltas_kib: vec![0.0, 0.0],
+                window_shrink_catch_up_rss_deltas_kib: vec![0.0, 0.0],
+                window_only_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
+                window_only_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
+                summary_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
+                summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
+                summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
+                summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples {
+                    copy_db_ms: vec![copy_db_ms, copy_db_ms],
+                    target_load_ms: vec![target_load_ms, target_load_ms],
+                    target_load_summary_rebuild_ms: vec![target_load_ms, target_load_ms],
+                    ..MemoryContextColdPathPhaseSamples::default()
+                },
+                summary_rebuild_budget_change_phase_samples:
+                    MemoryContextColdPathPhaseSamples::default(),
+                summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+                ),
+                window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+                window_only_shape: shape,
+                summary_window_cover_shape: shape,
+                summary_rebuild_shape: shape,
+                summary_rebuild_budget_change_shape: shape,
+                summary_metadata_realign_shape: shape,
+                summary_steady_state_shape: shape,
+                window_shrink_catch_up_shape: shape,
+            }
+        };
     let suite_runs = vec![
         make_suite(4.0, 0.40, 1.0, 3.0),
         make_suite(8.0, 1.60, 5.0, 8.0),
@@ -1806,10 +1783,9 @@ fn memory_context_benchmark_report_suppresses_speedup_warning_when_bootstrap_noi
                 target_load_summary_rebuild_ms: vec![target_load_ms, target_load_ms],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1866,7 +1842,7 @@ fn memory_context_benchmark_report_suppresses_speedup_warning_when_bootstrap_noi
 
 #[test]
 fn memory_context_benchmark_report_suppresses_speedup_warning_for_tiny_hot_path_denominator_jitter()
- {
+{
     let shape = MemoryContextShape {
         entry_count: 2,
         turn_entries: 2,
@@ -1901,10 +1877,9 @@ fn memory_context_benchmark_report_suppresses_speedup_warning_for_tiny_hot_path_
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -1994,10 +1969,9 @@ fn memory_context_benchmark_report_keeps_speedup_warning_when_hot_path_spread_is
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2045,7 +2019,7 @@ fn memory_context_benchmark_report_keeps_speedup_warning_when_hot_path_spread_is
 
 #[test]
 fn memory_context_benchmark_report_qualifies_speedup_warning_when_all_suites_still_clear_the_floor()
- {
+{
     let shape = MemoryContextShape {
         entry_count: 2,
         turn_entries: 2,
@@ -2080,10 +2054,9 @@ fn memory_context_benchmark_report_qualifies_speedup_warning_when_all_suites_sti
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2141,61 +2114,58 @@ fn memory_context_benchmark_report_warns_when_summary_rebuild_is_suite_noisy() {
         summary_chars: 64,
         payload_chars: 128,
     };
-    let make_suite =
-        |summary_rebuild: f64,
-         summary_steady_state: f64,
-         target_bootstrap_ms: f64,
-         target_bootstrap_connection_open_ms: f64,
-         target_load_ms: f64,
-         copy_db_ms: f64| MemoryContextBenchmarkSuiteSamples {
-            seed_db_bytes: 512,
-            window_only_samples: vec![1.0, 1.0],
-            summary_window_cover_samples: vec![1.0, 1.0],
-            summary_rebuild_samples: vec![summary_rebuild, summary_rebuild],
-            summary_rebuild_budget_change_samples: vec![2.0, 2.0],
-            summary_metadata_realign_samples: vec![1.0, 1.0],
-            summary_steady_state_samples: vec![summary_steady_state, summary_steady_state],
-            window_shrink_catch_up_samples: vec![2.0, 2.0],
-            window_only_append_pre_overflow_samples: vec![1.0, 1.0],
-            window_only_append_cold_overflow_samples: vec![1.0, 1.0],
-            summary_append_pre_overflow_samples: vec![1.0, 1.0],
-            summary_append_cold_overflow_samples: vec![1.0, 1.0],
-            summary_append_saturated_samples: vec![1.0, 1.0],
-            window_only_rss_deltas_kib: vec![0.0, 0.0],
-            summary_window_cover_rss_deltas_kib: vec![0.0, 0.0],
-            summary_rebuild_rss_deltas_kib: vec![0.0, 0.0],
-            summary_rebuild_budget_change_rss_deltas_kib: vec![0.0, 0.0],
-            summary_metadata_realign_rss_deltas_kib: vec![0.0, 0.0],
-            summary_steady_state_rss_deltas_kib: vec![0.0, 0.0],
-            window_shrink_catch_up_rss_deltas_kib: vec![0.0, 0.0],
-            window_only_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            window_only_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            summary_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
-            summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
-            summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples {
-                copy_db_ms: vec![copy_db_ms, copy_db_ms],
-                target_bootstrap_ms: vec![target_bootstrap_ms, target_bootstrap_ms],
-                target_bootstrap_connection_open_ms: vec![
-                    target_bootstrap_connection_open_ms,
-                    target_bootstrap_connection_open_ms,
-                ],
-                target_load_ms: vec![target_load_ms, target_load_ms],
-                ..MemoryContextColdPathPhaseSamples::default()
-            },
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
-            ),
-            window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            window_only_shape: shape,
-            summary_window_cover_shape: shape,
-            summary_rebuild_shape: shape,
-            summary_rebuild_budget_change_shape: shape,
-            summary_metadata_realign_shape: shape,
-            summary_steady_state_shape: shape,
-            window_shrink_catch_up_shape: shape,
-        };
+    let make_suite = |summary_rebuild: f64,
+                      summary_steady_state: f64,
+                      target_bootstrap_ms: f64,
+                      target_bootstrap_connection_open_ms: f64,
+                      target_load_ms: f64,
+                      copy_db_ms: f64| MemoryContextBenchmarkSuiteSamples {
+        seed_db_bytes: 512,
+        window_only_samples: vec![1.0, 1.0],
+        summary_window_cover_samples: vec![1.0, 1.0],
+        summary_rebuild_samples: vec![summary_rebuild, summary_rebuild],
+        summary_rebuild_budget_change_samples: vec![2.0, 2.0],
+        summary_metadata_realign_samples: vec![1.0, 1.0],
+        summary_steady_state_samples: vec![summary_steady_state, summary_steady_state],
+        window_shrink_catch_up_samples: vec![2.0, 2.0],
+        window_only_append_pre_overflow_samples: vec![1.0, 1.0],
+        window_only_append_cold_overflow_samples: vec![1.0, 1.0],
+        summary_append_pre_overflow_samples: vec![1.0, 1.0],
+        summary_append_cold_overflow_samples: vec![1.0, 1.0],
+        summary_append_saturated_samples: vec![1.0, 1.0],
+        window_only_rss_deltas_kib: vec![0.0, 0.0],
+        summary_window_cover_rss_deltas_kib: vec![0.0, 0.0],
+        summary_rebuild_rss_deltas_kib: vec![0.0, 0.0],
+        summary_rebuild_budget_change_rss_deltas_kib: vec![0.0, 0.0],
+        summary_metadata_realign_rss_deltas_kib: vec![0.0, 0.0],
+        summary_steady_state_rss_deltas_kib: vec![0.0, 0.0],
+        window_shrink_catch_up_rss_deltas_kib: vec![0.0, 0.0],
+        window_only_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
+        window_only_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
+        summary_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
+        summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
+        summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
+        summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples {
+            copy_db_ms: vec![copy_db_ms, copy_db_ms],
+            target_bootstrap_ms: vec![target_bootstrap_ms, target_bootstrap_ms],
+            target_bootstrap_connection_open_ms: vec![
+                target_bootstrap_connection_open_ms,
+                target_bootstrap_connection_open_ms,
+            ],
+            target_load_ms: vec![target_load_ms, target_load_ms],
+            ..MemoryContextColdPathPhaseSamples::default()
+        },
+        summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+        summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+        window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+        window_only_shape: shape,
+        summary_window_cover_shape: shape,
+        summary_rebuild_shape: shape,
+        summary_rebuild_budget_change_shape: shape,
+        summary_metadata_realign_shape: shape,
+        summary_steady_state_shape: shape,
+        window_shrink_catch_up_shape: shape,
+    };
     let suite_runs = vec![
         make_suite(4.0, 1.0, 4.0, 4.0, 1.0, 1.0),
         make_suite(8.0, 2.0, 8.0, 8.0, 1.2, 1.2),
@@ -2279,8 +2249,7 @@ fn memory_context_benchmark_report_emits_cold_path_noise_attribution() {
                 target_load_ms: vec![budget_target_load_ms, budget_target_load_ms],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
-            ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2378,10 +2347,7 @@ fn memory_context_benchmark_report_emits_cold_path_bootstrap_noise_attribution()
                     target_connection_open_ms,
                     target_connection_open_ms,
                 ],
-                target_bootstrap_schema_init_ms: vec![
-                    target_schema_init_ms,
-                    target_schema_init_ms,
-                ],
+                target_bootstrap_schema_init_ms: vec![target_schema_init_ms, target_schema_init_ms],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
             summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples {
@@ -2395,8 +2361,7 @@ fn memory_context_benchmark_report_emits_cold_path_bootstrap_noise_attribution()
                 ],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
-            ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2621,10 +2586,7 @@ fn memory_context_benchmark_report_emits_split_summary_rebuild_load_noise_attrib
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples {
                 target_load_summary_rebuild_ms: vec![1.0, 1.0],
-                target_load_summary_rebuild_stream_ms: vec![
-                    rebuild_stream_ms,
-                    rebuild_stream_ms,
-                ],
+                target_load_summary_rebuild_stream_ms: vec![rebuild_stream_ms, rebuild_stream_ms],
                 target_load_summary_rebuild_checkpoint_metadata_upsert_ms: vec![
                     rebuild_metadata_upsert_ms,
                     rebuild_metadata_upsert_ms,
@@ -2643,10 +2605,9 @@ fn memory_context_benchmark_report_emits_split_summary_rebuild_load_noise_attrib
                 ],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2743,10 +2704,9 @@ fn memory_context_benchmark_report_emits_split_window_query_load_noise_attributi
                 ],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2832,10 +2792,7 @@ fn memory_context_benchmark_report_emits_summary_rebuild_checkpoint_commit_noise
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples {
                 target_load_summary_rebuild_ms: vec![1.0, 1.0],
-                target_load_summary_rebuild_stream_ms: vec![
-                    rebuild_stream_ms,
-                    rebuild_stream_ms,
-                ],
+                target_load_summary_rebuild_stream_ms: vec![rebuild_stream_ms, rebuild_stream_ms],
                 target_load_summary_rebuild_checkpoint_metadata_upsert_ms: vec![
                     rebuild_metadata_upsert_ms,
                     rebuild_metadata_upsert_ms,
@@ -2854,10 +2811,9 @@ fn memory_context_benchmark_report_emits_summary_rebuild_checkpoint_commit_noise
                 ],
                 ..MemoryContextColdPathPhaseSamples::default()
             },
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape,
             summary_window_cover_shape: shape,
@@ -2914,50 +2870,49 @@ fn memory_context_benchmark_report_emits_cold_path_phase_reports() {
         summary_chars: 64,
         payload_chars: 128,
     };
-    let make_suite =
-        |rebuild_phase: MemoryContextColdPathPhaseSamples,
-         budget_change_phase: MemoryContextColdPathPhaseSamples,
-         metadata_phase: MemoryContextColdPathPhaseSamples,
-         shrink_phase: MemoryContextColdPathPhaseSamples| {
-            MemoryContextBenchmarkSuiteSamples {
-                seed_db_bytes: 512,
-                window_only_samples: vec![1.0, 1.0],
-                summary_window_cover_samples: vec![1.0, 1.0],
-                summary_rebuild_samples: vec![4.0, 4.0],
-                summary_rebuild_budget_change_samples: vec![2.0, 2.0],
-                summary_metadata_realign_samples: vec![1.0, 1.0],
-                summary_steady_state_samples: vec![1.0, 1.0],
-                window_shrink_catch_up_samples: vec![2.0, 2.0],
-                window_only_append_pre_overflow_samples: vec![1.0, 1.0],
-                window_only_append_cold_overflow_samples: vec![1.0, 1.0],
-                summary_append_pre_overflow_samples: vec![1.0, 1.0],
-                summary_append_cold_overflow_samples: vec![1.0, 1.0],
-                summary_append_saturated_samples: vec![1.0, 1.0],
-                window_only_rss_deltas_kib: vec![0.0, 0.0],
-                summary_window_cover_rss_deltas_kib: vec![0.0, 0.0],
-                summary_rebuild_rss_deltas_kib: vec![0.0, 0.0],
-                summary_rebuild_budget_change_rss_deltas_kib: vec![0.0, 0.0],
-                summary_metadata_realign_rss_deltas_kib: vec![0.0, 0.0],
-                summary_steady_state_rss_deltas_kib: vec![0.0, 0.0],
-                window_shrink_catch_up_rss_deltas_kib: vec![0.0, 0.0],
-                window_only_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
-                window_only_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
-                summary_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
-                summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
-                summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
-                summary_rebuild_phase_samples: rebuild_phase,
-                summary_rebuild_budget_change_phase_samples: budget_change_phase,
-                summary_metadata_realign_phase_samples: metadata_phase,
-                window_shrink_catch_up_phase_samples: shrink_phase,
-                window_only_shape: shape,
-                summary_window_cover_shape: shape,
-                summary_rebuild_shape: shape,
-                summary_rebuild_budget_change_shape: shape,
-                summary_metadata_realign_shape: shape,
-                summary_steady_state_shape: shape,
-                window_shrink_catch_up_shape: shape,
-            }
-        };
+    let make_suite = |rebuild_phase: MemoryContextColdPathPhaseSamples,
+                      budget_change_phase: MemoryContextColdPathPhaseSamples,
+                      metadata_phase: MemoryContextColdPathPhaseSamples,
+                      shrink_phase: MemoryContextColdPathPhaseSamples| {
+        MemoryContextBenchmarkSuiteSamples {
+            seed_db_bytes: 512,
+            window_only_samples: vec![1.0, 1.0],
+            summary_window_cover_samples: vec![1.0, 1.0],
+            summary_rebuild_samples: vec![4.0, 4.0],
+            summary_rebuild_budget_change_samples: vec![2.0, 2.0],
+            summary_metadata_realign_samples: vec![1.0, 1.0],
+            summary_steady_state_samples: vec![1.0, 1.0],
+            window_shrink_catch_up_samples: vec![2.0, 2.0],
+            window_only_append_pre_overflow_samples: vec![1.0, 1.0],
+            window_only_append_cold_overflow_samples: vec![1.0, 1.0],
+            summary_append_pre_overflow_samples: vec![1.0, 1.0],
+            summary_append_cold_overflow_samples: vec![1.0, 1.0],
+            summary_append_saturated_samples: vec![1.0, 1.0],
+            window_only_rss_deltas_kib: vec![0.0, 0.0],
+            summary_window_cover_rss_deltas_kib: vec![0.0, 0.0],
+            summary_rebuild_rss_deltas_kib: vec![0.0, 0.0],
+            summary_rebuild_budget_change_rss_deltas_kib: vec![0.0, 0.0],
+            summary_metadata_realign_rss_deltas_kib: vec![0.0, 0.0],
+            summary_steady_state_rss_deltas_kib: vec![0.0, 0.0],
+            window_shrink_catch_up_rss_deltas_kib: vec![0.0, 0.0],
+            window_only_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
+            window_only_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
+            summary_append_pre_overflow_rss_deltas_kib: vec![0.0, 0.0],
+            summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
+            summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
+            summary_rebuild_phase_samples: rebuild_phase,
+            summary_rebuild_budget_change_phase_samples: budget_change_phase,
+            summary_metadata_realign_phase_samples: metadata_phase,
+            window_shrink_catch_up_phase_samples: shrink_phase,
+            window_only_shape: shape,
+            summary_window_cover_shape: shape,
+            summary_rebuild_shape: shape,
+            summary_rebuild_budget_change_shape: shape,
+            summary_metadata_realign_shape: shape,
+            summary_steady_state_shape: shape,
+            window_shrink_catch_up_shape: shape,
+        }
+    };
     let suite_runs = vec![
         make_suite(
             MemoryContextColdPathPhaseSamples {
@@ -3114,10 +3069,9 @@ fn memory_context_benchmark_report_tracks_budget_change_workload_adjusted_ratios
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape_small,
             summary_window_cover_shape: shape_small,
@@ -3154,10 +3108,9 @@ fn memory_context_benchmark_report_tracks_budget_change_workload_adjusted_ratios
             summary_append_cold_overflow_rss_deltas_kib: vec![0.0, 0.0],
             summary_append_saturated_rss_deltas_kib: vec![0.0, 0.0],
             summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
-            summary_rebuild_budget_change_phase_samples:
-                MemoryContextColdPathPhaseSamples::default(),
-            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
             ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
             window_only_shape: shape_small,
             summary_window_cover_shape: shape_small,
@@ -3198,16 +3151,14 @@ fn memory_context_benchmark_report_tracks_budget_change_workload_adjusted_ratios
     let flattened_adjusted_ratio = report_json
         .get("flattened_sample_ratios")
         .and_then(|value| {
-            value
-                .get("summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95")
+            value.get("summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95")
         })
         .and_then(Value::as_f64)
         .expect("summary-char-adjusted budget-change ratio should be present");
     let aggregated_adjusted_ratio = report_json
         .get("aggregated_ratios")
         .and_then(|value| {
-            value
-                .get("summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95")
+            value.get("summary_rebuild_budget_change_vs_rebuild_summary_char_adjusted_ratio_p95")
         })
         .and_then(Value::as_f64)
         .expect("aggregated summary-char-adjusted budget-change ratio should be present");

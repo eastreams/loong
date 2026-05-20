@@ -20,8 +20,8 @@ use super::runtime_backed::{
     QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, QQBOT_ONBOARDING_DESCRIPTOR, QQBOT_OPERATIONS,
     TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_ONBOARDING_DESCRIPTOR, TELEGRAM_OPERATIONS,
     WECOM_COMMAND_FAMILY_DESCRIPTOR, build_feishu_snapshots, build_line_snapshots,
-    build_matrix_snapshots, build_qqbot_snapshots, build_telegram_snapshots,
-    build_wecom_snapshots, build_whatsapp_snapshots,
+    build_matrix_snapshots, build_qqbot_snapshots, build_telegram_snapshots, build_wecom_snapshots,
+    build_whatsapp_snapshots,
 };
 use super::tlon::TLON_CHANNEL_REGISTRY_DESCRIPTOR;
 use super::twitch::{TWITCH_ONBOARDING_DESCRIPTOR, TWITCH_OPERATIONS, build_twitch_snapshots};

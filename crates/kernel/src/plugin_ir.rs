@@ -1,6 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use loong_plugin_sdk as plugin_sdk;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -9,7 +7,9 @@ mod runtime;
 mod setup;
 
 pub use runtime::plugin_runtime_scaffold_defaults;
-pub use setup::{PluginSetupReadiness, PluginSetupReadinessContext, evaluate_plugin_setup_requirements};
+pub use setup::{
+    PluginSetupReadiness, PluginSetupReadinessContext, evaluate_plugin_setup_requirements,
+};
 
 use runtime::{
     bootstrap_hint, derive_channel_bridge_contract, infer_runtime_profile,
@@ -24,9 +24,9 @@ use crate::{
     plugin::{
         PLUGIN_SLOT_CLAIMS_METADATA_KEY, PluginCompatibility, PluginCompatibilityMode,
         PluginCompatibilityShim, PluginContractDialect, PluginDescriptor, PluginDiagnosticCode,
-        PluginDiagnosticFinding, PluginDiagnosticPhase, PluginDiagnosticSeverity,
-        PluginScanReport, PluginSetup, PluginSlotClaim, PluginSlotMode, PluginSourceKind,
-        PluginTrustTier, plugin_host_compatibility_issue, slot_modes_conflict,
+        PluginDiagnosticFinding, PluginDiagnosticPhase, PluginDiagnosticSeverity, PluginScanReport,
+        PluginSetup, PluginSlotClaim, PluginSlotMode, PluginSourceKind, PluginTrustTier,
+        plugin_host_compatibility_issue, slot_modes_conflict,
     },
 };
 

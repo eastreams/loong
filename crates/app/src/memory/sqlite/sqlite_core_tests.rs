@@ -24,11 +24,8 @@ fn sqlite_test_summary_config(
     sliding_window: usize,
     summary_max_chars: usize,
 ) -> MemoryRuntimeConfig {
-    let mut config = sqlite_test_config_with_profile(
-        db_path,
-        MemoryProfile::WindowPlusSummary,
-        sliding_window,
-    );
+    let mut config =
+        sqlite_test_config_with_profile(db_path, MemoryProfile::WindowPlusSummary, sliding_window);
     config.summary_max_chars = summary_max_chars;
     config
 }
@@ -400,10 +397,8 @@ fn distinct_sqlite_paths_get_distinct_runtime_bootstraps() {
     let _ = fs::remove_file(&db_path_a);
     let _ = fs::remove_file(&db_path_b);
 
-    let config_a =
-        sqlite_test_config_with_profile(db_path_a.clone(), MemoryProfile::WindowOnly, 2);
-    let config_b =
-        sqlite_test_config_with_profile(db_path_b.clone(), MemoryProfile::WindowOnly, 2);
+    let config_a = sqlite_test_config_with_profile(db_path_a.clone(), MemoryProfile::WindowOnly, 2);
+    let config_b = sqlite_test_config_with_profile(db_path_b.clone(), MemoryProfile::WindowOnly, 2);
 
     ensure_memory_db_ready(Some(db_path_a.clone()), &config_a).expect("ensure db a ready");
     window_direct_with_options("runtime-a-session", 2, true, &config_a)
@@ -480,10 +475,8 @@ fn dropping_one_cached_runtime_preserves_other_cached_runtimes() {
     let _ = fs::remove_file(&db_path_a);
     let _ = fs::remove_file(&db_path_b);
 
-    let config_a =
-        sqlite_test_config_with_profile(db_path_a.clone(), MemoryProfile::WindowOnly, 2);
-    let config_b =
-        sqlite_test_config_with_profile(db_path_b.clone(), MemoryProfile::WindowOnly, 2);
+    let config_a = sqlite_test_config_with_profile(db_path_a.clone(), MemoryProfile::WindowOnly, 2);
+    let config_b = sqlite_test_config_with_profile(db_path_b.clone(), MemoryProfile::WindowOnly, 2);
 
     ensure_memory_db_ready(Some(db_path_a.clone()), &config_a).expect("ensure db a ready");
     window_direct_with_options("runtime-drop-a", 2, true, &config_a)
@@ -743,8 +736,7 @@ fn ensure_memory_db_ready_repairs_session_event_search_storage() {
     ensure_memory_db_ready(Some(db_path.clone()), &config).expect("repair sqlite db");
 
     let conn = Connection::open(&db_path).expect("open repaired sqlite db");
-    let columns =
-        sqlite_table_columns(&conn, "session_events").expect("session_events columns");
+    let columns = sqlite_table_columns(&conn, "session_events").expect("session_events columns");
     assert!(columns.iter().any(|column| column == "search_text"));
 
     let search_text = conn
@@ -948,8 +940,7 @@ fn reopening_current_schema_db_skips_metadata_repairs() {
 
     let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
-    ensure_memory_db_ready(Some(db_path.clone()), &config)
-        .expect("bootstrap current schema db");
+    ensure_memory_db_ready(Some(db_path.clone()), &config).expect("bootstrap current schema db");
     drop_cached_sqlite_runtime_for_tests(&db_path);
 
     reset_sqlite_schema_repair_metrics_for_tests();
@@ -988,8 +979,7 @@ fn reopening_current_schema_db_skips_schema_init_batch() {
 
     let config = sqlite_test_config_with_profile(db_path.clone(), MemoryProfile::WindowOnly, 2);
 
-    ensure_memory_db_ready(Some(db_path.clone()), &config)
-        .expect("bootstrap current schema db");
+    ensure_memory_db_ready(Some(db_path.clone()), &config).expect("bootstrap current schema db");
     assert_eq!(
         sqlite_schema_init_count_for_tests(&db_path),
         1,
@@ -1336,9 +1326,7 @@ fn summary_append_path_avoids_empty_checkpoint_delete_before_window_overflow() {
     .expect("append turn 2 should succeed");
 
     assert_eq!(
-        cached_prepare_count_for_sql_fragment_for_tests(
-            "DELETE FROM memory_summary_checkpoints"
-        ),
+        cached_prepare_count_for_sql_fragment_for_tests("DELETE FROM memory_summary_checkpoints"),
         0,
         "expected append maintenance to avoid preparing checkpoint delete statements before the active window overflows"
     );
@@ -1446,11 +1434,9 @@ fn summary_append_hot_path_advances_boundary_without_window_offset_probe() {
     )
     .expect("append turn 4 should succeed");
 
-    let boundary_before = read_summary_checkpoint_boundary_turn_id(
-        &config,
-        "summary-append-hot-boundary-session",
-    )
-    .expect("read summary checkpoint boundary after warmup");
+    let boundary_before =
+        read_summary_checkpoint_boundary_turn_id(&config, "summary-append-hot-boundary-session")
+            .expect("read summary checkpoint boundary after warmup");
     assert_eq!(boundary_before, Some(3));
 
     reset_cached_prepare_metrics_for_tests();
@@ -1464,9 +1450,8 @@ fn summary_append_hot_path_advances_boundary_without_window_offset_probe() {
     .expect("append turn 5 should succeed");
 
     assert!(
-        cached_prepare_count_for_sql_fragment_for_tests(
-            "id > checkpoint.summary_before_turn_id"
-        ) >= 1,
+        cached_prepare_count_for_sql_fragment_for_tests("id > checkpoint.summary_before_turn_id")
+            >= 1,
         "expected steady-state append to advance the summary boundary from checkpoint metadata instead of re-probing the full window"
     );
     assert_eq!(
@@ -1482,11 +1467,9 @@ fn summary_append_hot_path_advances_boundary_without_window_offset_probe() {
         "expected steady-state append to reuse checkpoint metadata already loaded by append maintenance instead of re-querying checkpoint meta"
     );
 
-    let boundary_after = read_summary_checkpoint_boundary_turn_id(
-        &config,
-        "summary-append-hot-boundary-session",
-    )
-    .expect("read summary checkpoint boundary after hot append");
+    let boundary_after =
+        read_summary_checkpoint_boundary_turn_id(&config, "summary-append-hot-boundary-session")
+            .expect("read summary checkpoint boundary after hot append");
     assert_eq!(boundary_after, Some(4));
 
     let _ = fs::remove_file(&db_path);
@@ -1973,8 +1956,7 @@ fn summary_rebuild_load_diagnostics_split_stream_and_checkpoint_upsert_costs() {
         "expected checkpoint upsert subphases to stay within the measured checkpoint upsert envelope"
     );
     assert!(
-        diagnostics.summary_rebuild_stream_ms
-            + diagnostics.summary_rebuild_checkpoint_upsert_ms
+        diagnostics.summary_rebuild_stream_ms + diagnostics.summary_rebuild_checkpoint_upsert_ms
             <= diagnostics.summary_rebuild_ms + 1.0,
         "expected rebuild subphases to stay within the measured rebuild envelope"
     );
@@ -2226,8 +2208,7 @@ fn append_summary_line_preserves_whitespace_collapse_and_utf8_safe_truncation() 
 
 #[test]
 fn context_snapshot_separates_materialized_summary_from_active_window() {
-    let tmp =
-        std::env::temp_dir().join(format!("loong-context-snapshot-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("loong-context-snapshot-{}", std::process::id()));
     let _ = fs::create_dir_all(&tmp);
     let db_path = tmp.join("context-snapshot.sqlite3");
     let _ = fs::remove_file(&db_path);
@@ -2350,9 +2331,8 @@ fn initial_summary_checkpoint_waits_for_visible_overflow() {
         "raw overflow without visible overflow must not materialize a checkpoint",
     );
 
-    let pre_overflow_snapshot =
-        load_context_snapshot("initial-summary-visible-overflow", &config)
-            .expect("load pre-overflow context snapshot");
+    let pre_overflow_snapshot = load_context_snapshot("initial-summary-visible-overflow", &config)
+        .expect("load pre-overflow context snapshot");
     let pre_overflow_contents = pre_overflow_snapshot
         .window_turns
         .iter()
@@ -2377,9 +2357,8 @@ fn initial_summary_checkpoint_waits_for_visible_overflow() {
         "checkpoint should materialize once the visible window actually overflows",
     );
 
-    let post_overflow_snapshot =
-        load_context_snapshot("initial-summary-visible-overflow", &config)
-            .expect("load post-overflow context snapshot");
+    let post_overflow_snapshot = load_context_snapshot("initial-summary-visible-overflow", &config)
+        .expect("load post-overflow context snapshot");
     let post_overflow_contents = post_overflow_snapshot
         .window_turns
         .iter()
@@ -2589,9 +2568,8 @@ fn load_context_snapshot_uses_compatible_checkpoint_body_fast_path() {
 
     reset_cached_prepare_metrics_for_tests();
     let _metrics = begin_sqlite_metric_capture_for_tests();
-    let second_snapshot =
-        load_context_snapshot("summary-compatible-fast-path-session", &config)
-            .expect("compatible summary snapshot should succeed");
+    let second_snapshot = load_context_snapshot("summary-compatible-fast-path-session", &config)
+        .expect("compatible summary snapshot should succeed");
 
     assert_eq!(second_snapshot.summary_body, first_snapshot.summary_body);
     assert_eq!(second_snapshot.window_turns.len(), 2);
@@ -2767,12 +2745,11 @@ fn load_context_snapshot_catch_up_probes_frontier_when_saturated() {
     )
     .expect("append turn 5 should succeed");
 
-    let (through_before, summary_before, _budget_before, window_before) =
-        read_summary_checkpoint(
-            &config_window_three,
-            "window-shrink-saturated-catch-up-session",
-        )
-        .expect("summary checkpoint should exist before shrink");
+    let (through_before, summary_before, _budget_before, window_before) = read_summary_checkpoint(
+        &config_window_three,
+        "window-shrink-saturated-catch-up-session",
+    )
+    .expect("summary checkpoint should exist before shrink");
     assert_eq!(through_before, 2);
     assert_eq!(window_before, 3);
     assert!(summary_before.contains("FIRST-MARKER"));
@@ -3258,11 +3235,9 @@ fn load_context_snapshot_diagnostics_split_exact_window_query_costs() {
     )
     .expect("append turn 2 should succeed");
 
-    let (snapshot, diagnostics) = load_context_snapshot_with_diagnostics(
-        "exact-window-query-diagnostics-session",
-        &config,
-    )
-    .expect("load exact-window snapshot diagnostics");
+    let (snapshot, diagnostics) =
+        load_context_snapshot_with_diagnostics("exact-window-query-diagnostics-session", &config)
+            .expect("load exact-window snapshot diagnostics");
 
     assert!(snapshot.summary_body.is_none());
     assert_eq!(snapshot.window_turns.len(), 2);
@@ -3335,8 +3310,7 @@ fn load_context_snapshot_diagnostics_split_known_overflow_window_query_costs() {
     assert_eq!(diagnostics.window_fallback_rows_query_ms, 0.0);
     assert_eq!(diagnostics.summary_checkpoint_meta_query_ms, 0.0);
     assert!(
-        diagnostics.window_turn_count_query_ms
-            + diagnostics.window_known_overflow_rows_query_ms
+        diagnostics.window_turn_count_query_ms + diagnostics.window_known_overflow_rows_query_ms
             <= diagnostics.window_query_ms + 1.0
     );
 
@@ -3346,7 +3320,7 @@ fn load_context_snapshot_diagnostics_split_known_overflow_window_query_costs() {
 
 #[test]
 fn load_context_snapshot_diagnostics_split_fallback_window_query_costs_when_turn_count_is_missing()
- {
+{
     let _guard = sqlite_runtime_test_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3565,9 +3539,7 @@ fn ensure_memory_db_ready_migrates_legacy_summary_checkpoint_body_bytes() {
                 rusqlite::params!["legacy-session"],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
             )
-            .map_err(|error| {
-                format!("read migrated summary checkpoint metadata failed: {error}")
-            })
+            .map_err(|error| format!("read migrated summary checkpoint metadata failed: {error}"))
         })
         .expect("read migrated summary checkpoint metadata");
     let migrated_summary_body = runtime
@@ -3589,9 +3561,9 @@ fn ensure_memory_db_ready_migrates_legacy_summary_checkpoint_body_bytes() {
                 .map_err(|error| {
                     format!("prepare summary checkpoint table info query failed: {error}")
                 })?;
-            let mut rows = stmt.query([]).map_err(|error| {
-                format!("query summary checkpoint table info failed: {error}")
-            })?;
+            let mut rows = stmt
+                .query([])
+                .map_err(|error| format!("query summary checkpoint table info failed: {error}"))?;
             let mut names = Vec::new();
             while let Some(row) = rows.next().map_err(|error| {
                 format!("read summary checkpoint table info row failed: {error}")
@@ -4261,8 +4233,7 @@ fn cached_runtime_repair_path_recovers_stale_canonical_fts_metadata_schema() {
     ensure_memory_db_ready_with_diagnostics(None, &config)
         .expect("repair cached stale canonical FTS schema");
 
-    let canonical_record_repair_count =
-        sqlite_schema_repair_count_for_tests("canonical_records");
+    let canonical_record_repair_count = sqlite_schema_repair_count_for_tests("canonical_records");
     assert!(
         canonical_record_repair_count >= 1,
         "expected cached runtime repair path to trigger canonical record repair, got: {canonical_record_repair_count}"
@@ -4393,8 +4364,7 @@ fn ensure_memory_db_ready_preserves_newer_schema_versions_without_current_repair
     ensure_memory_db_ready_with_diagnostics(Some(db_path.clone()), &config)
         .expect("reopen newer sqlite schema");
 
-    let reopened_runtime =
-        acquire_memory_runtime(&config).expect("reopen cached sqlite runtime");
+    let reopened_runtime = acquire_memory_runtime(&config).expect("reopen cached sqlite runtime");
     let reopened_user_version = reopened_runtime
         .with_connection("test.read_future_user_version", |conn| {
             read_sqlite_user_version(conn)

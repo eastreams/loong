@@ -10,18 +10,13 @@ use super::current_epoch_seconds;
 mod report;
 
 pub use report::{
-    MemoryContextBenchmarkReportAugmentContext,
-    MemoryContextBenchmarkReportAugmenter,
-    MemoryContextBenchmarkSuiteRunner,
-    MemoryContextBenchmarkSuiteSamples,
-    MemoryContextColdPathPhaseSamples,
-    MemoryContextShape,
+    MemoryContextBenchmarkReportAugmentContext, MemoryContextBenchmarkReportAugmenter,
+    MemoryContextBenchmarkSuiteRunner, MemoryContextBenchmarkSuiteSamples,
+    MemoryContextColdPathPhaseSamples, MemoryContextShape,
     run_memory_context_benchmark_cli_with_suite_runner,
 };
 pub(crate) use report::{
-    ProgrammaticPressureGateCheck,
-    ProgrammaticPressureScenarioGate,
-    ScenarioRunSample,
+    ProgrammaticPressureGateCheck, ProgrammaticPressureScenarioGate, ScenarioRunSample,
     SchedulerSnapshot,
 };
 

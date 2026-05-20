@@ -149,9 +149,7 @@ fn assert_request_adapter_matches_plan_result_for_workspace_recall(system: &dyn 
     );
 }
 
-fn assert_request_helper_matches_request_adapter_for_workspace_recall(
-    system: &dyn MemorySystem,
-) {
+fn assert_request_helper_matches_request_adapter_for_workspace_recall(system: &dyn MemorySystem) {
     let config = workspace_recall_test_config();
     assert_request_helper_matches_request_adapter(system, &config, &[]);
 }
@@ -372,12 +370,7 @@ fn assert_boxed_request_adapter_matches_plan_result(
     config: &MemoryRuntimeConfig,
     recent_window: &[WindowTurn],
 ) {
-    assert_request_adapter_matches_plan_result(
-        &*boxed,
-        expected_system_id,
-        config,
-        recent_window,
-    );
+    assert_request_adapter_matches_plan_result(&*boxed, expected_system_id, config, recent_window);
 }
 
 fn assert_request_helper_matches_request_adapter(
@@ -451,11 +444,7 @@ fn assert_boxed_request_helper_matches_request_adapter_for_release_freeze(
 ) {
     let recent_window = release_freeze_recent_window();
     let config = release_freeze_test_config();
-    assert_boxed_request_helper_matches_request_adapter(
-        boxed,
-        &config,
-        recent_window.as_slice(),
-    );
+    assert_boxed_request_helper_matches_request_adapter(boxed, &config, recent_window.as_slice());
 }
 
 fn assert_request_adapter_matches_plan_result_for_release_freeze(
@@ -783,16 +772,9 @@ fn assert_plan_result_only_request_adapter_shape(
     );
 }
 
-fn assert_plan_result_only_request_gap(
-    system: &dyn MemorySystem,
-    config: &MemoryRuntimeConfig,
-) {
-    let request = system.build_retrieval_request(
-        TEST_SESSION_ID,
-        Some(test_workspace_root()),
-        config,
-        &[],
-    );
+fn assert_plan_result_only_request_gap(system: &dyn MemorySystem, config: &MemoryRuntimeConfig) {
+    let request =
+        system.build_retrieval_request(TEST_SESSION_ID, Some(test_workspace_root()), config, &[]);
     let result = system
         .build_retrieval_plan_result(TEST_SESSION_ID, Some(test_workspace_root()), config, &[])
         .expect("retrieval plan result");
@@ -951,10 +933,7 @@ fn boxed_plan_result_only_system_helper_request_matches_default_plan_result_requ
 #[test]
 fn boxed_memory_system_preserves_plan_result_only_request_gap() {
     let config = default_test_config();
-    assert_boxed_plan_result_only_request_gap(
-        boxed_plan_result_only_registry_system(),
-        &config,
-    );
+    assert_boxed_plan_result_only_request_gap(boxed_plan_result_only_registry_system(), &config);
 }
 
 #[test]
@@ -1094,9 +1073,7 @@ fn boxed_recall_first_request_adapter_matches_plan_result_request() {
 
 #[test]
 fn boxed_recall_first_plan_result_helper_matches_default_plan_result() {
-    assert_boxed_plan_result_helper_matches_default_for_release_freeze(
-        boxed_recall_first_system(),
-    );
+    assert_boxed_plan_result_helper_matches_default_for_release_freeze(boxed_recall_first_system());
 }
 
 #[test]
@@ -1129,9 +1106,7 @@ fn builtin_request_helper_matches_request_adapter() {
 
 #[test]
 fn boxed_builtin_request_helper_matches_request_adapter() {
-    assert_boxed_request_helper_matches_request_adapter_for_release_freeze(
-        boxed_builtin_system(),
-    );
+    assert_boxed_request_helper_matches_request_adapter_for_release_freeze(boxed_builtin_system());
 }
 
 #[test]
@@ -1622,16 +1597,12 @@ fn workspace_recall_retrieval_plan_result_matches_request_snapshot() {
 
 #[test]
 fn workspace_recall_plan_result_helper_matches_default_plan_result() {
-    assert_plan_result_helper_matches_default_for_workspace_recall(
-        &WorkspaceRecallMemorySystem,
-    );
+    assert_plan_result_helper_matches_default_for_workspace_recall(&WorkspaceRecallMemorySystem);
 }
 
 #[test]
 fn workspace_recall_request_adapter_matches_plan_result_request() {
-    assert_request_adapter_matches_plan_result_for_workspace_recall(
-        &WorkspaceRecallMemorySystem,
-    );
+    assert_request_adapter_matches_plan_result_for_workspace_recall(&WorkspaceRecallMemorySystem);
     assert_workspace_recall_request_budget_items(&WorkspaceRecallMemorySystem, 4);
 }
 
@@ -1840,8 +1811,7 @@ fn recall_first_rank_stage_drops_summary_when_retrieved_entries_exist() {
     ];
 
     let runtime_config = MemoryRuntimeConfig::default();
-    let ranked_entries_result =
-        RecallFirstMemorySystem.run_rank_stage(entries, &runtime_config);
+    let ranked_entries_result = RecallFirstMemorySystem.run_rank_stage(entries, &runtime_config);
     let ranked_entries_option = ranked_entries_result.expect("rank stage should succeed");
     let ranked_entries =
         ranked_entries_option.expect("recall-first rank stage should return entries");
@@ -2115,13 +2085,8 @@ fn builtin_retrieve_stage_keeps_allowed_hits_when_top_match_is_filtered_out() {
         &config,
     )
     .expect("append allowed canonical payload");
-    crate::memory::append_turn_direct(
-        "session-session",
-        "assistant",
-        "release checklist",
-        &config,
-    )
-    .expect("append disallowed session hit");
+    crate::memory::append_turn_direct("session-session", "assistant", "release checklist", &config)
+        .expect("append disallowed session hit");
 
     let entries = BuiltinMemorySystem
         .run_retrieve_stage(&request, None, &config, recent_window.as_slice())

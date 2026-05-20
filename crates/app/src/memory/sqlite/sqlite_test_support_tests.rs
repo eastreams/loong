@@ -33,8 +33,7 @@ fn schema_init_counts() -> &'static Mutex<HashMap<PathBuf, usize>> {
 }
 
 fn schema_repair_counts() -> &'static Mutex<HashMap<&'static str, usize>> {
-    static SCHEMA_REPAIR_COUNTS: OnceLock<Mutex<HashMap<&'static str, usize>>> =
-        OnceLock::new();
+    static SCHEMA_REPAIR_COUNTS: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
     SCHEMA_REPAIR_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -44,10 +43,8 @@ fn sqlite_metric_capture() -> &'static Mutex<SqliteMetricCapture> {
 }
 
 fn sqlite_runtime_cache_miss_gate() -> &'static (Mutex<SqliteRuntimeCacheMissGate>, Condvar) {
-    static SQLITE_RUNTIME_CACHE_MISS_GATE: OnceLock<(
-        Mutex<SqliteRuntimeCacheMissGate>,
-        Condvar,
-    )> = OnceLock::new();
+    static SQLITE_RUNTIME_CACHE_MISS_GATE: OnceLock<(Mutex<SqliteRuntimeCacheMissGate>, Condvar)> =
+        OnceLock::new();
     SQLITE_RUNTIME_CACHE_MISS_GATE.get_or_init(|| {
         (
             Mutex::new(SqliteRuntimeCacheMissGate::default()),

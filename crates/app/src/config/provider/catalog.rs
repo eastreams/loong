@@ -613,7 +613,9 @@ pub(super) fn provider_descriptor_aliases(profile: &ProviderProfile) -> Vec<Stri
     aliases
 }
 
-pub(super) fn provider_descriptor_headers(profile: &ProviderProfile) -> Vec<ProviderDescriptorHeader> {
+pub(super) fn provider_descriptor_headers(
+    profile: &ProviderProfile,
+) -> Vec<ProviderDescriptorHeader> {
     let mut headers = Vec::new();
 
     for (name, value) in profile.default_headers {

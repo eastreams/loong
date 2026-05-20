@@ -132,6 +132,9 @@ fn build_channel_surfaces_body_lines(
             continue;
         }
 
+        if operational_model == mvp::channel::ChannelOperationalModel::PluginBacked {
+            lines.push("plugin-backed channels:".to_owned());
+        }
         lines.push(section_title.to_owned());
         for surface in grouped {
             push_channel_surface_block(&mut lines, surface, &channel_access_policies);
@@ -172,8 +175,7 @@ fn render_channel_surface_summary_line(surfaces: &[mvp::channel::ChannelSurface]
     let catalog_only = surfaces
         .iter()
         .filter(|surface| {
-            channel_operational_model(surface)
-                == mvp::channel::ChannelOperationalModel::CatalogOnly
+            channel_operational_model(surface) == mvp::channel::ChannelOperationalModel::CatalogOnly
         })
         .count();
 

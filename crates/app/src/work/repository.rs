@@ -2293,7 +2293,6 @@ fn usize_from_i64(value: i64, label: &str) -> Result<usize, String> {
     usize::try_from(value).map_err(|error| format!("{label} overflowed usize: {error}"))
 }
 
-
 #[cfg(test)]
 #[path = "repository_tests.rs"]
 mod tests;

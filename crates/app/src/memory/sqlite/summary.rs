@@ -1,5 +1,5 @@
-use super::*;
 use super::bootstrap::unix_ts_now;
+use super::*;
 
 pub(super) fn load_context_snapshot(
     session_id: &str,
@@ -377,7 +377,10 @@ fn query_session_turn_count(conn: &Connection, session_id: &str) -> Result<Optio
         .map_err(|error| format!("query session turn count failed: {error}"))
 }
 
-pub(super) fn resolve_actual_turn_count(conn: &Connection, session_id: &str) -> Result<i64, String> {
+pub(super) fn resolve_actual_turn_count(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<i64, String> {
     if let Some(turn_count) = query_session_turn_count(conn, session_id)? {
         return Ok(turn_count.max(0));
     }

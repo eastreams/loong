@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::Path,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, fs, path::Path, path::PathBuf};
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -12,31 +7,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::CliResult;
 use crate::mcp::McpConfig;
+#[path = "runtime_provider_profiles.rs"]
+mod provider_profiles;
 #[path = "runtime_provider_selector.rs"]
 mod provider_selector;
 #[path = "runtime_acp.rs"]
 mod runtime_acp;
-#[path = "runtime_provider_profiles.rs"]
-mod provider_profiles;
 
+use self::provider_profiles::{
+    ActiveProviderSelectionBasis, ProviderSelectionNormalizationReport, RawProviderSelectionIntent,
+    normalize_provider_profile_id, parse_toml_config_components,
+    recover_active_provider_from_legacy_config,
+};
 pub use self::provider_selector::{
     PROVIDER_SELECTOR_COMPACT_NOTE, PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE,
     PROVIDER_SELECTOR_PLACEHOLDER, PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef,
     ProviderSelectorResolution, accepted_provider_selectors, describe_provider_selector_target,
-    preferred_provider_selector, provider_selector_catalog,
-    provider_selector_recommendation_hint, resolve_provider_selector,
-};
-pub(crate) use self::runtime_acp::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
-use self::provider_profiles::{
-    ActiveProviderSelectionBasis, ProviderSelectionNormalizationReport,
-    RawProviderSelectionIntent, normalize_provider_profile_id, parse_toml_config_components,
-    recover_active_provider_from_legacy_config,
+    preferred_provider_selector, provider_selector_catalog, provider_selector_recommendation_hint,
+    resolve_provider_selector,
 };
 pub use self::runtime_acp::{
     AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
     AcpDispatchThreadRoutingMode, AcpxBackendConfig, AcpxMcpServerConfig, ControlPlaneConfig,
     GatewayConfig,
 };
+pub(crate) use self::runtime_acp::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
 
 use super::{
     OnebotChannelConfig, QqbotChannelConfig, WeixinChannelConfig,

@@ -1,6 +1,5 @@
 use kernel::{
-    PluginDiagnosticCode, PluginDiagnosticFinding, PluginDiagnosticPhase,
-    PluginDiagnosticSeverity,
+    PluginDiagnosticCode, PluginDiagnosticFinding, PluginDiagnosticPhase, PluginDiagnosticSeverity,
 };
 
 use super::*;
@@ -112,15 +111,14 @@ fn runtime_activation_profile_blocks_invalid_loaded_attestation() {
         .clone();
     let mut plugin = sample_inventory_result();
     plugin.loaded = true;
-    plugin.activation_attestation =
-        Some(crate::spec_runtime::PluginActivationAttestationResult {
-            attested: true,
-            verified: false,
-            integrity: "invalid".to_owned(),
-            checksum: Some("deadbeefdeadbeef".to_owned()),
-            computed_checksum: Some("beadfeedbeadfeed".to_owned()),
-            issue: Some("plugin activation contract checksum mismatch".to_owned()),
-        });
+    plugin.activation_attestation = Some(crate::spec_runtime::PluginActivationAttestationResult {
+        attested: true,
+        verified: false,
+        integrity: "invalid".to_owned(),
+        checksum: Some("deadbeefdeadbeef".to_owned()),
+        computed_checksum: Some("beadfeedbeadfeed".to_owned()),
+        issue: Some("plugin activation contract checksum mismatch".to_owned()),
+    });
 
     let result = evaluate_plugin_preflight(
         plugin,
@@ -163,8 +161,7 @@ fn runtime_activation_profile_blocks_invalid_loaded_attestation() {
                 .as_ref()
                 .is_some_and(|operator_action| {
                     operator_action.surface == PluginPreflightOperatorActionSurface::HostRuntime
-                        && operator_action.kind
-                            == PluginPreflightOperatorActionKind::ReabsorbPlugin
+                        && operator_action.kind == PluginPreflightOperatorActionKind::ReabsorbPlugin
                         && operator_action.follow_up_profile
                             == Some(PluginPreflightProfile::RuntimeActivation)
                         && operator_action.requires_reload
@@ -487,9 +484,8 @@ fn runtime_activation_surfaces_missing_compatibility_shim_as_blocking_action() {
     plugin.dialect = "openclaw_modern_manifest".to_owned();
     plugin.compatibility_mode = "openclaw_modern".to_owned();
     plugin.activation_status = Some("blocked_compatibility_mode".to_owned());
-    plugin.activation_reason = Some(
-        "runtime matrix does not enable the openclaw_modern compatibility shim".to_owned(),
-    );
+    plugin.activation_reason =
+        Some("runtime matrix does not enable the openclaw_modern compatibility shim".to_owned());
     plugin.diagnostic_findings = vec![PluginDiagnosticFinding {
         code: PluginDiagnosticCode::CompatibilityShimRequired,
         severity: PluginDiagnosticSeverity::Error,
@@ -575,8 +571,7 @@ fn runtime_activation_surfaces_shim_profile_mismatch_as_distinct_blocking_action
             .any(|flag| flag == "compatibility_shim_required")
     );
     assert!(result.recommended_actions.iter().any(|action| {
-        action.remediation_class
-            == PluginPreflightRemediationClass::AlignCompatibilityShimProfile
+        action.remediation_class == PluginPreflightRemediationClass::AlignCompatibilityShimProfile
             && action.blocking
     }));
 }
@@ -796,8 +791,7 @@ fn build_recommended_actions_adds_generic_review_for_unmapped_advisory_findings(
                 .operator_action
                 .as_ref()
                 .is_some_and(|operator_action| {
-                    operator_action.surface
-                        == PluginPreflightOperatorActionSurface::PluginPackage
+                    operator_action.surface == PluginPreflightOperatorActionSurface::PluginPackage
                         && operator_action.kind
                             == PluginPreflightOperatorActionKind::UpdatePluginPackage
                         && operator_action.follow_up_profile

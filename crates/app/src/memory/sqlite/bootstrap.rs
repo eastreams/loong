@@ -1,4 +1,3 @@
-use super::*;
 use super::schema::{
     ensure_approval_lifecycle_tables, ensure_control_plane_pairing_tables,
     ensure_session_event_search_storage, ensure_session_terminal_outcome_storage,
@@ -11,6 +10,7 @@ use super::search::{
     ensure_workspace_memory_search_storage, workspace_memory_search_storage_needs_rebuild,
 };
 use super::summary::ensure_summary_checkpoint_storage_layout;
+use super::*;
 
 pub(super) fn ensure_memory_db_ready(
     path: Option<PathBuf>,
@@ -350,8 +350,8 @@ pub(super) fn sqlite_runtime_registry() -> &'static Mutex<HashMap<PathBuf, Arc<S
     SQLITE_RUNTIME_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(super) fn sqlite_runtime_bootstrap_lock_registry(
-) -> &'static Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> {
+pub(super) fn sqlite_runtime_bootstrap_lock_registry()
+-> &'static Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> {
     static SQLITE_RUNTIME_BOOTSTRAP_LOCK_REGISTRY: OnceLock<
         Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     > = OnceLock::new();
@@ -707,7 +707,6 @@ fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String
         && terminal_outcome_storage_ready
         && session_head_mode_ready)
 }
-
 
 #[cfg(test)]
 pub(super) fn clear_sqlite_runtime_registries_for_tests() {

@@ -78,9 +78,7 @@ pub(super) fn evaluate_plugin_setup_readiness(
     )
 }
 
-pub(super) fn format_plugin_setup_incomplete_reason(
-    readiness: &PluginSetupReadiness,
-) -> String {
+pub(super) fn format_plugin_setup_incomplete_reason(readiness: &PluginSetupReadiness) -> String {
     let mut reasons = Vec::new();
 
     if !readiness.missing_required_env_vars.is_empty() {

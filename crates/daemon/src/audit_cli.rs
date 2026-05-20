@@ -2863,7 +2863,6 @@ fn format_top_rollup(counts: &BTreeMap<String, usize>, limit: usize) -> String {
         .join(",")
 }
 
-
 #[cfg(test)]
 #[path = "audit_cli_tests.rs"]
 mod tests;

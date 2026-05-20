@@ -1030,7 +1030,9 @@ pub(super) fn render_onboard_shortcut_header_lines_with_style(
     render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
-pub(super) fn render_shortcut_default_choice_footer_line(shortcut_kind: OnboardShortcutKind) -> String {
+pub(super) fn render_shortcut_default_choice_footer_line(
+    shortcut_kind: OnboardShortcutKind,
+) -> String {
     render_default_choice_footer_line("1", shortcut_kind.default_choice_description())
 }
 
@@ -1278,7 +1280,10 @@ fn format_starting_point_domain_detail(
     detail
 }
 
-pub(super) fn summarize_starting_point_detail_lines(candidate: &ImportCandidate, width: usize) -> Vec<String> {
+pub(super) fn summarize_starting_point_detail_lines(
+    candidate: &ImportCandidate,
+    width: usize,
+) -> Vec<String> {
     let mut details = Vec::new();
     let max_lines = if width < 68 { 4 } else { 5 };
     let mut detail_lines_used = 0usize;
@@ -1934,7 +1939,9 @@ pub(super) fn onboard_display_line(prefix: &str, value: &str) -> String {
     format!("{prefix}{value}")
 }
 
-pub(super) fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongConfig) -> Vec<String> {
+pub(super) fn build_onboard_review_digest_display_lines(
+    config: &mvp::config::LoongConfig,
+) -> Vec<String> {
     let mut lines = crate::provider_presentation::provider_profile_state_display_lines(
         config,
         Some("- provider: "),
@@ -2042,7 +2049,9 @@ fn push_onboard_review_enabled_channel_lines(
     }
 }
 
-pub(super) fn render_onboard_review_credential_line(provider: &mvp::config::ProviderConfig) -> Option<String> {
+pub(super) fn render_onboard_review_credential_line(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<String> {
     summarize_provider_credential(provider)
         .map(|credential| format!("- {}: {}", credential.label, credential.value))
 }

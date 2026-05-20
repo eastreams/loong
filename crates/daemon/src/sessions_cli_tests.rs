@@ -67,15 +67,17 @@ fn build_session_heal_plan_marks_manual_checkpoint_recovery_as_observe_only() {
         }
     });
 
-    let plan =
-        build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
-            .expect("build heal plan");
+    let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+        .expect("build heal plan");
 
     assert_eq!(plan.actions.len(), 1);
     assert_eq!(plan.actions[0].tool_name, "session_status");
     assert!(!plan.actions[0].can_apply);
     assert_eq!(plan.actions[0].kind, "turn_checkpoint_manual_review");
-    assert_eq!(plan.attention_hints, vec!["checkpoint attention".to_owned()]);
+    assert_eq!(
+        plan.attention_hints,
+        vec!["checkpoint attention".to_owned()]
+    );
 }
 
 #[test]
@@ -99,9 +101,8 @@ fn build_session_heal_plan_adds_turn_checkpoint_repair_action_when_runtime_repai
         }
     });
 
-    let plan =
-        build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
-            .expect("build heal plan");
+    let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+        .expect("build heal plan");
 
     assert_eq!(plan.actions.len(), 1);
     assert_eq!(plan.actions[0].tool_name, "turn_checkpoint_repair");
@@ -127,9 +128,8 @@ fn build_session_heal_plan_preserves_task_surface_commands_for_resume_recipes() 
         }
     });
 
-    let plan =
-        build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
-            .expect("build heal plan");
+    let plan = build_session_heal_plan("/tmp/loong.toml", "ops-root", "session-1", &detail)
+        .expect("build heal plan");
 
     assert_eq!(plan.actions.len(), 1);
     assert_eq!(plan.actions[0].tool_name, "task_status");

@@ -284,9 +284,7 @@ fn ensure_session_head_mode_storage(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn ensure_session_terminal_outcome_storage(
-    conn: &Connection,
-) -> Result<(), String> {
+pub(super) fn ensure_session_terminal_outcome_storage(conn: &Connection) -> Result<(), String> {
     #[cfg(test)]
     test_support::record_sqlite_schema_repair("session_terminal_outcomes");
 

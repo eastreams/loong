@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 mod catalog;
 
+pub use self::catalog::parse_provider_kind_id;
 use self::catalog::{
     PROVIDER_PROFILES, build_provider_descriptor_feature, find_cross_routed_validation_profile,
     provider_descriptor_aliases, provider_descriptor_env_aliases, provider_descriptor_headers,
@@ -17,7 +18,6 @@ use super::shared::{
 use crate::secrets::{
     SecretLookup, has_configured_secret_ref, resolve_secret_lookup, secret_ref_env_name,
 };
-pub use self::catalog::parse_provider_kind_id;
 
 pub(crate) const GITHUB_COPILOT_EDITOR_VERSION: &str = "vscode/1.85.1";
 pub(crate) const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot/1.155.0";

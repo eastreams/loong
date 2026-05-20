@@ -214,7 +214,7 @@ pub(super) fn extract_model_catalog_entries(body: &Value) -> Vec<super::Provider
     model_catalog::extract_model_catalog_entries(body)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub(super) fn extract_model_ids(body: &Value) -> Vec<String> {
     model_catalog::extract_model_ids(body)
 }

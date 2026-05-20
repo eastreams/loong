@@ -234,12 +234,9 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                 .channel_surfaces
                 .iter()
                 .filter(|surface| {
-                    mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(
-                        |descriptor| {
-                            descriptor.runtime_kind
-                                == mvp::channel::ChannelRuntimeKind::RuntimeBacked
-                        },
-                    )
+                    mvp::channel::channel_descriptor(surface.catalog.id).is_some_and(|descriptor| {
+                        descriptor.runtime_kind == mvp::channel::ChannelRuntimeKind::RuntimeBacked
+                    })
                 })
                 .count() as u64
         )

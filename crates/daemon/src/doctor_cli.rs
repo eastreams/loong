@@ -1369,13 +1369,10 @@ fn managed_plugin_bridge_selection_is_ready(
 mod render_support;
 
 use render_support::{
-    managed_bridge_duplicate_plugin_id_counts,
-    managed_bridge_plugin_label,
-    render_managed_bridge_compatible_plugin_labels,
-    render_managed_bridge_configured_plugin_labels,
+    managed_bridge_duplicate_plugin_id_counts, managed_bridge_plugin_label,
+    render_managed_bridge_compatible_plugin_labels, render_managed_bridge_configured_plugin_labels,
     render_managed_plugin_bridge_compatible_plugin_ids,
-    render_managed_plugin_bridge_discovery_plugins,
-    render_runtime_incident_summary,
+    render_managed_plugin_bridge_discovery_plugins, render_runtime_incident_summary,
     render_u32_list,
 };
 

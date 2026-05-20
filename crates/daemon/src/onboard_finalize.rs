@@ -20,8 +20,6 @@ use mvp::tui_surface::{
 const BACKUP_TIMESTAMP_FORMAT: &[FormatItem<'static>] =
     format_description!("[year][month][day]-[hour][minute][second]");
 const CLI_CHANNEL_ID: &str = "cli";
-const MAX_SUGGESTED_RUNTIME_CHANNELS: usize = 3;
-
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigWritePlan {
     pub(crate) force: bool,
@@ -378,45 +376,8 @@ fn collect_onboarding_domain_outcomes(
 }
 
 fn collect_onboarding_suggested_channels(config: &mvp::config::LoongConfig) -> Vec<String> {
-    let has_enabled_non_cli_channels = config
-        .enabled_channel_ids()
-        .into_iter()
-        .any(|channel_id| channel_id != CLI_CHANNEL_ID);
-    if has_enabled_non_cli_channels {
-        return Vec::new();
-    }
-
-    let enabled_service_channel_ids = config.enabled_service_channel_ids();
-    if !enabled_service_channel_ids.is_empty() {
-        return Vec::new();
-    }
-
-    let inventory = mvp::channel::channel_inventory(config);
-    inventory
-        .channel_surfaces
-        .into_iter()
-        .filter_map(|surface| {
-            let serve_operation = surface
-                .catalog
-                .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)?;
-            let implementation_status = surface.catalog.implementation_status;
-            let availability = serve_operation.availability;
-            if implementation_status
-                != mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-            {
-                return None;
-            }
-            if availability != mvp::channel::ChannelCatalogOperationAvailability::Implemented {
-                return None;
-            }
-
-            let label = surface.catalog.label;
-            let selection_label = surface.catalog.selection_label;
-            let suggested_channel = format!("{label} ({selection_label})");
-            Some(suggested_channel)
-        })
-        .take(MAX_SUGGESTED_RUNTIME_CHANNELS)
-        .collect()
+    let _ = config;
+    Vec::new()
 }
 
 fn collect_onboarding_channel_surface_summary(
@@ -425,14 +386,7 @@ fn collect_onboarding_channel_surface_summary(
     let inventory = mvp::channel::channel_inventory(config);
 
     let total_surface_count = inventory.channel_surfaces.len();
-    let runtime_backed_surface_count = inventory
-        .channel_surfaces
-        .iter()
-        .filter(|surface| {
-            surface.catalog.implementation_status
-                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
-        })
-        .count();
+    let runtime_backed_surface_count = config.enabled_runtime_backed_channel_ids().len();
     let config_backed_surface_count = inventory
         .channel_surfaces
         .iter()

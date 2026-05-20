@@ -1,9 +1,9 @@
+#[path = "memory_context.rs"]
+mod memory_context;
 #[path = "test_support.rs"]
 pub mod test_support;
 #[path = "wasm_cache.rs"]
 mod wasm_cache;
-#[path = "memory_context.rs"]
-mod memory_context;
 
 use std::{
     collections::BTreeMap,
@@ -29,12 +29,9 @@ use loong_spec::{
     spec_requires_native_tool_executor,
 };
 pub use memory_context::{
-    MemoryContextBenchmarkReportAugmentContext,
-    MemoryContextBenchmarkReportAugmenter,
-    MemoryContextBenchmarkSuiteRunner,
-    MemoryContextBenchmarkSuiteSamples,
-    MemoryContextColdPathPhaseSamples,
-    MemoryContextShape,
+    MemoryContextBenchmarkReportAugmentContext, MemoryContextBenchmarkReportAugmenter,
+    MemoryContextBenchmarkSuiteRunner, MemoryContextBenchmarkSuiteSamples,
+    MemoryContextColdPathPhaseSamples, MemoryContextShape,
     run_memory_context_benchmark_cli_with_suite_runner,
 };
 use memory_context::{
@@ -271,7 +268,6 @@ struct ProgrammaticPressureBaselineLintReport {
     warning_count: usize,
     issues: Vec<ProgrammaticPressureBaselineIssue>,
 }
-
 
 async fn run_programmatic_pressure_matrix(
     matrix: &ProgrammaticPressureMatrix,
@@ -1592,8 +1588,7 @@ pub fn run_programmatic_pressure_baseline_lint_cli(
         .map(str::to_owned)
         .or_else(|| matrix.baseline_path.clone());
     let baseline_path = selected_baseline_path.ok_or_else(|| {
-        "programmatic pressure baseline lint requires --baseline or matrix.baseline_path"
-            .to_owned()
+        "programmatic pressure baseline lint requires --baseline or matrix.baseline_path".to_owned()
     })?;
     let baseline: ProgrammaticPressureBaseline = read_json_file(&baseline_path)?;
     let lint = lint_programmatic_pressure_baseline(&matrix, &baseline);
@@ -1609,7 +1604,12 @@ pub fn run_programmatic_pressure_baseline_lint_cli(
         spec_run_scenario_count: matrix
             .scenarios
             .iter()
-            .filter(|scenario| matches!(scenario.kind, ProgrammaticPressureScenarioKind::SpecRun { .. }))
+            .filter(|scenario| {
+                matches!(
+                    scenario.kind,
+                    ProgrammaticPressureScenarioKind::SpecRun { .. }
+                )
+            })
             .count(),
         baseline_scenario_count: baseline.scenarios.len(),
         fail_on_warnings,
@@ -1648,7 +1648,6 @@ pub fn run_programmatic_pressure_baseline_lint_cli(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1671,7 +1670,6 @@ mod tests {
             Some("circuit_open".to_owned())
         );
     }
-
 
     #[test]
     fn benchmark_copy_strategy_defaults_to_stable_fs_copy() {
@@ -1705,7 +1703,6 @@ mod tests {
             wasm_cache::BenchmarkCopyStrategy::MacosCloneCp
         );
     }
-
 
     #[test]
     fn benchmark_matrix_and_baseline_fixtures_parse() {

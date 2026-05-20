@@ -82,53 +82,36 @@ use self::screen_spec_support::*;
 #[path = "onboard_cli_render.rs"]
 mod onboard_cli_render;
 pub use self::onboard_cli_render::{
-    append_escape_cancel_hint,
+    append_escape_cancel_hint, collect_import_candidates_with_paths,
     render_api_key_env_selection_screen_lines,
     render_api_key_env_selection_screen_lines_with_default,
-    render_continue_current_setup_screen_lines,
-    render_continue_detected_setup_screen_lines,
-    collect_import_candidates_with_paths,
+    render_continue_current_setup_screen_lines, render_continue_detected_setup_screen_lines,
     render_current_setup_review_lines_with_guidance,
-    render_current_setup_write_confirmation_screen_lines,
+    render_current_setup_write_confirmation_screen_lines, render_default_choice_footer_line,
     render_detected_setup_review_lines_with_guidance,
     render_detected_setup_write_confirmation_screen_lines,
-    render_existing_config_write_screen_lines,
-    render_model_selection_screen_lines,
-    render_model_selection_screen_lines_with_default,
-    render_onboard_entry_screen_lines,
-    render_onboard_review_lines_with_guidance,
-    render_onboarding_risk_screen_lines,
-    render_provider_selection_screen_lines,
-    render_single_detected_setup_preview_screen_lines,
-    render_starting_point_selection_screen_lines,
-    render_system_prompt_selection_screen_lines,
+    render_existing_config_write_screen_lines, render_model_selection_screen_lines,
+    render_model_selection_screen_lines_with_default, render_onboard_entry_screen_lines,
+    render_onboard_review_lines_with_guidance, render_onboarding_risk_screen_lines,
+    render_provider_selection_screen_lines, render_single_detected_setup_preview_screen_lines,
+    render_starting_point_selection_screen_lines, render_system_prompt_selection_screen_lines,
     render_system_prompt_selection_screen_lines_with_default,
-    render_default_choice_footer_line,
-    render_write_confirmation_screen_lines,
-    summarize_prompt_addendum,
-    summarize_prompt_mode,
+    render_write_confirmation_screen_lines, summarize_prompt_addendum, summarize_prompt_mode,
     summarize_provider_credential,
 };
 use self::onboard_cli_render::{
     build_onboard_review_candidate_with_selected_context,
-    build_onboard_review_digest_display_lines,
-    prompt_onboard_entry_choice,
+    build_onboard_review_digest_display_lines, prompt_onboard_entry_choice,
     render_api_key_env_selection_screen_lines_with_style,
     render_existing_config_write_header_lines_with_style,
-    render_model_selection_screen_lines_with_style,
-    render_onboard_choice_screen,
+    render_model_selection_screen_lines_with_style, render_onboard_choice_screen,
     render_onboard_entry_interactive_screen_lines_with_style,
     render_onboard_review_lines_with_guidance_and_style,
-    render_onboard_shortcut_header_lines_with_style,
-    render_prompt_with_default_text,
-    render_provider_selection_header_lines,
-    render_system_prompt_selection_screen_lines_with_style,
-    render_web_search_credential_selection_screen_lines_with_style,
-    screen_subtitle,
-    select_interactive_import_starting_config,
-    start_fresh_starting_point_detail_lines,
-    summarize_starting_point_detail_lines,
-    tui_header_style,
+    render_onboard_shortcut_header_lines_with_style, render_prompt_with_default_text,
+    render_provider_selection_header_lines, render_system_prompt_selection_screen_lines_with_style,
+    render_web_search_credential_selection_screen_lines_with_style, screen_subtitle,
+    select_interactive_import_starting_config, start_fresh_starting_point_detail_lines,
+    summarize_starting_point_detail_lines, tui_header_style,
 };
 #[cfg(test)]
 use self::onboard_cli_render::{
@@ -2693,7 +2676,6 @@ fn print_onboard_entry_options(
         ),
     )
 }
-
 
 fn prompt_import_candidate_choice(
     ui: &mut impl OnboardUi,

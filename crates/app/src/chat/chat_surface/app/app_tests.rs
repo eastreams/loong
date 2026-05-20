@@ -1,4 +1,3 @@
-
 use super::{
     App, Focus, LiveTranscriptState, StartupBootstrapCapture, StartupOnboardingAction,
     StartupOnboardingInteractionKind, StartupOnboardingStage, StartupOnboardingState,

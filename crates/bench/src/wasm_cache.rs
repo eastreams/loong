@@ -1,6 +1,4 @@
-use super::{
-    NumericStats, current_epoch_seconds, write_json_file,
-};
+use super::{NumericStats, current_epoch_seconds, write_json_file};
 use kernel::{BridgeSupportMatrix, ChannelConfig, ConnectorCommand, ProviderConfig};
 use loong_spec::{
     BridgeRuntimePolicy, CliResult, ConnectorCircuitBreakerPolicy, execute_wasm_component_bridge,
@@ -80,8 +78,7 @@ pub fn run_wasm_cache_benchmark_cli(
         return Err("wasm cache benchmark requires hot_iterations > 0".to_owned());
     }
 
-    let normalized_min_speedup_ratio = if min_speedup_ratio.is_finite() && min_speedup_ratio > 0.0
-    {
+    let normalized_min_speedup_ratio = if min_speedup_ratio.is_finite() && min_speedup_ratio > 0.0 {
         min_speedup_ratio
     } else {
         DEFAULT_WASM_CACHE_MIN_SPEEDUP_RATIO
@@ -242,12 +239,9 @@ pub fn run_wasm_cache_benchmark_cli(
 
 fn write_synthetic_wasm_benchmark_module(path: &Path) -> CliResult<()> {
     const SYNTHETIC_WASM_WITH_RUN_EXPORT: &[u8] = &[
-        0x00, 0x61, 0x73, 0x6d,
-        0x01, 0x00, 0x00, 0x00,
-        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-        0x03, 0x02, 0x01, 0x00,
-        0x07, 0x07, 0x01, 0x03, 0x72, 0x75, 0x6e, 0x00, 0x00,
-        0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x72, 0x75, 0x6e, 0x00, 0x00, 0x0a, 0x04, 0x01,
+        0x02, 0x00, 0x0b,
     ];
     fs::write(path, SYNTHETIC_WASM_WITH_RUN_EXPORT)
         .map_err(|error| format!("failed to write synthetic wasm benchmark module: {error}"))?;

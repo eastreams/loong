@@ -246,9 +246,7 @@ fn discovery_group_identity_filters(
 
     match group_by {
         "pack" => merge_discovery_group_filter(&mut pack_id_filter, group.group_value.as_ref())?,
-        "agent" => {
-            merge_discovery_group_filter(&mut agent_id_filter, group.group_value.as_ref())?
-        }
+        "agent" => merge_discovery_group_filter(&mut agent_id_filter, group.group_value.as_ref())?,
         _ => return None,
     }
 

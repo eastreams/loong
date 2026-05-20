@@ -5,11 +5,11 @@ use std::{
 
 use serde::Serialize;
 
-use super::resolve_memory_context_benchmark_temp_root;
+use super::super::Value;
 use super::super::{
     CliResult, NumericStats, compute_numeric_stats, current_epoch_seconds, write_json_file,
 };
-use super::super::Value;
+use super::resolve_memory_context_benchmark_temp_root;
 
 const DEFAULT_MEMORY_CONTEXT_MIN_SPEEDUP_RATIO: f64 = 1.2;
 const DEFAULT_MEMORY_CONTEXT_WINDOW_COVER_SOFT_MAX_RATIO_P95: f64 = 1.15;

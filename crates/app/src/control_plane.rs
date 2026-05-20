@@ -2543,7 +2543,6 @@ fn normalize_control_plane_session_id(raw: &str) -> String {
     }
 }
 
-
 #[cfg(test)]
 #[path = "control_plane_tests.rs"]
 mod tests;

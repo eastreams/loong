@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 
 use crate::plugin::{
     PluginCompatibilityShim, PluginContractDialect, PluginManifest, PluginSourceKind,

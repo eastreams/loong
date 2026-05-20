@@ -641,52 +641,36 @@ fn build_channel_inventory_summary_read_model(
     let total_surface_count = channel_surfaces.len();
     let runtime_backed_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            channel_runtime_kind_text(surface.catalog.id) == "runtime_backed"
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "runtime_backed")
         .count();
     let config_backed_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            channel_runtime_kind_text(surface.catalog.id) == "outbound_only"
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "outbound_only")
         .count();
     let plugin_backed_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            channel_runtime_kind_text(surface.catalog.id) == "plugin_backed"
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "plugin_backed")
         .count();
     let catalog_only_surface_count = channel_surfaces
         .iter()
-        .filter(|surface| {
-            channel_runtime_kind_text(surface.catalog.id) == "catalog_only"
-        })
+        .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "catalog_only")
         .count();
     let runtime_kind_counts = GatewayChannelRuntimeKindCountsReadModel {
         runtime_backed: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_runtime_kind_text(surface.catalog.id) == "runtime_backed"
-            })
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "runtime_backed")
             .count(),
         plugin_backed: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_runtime_kind_text(surface.catalog.id) == "plugin_backed"
-            })
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "plugin_backed")
             .count(),
         outbound_only: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_runtime_kind_text(surface.catalog.id) == "outbound_only"
-            })
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "outbound_only")
             .count(),
         catalog_only: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_runtime_kind_text(surface.catalog.id) == "catalog_only"
-            })
+            .filter(|surface| channel_runtime_kind_text(surface.catalog.id) == "catalog_only")
             .count(),
     };
     let operational_model_counts = GatewayChannelOperationalModelCountsReadModel {
@@ -704,21 +688,15 @@ fn build_channel_inventory_summary_read_model(
             .count(),
         plugin_backed: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_operational_model_text(surface.catalog.id) == "plugin_backed"
-            })
+            .filter(|surface| channel_operational_model_text(surface.catalog.id) == "plugin_backed")
             .count(),
         outbound_only: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_operational_model_text(surface.catalog.id) == "outbound_only"
-            })
+            .filter(|surface| channel_operational_model_text(surface.catalog.id) == "outbound_only")
             .count(),
         catalog_only: channel_surfaces
             .iter()
-            .filter(|surface| {
-                channel_operational_model_text(surface.catalog.id) == "catalog_only"
-            })
+            .filter(|surface| channel_operational_model_text(surface.catalog.id) == "catalog_only")
             .count(),
     };
 
@@ -1403,7 +1381,10 @@ fn build_operator_channels_summary_read_model(
     let plugin_backed_channel_count = channel_inventory
         .channel_catalog
         .iter()
-        .filter(|channel| channel.runtime_kind == "plugin_backed")
+        .filter(|channel| {
+            channel.catalog.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::PluginBacked
+        })
         .count();
     let catalog_only_channel_count = channel_inventory
         .channel_catalog

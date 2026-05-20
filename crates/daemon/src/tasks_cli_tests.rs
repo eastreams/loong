@@ -281,8 +281,12 @@ fn best_effort_task_approvals_payload_falls_back_when_session_tools_are_disabled
         task_session_id: "delegate-session-1".to_owned(),
     };
 
-    let (payload, lookup_error) =
-        load_best_effort_task_approvals_payload(&memory_config, &tool_config, "ops-root", &task_target);
+    let (payload, lookup_error) = load_best_effort_task_approvals_payload(
+        &memory_config,
+        &tool_config,
+        "ops-root",
+        &task_target,
+    );
 
     assert_eq!(payload["matched_count"], 0);
     assert_eq!(payload["returned_count"], 0);
@@ -307,8 +311,12 @@ fn best_effort_task_tool_policy_payload_falls_back_when_session_tools_are_disabl
         task_session_id: "delegate-session-1".to_owned(),
     };
 
-    let (payload, lookup_error) =
-        load_best_effort_task_tool_policy_payload(&memory_config, &tool_config, "ops-root", &task_target);
+    let (payload, lookup_error) = load_best_effort_task_tool_policy_payload(
+        &memory_config,
+        &tool_config,
+        "ops-root",
+        &task_target,
+    );
 
     assert!(
         payload.is_null(),
@@ -400,7 +408,10 @@ fn compose_task_detail_payload_keeps_core_status_truth_when_secondary_lookups_de
     assert_eq!(detail["task_session_id"], "delegate-session-1");
     assert_eq!(detail["owner_session_id"], "delegate-session-1");
     assert_eq!(detail["approval_lookup_error"], "approval lookup failed");
-    assert_eq!(detail["tool_policy_lookup_error"], "tool policy lookup failed");
+    assert_eq!(
+        detail["tool_policy_lookup_error"],
+        "tool policy lookup failed"
+    );
     assert_eq!(detail["tool_policy"], Value::Null);
     assert_eq!(detail["approval"]["matched_count"], 0);
     assert_eq!(detail["terminal_outcome_state"], "missing");

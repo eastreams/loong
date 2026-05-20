@@ -343,28 +343,46 @@ fn collect_configured_runtime_channel_next_actions(
     }
 
     let inventory = mvp::channel::channel_inventory(config);
-    inventory
+    let surfaces = inventory
         .channel_surfaces
         .into_iter()
         .filter(|surface| enabled_channel_ids.contains(surface.catalog.id))
         .filter_map(|surface| {
-            let serve_operation = surface
-                .catalog
-                .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)?;
-            if serve_operation.availability
-                != mvp::channel::ChannelCatalogOperationAvailability::Implemented
-            {
-                return None;
-            }
+            let command = {
+                let serve_operation = surface
+                    .catalog
+                    .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)?;
+                if serve_operation.availability
+                    != mvp::channel::ChannelCatalogOperationAvailability::Implemented
+                {
+                    return None;
+                }
+                serve_operation.command.to_owned()
+            };
+            Some((surface, command))
+        })
+        .collect::<Vec<_>>();
 
-            Some(ChannelNextAction {
-                id: surface.catalog.id,
-                label: surface.catalog.label,
-                command: crate::cli_handoff::format_subcommand_with_config(
-                    serve_operation.command,
-                    config_path,
-                ),
-            })
+    if surfaces.len() > 1 {
+        let runtime_surfaces = surfaces
+            .iter()
+            .map(|(surface, _)| surface.clone())
+            .collect::<Vec<_>>();
+        return vec![build_configured_channel_inspection_action(
+            config_path,
+            &runtime_surfaces,
+        )];
+    }
+
+    surfaces
+        .into_iter()
+        .map(|(surface, command)| ChannelNextAction {
+            id: surface.catalog.id,
+            label: surface.catalog.label,
+            command: crate::cli_handoff::format_subcommand_with_config(
+                command.as_str(),
+                config_path,
+            ),
         })
         .collect()
 }

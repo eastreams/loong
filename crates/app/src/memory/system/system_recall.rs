@@ -1,8 +1,7 @@
-use super::*;
 use super::system_builtin::{
-    build_workspace_retrieval_plan_result, derive_session_overview_entry,
-    rank_recall_first_entries,
+    build_workspace_retrieval_plan_result, derive_session_overview_entry, rank_recall_first_entries,
 };
+use super::*;
 
 #[derive(Default)]
 pub struct WorkspaceRecallMemorySystem;

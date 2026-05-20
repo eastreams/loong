@@ -140,12 +140,13 @@ pub(super) const TELEGRAM_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: TELEGRAM_SERVE_DOCTOR_CHECKS,
     },
 ];
-pub(super) const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "install and configure a Telegram bridge plugin that declares setup.surface=channel plus telegram bot credentials, allowed chat ids, and optional mention gating before serving the managed bridge surface",
-    status_command: "loong doctor",
-    repair_command: None,
-};
+pub(super) const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::PluginBridge,
+        setup_hint: "install and configure a Telegram bridge plugin that declares setup.surface=channel plus telegram bot credentials, allowed chat ids, and optional mention gating before serving the managed bridge surface",
+        status_command: "loong doctor",
+        repair_command: None,
+    };
 
 pub(super) const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
@@ -311,12 +312,13 @@ pub(super) const FEISHU_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: FEISHU_SERVE_DOCTOR_CHECKS,
     },
 ];
-pub(super) const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "install and configure a Feishu/Lark bridge plugin that declares setup.surface=channel plus app credentials, allowed chat ids, serve mode, and any webhook verification inputs before serving the managed bridge surface",
-    status_command: "loong doctor",
-    repair_command: None,
-};
+pub(super) const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::PluginBridge,
+        setup_hint: "install and configure a Feishu/Lark bridge plugin that declares setup.surface=channel plus app credentials, allowed chat ids, serve mode, and any webhook verification inputs before serving the managed bridge surface",
+        status_command: "loong doctor",
+        repair_command: None,
+    };
 
 pub const QQBOT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
     ChannelCatalogCommandFamilyDescriptor {
@@ -433,12 +435,13 @@ pub(super) const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     },
 ];
 
-pub(super) const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure qqbot app credentials plus allowed_peer_ids in loong.toml; Loong owns the native QQ gateway runtime and serves it directly through `channels serve qqbot`",
-    status_command: "loong doctor",
-    repair_command: Some("loong doctor --fix"),
-};
+pub(super) const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::ManualConfig,
+        setup_hint: "configure qqbot app credentials plus allowed_peer_ids in loong.toml; Loong owns the native QQ gateway runtime and serves it directly through `channels serve qqbot`",
+        status_command: "loong doctor",
+        repair_command: Some("loong doctor --fix"),
+    };
 
 pub(super) const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     id: CHANNEL_OPERATION_SEND_ID,
@@ -622,12 +625,13 @@ pub(super) const MATRIX_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
         doctor_checks: MATRIX_SERVE_DOCTOR_CHECKS,
     },
 ];
-pub(super) const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
-    strategy: ChannelOnboardingStrategy::PluginBridge,
-    setup_hint: "install and configure a Matrix bridge plugin that declares setup.surface=channel plus matrix access tokens, homeserver base url, allowed room ids, and optional mention gating before serving the managed bridge surface",
-    status_command: "loong doctor",
-    repair_command: None,
-};
+pub(super) const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
+    ChannelOnboardingDescriptor {
+        strategy: ChannelOnboardingStrategy::PluginBridge,
+        setup_hint: "install and configure a Matrix bridge plugin that declares setup.surface=channel plus matrix access tokens, homeserver base url, allowed room ids, and optional mention gating before serving the managed bridge surface",
+        status_command: "loong doctor",
+        repair_command: None,
+    };
 
 pub(super) fn build_telegram_snapshots(
     descriptor: &ChannelRegistryDescriptor,

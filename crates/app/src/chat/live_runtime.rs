@@ -2425,7 +2425,6 @@ fn build_cli_chat_live_tool_section(
     })
 }
 
-
 #[cfg(test)]
 #[path = "live_runtime_tests.rs"]
 mod tests;

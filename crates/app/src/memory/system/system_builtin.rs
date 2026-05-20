@@ -833,7 +833,9 @@ pub(super) fn run_builtin_retrieve_stage(
     Ok(Some(entries))
 }
 
-pub(super) fn rank_recall_first_entries(entries: Vec<MemoryContextEntry>) -> Vec<MemoryContextEntry> {
+pub(super) fn rank_recall_first_entries(
+    entries: Vec<MemoryContextEntry>,
+) -> Vec<MemoryContextEntry> {
     let mut profile_entries = Vec::new();
     let mut derived_entries = Vec::new();
     let mut retrieved_entries = Vec::new();
@@ -1196,10 +1198,7 @@ fn render_session_overview_block(records: &[CanonicalMemoryRecord]) -> String {
     sections.join("\n\n")
 }
 
-fn count_canonical_kind(
-    records: &[CanonicalMemoryRecord],
-    kind: CanonicalMemoryKind,
-) -> usize {
+fn count_canonical_kind(records: &[CanonicalMemoryRecord], kind: CanonicalMemoryKind) -> usize {
     records.iter().filter(|record| record.kind == kind).count()
 }
 

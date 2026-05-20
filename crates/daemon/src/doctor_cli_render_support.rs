@@ -1,6 +1,8 @@
 use super::*;
 
-pub(super) fn render_managed_plugin_bridge_compatible_plugin_ids(compatible_plugin_ids: &[String]) -> String {
+pub(super) fn render_managed_plugin_bridge_compatible_plugin_ids(
+    compatible_plugin_ids: &[String],
+) -> String {
     crate::render_line_safe_text_values(compatible_plugin_ids.iter().map(String::as_str), ",")
 }
 

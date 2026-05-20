@@ -146,14 +146,15 @@ pub mod feishu_support;
 mod first_run_action_presentation;
 pub mod gateway;
 pub mod import_cli;
+mod lib_default_entry;
+mod lib_runtime_snapshot_support;
+mod lib_spec_io;
 mod managed_plugin_bridge_runtime;
 mod mcp_cli;
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
 pub mod migrate_cli;
 pub mod migration;
-mod lib_default_entry;
-mod lib_spec_io;
 pub mod next_actions;
 mod observability;
 pub mod onboard_cli;
@@ -187,7 +188,6 @@ mod runtime_snapshot_compaction_assessment;
 mod runtime_snapshot_compaction_hygiene;
 mod runtime_snapshot_compaction_presentation;
 mod runtime_snapshot_compaction_sequence;
-mod lib_runtime_snapshot_support;
 mod runtime_snapshot_render;
 mod runtime_snapshot_types;
 pub mod runtime_trajectory_cli;
@@ -237,27 +237,27 @@ use first_run_action_presentation::{
     build_first_run_action_sections, first_run_group_for_setup_action_kind,
 };
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
+pub(crate) use lib_runtime_snapshot_support::{
+    RUNTIME_TOOL_ACCESS_SEPARATION_NOTE, RuntimeToolAccessSummary,
+    collect_runtime_snapshot_cli_state_from_loaded_config,
+    collect_runtime_snapshot_runtime_plugins_state, persist_json_artifact,
+};
+pub use lib_runtime_snapshot_support::{
+    RuntimeSnapshotArtifactDocument, RuntimeSnapshotArtifactLineage,
+    RuntimeSnapshotArtifactMetadata, RuntimeSnapshotArtifactSchema, RuntimeSnapshotCliState,
+    RuntimeSnapshotInventoryStatus, RuntimeSnapshotRestoreManagedSkillSpec,
+    RuntimeSnapshotRestoreManagedSkillsSpec, RuntimeSnapshotRestoreProviderSpec,
+    RuntimeSnapshotRestoreSpec, RuntimeSnapshotRuntimePluginState,
+    RuntimeSnapshotRuntimePluginsState, RuntimeSnapshotSkillsState,
+    build_runtime_snapshot_artifact_json_payload, collect_runtime_snapshot_cli_state,
+    run_runtime_snapshot_cli,
+};
 pub use loong_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
 use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
 use runtime_snapshot_compaction_hygiene::collect_runtime_snapshot_compaction_hygiene_state;
-pub use lib_runtime_snapshot_support::{
-    RuntimeSnapshotArtifactDocument, RuntimeSnapshotArtifactLineage,
-    RuntimeSnapshotArtifactMetadata, RuntimeSnapshotArtifactSchema,
-    RuntimeSnapshotCliState, RuntimeSnapshotInventoryStatus,
-    RuntimeSnapshotRestoreManagedSkillSpec, RuntimeSnapshotRestoreManagedSkillsSpec,
-    RuntimeSnapshotRestoreProviderSpec, RuntimeSnapshotRestoreSpec,
-    RuntimeSnapshotRuntimePluginState, RuntimeSnapshotRuntimePluginsState,
-    RuntimeSnapshotSkillsState, build_runtime_snapshot_artifact_json_payload,
-    collect_runtime_snapshot_cli_state, run_runtime_snapshot_cli,
-};
-pub(crate) use lib_runtime_snapshot_support::{
-    RUNTIME_TOOL_ACCESS_SEPARATION_NOTE, RuntimeToolAccessSummary,
-    collect_runtime_snapshot_cli_state_from_loaded_config,
-    collect_runtime_snapshot_runtime_plugins_state, persist_json_artifact,
-};
 pub use runtime_snapshot_render::render_runtime_snapshot_text;
 pub(crate) use runtime_snapshot_render::{
     runtime_snapshot_acp_json, runtime_snapshot_context_engine_json,
@@ -304,11 +304,11 @@ pub use channel_serve_cli::{
 
 pub const PUBLIC_GITHUB_REPO: &str = "loong-ai/loong";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
+pub(crate) use lib_default_entry::resolved_default_entry_config_path;
 pub use lib_default_entry::{
     redacted_command_name, render_welcome_banner, resolve_default_entry_command,
     resolve_default_entry_post_onboard_command, run_welcome_cli,
 };
-pub(crate) use lib_default_entry::resolved_default_entry_config_path;
 #[cfg(test)]
 use lib_default_entry::{resolve_welcome_config_path, should_resolve_default_entry_to_chat};
 pub use lib_spec_io::{
@@ -2952,7 +2952,6 @@ pub fn format_usize_rollup(values: &BTreeMap<String, usize>) -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -236,7 +236,10 @@ fn qqbot_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
 }
 
 fn whatsapp_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
-    BackgroundChannelSurface::new(mvp::channel::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, account_id)
+    BackgroundChannelSurface::new(
+        mvp::channel::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+        account_id,
+    )
 }
 
 #[tokio::test(flavor = "current_thread")]

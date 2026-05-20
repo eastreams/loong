@@ -41,28 +41,24 @@ mod tests;
 use self::bootstrap::{
     acquire_memory_runtime, default_window_size, default_window_size_u64,
     normalize_runtime_db_path, open_sqlite_connection_with_diagnostics,
-    prepare_cached_sqlite_statement, query_max_turn_id_for_session,
-    query_transcript_page_after_id, sqlite_runtime_bootstrap_lock_registry,
-    sqlite_runtime_path_alias_registry, sqlite_runtime_registry, unix_ts_now,
+    prepare_cached_sqlite_statement, query_max_turn_id_for_session, query_transcript_page_after_id,
+    sqlite_runtime_bootstrap_lock_registry, sqlite_runtime_path_alias_registry,
+    sqlite_runtime_registry, unix_ts_now,
 };
 #[cfg(test)]
 use self::bootstrap::{
-    configure_sqlite_connection, normalize_runtime_db_path_best_effort,
-    read_sqlite_user_version, write_sqlite_user_version,
+    configure_sqlite_connection, normalize_runtime_db_path_best_effort, read_sqlite_user_version,
+    write_sqlite_user_version,
 };
-use self::schema::{
-    session_event_search_text, sqlite_table_columns, sqlite_table_has_column,
-};
-use self::search::{
-    build_canonical_insert_input, insert_canonical_record,
-};
+use self::schema::{session_event_search_text, sqlite_table_columns, sqlite_table_has_column};
+use self::search::{build_canonical_insert_input, insert_canonical_record};
+#[cfg(test)]
+use self::summary::{append_summary_line, prompt_window_turn_is_visible};
 use self::summary::{
     delete_summary_checkpoint, load_summary_append_maintenance_state,
     maintain_summary_checkpoint_after_append, materialize_initial_summary_checkpoint,
     reserve_next_session_turn_index, resolve_actual_turn_count,
 };
-#[cfg(test)]
-use self::summary::{append_summary_line, prompt_window_turn_is_visible};
 
 pub(super) fn ensure_memory_db_ready(
     path: Option<PathBuf>,
@@ -94,7 +90,13 @@ pub(super) fn search_workspace_memory_documents(
     memory_system_id: &str,
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<WorkspaceMemoryIndexedSearchHit>, String> {
-    search::search_workspace_memory_documents(query, limit, workspace_root, memory_system_id, config)
+    search::search_workspace_memory_documents(
+        query,
+        limit,
+        workspace_root,
+        memory_system_id,
+        config,
+    )
 }
 
 pub(super) fn load_context_snapshot(

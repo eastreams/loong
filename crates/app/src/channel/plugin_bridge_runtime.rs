@@ -882,7 +882,6 @@ mod tests {
         assert!(binding.supports_operation(CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION));
     }
 
-
     #[test]
     fn process_command_is_allowed_rejects_path_spoofing() {
         let allowed_commands = vec!["python3".to_owned()];

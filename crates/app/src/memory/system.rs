@@ -21,11 +21,7 @@ mod system_recall;
 #[path = "system/system_tests.rs"]
 mod tests;
 
-use self::system_builtin::{
-    build_builtin_retrieval_plan_result, run_builtin_retrieve_stage,
-};
 pub use self::system_builtin::BuiltinMemorySystem;
-pub use self::system_recall::{RecallFirstMemorySystem, WorkspaceRecallMemorySystem};
 #[cfg(test)]
 use self::system_builtin::{
     BuiltinRetrievalPlan, BuiltinRetrievalPlannerInputs, SeededWorkspaceRetrievalPlan,
@@ -33,6 +29,8 @@ use self::system_builtin::{
     filter_cross_session_recall_hits, structured_signal_query_seed_from_records,
     workflow_task_policy_from_metadata, workflow_task_query_seed_from_metadata,
 };
+use self::system_builtin::{build_builtin_retrieval_plan_result, run_builtin_retrieve_stage};
+pub use self::system_recall::{RecallFirstMemorySystem, WorkspaceRecallMemorySystem};
 
 pub const MEMORY_SYSTEM_API_VERSION: u16 = 1;
 pub const DEFAULT_MEMORY_SYSTEM_ID: &str = "builtin";

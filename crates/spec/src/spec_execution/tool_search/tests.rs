@@ -261,7 +261,10 @@ fn execute_tool_search_surfaces_plugin_provenance_and_setup_metadata() {
         report.results[0].source_kind.as_deref(),
         Some("package_manifest")
     );
-    assert_eq!(report.results[0].package_root.as_deref(), Some("/tmp/tavily"));
+    assert_eq!(
+        report.results[0].package_root.as_deref(),
+        Some("/tmp/tavily")
+    );
     assert_eq!(
         report.results[0].package_manifest_path.as_deref(),
         Some("/tmp/tavily/loong.plugin.json")
@@ -836,9 +839,7 @@ fn execute_tool_search_surfaces_shim_support_profile_and_mismatch_reasons() {
             source_path: "/tmp/openclaw-weather/openclaw.plugin.json".to_owned(),
             source_kind: PluginSourceKind::PackageManifest,
             package_root: "/tmp/openclaw-weather".to_owned(),
-            package_manifest_path: Some(
-                "/tmp/openclaw-weather/openclaw.plugin.json".to_owned(),
-            ),
+            package_manifest_path: Some("/tmp/openclaw-weather/openclaw.plugin.json".to_owned()),
             trust_tier: kernel::PluginTrustTier::Unverified,
             compatibility_mode: PluginCompatibilityMode::OpenClawModern,
             compatibility_shim: Some(shim.clone()),
