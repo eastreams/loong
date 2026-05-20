@@ -271,3 +271,104 @@ If you want to help where it matters most right now, read [Contribution Areas](s
     </picture>
   </a>
 </p>
+
+## ❓ FAQ (Frequently Asked Questions)
+
+### What is Loong?
+
+Loong (🐉) is a lightweight, clear, and fully extensible AI agent infrastructure built in Rust. It provides a secure and controlled base for longer-horizon workflow construction, compound task execution, and closed-loop improvement — enabling people and AI to collaborate in real-world scenarios.
+
+### How does Loong differ from other agent frameworks?
+
+| Feature | Loong | OpenClaw | Claude Code |
+|---------|-------|----------|-------------|
+| Language | Rust | TypeScript | TypeScript |
+| Architecture | Secure base + extensions | Agent-centric | IDE-centric |
+| Configuration | 42+ providers, 25+ channels | Flexible | Fixed |
+| Transparency | Operator shells | Flat commands | IDE-bound |
+| Security | Explicit runtime boundaries | Default | Default |
+
+### Why choose Loong?
+
+- **🚀 Rich configuration out of the box**: 42+ built-in providers, 25+ channels
+- **👀 Transparent and controllable**: Commands grouped under named operator shells
+- **🛡️ Secure and controllable base**: Provider selection, tools, memory within explicit boundaries
+- **⚡ Easy to start**: Few commands to get running
+- **🧭 Transparent boundaries**: Assistant, gateway, channels operate independently
+- **🌱 Not a toy**: Designed for long-term use, grows with needs
+
+### What are the key components?
+
+- **sessions**: Session management
+- **skills**: Reusable skill modules
+- **channels**: Communication channels
+- **gateway**: LLM gateway service
+- **runtime**: Execution runtime
+- **plugins**: Extension plugins
+- **feishu**: Feishu integration
+
+### What LLM providers are supported?
+
+42+ built-in providers including:
+- OpenAI, Anthropic, Google
+- DeepSeek, Qwen, InternLM
+- Azure OpenAI, AWS Bedrock
+- Ollama, vLLM (local)
+
+### How do I get started?
+
+**Linux/macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.sh | bash -s -- --onboard
+```
+
+**Windows PowerShell:**
+```powershell
+pwsh -Onboard
+```
+
+### Is Loong compatible with other tools?
+
+Yes! Compatible with configurations from:
+- OpenClaw
+- Claude Code
+- Codex
+- OpenCode
+
+### What is the command-line entrypoint?
+
+Loong uses `loong` as the only supported CLI entrypoint.
+
+### Does Loong support skills?
+
+Yes, skills are reusable modules that can be customized for vertical domains.
+
+### What channels are available?
+
+25+ channels including:
+- Feishu (飞书)
+- WeChat (微信)
+- Telegram
+- Discord
+- Slack
+- Email (IMAP/SMTP)
+
+### Is there documentation?
+
+Yes: https://loongclaw.ai (site/index.mdx)
+
+### How can I contribute?
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### License
+
+MIT License (LICENSE-MIT)
+
+### Help Resources
+
+- 📖 Documentation: https://loongclaw.ai
+- 💬 Discord: https://discord.gg/7kSTX9mca
+- 📱 Telegram: https://t.me/loongclaw
+- 🐛 Issues: https://github.com/eastreams/loong/issues
+- 🌍 Community: X, Reddit, Xiaohongshu (小红书), WeChat
