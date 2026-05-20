@@ -59,15 +59,18 @@ pub fn initialize_runtime_environment(config: &LoongConfig, resolved_config_path
         config.tools.shell_default_mode.as_str(),
     );
     let configured_file_root = config.tools.configured_file_root();
-    match configured_file_root {
+    match configured_file_root.as_ref() {
         Some(configured_file_root) => {
             let configured_file_root_text = configured_file_root.display().to_string();
             set_env_var("LOONG_FILE_ROOT", configured_file_root_text);
         }
         None => remove_env_var("LOONG_FILE_ROOT"),
     }
-    let workspace_root = std::env::current_dir()
-        .ok()
+    let workspace_root = config
+        .tools
+        .configured_runtime_workspace_root()
+        .or(configured_file_root)
+        .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| config.tools.resolved_file_root());
     let workspace_root = dunce::canonicalize(&workspace_root).unwrap_or(workspace_root);
     set_env_var("LOONG_WORKSPACE_ROOT", workspace_root.display().to_string());
@@ -306,14 +309,9 @@ mod tests {
             std::env::var("LOONG_FILE_ROOT").ok().as_deref(),
             Some("/tmp/loong-runtime-file-root")
         );
-        let expected_workspace_root =
-            std::env::current_dir().expect("current_dir should resolve during runtime env tests");
-        let expected_workspace_root =
-            dunce::canonicalize(&expected_workspace_root).unwrap_or(expected_workspace_root);
-        let expected_workspace_root = expected_workspace_root.display().to_string();
         assert_eq!(
             std::env::var("LOONG_WORKSPACE_ROOT").ok().as_deref(),
-            Some(expected_workspace_root.as_str())
+            Some("/tmp/loong-runtime-file-root")
         );
         assert_eq!(
             std::env::var("LOONG_TOOL_SESSIONS_ALLOW_MUTATION")
@@ -438,6 +436,22 @@ mod tests {
         assert_eq!(
             std::env::var("LOONG_HOME").ok().as_deref(),
             Some("/tmp/demo-home")
+        );
+    }
+
+    #[test]
+    fn initialize_runtime_environment_prefers_configured_runtime_workspace_root() {
+        let mut env = ScopedEnv::new();
+        clear_runtime_environment_exports(&mut env);
+        let mut config = LoongConfig::default();
+        config.tools.file_root = Some("/tmp/loong-runtime-file-root".to_owned());
+        config.tools.runtime_workspace_root = Some("/tmp/loong-runtime-workspace-root".to_owned());
+
+        initialize_runtime_environment(&config, None);
+
+        assert_eq!(
+            std::env::var("LOONG_WORKSPACE_ROOT").ok().as_deref(),
+            Some("/tmp/loong-runtime-workspace-root")
         );
     }
 }

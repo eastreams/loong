@@ -732,6 +732,32 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
             }
         }),
     );
+    append_tasks_conversation_event(
+        &config_path,
+        "delegate:task-1",
+        json!({
+            "type": "conversation_event",
+            "event": "final_status",
+            "payload": {
+                "status": "failed",
+                "failure_code": "safe_lane_plan_verify_failed_budget_exhausted",
+                "route_decision": "terminal",
+                "route_reason": "round_budget_exhausted",
+                "metrics": {
+                    "rounds_started": 2,
+                    "rounds_succeeded": 0,
+                    "rounds_failed": 2,
+                    "verify_failures": 2,
+                    "replans_triggered": 1,
+                    "total_attempts_used": 3
+                },
+                "health_signal": {
+                    "severity": "critical",
+                    "flags": ["verify", "budget"]
+                }
+            }
+        }),
+    );
 
     let execution = loong_daemon::tasks_cli::execute_tasks_command(
         loong_daemon::tasks_cli::TasksCommandOptions {
@@ -890,12 +916,12 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         "status render should surface safe-lane summary: {rendered}"
     );
     assert!(
-        rendered.contains("failure_code=safe_lane_backpressure_limit"),
-        "status render should surface safe-lane failure code: {rendered}"
+        rendered.contains("failure_code=safe_lane_plan_verify_failed_budget_exhausted"),
+        "status render should surface budget-exhaustion failure code: {rendered}"
     );
     assert!(
-        rendered.contains("route=terminal/session_governor_failed_threshold health=critical"),
-        "status render should surface safe-lane failure route and health: {rendered}"
+        rendered.contains("route=terminal/round_budget_exhausted health=critical"),
+        "status render should surface budget-exhaustion route and health: {rendered}"
     );
     assert!(
         rendered.contains("turn_checkpoint: session_state=finalization_failed durable=yes"),
