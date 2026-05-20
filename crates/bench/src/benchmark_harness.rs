@@ -47,20 +47,6 @@ const DEFAULT_PRESSURE_ITERATIONS: usize = 12;
 const DEFAULT_PRESSURE_WARMUP_ITERATIONS: usize = 2;
 const DEFAULT_CIRCUIT_POLL_INTERVAL_MS: u64 = 5;
 const DEFAULT_CIRCUIT_RECOVERY_BUFFER_MS: u64 = 250;
-const DEFAULT_MEMORY_CONTEXT_MIN_SPEEDUP_RATIO: f64 = 1.2;
-const DEFAULT_MEMORY_CONTEXT_WINDOW_COVER_SOFT_MAX_RATIO_P95: f64 = 1.15;
-const DEFAULT_MEMORY_CONTEXT_WINDOW_COVER_SOFT_MAX_OVERHEAD_P95_MS: f64 = 0.050;
-const DEFAULT_MEMORY_CONTEXT_WINDOW_COVER_SOFT_WARNING_MIN_SAMPLES: usize = 8;
-const DEFAULT_MEMORY_CONTEXT_WINDOW_COVER_NOISY_SUPPRESSION_MAX_RATIO_P95: f64 = 1.20;
-const DEFAULT_MEMORY_CONTEXT_WINDOW_COVER_NOISY_SUPPRESSION_MAX_OVERHEAD_P95_MS: f64 = 0.150;
-const DEFAULT_MEMORY_CONTEXT_REBUILD_BUDGET_CHANGE_SOFT_MAX_RATIO_P95: f64 = 1.05;
-const DEFAULT_MEMORY_CONTEXT_METADATA_REALIGN_SOFT_MAX_RATIO_P95: f64 = 1.10;
-const DEFAULT_MEMORY_CONTEXT_SUITE_STABILITY_SOFT_WARNING_MIN_SUITES: usize = 3;
-const DEFAULT_MEMORY_CONTEXT_SUITE_STABILITY_SOFT_MAX_RANGE_OVER_P50: f64 = 0.75;
-const DEFAULT_MEMORY_CONTEXT_SPEEDUP_SUITE_NOISE_CLEAR_WIN_SUPPRESSION_MULTIPLIER: f64 = 1.5;
-const DEFAULT_MEMORY_CONTEXT_SPEEDUP_SUITE_NOISE_TINY_HOT_PATH_MAX_P50_MS: f64 = 1.0;
-const DEFAULT_MEMORY_CONTEXT_SPEEDUP_SUITE_NOISE_TINY_HOT_PATH_MAX_RANGE_MS: f64 = 1.25;
-const MEMORY_CONTEXT_SUITE_AGGREGATION_MEDIAN_OF_P95: &str = "median_of_suite_p95";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProgrammaticPressureMatrix {
@@ -594,7 +580,6 @@ async fn run_pressure_scenario_once(
     }
 }
 
-#[doc(hidden)]
 pub async fn run_spec_pressure_once(
     spec: &RunnerSpec,
     scenario: &ProgrammaticPressureScenario,
@@ -1505,11 +1490,169 @@ fn default_failures_before_open() -> usize {
     1
 }
 
+#[allow(clippy::print_stdout)] // CLI benchmark report output
+pub async fn run_programmatic_pressure_benchmark_cli(
+    matrix_path: &str,
+    baseline_path: Option<&str>,
+    output_path: &str,
+    enforce_gate: bool,
+    preflight_fail_on_warnings: bool,
+    native_tool_executor: Option<NativeToolExecutor>,
+) -> CliResult<()> {
+    let matrix: ProgrammaticPressureMatrix = read_json_file(matrix_path)?;
+
+    let selected_baseline_path = baseline_path
+        .map(str::to_owned)
+        .or_else(|| matrix.baseline_path.clone());
+    if enforce_gate && selected_baseline_path.is_none() {
+        return Err(
+            "benchmark gate enforcement requires --baseline or matrix.baseline_path".to_owned(),
+        );
+    }
+
+    let baseline = if let Some(path) = selected_baseline_path.as_deref() {
+        Some(read_json_file::<ProgrammaticPressureBaseline>(path)?)
+    } else {
+        None
+    };
+    let baseline_lint = baseline
+        .as_ref()
+        .map(|value| lint_programmatic_pressure_baseline(&matrix, value));
+    let preflight = baseline_lint
+        .as_ref()
+        .map(|lint| build_baseline_preflight(lint, enforce_gate, preflight_fail_on_warnings));
+    if enforce_gate
+        && let Some(preflight_summary) = preflight.as_ref()
+        && !preflight_summary.gate_passed
+    {
+        let gate_issues = preflight_gate_issues(
+            &preflight_summary.issues,
+            preflight_summary.fail_on_warnings,
+        );
+        return Err(format!(
+            "programmatic pressure strict preflight failed: {}",
+            format_baseline_issue_list(&gate_issues)
+        ));
+    }
+
+    let report = run_programmatic_pressure_matrix(
+        &matrix,
+        matrix_path,
+        selected_baseline_path.as_deref(),
+        baseline.as_ref(),
+        preflight,
+        enforce_gate,
+        native_tool_executor,
+    )
+    .await;
+
+    write_json_file(output_path, &report)?;
+
+    println!("programmatic pressure benchmark report written to {output_path}");
+    for scenario in &report.scenarios {
+        let p95 = scenario.latency_ms.p95.unwrap_or(0.0);
+        println!(
+            "scenario={} kind={} pass={}/{} p95_ms={:.2} throughput_rps={:.2} gate={}",
+            scenario.name,
+            scenario.scenario_kind,
+            scenario.success_runs,
+            scenario.iterations,
+            p95,
+            scenario.throughput_rps,
+            if scenario.gate.passed { "pass" } else { "fail" }
+        );
+    }
+
+    if report.gate.passed {
+        println!("benchmark gate status: passed");
+        Ok(())
+    } else {
+        println!("benchmark gate status: failed");
+        if enforce_gate {
+            Err(format!(
+                "programmatic pressure benchmark regression gate failed for scenarios: {}",
+                report.gate.failed_scenarios.join(", ")
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI lint report output
+pub fn run_programmatic_pressure_baseline_lint_cli(
+    matrix_path: &str,
+    baseline_path: Option<&str>,
+    output_path: &str,
+    enforce_gate: bool,
+    fail_on_warnings: bool,
+) -> CliResult<()> {
+    let matrix: ProgrammaticPressureMatrix = read_json_file(matrix_path)?;
+    let selected_baseline_path = baseline_path
+        .map(str::to_owned)
+        .or_else(|| matrix.baseline_path.clone());
+    let baseline_path = selected_baseline_path.ok_or_else(|| {
+        "programmatic pressure baseline lint requires --baseline or matrix.baseline_path"
+            .to_owned()
+    })?;
+    let baseline: ProgrammaticPressureBaseline = read_json_file(&baseline_path)?;
+    let lint = lint_programmatic_pressure_baseline(&matrix, &baseline);
+    let gate_passed = lint_gate_passed(&lint, fail_on_warnings);
+
+    let report = ProgrammaticPressureBaselineLintReport {
+        generated_at_epoch_s: current_epoch_seconds(),
+        matrix_path: matrix_path.to_owned(),
+        baseline_path,
+        profile: matrix.profile.clone(),
+        baseline_profile: baseline.profile.clone(),
+        scenario_count: matrix.scenarios.len(),
+        spec_run_scenario_count: matrix
+            .scenarios
+            .iter()
+            .filter(|scenario| matches!(scenario.kind, ProgrammaticPressureScenarioKind::SpecRun { .. }))
+            .count(),
+        baseline_scenario_count: baseline.scenarios.len(),
+        fail_on_warnings,
+        passed: lint.passed(),
+        gate_passed,
+        error_count: lint.error_count(),
+        warning_count: lint.warning_count(),
+        issues: lint.issues,
+    };
+
+    write_json_file(output_path, &report)?;
+    println!("programmatic pressure baseline lint report written to {output_path}");
+    println!(
+        "baseline lint: passed={} gate_passed={} errors={} warnings={} fail_on_warnings={}",
+        report.passed,
+        report.gate_passed,
+        report.error_count,
+        report.warning_count,
+        report.fail_on_warnings
+    );
+    for issue in &report.issues {
+        println!(
+            "issue[{:?}/{:?}] scenario={} {}",
+            issue.severity, issue.kind, issue.scenario_name, issue.message
+        );
+    }
+
+    if enforce_gate && !report.gate_passed {
+        let gate_issues = preflight_gate_issues(&report.issues, fail_on_warnings);
+        return Err(format!(
+            "programmatic pressure baseline lint failed: {}",
+            format_baseline_issue_list(&gate_issues)
+        ));
+    }
+
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     #[test]
     fn percentile_interpolates_expected_points() {

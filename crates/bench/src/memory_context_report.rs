@@ -403,7 +403,7 @@ pub(crate) struct ProgrammaticPressureGateCheck {
 
 #[derive(Debug, Clone, Default)]
 #[doc(hidden)]
-pub(crate) struct ScenarioRunSample {
+pub struct ScenarioRunSample {
     pub latency_ms: f64,
     pub passed: bool,
     pub blocked: bool,
@@ -584,6 +584,7 @@ pub type MemoryContextBenchmarkReportAugmenter = fn(
     context: &MemoryContextBenchmarkReportAugmentContext,
 ) -> CliResult<()>;
 
+#[allow(clippy::print_stdout)] // CLI benchmark report output
 pub fn run_memory_context_benchmark_cli_with_suite_runner(
     output_path: &str,
     temp_root: Option<&str>,

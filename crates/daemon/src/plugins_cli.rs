@@ -1397,7 +1397,6 @@ mod tests {
     use crate::plugins_cli::governance_support::{
         build_policy_signature_spec, normalize_scan_roots,
     };
-    use crate::plugins_cli::render_support::wrap_plugins_surface_text;
     use crate::{
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_PURPOSE, PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_SURFACE,
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_VERSION,

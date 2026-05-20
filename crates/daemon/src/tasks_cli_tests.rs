@@ -1,5 +1,6 @@
 use super::*;
 use crate::mvp;
+use crate::tasks_cli::{render_task_brief_line, render_task_detail_lines};
 use mvp::session::repository::{
     NewSessionEvent, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };

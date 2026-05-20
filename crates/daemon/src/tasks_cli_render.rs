@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{TasksCommandExecution, unknown_task_status_payload};
 
-pub(super) fn render_tasks_cli_text(execution: &TasksCommandExecution) -> CliResult<String> {
+pub fn render_tasks_cli_text(execution: &TasksCommandExecution) -> CliResult<String> {
     let command = execution
         .payload
         .get("command")
@@ -22,7 +22,7 @@ pub(super) fn render_tasks_cli_text(execution: &TasksCommandExecution) -> CliRes
     }
 }
 
-pub(super) fn render_task_brief_line(task: &Value) -> CliResult<String> {
+pub fn render_task_brief_line(task: &Value) -> CliResult<String> {
     let task_id = required_string_field(task, "task_id", "task summary")?;
     let task_status = task
         .get("task_status")
@@ -71,7 +71,7 @@ pub(super) fn render_task_brief_line(task: &Value) -> CliResult<String> {
     Ok(line)
 }
 
-pub(super) fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
+pub fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
     let task_id = required_string_field(task, "task_id", "task detail")?;
     let task_status = task
         .get("task_status")

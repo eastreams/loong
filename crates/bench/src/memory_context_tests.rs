@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::*;
 use super::super::{

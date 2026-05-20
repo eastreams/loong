@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use self::report::{MemoryContextBenchmarkTempRootSource, ResolvedMemoryContextBenchmarkTempRoot};
 
-use super::{CliResult, current_epoch_seconds};
+use super::CliResult;
+#[cfg(test)]
+use super::current_epoch_seconds;
 
 #[path = "memory_context_report.rs"]
 mod report;

@@ -20,7 +20,9 @@ mod render_support;
 #[path = "tasks_cli_status.rs"]
 mod status_support;
 
-use self::render_support::render_tasks_cli_text;
+pub use self::render_support::{
+    render_task_brief_line, render_task_detail_lines, render_tasks_cli_text,
+};
 use self::status_support::{
     TaskStatusSummary, build_task_status_payload, summarize_task_status_payload,
     unknown_task_status_payload,
@@ -1453,4 +1455,3 @@ fn required_string_field(value: &Value, field: &str, context: &str) -> CliResult
 #[cfg(test)]
 #[path = "tasks_cli_tests.rs"]
 mod tests;
-
