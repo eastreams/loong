@@ -99,19 +99,55 @@ use crate::config::ResolvedTelegramChannelConfig;
 #[cfg(feature = "channel-wecom")]
 use crate::config::ResolvedWecomChannelConfig;
 
+#[cfg(feature = "channel-feishu")]
 use super::commands::accounts::{
-    build_feishu_command_context, build_line_command_context, build_matrix_command_context,
-    build_telegram_command_context, build_wecom_command_context, load_dingtalk_command_context,
-    load_discord_command_context, load_email_command_context, load_feishu_command_context,
-    load_google_chat_command_context, load_imessage_command_context, load_irc_command_context,
-    load_line_command_context, load_matrix_command_context, load_mattermost_command_context,
-    load_nextcloud_talk_command_context, load_nostr_command_context, load_qqbot_command_context,
-    load_slack_command_context, load_synology_chat_command_context, load_teams_command_context,
-    load_telegram_command_context, load_webhook_command_context, load_wecom_command_context,
-    load_whatsapp_command_context, validate_feishu_security_config,
-    validate_matrix_security_config, validate_telegram_security_config,
-    validate_wecom_security_config,
+    build_feishu_command_context, load_feishu_command_context, validate_feishu_security_config,
 };
+#[cfg(feature = "channel-line")]
+use super::commands::accounts::{build_line_command_context, load_line_command_context};
+#[cfg(feature = "channel-matrix")]
+use super::commands::accounts::{
+    build_matrix_command_context, load_matrix_command_context, validate_matrix_security_config,
+};
+#[cfg(feature = "channel-telegram")]
+use super::commands::accounts::{
+    build_telegram_command_context, load_telegram_command_context,
+    validate_telegram_security_config,
+};
+#[cfg(feature = "channel-wecom")]
+use super::commands::accounts::{
+    build_wecom_command_context, load_wecom_command_context, validate_wecom_security_config,
+};
+#[cfg(feature = "channel-dingtalk")]
+use super::commands::accounts::load_dingtalk_command_context;
+#[cfg(feature = "channel-discord")]
+use super::commands::accounts::load_discord_command_context;
+#[cfg(feature = "channel-email")]
+use super::commands::accounts::load_email_command_context;
+#[cfg(feature = "channel-google-chat")]
+use super::commands::accounts::load_google_chat_command_context;
+#[cfg(feature = "channel-imessage")]
+use super::commands::accounts::load_imessage_command_context;
+#[cfg(feature = "channel-irc")]
+use super::commands::accounts::load_irc_command_context;
+#[cfg(feature = "channel-mattermost")]
+use super::commands::accounts::load_mattermost_command_context;
+#[cfg(feature = "channel-nextcloud-talk")]
+use super::commands::accounts::load_nextcloud_talk_command_context;
+#[cfg(feature = "channel-nostr")]
+use super::commands::accounts::load_nostr_command_context;
+#[cfg(feature = "channel-qqbot")]
+use super::commands::accounts::load_qqbot_command_context;
+#[cfg(feature = "channel-slack")]
+use super::commands::accounts::load_slack_command_context;
+#[cfg(feature = "channel-synology-chat")]
+use super::commands::accounts::load_synology_chat_command_context;
+#[cfg(feature = "channel-teams")]
+use super::commands::accounts::load_teams_command_context;
+#[cfg(feature = "channel-webhook")]
+use super::commands::accounts::load_webhook_command_context;
+#[cfg(feature = "channel-whatsapp")]
+use super::commands::accounts::load_whatsapp_command_context;
 pub(super) use super::commands::{
     ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_command,
 };
