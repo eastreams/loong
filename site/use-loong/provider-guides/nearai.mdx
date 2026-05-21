@@ -1,0 +1,62 @@
+---
+title: NEAR AI Cloud
+description: Configure the NEAR AI Cloud provider profile in Loong.
+---
+
+# NEAR AI Cloud
+
+Use this when your team wants NEAR AI Cloud TEE inference as an explicit OpenAI-compatible provider lane instead of routing it through a generic compatibility profile.
+
+## At A Glance
+
+| Field | Value |
+| --- | --- |
+| Built-in kind | `nearai` |
+| Provider group | Direct Hosted Providers |
+| Protocol family | `openai_chat_completions` |
+| Feature family | `openai_compatible` |
+| Auth scheme | `bearer` |
+| Credential envs | NEARAI_API_KEY |
+| Aliases | `near_ai`, `near-ai`, `nearai_compatible`, `near_ai_cloud`, `near-ai-cloud` |
+| Default base URL | `https://cloud-api.near.ai/v1` |
+| Request endpoint | `https://cloud-api.near.ai/v1/chat/completions` |
+| Models endpoint | `https://cloud-api.near.ai/v1/model/list` |
+
+## Minimal Config
+
+```toml
+active_provider = "nearai"
+
+[providers.nearai]
+kind = "nearai"
+api_key = { env = "NEARAI_API_KEY" }
+model = "auto"
+```
+
+## Verify It
+
+```bash
+loong doctor
+loong runtime models list
+loong ask --message "Say hello and name the active provider."
+```
+
+NEAR AI Cloud publishes a public model catalog, but chat requests still require `NEARAI_API_KEY`. If `runtime models list` is unreliable for this account or route, pin an explicit `provider.model` or add `preferred_models` instead of leaving recovery implicit.
+
+## Auth And Routing Contract
+
+| Contract | Value |
+| --- | --- |
+| Auth optional | no |
+| Model probe auth optional | yes |
+| Default API key env | `NEARAI_API_KEY` |
+| OAuth env | none |
+| Primary request route | `https://cloud-api.near.ai/v1/chat/completions` |
+| Primary model-catalog route | `https://cloud-api.near.ai/v1/model/list` |
+
+## Related Docs
+
+- Continue to [Providers And Models](/use-loong/providers-and-models) when you still need the broader chooser page.
+- Continue to [Provider Guides](/use-loong/provider-guides/index) for the full built-in provider matrix.
+- Continue to [Provider Recipes](/use-loong/provider-recipes) for representative rollout recipes.
+- Continue to [Configuration Patterns](/use-loong/configuration-patterns) for the shared provider-profile shape.

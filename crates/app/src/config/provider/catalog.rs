@@ -91,6 +91,7 @@ impl ProviderKind {
             ProviderKind::KimiCoding => "Kimi Coding",
             ProviderKind::Mistral => "Mistral",
             ProviderKind::Minimax => "MiniMax",
+            ProviderKind::NearAi => "NEAR AI Cloud",
             ProviderKind::Novita => "Novita",
             ProviderKind::Nvidia => "NVIDIA",
             ProviderKind::Llamacpp => "llama.cpp",
@@ -148,6 +149,7 @@ impl ProviderKind {
             lm_studio,
             mistral,
             minimax,
+            nearai,
             novita,
             nvidia,
             ollama,
@@ -196,6 +198,7 @@ impl ProviderKind {
             ProviderKind::LmStudio => lm_studio,
             ProviderKind::Mistral => mistral,
             ProviderKind::Minimax => minimax,
+            ProviderKind::NearAi => nearai,
             ProviderKind::Novita => novita,
             ProviderKind::Nvidia => nvidia,
             ProviderKind::Ollama => ollama,
@@ -273,7 +276,10 @@ impl ProviderKind {
 
     pub fn model_probe_auth_optional(self) -> bool {
         self.auth_optional()
-            || matches!(self, ProviderKind::Cerebras | ProviderKind::VercelAiGateway)
+            || matches!(
+                self,
+                ProviderKind::Cerebras | ProviderKind::NearAi | ProviderKind::VercelAiGateway
+            )
     }
 
     pub fn allowed_reasoning_efforts(self) -> Option<&'static [ReasoningEffort]> {
@@ -404,6 +410,7 @@ impl ProviderKind {
             | ProviderKind::LmStudio
             | ProviderKind::Mistral
             | ProviderKind::Novita
+            | ProviderKind::NearAi
             | ProviderKind::Nvidia
             | ProviderKind::Ollama
             | ProviderKind::Openai
@@ -694,7 +701,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 45] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 46] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -715,6 +722,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 45] = [
     ProviderKind::LmStudio,
     ProviderKind::Mistral,
     ProviderKind::Minimax,
+    ProviderKind::NearAi,
     ProviderKind::Novita,
     ProviderKind::Nvidia,
     ProviderKind::Ollama,
@@ -742,7 +750,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 45] = [
     ProviderKind::Zhipu,
 ];
 
-pub(super) const PROVIDER_PROFILES: [ProviderProfile; 45] = [
+pub(super) const PROVIDER_PROFILES: [ProviderProfile; 46] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -1087,6 +1095,29 @@ pub(super) const PROVIDER_PROFILES: [ProviderProfile; 45] = [
         auth_scheme: ProviderAuthScheme::Bearer,
         default_headers: &[],
         default_api_key_env: Some("MINIMAX_API_KEY"),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::NearAi,
+        id: "nearai",
+        aliases: &[
+            "near_ai",
+            "near-ai",
+            "nearai_compatible",
+            "near_ai_cloud",
+            "near-ai-cloud",
+        ],
+        base_url: "https://cloud-api.near.ai/v1",
+        chat_completions_path: "/chat/completions",
+        models_path: Some("/model/list"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some("NEARAI_API_KEY"),
         api_key_env_aliases: &[],
         default_user_agent: None,
         default_oauth_access_token_env: None,

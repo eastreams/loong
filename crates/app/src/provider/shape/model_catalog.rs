@@ -113,7 +113,42 @@ fn model_is_default(value: &Value) -> bool {
 }
 
 fn model_display_name_from_value(value: &Value) -> Option<String> {
-    for key in ["display_name", "displayName", "modelName", "name"] {
+    first_model_text_from_keys(
+        value,
+        &[
+            "display_name",
+            "displayName",
+            "modelDisplayName",
+            "modelName",
+            "name",
+        ],
+    )
+    .or_else(|| {
+        model_metadata(value).and_then(|metadata| {
+            first_model_text_from_keys(
+                metadata,
+                &[
+                    "modelDisplayName",
+                    "display_name",
+                    "displayName",
+                    "modelName",
+                    "name",
+                ],
+            )
+        })
+    })
+}
+
+fn model_description_from_value(value: &Value) -> Option<String> {
+    first_model_text_from_keys(value, &["description", "modelDescription"]).or_else(|| {
+        model_metadata(value).and_then(|metadata| {
+            first_model_text_from_keys(metadata, &["modelDescription", "description"])
+        })
+    })
+}
+
+fn first_model_text_from_keys(value: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
         if let Some(text) = value.get(key).and_then(Value::as_str)
             && let Some(normalized) = normalize_text(text)
         {
@@ -123,15 +158,10 @@ fn model_display_name_from_value(value: &Value) -> Option<String> {
     None
 }
 
-fn model_description_from_value(value: &Value) -> Option<String> {
-    for key in ["description", "modelDescription"] {
-        if let Some(text) = value.get(key).and_then(Value::as_str)
-            && let Some(normalized) = normalize_text(text)
-        {
-            return Some(normalized);
-        }
-    }
-    None
+fn model_metadata(value: &Value) -> Option<&Value> {
+    value
+        .get("metadata")
+        .filter(|metadata| metadata.is_object())
 }
 
 fn parse_reasoning_effort_token(raw: &str) -> Option<ReasoningEffort> {
@@ -293,6 +323,10 @@ fn model_id_from_value(value: &Value) -> Option<String> {
 }
 
 fn model_is_known_non_chat_candidate(value: &Value) -> bool {
+    if model_id_is_known_non_chat_candidate(value) {
+        return true;
+    }
+
     if model_has_explicit_non_chat_endpoint_compatibility(value) {
         return true;
     }
@@ -309,7 +343,20 @@ fn model_is_known_non_chat_candidate(value: &Value) -> bool {
         return true;
     }
 
+    if model_has_explicit_audio_only_input_capability(value) {
+        return true;
+    }
+
     false
+}
+
+fn model_id_is_known_non_chat_candidate(value: &Value) -> bool {
+    let Some(id) = model_id_from_value(value) else {
+        return false;
+    };
+    let normalized = id.to_ascii_lowercase();
+
+    normalized.contains("privacy-filter") || normalized.contains("reranker")
 }
 
 fn model_has_explicit_non_chat_endpoint_compatibility(value: &Value) -> bool {
@@ -393,10 +440,8 @@ fn model_is_hidden(value: &Value) -> bool {
 }
 
 fn model_has_explicit_non_text_output_capability(value: &Value) -> bool {
-    let Some(output_modalities) = value
-        .get("output_modalities")
-        .or_else(|| value.get("outputModalities"))
-        .and_then(Value::as_array)
+    let Some(output_modalities) =
+        model_modality_array(value, "output_modalities", "outputModalities")
     else {
         return false;
     };
@@ -407,6 +452,44 @@ fn model_has_explicit_non_text_output_capability(value: &Value) -> bool {
         .map(|entry| entry.to_ascii_lowercase())
         .collect::<Vec<_>>();
     !modalities.is_empty() && !modalities.iter().any(|entry| entry == "text")
+}
+
+fn model_has_explicit_audio_only_input_capability(value: &Value) -> bool {
+    let Some(input_modalities) = model_modality_array(value, "input_modalities", "inputModalities")
+    else {
+        return false;
+    };
+
+    let modalities = input_modalities
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    !modalities.is_empty()
+        && !modalities.iter().any(|entry| entry == "text")
+        && modalities.iter().any(|entry| entry == "audio")
+}
+
+fn model_modality_array<'a>(
+    value: &'a Value,
+    snake_key: &str,
+    camel_key: &str,
+) -> Option<&'a [Value]> {
+    value
+        .get(snake_key)
+        .or_else(|| value.get(camel_key))
+        .and_then(Value::as_array)
+        .or_else(|| {
+            model_metadata(value)
+                .and_then(|metadata| metadata.get("architecture"))
+                .and_then(|architecture| {
+                    architecture
+                        .get(snake_key)
+                        .or_else(|| architecture.get(camel_key))
+                        .and_then(Value::as_array)
+                })
+        })
+        .map(Vec::as_slice)
 }
 
 fn model_created_from_value(value: &Value) -> Option<i64> {
@@ -523,6 +606,64 @@ mod tests {
                 "amazon.nova-lite-v1:0",
                 "anthropic.claude-3-7-sonnet-20250219-v1:0"
             ]
+        );
+    }
+
+    #[test]
+    fn extract_model_catalog_entries_supports_nearai_catalog_metadata() {
+        let body = json!({
+            "models": [
+                {
+                    "modelId": "anthropic/claude-haiku-4-5",
+                    "metadata": {
+                        "modelDisplayName": "Claude Haiku 4.5",
+                        "modelDescription": "Fast hosted chat model.",
+                        "architecture": {
+                            "inputModalities": ["text", "image"],
+                            "outputModalities": ["text"]
+                        }
+                    }
+                },
+                {
+                    "modelId": "black-forest-labs/FLUX.2-klein-4B",
+                    "metadata": {
+                        "architecture": {
+                            "inputModalities": ["text"],
+                            "outputModalities": ["image"]
+                        }
+                    }
+                },
+                {
+                    "modelId": "Qwen/Qwen3-Embedding-0.6B",
+                    "metadata": {
+                        "architecture": {
+                            "inputModalities": ["text"],
+                            "outputModalities": ["embedding"]
+                        }
+                    }
+                },
+                {
+                    "modelId": "openai/whisper-large-v3",
+                    "metadata": {
+                        "architecture": {
+                            "inputModalities": ["audio"],
+                            "outputModalities": ["text"]
+                        }
+                    }
+                },
+                {"modelId": "Qwen/Qwen3-Reranker-0.6B"},
+                {"modelId": "openai/privacy-filter"}
+            ]
+        });
+
+        let entries = extract_model_catalog_entries(&body);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].model, "anthropic/claude-haiku-4-5");
+        assert_eq!(entries[0].display_name.as_deref(), Some("Claude Haiku 4.5"));
+        assert_eq!(
+            entries[0].description.as_deref(),
+            Some("Fast hosted chat model.")
         );
     }
 

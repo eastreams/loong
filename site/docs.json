@@ -53,6 +53,7 @@
               "use-loong/provider-guides/minimax",
               "use-loong/provider-guides/mistral",
               "use-loong/provider-guides/cohere",
+              "use-loong/provider-guides/nearai",
               "use-loong/provider-guides/xai",
               "use-loong/provider-guides/zai",
               "use-loong/provider-guides/zhipu",

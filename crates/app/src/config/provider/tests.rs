@@ -530,6 +530,28 @@ fn provider_descriptor_document_marks_auth_optional_profiles_without_required_en
 }
 
 #[test]
+fn provider_descriptor_document_preserves_nearai_contract_facts() {
+    let provider = ProviderConfig {
+        kind: ProviderKind::NearAi,
+        ..ProviderConfig::default()
+    };
+
+    let descriptor = provider.descriptor_document();
+    let encoded = encode_provider_descriptor(&descriptor);
+
+    assert_eq!(encoded["kind"], json!("nearai"));
+    assert_eq!(encoded["display_name"], json!("NEAR AI Cloud"));
+    assert_eq!(encoded["protocol_family"], json!("openai_chat_completions"));
+    assert_eq!(encoded["feature"]["family"], json!("openai_compatible"));
+    assert_eq!(encoded["auth"]["scheme"], json!("bearer"));
+    assert_eq!(
+        encoded["auth"]["default_api_key_env"],
+        json!("NEARAI_API_KEY")
+    );
+    assert_eq!(encoded["auth"]["model_probe_auth_optional"], json!(true));
+}
+
+#[test]
 fn provider_descriptor_document_prefers_dynamic_configuration_hint() {
     let provider = ProviderConfig {
         kind: ProviderKind::Custom,

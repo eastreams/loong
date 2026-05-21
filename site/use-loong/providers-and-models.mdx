@@ -29,7 +29,7 @@ playbook that matches the rollout shape.
 | If you need... | Start here | Why |
 | --- | --- | --- |
 | a common hosted first run with a short reviewed path | Volcengine or BytePlus | the main hosted fast path stays short without hiding the broader provider map |
-| a direct hosted provider your team already uses | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Mistral, Cohere, xAI, Z.ai, Zhipu, Qwen, Kimi, Groq, Fireworks, Together, Perplexity, Qianfan, Cerebras, NVIDIA, SambaNova, Novita, SiliconFlow, StepFun, or Venice | built-in families stay explicit instead of being forced through `custom` |
+| a direct hosted provider your team already uses | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Mistral, Cohere, NEAR AI Cloud, xAI, Z.ai, Zhipu, Qwen, Kimi, Groq, Fireworks, Together, Perplexity, Qianfan, Cerebras, NVIDIA, SambaNova, Novita, SiliconFlow, StepFun, or Venice | built-in families stay explicit instead of being forced through `custom` |
 | a separate coding lane for coding quota or billing | Volcengine Coding, BytePlus Coding, Kimi Coding, Step Plan, or Bailian Coding | coding traffic stays separate from the general hosted lane |
 | one proxy or compatibility endpoint in front of upstream models | gateway or custom endpoint recipes | route ownership stays visible instead of being mistaken for a first-party provider |
 | a local or self-hosted model server | Ollama, LM Studio, llama.cpp, vLLM, or SGLang | the server boundary and model inventory stay explicit |
@@ -103,7 +103,7 @@ A practical public grouping, inferred from the built-in provider kinds, is:
 | Family | Current built-in kinds | Use it when... |
 | --- | --- | --- |
 | platform-first hosted | Volcengine, BytePlus | you want a short first-run hosted lane that stays explicit in the docs |
-| direct hosted general | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Mistral, Cohere, xAI, Z.ai, Zhipu, Qwen, Kimi, Groq, Fireworks, Together, Perplexity, Qianfan, Cerebras, NVIDIA, SambaNova, Novita, SiliconFlow, StepFun, Venice | your team already has a named hosted provider and you want that family to remain visible |
+| direct hosted general | OpenAI, Anthropic, Gemini, DeepSeek, MiniMax, Mistral, Cohere, NEAR AI Cloud, xAI, Z.ai, Zhipu, Qwen, Kimi, Groq, Fireworks, Together, Perplexity, Qianfan, Cerebras, NVIDIA, SambaNova, Novita, SiliconFlow, StepFun, Venice | your team already has a named hosted provider and you want that family to remain visible |
 | coding-specialized hosted | Volcengine Coding, BytePlus Coding, Kimi Coding, Step Plan, Bailian Coding | coding work, quota, or pricing should stay on an explicit lane |
 | gateway and platform routing | OpenRouter, Cloudflare AI Gateway, Vercel AI Gateway, Bedrock, Custom | a gateway, proxy, or managed route sits between Loong and the upstream models |
 | local and self-hosted | Ollama, LM Studio, llama.cpp, vLLM, SGLang | the model server boundary should stay operator-owned |
@@ -124,6 +124,7 @@ A practical public grouping, inferred from the built-in provider kinds, is:
 - MiniMax
 - Mistral
 - Cohere
+- NEAR AI Cloud
 - xAI
 - Z.ai
 - Zhipu

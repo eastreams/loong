@@ -1333,6 +1333,25 @@ fn completion_body_includes_reasoning_effort_when_configured() {
 }
 
 #[test]
+fn nearai_completion_body_omits_reasoning_effort_when_configured() {
+    let mut config = test_config(ProviderConfig {
+        kind: ProviderKind::NearAi,
+        ..ProviderConfig::default()
+    });
+    config.provider.reasoning_effort = Some(ReasoningEffort::High);
+
+    let body = build_completion_request_body(
+        &config,
+        &[],
+        "anthropic/claude-haiku-4-5",
+        CompletionPayloadMode::default_for(&config.provider),
+    );
+
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(body.get("reasoning").is_none());
+}
+
+#[test]
 fn responses_completion_body_uses_input_shape_and_responses_specific_fields() {
     let mut config = test_config(ProviderConfig {
         wire_api: crate::config::ProviderWireApi::Responses,
