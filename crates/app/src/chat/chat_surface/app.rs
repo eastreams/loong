@@ -1,6 +1,3 @@
-use crossterm::event::{
-    self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
 use crossterm::terminal::SetTitle;
 use ratatui::{
     Frame, Terminal,
@@ -43,6 +40,10 @@ use super::command_palette::{
 };
 use super::composer::Composer;
 use super::i18n::{I18nService, Language, SurfaceCopy, resolve_default_language};
+use super::input::{
+    ChatInputEvent, ChatKeyCode as KeyCode, ChatKeyEvent, ChatKeyModifiers as KeyModifiers,
+    ChatMouseButton as MouseButton, ChatMouseEvent, ChatMouseEventKind, InputAdapter,
+};
 use super::message_list::{MessageList, StartupEyeAnimation, StartupEyeFocus};
 use super::utils::*;
 

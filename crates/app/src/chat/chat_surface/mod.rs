@@ -3,6 +3,7 @@ pub mod command_palette;
 pub mod composer;
 pub mod diff_viewer;
 pub mod i18n;
+pub mod input;
 pub mod markdown;
 pub mod message_list;
 pub mod scroll_state;

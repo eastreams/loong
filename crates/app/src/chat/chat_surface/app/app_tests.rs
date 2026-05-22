@@ -9,6 +9,11 @@ use crate::chat::chat_surface::command_palette::{
 };
 use crate::chat::chat_surface::composer::Composer;
 use crate::chat::chat_surface::i18n::{I18nService, Language};
+use crate::chat::chat_surface::input::{
+    ChatKeyCode as KeyCode, ChatKeyEvent, ChatKeyEvent as KeyEvent, ChatKeyEventKind,
+    ChatKeyModifiers as KeyModifiers, ChatMouseButton as MouseButton, ChatMouseEvent as MouseEvent,
+    ChatMouseEventKind as MouseEventKind,
+};
 use crate::chat::chat_surface::message_list::{MessageList, StartupEyeAnimation, StartupEyeFocus};
 use crate::chat::chat_surface::utils::SURFACE_USER_MSG_BG;
 use crate::chat::{
@@ -16,7 +21,6 @@ use crate::chat::{
 };
 use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 use crate::test_support::{ScopedEnv, unique_temp_dir};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Style};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -1012,10 +1016,7 @@ fn typing_dollar_keeps_focus_in_composer_while_inline_skill_popup_filters() {
 
     assert!(
         app.composer
-            .handle_key(crossterm::event::KeyEvent::new(
-                KeyCode::Char('$'),
-                KeyModifiers::NONE,
-            ))
+            .handle_key(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE))
             .is_none()
     );
     app.sync_inline_skill_popup();
@@ -1025,20 +1026,14 @@ fn typing_dollar_keeps_focus_in_composer_while_inline_skill_popup_filters() {
 
     assert!(
         app.composer
-            .handle_key(crossterm::event::KeyEvent::new(
-                KeyCode::Char('d'),
-                KeyModifiers::NONE,
-            ))
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
             .is_none()
     );
     app.sync_inline_skill_popup();
 
     if let Some(action) = app
         .command_palette
-        .handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        ))
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
     {
         let _ = app.apply_palette_action(action);
     }
@@ -1052,10 +1047,7 @@ fn typing_dollar_without_available_skills_keeps_plain_text_without_popup() {
 
     assert!(
         app.composer
-            .handle_key(crossterm::event::KeyEvent::new(
-                KeyCode::Char('$'),
-                KeyModifiers::NONE,
-            ))
+            .handle_key(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE))
             .is_none()
     );
     app.sync_inline_skill_popup();
@@ -1063,6 +1055,26 @@ fn typing_dollar_without_available_skills_keeps_plain_text_without_popup() {
     assert_eq!(app.focus, Focus::Composer);
     assert!(!app.inline_skill_popup_active);
     assert_eq!(app.composer.text(), "$");
+}
+
+#[test]
+fn release_key_events_do_not_change_app_state() {
+    let initial = blank_app();
+    let mut app = blank_app();
+
+    let handled = app.handle_inline_skill_popup_key(ChatKeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+        ChatKeyEventKind::Release,
+    ));
+
+    assert!(!handled);
+    assert_eq!(app.focus, initial.focus);
+    assert_eq!(app.composer.text(), initial.composer.text());
+    assert_eq!(
+        app.inline_skill_popup_active,
+        initial.inline_skill_popup_active
+    );
 }
 
 #[test]
@@ -1206,12 +1218,7 @@ fn tab_confirms_inline_skill_popup_through_shared_key_handler() {
     app.composer.set_input("$dem".to_owned());
     app.sync_inline_skill_popup();
 
-    assert!(
-        app.handle_inline_skill_popup_key(crossterm::event::KeyEvent::new(
-            KeyCode::Tab,
-            KeyModifiers::NONE,
-        ))
-    );
+    assert!(app.handle_inline_skill_popup_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
 
     assert_eq!(app.composer.text(), "$demo-skill ");
     assert_eq!(app.focus, Focus::Composer);
@@ -1224,10 +1231,9 @@ fn confirming_inline_skill_keeps_surrounding_text_stable() {
     app.command_palette = CommandPalette::new(Language::En, vec![skill("demo-skill")]);
     app.composer.set_input("please $dem now".to_owned());
     for _ in 0..4 {
-        let _ = app.composer.handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Left,
-            KeyModifiers::NONE,
-        ));
+        let _ = app
+            .composer
+            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
     }
     app.sync_inline_skill_popup();
 
@@ -1242,10 +1248,9 @@ fn confirming_inline_skill_works_with_cursor_inside_token_middle() {
     app.command_palette = CommandPalette::new(Language::En, vec![skill("demo-skill")]);
     app.composer.set_input("$demo now".to_owned());
     for _ in 0..4 {
-        let _ = app.composer.handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Left,
-            KeyModifiers::NONE,
-        ));
+        let _ = app
+            .composer
+            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
     }
     app.sync_inline_skill_popup();
 
@@ -1339,10 +1344,8 @@ fn footer_shows_follow_hint_when_transcript_is_off_tail() {
     }
 
     terminal.draw(|f| app.render(f)).expect("draw");
-    app.message_list.handle_key(crossterm::event::KeyEvent::new(
-        KeyCode::Up,
-        KeyModifiers::NONE,
-    ));
+    app.message_list
+        .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     terminal.draw(|f| app.render(f)).expect("draw off tail");
     let lines = buffer_lines(&terminal).join("\n");
 
@@ -1361,15 +1364,11 @@ fn footer_returns_to_status_line_when_tail_is_restored() {
     }
 
     terminal.draw(|f| app.render(f)).expect("draw");
-    app.message_list.handle_key(crossterm::event::KeyEvent::new(
-        KeyCode::Up,
-        KeyModifiers::NONE,
-    ));
+    app.message_list
+        .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     terminal.draw(|f| app.render(f)).expect("draw off tail");
-    app.message_list.handle_key(crossterm::event::KeyEvent::new(
-        KeyCode::End,
-        KeyModifiers::NONE,
-    ));
+    app.message_list
+        .handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     terminal
         .draw(|f| app.render(f))
         .expect("draw tail restored");
@@ -1400,10 +1399,8 @@ fn mouse_scroll_over_palette_changes_selection_without_scrolling_transcript() {
     assert_eq!(app.message_list.scroll_offset_for_test(), 4);
     match app
         .command_palette
-        .handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )) {
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    {
         Some(CommandAction::RunCommand("/permissions")) => {}
         other => {
             panic!("expected palette mouse scroll to land on /permissions, got {other:?}")
@@ -1421,16 +1418,10 @@ fn slash_palette_open_and_sync_mirror_query_into_composer() {
 
     let _ = app
         .command_palette
-        .handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('m'),
-            KeyModifiers::NONE,
-        ));
+        .handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
     let _ = app
         .command_palette
-        .handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('o'),
-            KeyModifiers::NONE,
-        ));
+        .handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
     super::sync_slash_palette_composer(&mut app);
 
     assert_eq!(app.composer.text(), "/mo");
@@ -1763,10 +1754,8 @@ fn model_command_opens_selector_surface_instead_of_static_card() {
     assert_eq!(app.focus, Focus::CommandPalette);
     match app
         .command_palette
-        .handle_key(crossterm::event::KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )) {
+        .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    {
         Some(CommandAction::OpenModelReasoning(entry))
             if entry.model == runtime.config.provider.model => {}
         other => panic!("expected /model to open model selector flow, got {other:?}"),
@@ -2777,18 +2766,22 @@ fn pending_signature_preview_budget_tracks_last_render_geometry() {
 
 #[test]
 fn transcript_navigation_key_helper_keeps_printable_keys_for_composer() {
-    assert!(super::is_transcript_navigation_key(
-        crossterm::event::KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,)
-    ));
-    assert!(super::is_transcript_navigation_key(
-        crossterm::event::KeyEvent::new(KeyCode::Home, KeyModifiers::NONE,)
-    ));
-    assert!(!super::is_transcript_navigation_key(
-        crossterm::event::KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE,)
-    ));
-    assert!(!super::is_transcript_navigation_key(
-        crossterm::event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE,)
-    ));
+    assert!(super::is_transcript_navigation_key(KeyEvent::new(
+        KeyCode::PageDown,
+        KeyModifiers::NONE
+    )));
+    assert!(super::is_transcript_navigation_key(KeyEvent::new(
+        KeyCode::Home,
+        KeyModifiers::NONE
+    )));
+    assert!(!super::is_transcript_navigation_key(KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::NONE
+    )));
+    assert!(!super::is_transcript_navigation_key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE
+    )));
 }
 
 #[test]
@@ -2798,7 +2791,7 @@ fn transcript_focus_text_keys_enter_composer_immediately() {
 
     let submitted = super::route_transcript_key_to_composer(
         &mut app,
-        crossterm::event::KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE),
     );
 
     assert!(submitted.is_none());
@@ -2839,7 +2832,7 @@ fn transcript_focus_enter_submits_existing_draft() {
 
     let submitted = super::route_transcript_key_to_composer(
         &mut app,
-        crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
     );
 
     assert_eq!(submitted.as_deref(), Some("send me"));
@@ -2850,19 +2843,19 @@ fn transcript_focus_enter_submits_existing_draft() {
 #[test]
 fn transcript_focus_capture_helper_rejects_navigation_and_modified_keys() {
     assert!(super::should_focus_composer_for_transcript_key(
-        crossterm::event::KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
     ));
     assert!(super::should_focus_composer_for_transcript_key(
-        crossterm::event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
     ));
     assert!(super::should_focus_composer_for_transcript_key(
-        crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
     ));
     assert!(!super::should_focus_composer_for_transcript_key(
-        crossterm::event::KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)
     ));
     assert!(!super::should_focus_composer_for_transcript_key(
-        crossterm::event::KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL,)
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)
     ));
 }
 
@@ -2873,27 +2866,27 @@ fn composer_routes_arrow_and_page_scroll_even_with_a_draft() {
 
     assert!(super::should_route_composer_key_to_transcript(
         &app,
-        crossterm::event::KeyEvent::new(KeyCode::Up, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)
     ));
     assert!(super::should_route_composer_key_to_transcript(
         &app,
-        crossterm::event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
     ));
     assert!(super::should_route_composer_key_to_transcript(
         &app,
-        crossterm::event::KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)
     ));
     assert!(super::should_route_composer_key_to_transcript(
         &app,
-        crossterm::event::KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)
     ));
     assert!(!super::should_route_composer_key_to_transcript(
         &app,
-        crossterm::event::KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)
     ));
     assert!(!super::should_route_composer_key_to_transcript(
         &app,
-        crossterm::event::KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE,)
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)
     ));
 }
 
@@ -3069,10 +3062,8 @@ fn off_tail_pending_resize_and_end_restore_tail_without_losing_state() {
     }
 
     terminal.draw(|f| app.render(f)).expect("draw");
-    app.message_list.handle_key(crossterm::event::KeyEvent::new(
-        KeyCode::Up,
-        KeyModifiers::NONE,
-    ));
+    app.message_list
+        .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     app.pending_turn = true;
     app.turn_start = Some(std::time::Instant::now());
     if let Ok(mut live) = app.live_transcript.lock() {
@@ -3090,10 +3081,8 @@ fn off_tail_pending_resize_and_end_restore_tail_without_losing_state() {
     let resized_lines = buffer_lines(&terminal).join("\n");
     assert!(resized_lines.contains("PgDn / End"));
 
-    app.message_list.handle_key(crossterm::event::KeyEvent::new(
-        KeyCode::End,
-        KeyModifiers::NONE,
-    ));
+    app.message_list
+        .handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     terminal.draw(|f| app.render(f)).expect("draw restored");
     let restored_lines = buffer_lines(&terminal).join("\n");
 

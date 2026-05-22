@@ -616,7 +616,7 @@ impl StartupOnboardingState {
             .unwrap_or(Language::En)
     }
 
-    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> StartupOnboardingAction {
+    fn handle_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         match self.stage {
             StartupOnboardingStage::Language => self.handle_language_key(key),
             StartupOnboardingStage::Provider => self.handle_provider_key(key),
@@ -627,7 +627,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_language_key(&mut self, key: crossterm::event::KeyEvent) -> StartupOnboardingAction {
+    fn handle_language_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.language_index = self.language_index.saturating_sub(1);
@@ -656,7 +656,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_provider_key(&mut self, key: crossterm::event::KeyEvent) -> StartupOnboardingAction {
+    fn handle_provider_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.provider_index = self.provider_index.saturating_sub(1);
@@ -684,7 +684,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_skills_key(&mut self, key: crossterm::event::KeyEvent) -> StartupOnboardingAction {
+    fn handle_skills_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.skill_cursor = self.skill_cursor.saturating_sub(1);
@@ -730,10 +730,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_setup_path_key(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-    ) -> StartupOnboardingAction {
+    fn handle_setup_path_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.setup_path_index = self.setup_path_index.saturating_sub(1);
@@ -773,10 +770,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_personalization_key(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-    ) -> StartupOnboardingAction {
+    fn handle_personalization_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.personalization_index = self.personalization_index.saturating_sub(1);
@@ -799,7 +793,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_finish_key(&mut self, key: crossterm::event::KeyEvent) -> StartupOnboardingAction {
+    fn handle_finish_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Enter {
             StartupOnboardingAction::Complete
@@ -875,4 +869,3 @@ pub struct App {
     title_pending_approval_count: usize,
     pub i18n: I18nService,
 }
-

@@ -212,6 +212,7 @@ pub async fn run_app<B: Backend>(
     let mut dirty = true;
     let mut last_resize_at: Option<std::time::Instant> = None;
     let mut pending_live_resize_rerender = false;
+    let mut input_adapter = InputAdapter::new();
 
     loop {
         if let Some(task) = startup_release_task.as_ref()
@@ -280,11 +281,9 @@ pub async fn run_app<B: Backend>(
             Duration::from_millis(250)
         };
 
-        if event::poll(poll_timeout).map_err(|e| format!("poll error: {}", e))? {
-            let event = event::read().map_err(|e| format!("read error: {}", e))?;
-
+        if let Some(event) = input_adapter.next_event(poll_timeout)? {
             match event {
-                Event::Key(key) => {
+                ChatInputEvent::Key(key) => {
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
@@ -548,7 +547,7 @@ pub async fn run_app<B: Backend>(
                     }
                     dirty = true;
                 }
-                Event::Mouse(mouse_event) => {
+                ChatInputEvent::Mouse(mouse_event) => {
                     if let Some(command) = app.handle_mouse_event(mouse_event) {
                         if command == "/exit" {
                             clear_app_terminal_title(&mut app);
@@ -559,7 +558,7 @@ pub async fn run_app<B: Backend>(
                     }
                     dirty = true;
                 }
-                Event::Resize(width, height) => {
+                ChatInputEvent::Resize { width, height } => {
                     let new_size = ratatui::layout::Size::new(width, height);
                     if new_size.width == last_known_size.width
                         && new_size.height == last_known_size.height
@@ -586,15 +585,14 @@ pub async fn run_app<B: Backend>(
                     }
                     dirty = true;
                 }
-                Event::Paste(text) => {
+                ChatInputEvent::Paste(text) => {
                     paste_into_composer(&mut app, text.as_str());
                     dirty = true;
                 }
-                Event::FocusGained | Event::FocusLost => {}
+                ChatInputEvent::FocusGained | ChatInputEvent::FocusLost => {}
             }
         }
     }
     clear_app_terminal_title(&mut app);
     Ok(())
 }
-

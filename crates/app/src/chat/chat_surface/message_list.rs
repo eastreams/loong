@@ -1,10 +1,13 @@
 use super::utils::*;
 use crate::chat::chat_surface::diff_viewer::render_diff_to_lines;
+use crate::chat::chat_surface::input::{
+    ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatKeyModifiers as KeyModifiers,
+    ChatMouseEvent, ChatMouseEventKind,
+};
 use crate::chat::chat_surface::markdown;
 use crate::chat::chat_surface::transcript_scroll_state::TranscriptScrollState;
 use crate::conversation::is_compacted_summary_content;
 use crate::tui_surface::TuiSectionSpec;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::Rect,

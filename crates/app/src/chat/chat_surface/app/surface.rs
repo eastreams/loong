@@ -353,7 +353,7 @@ impl App {
         }
     }
 
-    fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> Option<String> {
+    fn handle_mouse_event(&mut self, mouse_event: ChatMouseEvent) -> Option<String> {
         if rect_contains_point(self.last_palette_area, mouse_event.column, mouse_event.row)
             && (matches!(self.focus, Focus::CommandPalette) || self.inline_skill_popup_active)
         {
@@ -364,7 +364,10 @@ impl App {
         }
 
         if rect_contains_point(self.last_composer_area, mouse_event.column, mouse_event.row) {
-            if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if matches!(
+                mouse_event.kind,
+                ChatMouseEventKind::Down(MouseButton::Left)
+            ) {
                 self.focus = Focus::Composer;
                 self.sync_inline_skill_popup();
             }
@@ -378,9 +381,9 @@ impl App {
         ) {
             if matches!(
                 mouse_event.kind,
-                MouseEventKind::Down(MouseButton::Left)
-                    | MouseEventKind::Down(MouseButton::Right)
-                    | MouseEventKind::Down(MouseButton::Middle)
+                ChatMouseEventKind::Down(MouseButton::Left)
+                    | ChatMouseEventKind::Down(MouseButton::Right)
+                    | ChatMouseEventKind::Down(MouseButton::Middle)
             ) {
                 self.focus = Focus::MessageList;
                 self.sync_inline_skill_popup();
@@ -410,10 +413,7 @@ impl App {
     fn confirm_inline_skill_popup(&mut self) {
         if let Some(action) = self
             .command_palette
-            .handle_key(crossterm::event::KeyEvent::new(
-                KeyCode::Enter,
-                KeyModifiers::NONE,
-            ))
+            .handle_key(ChatKeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         {
             let _ = self.apply_palette_action(action);
         } else {
@@ -421,7 +421,7 @@ impl App {
         }
     }
 
-    fn handle_inline_skill_popup_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    fn handle_inline_skill_popup_key(&mut self, key: ChatKeyEvent) -> bool {
         if !self.inline_skill_popup_active {
             return false;
         }

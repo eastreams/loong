@@ -1,9 +1,12 @@
 use crate::chat::chat_surface::i18n::{I18nService, Language, SurfaceCopy};
+use crate::chat::chat_surface::input::{
+    ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatMouseButton as MouseButton,
+    ChatMouseEvent as MouseEvent, ChatMouseEventKind as MouseEventKind,
+};
 use crate::chat::chat_surface::scroll_state::ScrollState;
 use crate::chat::chat_surface::utils::*;
 use crate::config::{ProviderKind, ReasoningEffort};
 use crate::provider::ProviderModelCatalogEntry;
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -1940,11 +1943,13 @@ fn area_contains(area: Rect, column: u16, row: u16) -> bool {
 mod tests {
     use super::{CommandAction, CommandPalette, SettingsEntry, SettingsSurfaceFocus, SkillEntry};
     use crate::chat::chat_surface::i18n::Language;
+    use crate::chat::chat_surface::input::{
+        ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatKeyModifiers as KeyModifiers,
+        ChatMouseButton as MouseButton, ChatMouseEvent as MouseEvent,
+        ChatMouseEventKind as MouseEventKind,
+    };
     use crate::config::ReasoningEffort;
     use crate::provider::ProviderModelCatalogEntry;
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-    };
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::{Modifier, Style};

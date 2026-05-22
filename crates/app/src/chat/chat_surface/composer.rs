@@ -1,5 +1,7 @@
 use super::utils::*;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::chat::chat_surface::input::{
+    ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatKeyModifiers as KeyModifiers,
+};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -397,7 +399,9 @@ fn highlight_composer_row(row: &str) -> Vec<Span<'static>> {
 #[cfg(test)]
 mod tests {
     use super::Composer;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::chat::chat_surface::input::{
+        ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatKeyModifiers as KeyModifiers,
+    };
     use ratatui::layout::Rect;
 
     fn key(code: KeyCode) -> KeyEvent {

@@ -144,7 +144,7 @@ fn dequeue_pending_steer(app: &mut App) -> bool {
     true
 }
 
-fn is_transcript_navigation_key(key: crossterm::event::KeyEvent) -> bool {
+fn is_transcript_navigation_key(key: ChatKeyEvent) -> bool {
     matches!(
         key.code,
         KeyCode::Up
@@ -156,7 +156,7 @@ fn is_transcript_navigation_key(key: crossterm::event::KeyEvent) -> bool {
     )
 }
 
-fn should_focus_composer_for_transcript_key(key: crossterm::event::KeyEvent) -> bool {
+fn should_focus_composer_for_transcript_key(key: ChatKeyEvent) -> bool {
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
@@ -175,17 +175,14 @@ fn should_focus_composer_for_transcript_key(key: crossterm::event::KeyEvent) -> 
     )
 }
 
-fn route_transcript_key_to_composer(
-    app: &mut App,
-    key: crossterm::event::KeyEvent,
-) -> Option<String> {
+fn route_transcript_key_to_composer(app: &mut App, key: ChatKeyEvent) -> Option<String> {
     app.focus = Focus::Composer;
     let submitted = app.composer.handle_key(key);
     app.sync_inline_skill_popup();
     submitted
 }
 
-fn should_route_composer_key_to_transcript(app: &App, key: crossterm::event::KeyEvent) -> bool {
+fn should_route_composer_key_to_transcript(app: &App, key: ChatKeyEvent) -> bool {
     matches!(
         key.code,
         KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown

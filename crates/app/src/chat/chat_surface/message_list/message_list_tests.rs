@@ -6,12 +6,15 @@ use super::{
     format_read_request_display, startup_logo_eye_frame_index, startup_logo_eye_style,
     startup_tip_render_state, startup_wordmark_eye_frame,
 };
+use crate::chat::chat_surface::input::{
+    ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatKeyModifiers as KeyModifiers,
+    ChatMouseEvent as MouseEvent, ChatMouseEventKind as MouseEventKind,
+};
 use crate::chat::chat_surface::utils::{
     SURFACE_ACCENT, SURFACE_DIM_GRAY, SURFACE_GRAY, SURFACE_GREEN, SURFACE_RED, SURFACE_TOOL_BG,
     SURFACE_USER_MSG_BG,
 };
 use crate::test_support::ScopedEnv;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend, style::Color, text::Line};
 use std::time::Duration;
 

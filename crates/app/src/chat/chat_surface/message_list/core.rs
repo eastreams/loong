@@ -741,20 +741,16 @@ impl MessageList {
         }
     }
 
-    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+    pub fn handle_mouse(&mut self, mouse: ChatMouseEvent) {
         match mouse.kind {
-            crossterm::event::MouseEventKind::ScrollUp => {
-                self.scroll_state.scroll_page_up(self.mouse_step)
-            }
-            crossterm::event::MouseEventKind::ScrollDown => {
-                self.scroll_state.scroll_page_down(self.mouse_step)
-            }
-            crossterm::event::MouseEventKind::Down(_)
-            | crossterm::event::MouseEventKind::Up(_)
-            | crossterm::event::MouseEventKind::Drag(_)
-            | crossterm::event::MouseEventKind::Moved
-            | crossterm::event::MouseEventKind::ScrollLeft
-            | crossterm::event::MouseEventKind::ScrollRight => {}
+            ChatMouseEventKind::ScrollUp => self.scroll_state.scroll_page_up(self.mouse_step),
+            ChatMouseEventKind::ScrollDown => self.scroll_state.scroll_page_down(self.mouse_step),
+            ChatMouseEventKind::Down(_)
+            | ChatMouseEventKind::Up(_)
+            | ChatMouseEventKind::Drag(_)
+            | ChatMouseEventKind::Moved
+            | ChatMouseEventKind::ScrollLeft
+            | ChatMouseEventKind::ScrollRight => {}
         }
     }
 
@@ -1210,4 +1206,3 @@ fn content_renders_colored_block(role: &str, content: &MessageContent) -> bool {
         | MessageContent::StartupHeader { .. } => false,
     }
 }
-
