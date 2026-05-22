@@ -2062,12 +2062,16 @@ Safe for model-driven activation.
     #[test]
     fn model_surface_redacts_operator_only_skill_metadata() {
         with_managed_runtime_test(|| {
+            let required_bin = if cfg!(windows) { "cmd" } else { "sh" };
             let root = unique_temp_dir("loong-ext-skill-model-redaction");
             fs::create_dir_all(&root).expect("create fixture root");
+            let skill_body = format!(
+                "---\nname: demo-skill\ndescription: eligible project skill.\nrequires_env:\n  - DEMO_SKILL_TOKEN\nrequires_bin:\n  - {required_bin}\nrequires_paths:\n  - fixtures/present.txt\n---\n\n# Demo Skill\n\nOnly expose model-safe metadata on the provider surface.\n"
+            );
             write_file(
                 &root,
                 ".agents/skills/demo-skill/SKILL.md",
-                "---\nname: demo-skill\ndescription: eligible project skill.\nrequires_env:\n  - DEMO_SKILL_TOKEN\nrequires_bin:\n  - sh\nrequires_paths:\n  - fixtures/present.txt\n---\n\n# Demo Skill\n\nOnly expose model-safe metadata on the provider surface.\n",
+                skill_body.as_str(),
             );
             write_file(&root, "fixtures/present.txt", "present");
             let config = managed_runtime_config(&root);
@@ -2119,7 +2123,7 @@ Safe for model-driven activation.
                 .expect("operator list should include demo-skill");
             assert_eq!(operator_skill["model_visibility"], "visible");
             assert_eq!(operator_skill["required_env"], json!(["DEMO_SKILL_TOKEN"]));
-            assert_eq!(operator_skill["required_bin"], json!(["sh"]));
+            assert_eq!(operator_skill["required_bin"], json!([required_bin]));
             assert_eq!(
                 operator_skill["required_paths"],
                 json!(["fixtures/present.txt"])
@@ -2168,7 +2172,7 @@ Safe for model-driven activation.
             );
             assert_eq!(
                 operator_inspect.payload["skill"]["required_bin"],
-                json!(["sh"])
+                json!([required_bin])
             );
             assert_eq!(
                 operator_inspect.payload["skill"]["required_paths"],

@@ -125,6 +125,11 @@ where
         .map(|value| OsString::from(value.as_ref()))
         .collect::<Vec<_>>();
 
+    #[cfg(windows)]
+    if let Some(invocation) = resolve_windows_builtin_invocation(command, &collected_args) {
+        return invocation;
+    }
+
     if let Some(resolved_path) = resolve_existing_command_path(command) {
         #[cfg(unix)]
         if let Some(invocation) =
@@ -143,6 +148,31 @@ where
         program: OsString::from(command),
         args: collected_args,
     }
+}
+
+#[cfg(windows)]
+fn resolve_windows_builtin_invocation(
+    command: &str,
+    collected_args: &[OsString],
+) -> Option<ResolvedCommandInvocation> {
+    let normalized = command.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "echo") {
+        return None;
+    }
+
+    let mut shell_command = String::from(command.trim());
+    for argument in collected_args {
+        shell_command.push(' ');
+        shell_command.push_str(argument.to_string_lossy().as_ref());
+    }
+
+    Some(ResolvedCommandInvocation {
+        program: OsString::from("cmd.exe"),
+        args: vec![
+            OsString::from("/C"),
+            OsString::from(shell_command.trim()),
+        ],
+    })
 }
 
 #[cfg(unix)]
@@ -237,9 +267,32 @@ fn resolve_existing_command_path(command: &str) -> Option<PathBuf> {
 fn stable_command_search_path() -> OsString {
     std::env::var_os("PATH")
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            OsString::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd")
-        })
+        .unwrap_or_else(default_windows_search_path)
+}
+
+#[cfg(windows)]
+fn default_windows_search_path() -> OsString {
+    let mut parts = Vec::new();
+
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        let root = PathBuf::from(system_root);
+        parts.push(root.join("System32").into_os_string());
+        parts.push(root.into_os_string());
+    } else {
+        parts.push(OsString::from(r"C:\Windows\System32"));
+        parts.push(OsString::from(r"C:\Windows"));
+    }
+
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        parts.push(
+            PathBuf::from(program_files)
+                .join("Git")
+                .join("cmd")
+                .into_os_string(),
+        );
+    }
+
+    std::env::join_paths(parts).unwrap_or_else(|_| OsString::from(r"C:\Windows\System32;C:\Windows"))
 }
 
 #[cfg(unix)]
