@@ -31,7 +31,7 @@ pub(super) fn ensure_cli_channel_enabled_for_entrypoint(
 /// Assemble a CLI turn runtime starting from a config path on disk.
 ///
 /// This is the highest-level bootstrap used by `chat`/`ask`: it loads the
-/// config, permits implicit default-session resolution, exports runtime
+/// config, resolves startup session selection, exports runtime
 /// environment variables, bootstraps a fresh kernel context, and delegates the
 /// final session/memory assembly to the lower-level helpers below.
 pub(crate) fn initialize_cli_turn_runtime(
@@ -144,7 +144,8 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, &memory_config)?;
 
     #[cfg(not(feature = "memory-sqlite"))]
-    let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
+    let session_id =
+        resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, ())?;
 
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
     let runtime_kernel = crate::runtime_bridge::RuntimeKernelOwner::new(kernel_ctx);
@@ -166,21 +167,76 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
-fn resolve_cli_session_id(
+fn resolve_or_create_cli_runtime_session_id(
     session_hint: Option<&str>,
     session_requirement: CliSessionRequirement,
+    _memory_store_unavailable: (),
 ) -> CliResult<String> {
-    match session_hint
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(session_id) => Ok(session_id.to_owned()),
-        None => match session_requirement {
-            CliSessionRequirement::AllowImplicitDefault => Ok("default".to_owned()),
-            CliSessionRequirement::RequireExplicit => {
-                Err("concurrent CLI host requires an explicit session id".to_owned())
-            }
-        },
+    let normalized = session_hint.map(str::trim).filter(|value| !value.is_empty());
+
+    match (normalized, session_requirement) {
+        (None, CliSessionRequirement::AllowImplicitDefault) => Err(
+            "CLI startup session creation requires sqlite-backed memory; enable feature `memory-sqlite`".to_owned(),
+        ),
+        (None, CliSessionRequirement::RequireExplicit) => {
+            Err("concurrent CLI host requires an explicit session id".to_owned())
+        }
+        (Some(session_id), _) if session_id == "latest" => Err(
+            "CLI session selector `latest` requires sqlite-backed memory; enable feature `memory-sqlite`".to_owned(),
+        ),
+        (Some(session_id), _) => Err(format!(
+            "CLI session `{session_id}` cannot be validated because sqlite-backed memory is disabled"
+        )),
+    }
+}
+
+#[cfg(all(test, not(feature = "memory-sqlite")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_cli_runtime_session_id_rejects_implicit_startup_without_sqlite() {
+        let error = match resolve_or_create_cli_runtime_session_id(
+            None,
+            CliSessionRequirement::AllowImplicitDefault,
+            (),
+        ) {
+            Ok(_) => panic!("implicit startup should require sqlite-backed memory"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("sqlite-backed memory"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn resolve_cli_runtime_session_id_rejects_latest_without_sqlite() {
+        let error = match resolve_or_create_cli_runtime_session_id(
+            Some("latest"),
+            CliSessionRequirement::RequireExplicit,
+            (),
+        ) {
+            Ok(_) => panic!("latest selector should require sqlite-backed memory"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("latest"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn resolve_cli_runtime_session_id_rejects_literal_without_sqlite_validation() {
+        let error = match resolve_or_create_cli_runtime_session_id(
+            Some("missing-session"),
+            CliSessionRequirement::AllowImplicitDefault,
+            (),
+        ) {
+            Ok(_) => panic!("explicit literal should not be accepted without validation"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.contains("cannot be validated"),
+            "unexpected error: {error}"
+        );
     }
 }
 
