@@ -7,6 +7,23 @@ fn split_surface_command(input: &str) -> (&str, &str) {
     }
 }
 
+enum ResumeInvocation {
+    Picker,
+    Latest,
+    SessionId(String),
+}
+
+fn parse_resume_command(args: &str) -> ResumeInvocation {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        ResumeInvocation::Picker
+    } else if trimmed == crate::session::LATEST_SESSION_SELECTOR {
+        ResumeInvocation::Latest
+    } else {
+        ResumeInvocation::SessionId(trimmed.to_owned())
+    }
+}
+
 fn is_known_surface_command(command: &str) -> bool {
     match command {
         super::super::CLI_CHAT_HELP_COMMAND
@@ -218,7 +235,7 @@ fn apply_settings_command(
 
 fn dispatch_palette_action(
     app: &mut App,
-    runtime: &mut CliTurnRuntime,
+    router: &mut SessionRouter,
     width: usize,
     action: CommandAction,
 ) -> CliResult<Option<String>> {
@@ -232,22 +249,42 @@ fn dispatch_palette_action(
             app.focus = Focus::Composer;
             Ok(Some(command.to_owned()))
         }
-        CommandAction::SelectResumeSession { .. } => Ok(None),
+        CommandAction::SelectResumeSession { session_id } => {
+            if should_clear_slash_buffer {
+                clear_slash_palette_composer(app);
+            }
+            let result = router.begin_resume_session(
+                session_id.as_str(),
+                SessionTransitionReason::UserRequestedResume,
+            );
+            if result.is_ok() {
+                refresh_app_cwd_dependent_state(app, router.active_runtime());
+            }
+            app.message_list
+                .add_rendered_lines(render_session_transition_lines_with_width(
+                    result.map(|outcome| outcome.message),
+                    width,
+                ));
+            app.inline_skill_popup_active = false;
+            app.focus = Focus::Composer;
+            Ok(None)
+        }
         CommandAction::OpenSettings(focus) => {
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
-            open_settings_palette(app, runtime, focus, width, None, None);
+            open_settings_palette(app, router.active_runtime(), focus, width, None, None);
             Ok(None)
         }
         CommandAction::ApplySettings(action) => {
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
-            let (focus, summary, selected_label) = apply_settings_command(app, runtime, action)?;
+            let (focus, summary, selected_label) =
+                apply_settings_command(app, router.active_runtime_mut(), action)?;
             open_settings_palette(
                 app,
-                runtime,
+                router.active_runtime(),
                 focus,
                 width,
                 Some(summary),
@@ -259,7 +296,7 @@ fn dispatch_palette_action(
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
-            open_reasoning_palette(app, runtime, &entry);
+            open_reasoning_palette(app, router.active_runtime(), &entry);
             Ok(None)
         }
         CommandAction::ApplyModelSelection {
@@ -269,7 +306,7 @@ fn dispatch_palette_action(
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
-            apply_model_selection(app, runtime, model, reasoning_effort)?;
+            apply_model_selection(app, router.active_runtime_mut(), model, reasoning_effort)?;
             Ok(None)
         }
         CommandAction::Noop => Ok(None),
@@ -750,6 +787,35 @@ fn render_new_conversation_lines_with_width(width: usize) -> Vec<String> {
             ],
         }],
         footer_lines: vec!["Type immediately; no extra focus step is needed.".to_owned()],
+    };
+    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+fn render_session_transition_lines_with_width(
+    result: Result<String, String>,
+    width: usize,
+) -> Vec<String> {
+    let (tone, title, lines) = match result {
+        Ok(message) => (
+            TuiCalloutTone::Info,
+            "session updated".to_owned(),
+            vec![message],
+        ),
+        Err(error) => (
+            TuiCalloutTone::Warning,
+            "session unchanged".to_owned(),
+            vec![error],
+        ),
+    };
+    let message_spec = TuiMessageSpec {
+        role: "session".to_owned(),
+        caption: Some("router transition".to_owned()),
+        sections: vec![TuiSectionSpec::Callout {
+            tone,
+            title: Some(title),
+            lines,
+        }],
+        footer_lines: vec!["The active session route was handled through the session router.".to_owned()],
     };
     super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
 }

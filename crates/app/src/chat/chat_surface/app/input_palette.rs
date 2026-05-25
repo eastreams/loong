@@ -528,10 +528,11 @@ fn apply_model_selection(
 async fn run_surface_command<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    runtime: &mut CliTurnRuntime,
+    router: &mut SessionRouter,
     options: &CliChatOptions,
     input: &str,
 ) -> CliResult<()> {
+    let runtime = router.active_runtime_mut();
     refresh_app_cwd_dependent_state(app, runtime);
     let trimmed = input.trim();
     let (command, args) = split_surface_command(trimmed);
@@ -544,9 +545,24 @@ async fn run_surface_command<B: Backend>(
             Ok(())
         }
         "/new" => {
-            app.message_list.clear_transcript();
+            if app.pending_turn {
+                app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
+                    Ok("Cannot start a new session while a turn is pending.".to_owned()),
+                    width,
+                ));
+                app.focus = Focus::Composer;
+                return Ok(());
+            }
+            let result = router.begin_create_new_session(SessionTransitionReason::UserRequestedNew);
+            if result.is_ok() {
+                app.message_list.clear_transcript();
+                refresh_app_cwd_dependent_state(app, router.active_runtime());
+            }
             app.message_list
-                .add_rendered_lines(render_new_conversation_lines_with_width(width));
+                .add_rendered_lines(render_session_transition_lines_with_width(
+                    result.map(|outcome| outcome.message),
+                    width,
+                ));
             app.focus = Focus::Composer;
             Ok(())
         }
@@ -646,11 +662,93 @@ async fn run_surface_command<B: Backend>(
             app.focus = Focus::Composer;
             Ok(())
         }
-        "/model" => open_model_palette(app, runtime, args).await,
+        "/resume" => {
+            if app.pending_turn {
+                app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
+                    Ok("Cannot resume another session while a turn is pending.".to_owned()),
+                    width,
+                ));
+                app.focus = Focus::Composer;
+                return Ok(());
+            }
+            match parse_resume_command(args) {
+                ResumeInvocation::Picker => {
+                    #[cfg(feature = "memory-sqlite")]
+                    {
+                        let candidates = resume_candidates::load_resume_candidates(
+                            router.active_runtime().session_id.as_str(),
+                            &router.active_runtime().memory_config,
+                        )?;
+                        let entries = candidates
+                            .into_iter()
+                            .map(|candidate| ResumePaletteEntry {
+                                session_id: candidate.session_id,
+                                timestamp_label: candidate.last_user_turn_at.to_string(),
+                                preview_text: candidate.preview_text,
+                            })
+                            .collect();
+                        app.command_palette.show_resume_candidates(
+                            entries,
+                            Some("Select a conversation to resume".to_owned()),
+                        );
+                        app.inline_skill_popup_active = false;
+                        app.focus = Focus::CommandPalette;
+                        return Ok(());
+                    }
+                    #[cfg(not(feature = "memory-sqlite"))]
+                    {
+                        app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
+                            Err("Resume picker requires sqlite-backed memory".to_owned()),
+                            width,
+                        ));
+                        app.focus = Focus::Composer;
+                        return Ok(());
+                    }
+                }
+                ResumeInvocation::Latest => {
+                    let latest = router
+                        .latest_resume_target_session_id()?
+                        .ok_or_else(|| "No resumable session available.".to_owned());
+                    let result = latest.and_then(|session_id| {
+                        router.begin_resume_session(
+                            session_id.as_str(),
+                            SessionTransitionReason::UserRequestedResume,
+                        )
+                    });
+                    if result.is_ok() {
+                        refresh_app_cwd_dependent_state(app, router.active_runtime());
+                    }
+                    app.message_list
+                        .add_rendered_lines(render_session_transition_lines_with_width(
+                            result.map(|outcome| outcome.message),
+                            width,
+                        ));
+                    app.focus = Focus::Composer;
+                    Ok(())
+                }
+                ResumeInvocation::SessionId(session_id) => {
+                    let result = router.begin_resume_session(
+                        session_id.as_str(),
+                        SessionTransitionReason::UserRequestedResume,
+                    );
+                    if result.is_ok() {
+                        refresh_app_cwd_dependent_state(app, router.active_runtime());
+                    }
+                    app.message_list
+                        .add_rendered_lines(render_session_transition_lines_with_width(
+                            result.map(|outcome| outcome.message),
+                            width,
+                        ));
+                    app.focus = Focus::Composer;
+                    Ok(())
+                }
+            }
+        }
+        "/model" => open_model_palette(app, router.active_runtime_mut(), args).await,
         "/settings" if args.trim().is_empty() => {
             open_settings_palette(
                 app,
-                runtime,
+                router.active_runtime(),
                 SettingsSurfaceFocus::Overview,
                 width,
                 None,
@@ -660,11 +758,11 @@ async fn run_surface_command<B: Backend>(
         }
         "/settings" if !args.trim().is_empty() => {
             let action = parse_settings_command_action(args)?;
-            let _ = dispatch_palette_action(app, runtime, width, action)?;
+            let _ = dispatch_palette_action(app, router, width, action)?;
             Ok(())
         }
         _ => {
-            let lines = build_command_lines(runtime, options, input, width).await?;
+            let lines = build_command_lines(router.active_runtime(), options, input, width).await?;
             app.message_list.add_rendered_lines(lines);
             app.focus = Focus::Composer;
             Ok(())

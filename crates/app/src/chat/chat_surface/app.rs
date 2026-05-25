@@ -35,8 +35,8 @@ use crate::tools::bundled_preinstall_targets;
 use crate::tui_surface::{TuiCalloutTone, TuiKeyValueSpec, TuiMessageSpec, TuiSectionSpec};
 
 use super::command_palette::{
-    CommandAction, CommandPalette, SettingsCommandAction, SettingsEntry, SettingsSurfaceFocus,
-    SkillEntry, slash_command_specs,
+    CommandAction, CommandPalette, ResumePaletteEntry, SettingsCommandAction, SettingsEntry,
+    SettingsSurfaceFocus, SkillEntry, slash_command_specs,
 };
 use super::composer::Composer;
 use super::i18n::{I18nService, Language, SurfaceCopy, resolve_default_language};

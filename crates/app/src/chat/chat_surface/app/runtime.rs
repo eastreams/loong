@@ -374,7 +374,7 @@ pub async fn run_app<B: Backend>(
                                 if let Some(action) = app.command_palette.handle_key(key)
                                     && let Some(command) = dispatch_palette_action(
                                         &mut app,
-                                        router.active_runtime_mut(),
+                                        &mut router,
                                         current_render_width(terminal)?,
                                         action,
                                     )?
@@ -415,7 +415,7 @@ pub async fn run_app<B: Backend>(
                             run_surface_command(
                                 terminal,
                                 &mut app,
-                                router.active_runtime_mut(),
+                                &mut router,
                                 &options,
                                 &command,
                             )
@@ -489,7 +489,7 @@ pub async fn run_app<B: Backend>(
                             if let Some(action) = app.command_palette.handle_key(key)
                                 && let Some(command) = dispatch_palette_action(
                                     &mut app,
-                                    router.active_runtime_mut(),
+                                    &mut router,
                                     current_render_width(terminal)?,
                                     action,
                                 )?
@@ -561,7 +561,7 @@ pub async fn run_app<B: Backend>(
                         run_surface_command(
                             terminal,
                             &mut app,
-                            router.active_runtime_mut(),
+                            &mut router,
                             &options,
                             &command,
                         )
@@ -578,7 +578,7 @@ pub async fn run_app<B: Backend>(
                         run_surface_command(
                             terminal,
                             &mut app,
-                            router.active_runtime_mut(),
+                            &mut router,
                             &options,
                             &command,
                         )

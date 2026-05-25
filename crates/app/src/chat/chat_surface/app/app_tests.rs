@@ -480,6 +480,136 @@ fn session_router_dedupes_created_session_cleanup_ids() {
     assert_eq!(router.created_this_run_session_ids(), vec![created_session_id]);
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn resume_test_harness(label: &str) -> ResumeCommandHarness {
+    ResumeCommandHarness::new(label)
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct ResumeCommandHarness {
+    terminal: Terminal<TestBackend>,
+    app: App,
+    router: SessionRouter,
+    options: CliChatOptions,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ResumeCommandHarness {
+    fn new(label: &str) -> Self {
+        let (config, memory_config) = test_router_memory(label);
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "current-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("current-root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create current session");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-old".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("root-old".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create old session");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-new".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("root-new".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create new session");
+        store::append_session_turn_direct("root-old", "user", "older resume candidate", &memory_config)
+            .expect("append old session turn");
+        store::append_session_turn_direct("root-new", "user", "newer resume candidate", &memory_config)
+            .expect("append new session turn");
+
+        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+            PathBuf::from(format!("/tmp/{label}.toml")),
+            config,
+            Some("current-root"),
+            &CliChatOptions::default(),
+            "chat-surface-resume-test",
+            CliSessionRequirement::RequireExplicit,
+            false,
+        )
+        .expect("resume harness runtime");
+        let terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let app = App::new(&runtime, &CliChatOptions::default(), 80).expect("app");
+        let router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
+
+        Self {
+            terminal,
+            app,
+            router,
+            options: CliChatOptions::default(),
+        }
+    }
+
+    fn run_command(&mut self, command: &str) -> crate::CliResult<()> {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(super::run_surface_command(
+            &mut self.terminal,
+            &mut self.app,
+            &mut self.router,
+            &self.options,
+            command,
+        ))
+    }
+
+    fn latest_transcript(&mut self) -> String {
+        self.app
+            .message_list
+            .get_rendered_lines(80)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_new_creates_and_switches_to_real_session() {
+    let mut harness = resume_test_harness("surface-new-switch");
+    let original_session_id = harness.router.active_runtime().session_id.clone();
+
+    let result = harness.run_command("/new");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_ne!(harness.router.active_runtime().session_id, original_session_id);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_latest_switches_to_first_candidate() {
+    let mut harness = resume_test_harness("resume-latest-switch");
+    let result = harness.run_command("/resume latest");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_new_is_blocked_while_pending_turn() {
+    let mut harness = resume_test_harness("new-pending");
+    harness.app.pending_turn = true;
+
+    let result = harness.run_command("/new");
+
+    assert!(result.is_ok(), "blocked command still renders feedback");
+    assert!(harness.latest_transcript().contains("pending"));
+}
+
 #[test]
 fn resize_reflow_tracks_width_and_height_changes() {
     assert!(super::resize_reflow_required(80, 24, 72, 24));
@@ -747,30 +877,29 @@ fn cwd_command_updates_runtime_and_app_cwd() {
     let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-command.toml");
     let mut runtime = test_runtime_with_path(config_path);
     runtime.effective_working_directory = Some(base.clone());
+    let expected_cwd = dunce::canonicalize(&nested).expect("canonical nested");
     let mut app = blank_app();
     app.cwd = base.display().to_string();
     let backend = TestBackend::new(72, 18);
     let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
 
     tokio::runtime::Runtime::new()
         .expect("runtime")
         .block_on(super::run_surface_command(
             &mut terminal,
             &mut app,
-            &mut runtime,
+            &mut router,
             &CliChatOptions::default(),
             "/cwd nested",
         ))
         .expect("run cwd command");
 
     assert_eq!(
-        runtime.effective_working_directory,
-        Some(dunce::canonicalize(&nested).expect("canonical nested"))
+        router.active_runtime().effective_working_directory,
+        Some(expected_cwd.clone())
     );
-    assert_eq!(
-        PathBuf::from(&app.cwd),
-        dunce::canonicalize(&nested).expect("canonical nested")
-    );
+    assert_eq!(PathBuf::from(&app.cwd), expected_cwd);
 }
 
 #[test]
@@ -2001,13 +2130,15 @@ fn model_command_opens_selector_surface_instead_of_static_card() {
     let mut app = blank_app();
     let backend = TestBackend::new(72, 18);
     let mut terminal = Terminal::new(backend).expect("terminal");
+    let current_model = runtime.config.provider.model.clone();
+    let mut router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
 
     tokio::runtime::Runtime::new()
         .expect("runtime")
         .block_on(super::run_surface_command(
             &mut terminal,
             &mut app,
-            &mut runtime,
+            &mut router,
             &CliChatOptions::default(),
             "/model",
         ))
@@ -2018,8 +2149,7 @@ fn model_command_opens_selector_surface_instead_of_static_card() {
         .command_palette
         .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
     {
-        Some(CommandAction::OpenModelReasoning(entry))
-            if entry.model == runtime.config.provider.model => {}
+        Some(CommandAction::OpenModelReasoning(entry)) if entry.model == current_model => {}
         other => panic!("expected /model to open model selector flow, got {other:?}"),
     }
 }

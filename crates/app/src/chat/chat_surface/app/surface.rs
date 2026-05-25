@@ -328,7 +328,7 @@ impl App {
                 self.focus = Focus::Composer;
                 Some(command.to_owned())
             }
-            CommandAction::SelectResumeSession { .. } => None,
+            CommandAction::SelectResumeSession { session_id } => Some(format!("/resume {session_id}")),
             CommandAction::OpenSettings(_)
             | CommandAction::ApplySettings(_)
             | CommandAction::OpenModelReasoning(_)
