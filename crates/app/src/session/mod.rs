@@ -26,6 +26,38 @@ pub fn latest_resumable_root_session_id(
     Ok(latest_session_id)
 }
 
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn resume_candidates_for_root_sessions(
+    store_config: &store::SessionStoreConfig,
+    current_session_id: &str,
+) -> crate::CliResult<Vec<crate::chat::chat_surface::app::resume_candidates::ResumeCandidate>> {
+    crate::chat::chat_surface::app::resume_candidates::load_resume_candidates(
+        current_session_id,
+        store_config,
+    )
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub fn created_empty_sessions_for_cleanup(
+    store_config: &store::SessionStoreConfig,
+    created_this_run_ids: &[String],
+) -> crate::CliResult<Vec<String>> {
+    let repo = repository::SessionRepository::new(store_config)?;
+    let mut doomed = Vec::new();
+
+    for session_id in created_this_run_ids {
+        let Some(_session) = repo.load_session(session_id)? else {
+            continue;
+        };
+        let turns = store::window_session_turns(session_id, 64, store_config)?;
+        if turns.iter().all(|turn| turn.role != "user") {
+            doomed.push(session_id.clone());
+        }
+    }
+
+    Ok(doomed)
+}
+
 pub(crate) const DELEGATE_CANCEL_REQUESTED_EVENT_KIND: &str = "delegate_cancel_requested";
 pub(crate) const DELEGATE_CANCELLED_EVENT_KIND: &str = "delegate_cancelled";
 pub(crate) const DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED: &str = "operator_requested";
@@ -74,8 +106,10 @@ mod delegate_cancelled_reason_tests {
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_cli_session_selector_tests {
+    use super::created_empty_sessions_for_cleanup;
     use super::LATEST_SESSION_SELECTOR;
     use super::latest_resumable_root_session_id;
+    use super::resume_candidates_for_root_sessions;
     use crate::session::repository::NewSessionRecord;
     use crate::session::repository::SessionKind;
     use crate::session::repository::SessionRepository;
@@ -208,6 +242,98 @@ mod latest_cli_session_selector_tests {
             latest_resumable_root_session_id(&memory_config).expect("resolve latest session id");
 
         assert!(selected_session_id.is_none());
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn startup_created_root_session_is_not_latest_eligible_without_user_turn() {
+        let (root, memory_config) = init_selector_test_memory("startup-created-empty");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "startup-empty".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("startup-empty".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create startup-empty");
+
+        assert_eq!(
+            latest_resumable_root_session_id(&memory_config).expect("resolve latest"),
+            None
+        );
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn resume_candidates_exclude_created_empty_root_sessions_without_user_turns() {
+        let (root, memory_config) = init_selector_test_memory("resume-empty-filter");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "empty-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("empty-root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create empty-root");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "root-user".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("root-user".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root-user");
+        append_session_turn(&memory_config, "root-user", "user", "hello from root-user");
+
+        let candidates = resume_candidates_for_root_sessions(&memory_config, "current-session")
+            .expect("load candidates");
+
+        let ids = candidates
+            .iter()
+            .map(|candidate| candidate.session_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["root-user"]);
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn created_this_run_empty_sessions_are_selected_for_exit_cleanup() {
+        let (root, memory_config) = init_selector_test_memory("cleanup-empty-created");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        for session_id in ["created-empty", "created-with-user", "resumed-existing"] {
+            repo.create_session(NewSessionRecord {
+                session_id: session_id.to_owned(),
+                kind: SessionKind::Root,
+                parent_session_id: None,
+                label: Some(session_id.to_owned()),
+                state: SessionState::Ready,
+            })
+            .expect("create session");
+        }
+
+        append_session_turn(&memory_config, "created-with-user", "user", "keep me");
+
+        let doomed = created_empty_sessions_for_cleanup(
+            &memory_config,
+            &["created-empty".to_owned(), "created-with-user".to_owned()],
+        )
+        .expect("select cleanup sessions");
+
+        assert_eq!(doomed, vec!["created-empty".to_owned()]);
+        assert!(
+            repo.load_session("resumed-existing")
+                .expect("load session")
+                .is_some()
+        );
 
         cleanup_selector_test_memory(&root);
     }

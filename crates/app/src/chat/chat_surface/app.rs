@@ -90,3 +90,4 @@ include!("app/startup_catalog.rs");
 #[cfg(test)]
 #[path = "app/app_tests.rs"]
 mod tests;
+pub(crate) mod resume_candidates;
