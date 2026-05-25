@@ -12,7 +12,6 @@ impl App {
             message_list: MessageList::new(),
             composer: Composer::new(),
             command_palette: CommandPalette::new(language, detected_skills.clone()),
-            session_router_state: SessionRouterVisualState::default(),
             focus: Focus::Composer,
             pending_turn: false,
             turn_start: None,

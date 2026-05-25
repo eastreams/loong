@@ -1,53 +1,17 @@
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RouteOrigin {
-    Existing,
-    CreatedThisRun,
-}
-
-#[allow(dead_code)]
-impl RouteOrigin {
-    pub(crate) fn is_created_this_run(self) -> bool {
-        matches!(self, Self::CreatedThisRun)
-    }
-}
-
-#[allow(dead_code)]
 pub(crate) struct ActiveSessionRoute {
     pub(crate) runtime: crate::chat::CliTurnRuntime,
-    pub(crate) route_origin: RouteOrigin,
 }
 
 #[allow(dead_code)]
 impl ActiveSessionRoute {
+    pub(crate) fn route_origin(&self) -> crate::chat::CliRuntimeSessionOrigin {
+        self.runtime.session_origin
+    }
+
     pub(crate) fn from_runtime(runtime: crate::chat::CliTurnRuntime) -> Self {
-        match runtime.session_origin {
-            crate::chat::CliRuntimeSessionOrigin::Existing => Self::for_existing(runtime),
-            crate::chat::CliRuntimeSessionOrigin::CreatedThisRun => {
-                Self::for_created_this_run(runtime)
-            }
-        }
+        Self { runtime }
     }
-
-    pub(crate) fn for_existing(runtime: crate::chat::CliTurnRuntime) -> Self {
-        Self {
-            runtime,
-            route_origin: RouteOrigin::Existing,
-        }
-    }
-
-    pub(crate) fn for_created_this_run(runtime: crate::chat::CliTurnRuntime) -> Self {
-        Self {
-            runtime,
-            route_origin: RouteOrigin::CreatedThisRun,
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct SessionRouterVisualState {
-    pub(crate) switch_confirm: Option<SwitchConfirmState>,
 }
 
 #[allow(dead_code)]
@@ -90,7 +54,13 @@ impl SessionRouter {
     }
 
     fn install_route(&mut self, active_route: ActiveSessionRoute) {
-        if active_route.route_origin.is_created_this_run() {
+        if matches!(
+            active_route.route_origin(),
+            crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
+        ) && !self
+            .created_this_run_session_ids
+            .contains(&active_route.runtime.session_id)
+        {
             self.created_this_run_session_ids
                 .push(active_route.runtime.session_id.clone());
         }

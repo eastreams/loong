@@ -1,6 +1,6 @@
 use super::{
     ActiveSessionRoute, App, Focus, LiveTranscriptState, SessionRouter,
-    SessionRouterVisualState, StartupBootstrapCapture, StartupOnboardingAction,
+    StartupBootstrapCapture, StartupOnboardingAction,
     StartupOnboardingInteractionKind, StartupOnboardingStage, StartupOnboardingState,
     StartupPersonalizationPreset, StartupProviderOption, StartupSetupPathChoice,
     StartupSkillOption, persist_startup_personalization, startup_eye_animation_for_state,
@@ -42,7 +42,6 @@ fn blank_app() -> App {
         message_list: MessageList::new(),
         composer: Composer::new(),
         command_palette: CommandPalette::new(Language::En, Vec::new()),
-        session_router_state: SessionRouterVisualState::default(),
         focus: Focus::Composer,
         pending_turn: false,
         turn_start: None,
@@ -313,7 +312,7 @@ fn created_router_runtime_with_path(
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
-    let existing_route = ActiveSessionRoute::for_existing(existing_router_runtime_with_path(
+    let existing_route = ActiveSessionRoute::from_runtime(existing_router_runtime_with_path(
         PathBuf::from("/tmp/loong-existing.toml"),
         "loong-session-router-existing",
         "existing-session",
@@ -321,7 +320,7 @@ fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
     let existing_session_id = existing_route.runtime.session_id.clone();
     let mut router = SessionRouter::new(existing_route);
 
-    let created_route = ActiveSessionRoute::for_created_this_run(created_router_runtime_with_path(
+    let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
         PathBuf::from("/tmp/loong-created.toml"),
         "loong-session-router-created",
     ));
@@ -336,7 +335,10 @@ fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
     );
     assert!(!cleanup_ids.contains(&existing_session_id));
     assert_eq!(router.active_session_id(), created_session_id);
-    assert!(router.active_route().route_origin.is_created_this_run());
+    assert!(matches!(
+        router.active_route().route_origin(),
+        crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
+    ));
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -356,7 +358,10 @@ fn session_router_marks_startup_created_initial_route_for_cleanup() {
         vec![created_session_id.clone()]
     );
     assert_eq!(router.active_session_id(), created_session_id);
-    assert!(router.active_route().route_origin.is_created_this_run());
+    assert!(matches!(
+        router.active_route().route_origin(),
+        crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
+    ));
 }
 
 #[test]
