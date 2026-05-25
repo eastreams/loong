@@ -80,6 +80,8 @@ const PENDING_TOOL_BODY_COLORS: [Color; 6] = [
 
 include!("app/state.rs");
 include!("app/surface.rs");
+include!("app/session_router.rs");
+include!("app/switch_confirm.rs");
 include!("app/runtime.rs");
 include!("app/startup.rs");
 include!("app/input_palette.rs");

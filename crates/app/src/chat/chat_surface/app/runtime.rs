@@ -200,13 +200,13 @@ pub async fn run_app<B: Backend>(
     runtime: CliTurnRuntime,
     options: CliChatOptions,
 ) -> CliResult<()> {
-    let mut runtime = runtime;
+    let mut router = SessionRouter::new(ActiveSessionRoute::for_existing(runtime));
     let mut last_known_size = terminal
         .size()
         .map_err(|e| format!("failed to query terminal size: {e}"))?;
     let render_width = last_known_size.width as usize;
-    let mut app = App::new(&runtime, &options, render_width)?;
-    refresh_app_cwd_dependent_state(&mut app, &runtime);
+    let mut app = App::new(&router.active_route().runtime, &options, render_width)?;
+    refresh_app_cwd_dependent_state(&mut app, &router.active_route().runtime);
     sync_app_terminal_title(&mut app);
     let mut startup_release_task = Some(tokio::spawn(load_startup_release_lines(render_width)));
     let mut dirty = true;
@@ -224,7 +224,9 @@ pub async fn run_app<B: Backend>(
             dirty = true;
         }
 
-        if maybe_finalize_pending_turn(terminal, &mut app, &mut runtime).await? {
+        if maybe_finalize_pending_turn(terminal, &mut app, &mut router.active_route_mut().runtime)
+            .await?
+        {
             dirty = true;
         }
 
@@ -374,7 +376,7 @@ pub async fn run_app<B: Backend>(
                                 if let Some(action) = app.command_palette.handle_key(key)
                                     && let Some(command) = dispatch_palette_action(
                                         &mut app,
-                                        &mut runtime,
+                                        &mut router.active_route_mut().runtime,
                                         current_render_width(terminal)?,
                                         action,
                                     )?
@@ -415,7 +417,7 @@ pub async fn run_app<B: Backend>(
                             run_surface_command(
                                 terminal,
                                 &mut app,
-                                &mut runtime,
+                                &mut router.active_route_mut().runtime,
                                 &options,
                                 &command,
                             )
@@ -437,7 +439,10 @@ pub async fn run_app<B: Backend>(
                             .as_mut()
                             .map(|state| state.handle_key(key))
                             .unwrap_or(StartupOnboardingAction::Ignored);
-                        if app.apply_startup_onboarding_action(action, &mut runtime)? {
+                        if app.apply_startup_onboarding_action(
+                            action,
+                            &mut router.active_route_mut().runtime,
+                        )? {
                             dirty = true;
                             continue;
                         }
@@ -486,7 +491,7 @@ pub async fn run_app<B: Backend>(
                             if let Some(action) = app.command_palette.handle_key(key)
                                 && let Some(command) = dispatch_palette_action(
                                     &mut app,
-                                    &mut runtime,
+                                    &mut router.active_route_mut().runtime,
                                     current_render_width(terminal)?,
                                     action,
                                 )?
@@ -530,9 +535,22 @@ pub async fn run_app<B: Backend>(
                         if let Some(command) = recognized_surface_command(trimmed_msg) {
                             command_to_run = Some(command);
                         } else if submitted_message_is_follow_up(&app, &msg) {
-                            start_turn(terminal, &mut app, &mut runtime, msg, false).await?;
+                            start_turn(
+                                terminal,
+                                &mut app,
+                                &mut router.active_route_mut().runtime,
+                                msg,
+                                false,
+                            )
+                            .await?;
                         } else {
-                            submit_user_turn(terminal, &mut app, &mut runtime, msg).await?;
+                            submit_user_turn(
+                                terminal,
+                                &mut app,
+                                &mut router.active_route_mut().runtime,
+                                msg,
+                            )
+                            .await?;
                         }
                     }
 
@@ -542,8 +560,14 @@ pub async fn run_app<B: Backend>(
                             break;
                         }
 
-                        run_surface_command(terminal, &mut app, &mut runtime, &options, &command)
-                            .await?;
+                        run_surface_command(
+                            terminal,
+                            &mut app,
+                            &mut router.active_route_mut().runtime,
+                            &options,
+                            &command,
+                        )
+                        .await?;
                     }
                     dirty = true;
                 }
@@ -553,8 +577,14 @@ pub async fn run_app<B: Backend>(
                             clear_app_terminal_title(&mut app);
                             break;
                         }
-                        run_surface_command(terminal, &mut app, &mut runtime, &options, &command)
-                            .await?;
+                        run_surface_command(
+                            terminal,
+                            &mut app,
+                            &mut router.active_route_mut().runtime,
+                            &options,
+                            &command,
+                        )
+                        .await?;
                     }
                     dirty = true;
                 }

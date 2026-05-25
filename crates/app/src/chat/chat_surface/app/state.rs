@@ -835,6 +835,8 @@ pub struct App {
     pub message_list: MessageList,
     pub composer: Composer,
     pub command_palette: CommandPalette,
+    #[allow(dead_code)]
+    pub session_router_state: SessionRouterVisualState,
     pub focus: Focus,
     pub pending_turn: bool,
     pub turn_start: Option<std::time::Instant>,

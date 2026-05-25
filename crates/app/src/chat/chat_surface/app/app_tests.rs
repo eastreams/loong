@@ -1,5 +1,6 @@
 use super::{
-    App, Focus, LiveTranscriptState, StartupBootstrapCapture, StartupOnboardingAction,
+    ActiveSessionRoute, App, Focus, LiveTranscriptState, SessionRouter,
+    SessionRouterVisualState, StartupBootstrapCapture, StartupOnboardingAction,
     StartupOnboardingInteractionKind, StartupOnboardingStage, StartupOnboardingState,
     StartupPersonalizationPreset, StartupProviderOption, StartupSetupPathChoice,
     StartupSkillOption, persist_startup_personalization, startup_eye_animation_for_state,
@@ -33,6 +34,7 @@ fn blank_app() -> App {
         message_list: MessageList::new(),
         composer: Composer::new(),
         command_palette: CommandPalette::new(Language::En, Vec::new()),
+        session_router_state: SessionRouterVisualState::default(),
         focus: Focus::Composer,
         pending_turn: false,
         turn_start: None,
@@ -209,13 +211,30 @@ fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
     initialize_cli_turn_runtime_with_loaded_config(
         path,
         config,
-        Some("chat-surface-test"),
+        None,
         &CliChatOptions::default(),
         "chat-surface-test",
-        CliSessionRequirement::RequireExplicit,
+        CliSessionRequirement::AllowImplicitDefault,
         false,
     )
     .expect("chat surface runtime")
+}
+
+#[test]
+fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
+    let mut router = SessionRouter::new(ActiveSessionRoute::for_existing(test_runtime_with_path(
+        PathBuf::from("/tmp/loong.toml"),
+    )));
+
+    router.install_created_route(ActiveSessionRoute::for_created_this_run(
+        test_runtime_with_path(PathBuf::from("/tmp/loong.toml")),
+    ));
+
+    assert_eq!(
+        router.created_this_run_session_ids(),
+        vec![router.active_session_id().to_owned()]
+    );
+    assert!(router.active_route().route_origin.is_created_this_run());
 }
 
 #[test]
