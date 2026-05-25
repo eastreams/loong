@@ -132,7 +132,6 @@ use super::conversation::{
     TurnCheckpointSessionState, TurnCheckpointStage, TurnCheckpointTailRepairOutcome,
     TurnCheckpointTailRepairReason, TurnCheckpointTailRepairStatus,
 };
-#[cfg(feature = "memory-sqlite")]
 use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
 use super::session::latest_resumable_root_session_id;
