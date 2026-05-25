@@ -13,7 +13,6 @@ pub mod trajectory;
 #[cfg(feature = "memory-sqlite")]
 pub mod frozen_result;
 
-#[cfg(feature = "memory-sqlite")]
 pub const LATEST_SESSION_SELECTOR: &str = "latest";
 
 #[cfg(feature = "memory-sqlite")]

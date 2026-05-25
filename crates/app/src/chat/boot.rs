@@ -181,7 +181,7 @@ fn resolve_or_create_cli_runtime_session_id(
         (None, CliSessionRequirement::RequireExplicit) => {
             Err("concurrent CLI host requires an explicit session id".to_owned())
         }
-        (Some(session_id), _) if session_id == "latest" => Err(
+        (Some(session_id), _) if session_id == LATEST_SESSION_SELECTOR => Err(
             "CLI session selector `latest` requires sqlite-backed memory; enable feature `memory-sqlite`".to_owned(),
         ),
         (Some(session_id), _) => Err(format!(
@@ -193,6 +193,8 @@ fn resolve_or_create_cli_runtime_session_id(
 #[cfg(all(test, not(feature = "memory-sqlite")))]
 mod tests {
     use super::*;
+    use crate::context::bootstrap_test_kernel_context;
+    use std::path::PathBuf;
 
     #[test]
     fn resolve_cli_runtime_session_id_rejects_implicit_startup_without_sqlite() {
@@ -211,7 +213,7 @@ mod tests {
     #[test]
     fn resolve_cli_runtime_session_id_rejects_latest_without_sqlite() {
         let error = match resolve_or_create_cli_runtime_session_id(
-            Some("latest"),
+            Some(LATEST_SESSION_SELECTOR),
             CliSessionRequirement::RequireExplicit,
             (),
         ) {
@@ -237,6 +239,27 @@ mod tests {
             error.contains("cannot be validated"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn cli_runtime_bootstrap_rejects_implicit_startup_without_sqlite() {
+        let kernel_ctx =
+            bootstrap_test_kernel_context("cli-runtime-no-sqlite", 60).expect("kernel context");
+        let result = initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+            PathBuf::from("/tmp/loong.toml"),
+            LoongConfig::default(),
+            None,
+            &CliChatOptions::default(),
+            kernel_ctx,
+            CliSessionRequirement::AllowImplicitDefault,
+        );
+
+        let error = match result {
+            Ok(_) => panic!("bootstrap path should reject implicit startup without sqlite"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("sqlite-backed memory"), "unexpected error: {error}");
     }
 }
 
