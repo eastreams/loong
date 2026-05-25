@@ -270,6 +270,76 @@ fn resume_picker_mode_renders_candidate_preview_and_timestamp() {
     assert!(!rendered.contains("/resume is available"));
 }
 
+#[test]
+fn resume_picker_app_layout_mouse_row_uses_palette_list_offset() {
+    let backend = TestBackend::new(72, 18);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut app = blank_app();
+    app.command_palette.show_resume_candidates(
+        vec![ResumePaletteEntry {
+            session_id: "root-session".to_owned(),
+            timestamp_label: "2026-05-25 09:30".to_owned(),
+            preview_text: "summarize the repository".to_owned(),
+        }],
+        Some("Select a conversation to resume".to_owned()),
+    );
+    app.focus = Focus::CommandPalette;
+
+    terminal.draw(|f| app.render(f)).expect("draw");
+
+    assert_eq!(app.last_palette_area.height, 3);
+
+    let header_row = app.last_palette_area.y;
+    let list_row = app.last_palette_area.y.saturating_add(1);
+    let palette_col = app.last_palette_area.x.saturating_add(1);
+
+    let header_click = app.command_palette.handle_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), palette_col, header_row),
+        app.last_palette_area,
+    );
+    assert!(header_click.is_none());
+
+    let list_click = app.command_palette.handle_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), palette_col, list_row),
+        app.last_palette_area,
+    );
+    match list_click {
+        Some(CommandAction::SelectResumeSession { session_id }) => {
+            assert_eq!(session_id, "root-session");
+        }
+        other => panic!("expected resume selection from live palette row, got {other:?}"),
+    }
+}
+
+#[test]
+fn resume_picker_selection_preserves_matching_session_id_across_multiple_candidates() {
+    let mut palette = CommandPalette::new(Language::En, Vec::new());
+    palette.show_resume_candidates(
+        vec![
+            ResumePaletteEntry {
+                session_id: "root-session".to_owned(),
+                timestamp_label: "2026-05-25 09:30".to_owned(),
+                preview_text: "summarize the repository".to_owned(),
+            },
+            ResumePaletteEntry {
+                session_id: "child-session".to_owned(),
+                timestamp_label: "2026-05-25 10:45".to_owned(),
+                preview_text: "resume the child branch".to_owned(),
+            },
+        ],
+        Some("Select a conversation to resume".to_owned()),
+    );
+
+    let _ = palette.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+    match palette.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
+        Some(CommandAction::SelectResumeSession { session_id }) => {
+            assert_eq!(session_id, "child-session");
+        }
+        other => panic!("expected second resume selection action, got {other:?}"),
+    }
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn test_router_memory(label: &str) -> (LoongConfig, SessionStoreConfig) {
     let root = unique_temp_dir(label);

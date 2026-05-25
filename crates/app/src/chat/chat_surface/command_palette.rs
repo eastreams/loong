@@ -1404,6 +1404,9 @@ impl CommandPalette {
                 } else {
                     area.y
                 };
+                if mouse.row < base_y {
+                    return None;
+                }
                 let row = mouse.row.saturating_sub(base_y) as usize;
                 if row >= visible_rows {
                     return None;
