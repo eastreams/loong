@@ -7,6 +7,7 @@ pub(crate) struct ResumeCandidate {
 }
 
 #[cfg(feature = "memory-sqlite")]
+// Thin adapter that keeps TUI-local DTOs out of the session-layer contract.
 pub(crate) fn load_resume_candidates(
     current_session_id: &str,
     config: &crate::session::store::SessionStoreConfig,
