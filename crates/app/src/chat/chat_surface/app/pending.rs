@@ -875,6 +875,66 @@ fn render_slash_command_detail_lines_with_width(
     super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
+fn render_resume_palette_lines_with_width(
+    entries: &[super::command_palette::ResumePaletteEntry],
+    status: Option<&str>,
+    width: usize,
+) -> Vec<String> {
+    let items = entries
+        .iter()
+        .map(|entry| TuiKeyValueSpec::Plain {
+            key: entry.timestamp_label.clone(),
+            value: entry.preview_text.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut footer_lines = Vec::new();
+    if let Some(status) = status.filter(|status| !status.trim().is_empty()) {
+        footer_lines.push(status.to_owned());
+    }
+    let message_spec = TuiMessageSpec {
+        role: "resume".to_owned(),
+        caption: Some("resume".to_owned()),
+        sections: vec![TuiSectionSpec::KeyValues {
+            title: Some("conversations".to_owned()),
+            items,
+        }],
+        footer_lines,
+    };
+    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+}
+
+#[cfg(test)]
+pub(super) fn render_command_palette_lines_for_test(
+    palette: &crate::chat::chat_surface::command_palette::CommandPalette,
+    width: usize,
+) -> Vec<String> {
+    if palette.is_resume_picker_mode() {
+        return render_resume_palette_lines_with_width(
+            palette.resume_entries(),
+            palette.resume_status(),
+            width,
+        );
+    }
+
+    let query = palette.query_text().trim();
+    let trimmed = if query.starts_with('/') {
+        query
+    } else if query.is_empty() {
+        ""
+    } else {
+        return render_slash_command_usage_lines_with_width(width);
+    };
+
+    if let Some(spec) = slash_command_specs()
+        .iter()
+        .find(|spec| spec.command == trimmed)
+    {
+        render_slash_command_detail_lines_with_width(spec, width)
+    } else {
+        render_slash_command_usage_lines_with_width(width)
+    }
+}
+
 fn slash_command_help_value(spec: &super::command_palette::SlashCommandSpec) -> String {
     spec.description.to_owned()
 }

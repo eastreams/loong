@@ -221,6 +221,13 @@ struct CommandEntry {
     action: CommandAction,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResumePaletteEntry {
+    pub(crate) session_id: String,
+    pub(crate) timestamp_label: String,
+    pub(crate) preview_text: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SettingsEntry {
     pub label: String,
@@ -234,6 +241,8 @@ pub struct SettingsEntry {
 pub struct CommandPalette {
     query: String,
     commands: Vec<CommandEntry>,
+    resume_entries: Vec<ResumePaletteEntry>,
+    resume_status: Option<String>,
     settings: Vec<SettingsEntry>,
     settings_status: Option<String>,
     settings_focus: SettingsSurfaceFocus,
@@ -244,14 +253,15 @@ pub struct CommandPalette {
     reasoning_status: Option<String>,
     reasoning_model_label: Option<String>,
     skills: Vec<SkillEntry>,
-    mode: PaletteMode,
+    mode: CommandPaletteMode,
     scroll_state: ScrollState,
     i18n: I18nService,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PaletteMode {
-    Commands,
+pub(crate) enum CommandPaletteMode {
+    SlashCommands,
+    ResumePicker,
     Settings,
     Models,
     Reasoning,
@@ -275,6 +285,8 @@ impl CommandPalette {
                     action: CommandAction::RunCommand(spec.command),
                 })
                 .collect(),
+            resume_entries: Vec::new(),
+            resume_status: None,
             settings: Vec::new(),
             settings_status: None,
             settings_focus: SettingsSurfaceFocus::Overview,
@@ -285,17 +297,32 @@ impl CommandPalette {
             reasoning_status: None,
             reasoning_model_label: None,
             skills,
-            mode: PaletteMode::Commands,
+            mode: CommandPaletteMode::SlashCommands,
             scroll_state: ScrollState::new(),
             i18n: I18nService::new(lang),
         }
     }
 
     pub fn show_commands(&mut self, query: &str) {
-        self.mode = PaletteMode::Commands;
+        self.mode = CommandPaletteMode::SlashCommands;
         self.query = query.trim().trim_start_matches(['/', ':']).to_string();
+        self.resume_status = None;
         self.settings_status = None;
         self.scroll_state.reset();
+    }
+
+    pub fn show_resume_candidates(
+        &mut self,
+        entries: Vec<ResumePaletteEntry>,
+        status: Option<String>,
+    ) {
+        self.mode = CommandPaletteMode::ResumePicker;
+        self.query.clear();
+        self.resume_entries = entries;
+        self.resume_status = status;
+        self.settings_status = None;
+        self.scroll_state.selected_idx = (!self.resume_entries.is_empty()).then_some(0);
+        self.scroll_state.scroll_top = 0;
     }
 
     pub fn show_settings(
@@ -305,7 +332,7 @@ impl CommandPalette {
         status: Option<String>,
         selected_label: Option<&str>,
     ) {
-        self.mode = PaletteMode::Settings;
+        self.mode = CommandPaletteMode::Settings;
         self.query.clear();
         self.settings_focus = focus;
         self.settings = entries;
@@ -329,7 +356,7 @@ impl CommandPalette {
         selected_label: Option<&str>,
         query: &str,
     ) {
-        self.mode = PaletteMode::Models;
+        self.mode = CommandPaletteMode::Models;
         self.query = query.trim().to_owned();
         self.model_focus = ModelSurfaceFocus::Models;
         self.model_entries = entries;
@@ -351,7 +378,7 @@ impl CommandPalette {
         status: Option<String>,
         selected_label: Option<&str>,
     ) {
-        self.mode = PaletteMode::Reasoning;
+        self.mode = CommandPaletteMode::Reasoning;
         self.query.clear();
         self.model_focus = ModelSurfaceFocus::Reasoning;
         self.reasoning_entries = entries;
@@ -366,7 +393,7 @@ impl CommandPalette {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn show_skills(&mut self, query: &str) {
-        self.mode = PaletteMode::Skills;
+        self.mode = CommandPaletteMode::Skills;
         self.query = query.trim().trim_start_matches('$').to_string();
         self.settings_status = None;
         self.scroll_state.reset();
@@ -377,11 +404,23 @@ impl CommandPalette {
     }
 
     pub fn is_skills_mode(&self) -> bool {
-        self.mode == PaletteMode::Skills
+        self.mode == CommandPaletteMode::Skills
     }
 
     pub fn is_commands_mode(&self) -> bool {
-        self.mode == PaletteMode::Commands
+        self.mode == CommandPaletteMode::SlashCommands
+    }
+
+    pub(crate) fn is_resume_picker_mode(&self) -> bool {
+        self.mode == CommandPaletteMode::ResumePicker
+    }
+
+    pub(crate) fn resume_entries(&self) -> &[ResumePaletteEntry] {
+        self.resume_entries.as_slice()
+    }
+
+    pub(crate) fn resume_status(&self) -> Option<&str> {
+        self.resume_status.as_deref()
     }
 
     pub fn query_text(&self) -> &str {
@@ -390,11 +429,12 @@ impl CommandPalette {
 
     pub fn desired_height(&self) -> usize {
         let footer_rows = match self.mode {
-            PaletteMode::Commands
-            | PaletteMode::Settings
-            | PaletteMode::Models
-            | PaletteMode::Reasoning => Self::FOOTER_ROWS,
-            PaletteMode::Skills => Self::SKILL_HINT_ROWS,
+            CommandPaletteMode::SlashCommands
+            | CommandPaletteMode::ResumePicker
+            | CommandPaletteMode::Settings
+            | CommandPaletteMode::Models
+            | CommandPaletteMode::Reasoning => Self::FOOTER_ROWS,
+            CommandPaletteMode::Skills => Self::SKILL_HINT_ROWS,
         };
         Self::visible_rows_for_total(self.filtered_item_count()) + footer_rows
     }
@@ -404,15 +444,18 @@ impl CommandPalette {
 
         let filtered = self.filtered_items();
         let visible_rows = Self::visible_rows_for_total(filtered.len());
-        if self.mode == PaletteMode::Skills {
+        if self.mode == CommandPaletteMode::Skills {
             self.render_skills_mode(f, area, filtered, visible_rows);
             return;
         }
-        if self.mode == PaletteMode::Settings {
+        if self.mode == CommandPaletteMode::Settings {
             self.render_settings_mode(f, area, filtered, visible_rows);
             return;
         }
-        if matches!(self.mode, PaletteMode::Models | PaletteMode::Reasoning) {
+        if matches!(
+            self.mode,
+            CommandPaletteMode::Models | CommandPaletteMode::Reasoning
+        ) {
             self.render_model_mode(f, area, filtered, visible_rows);
             return;
         }
@@ -525,14 +568,16 @@ impl CommandPalette {
         }
 
         let footer_line = match self.mode {
-            PaletteMode::Commands => format!("({}/{})", selected + 1, filtered.len().max(1)),
-            PaletteMode::Settings => self
+            CommandPaletteMode::SlashCommands | CommandPaletteMode::ResumePicker => {
+                format!("({}/{})", selected + 1, filtered.len().max(1))
+            }
+            CommandPaletteMode::Settings => self
                 .settings_status
                 .as_deref()
                 .map(|status| truncate(status, area.width.saturating_sub(2) as usize))
                 .unwrap_or_else(|| "Enter apply · Esc close · type to filter".to_owned()),
-            PaletteMode::Models | PaletteMode::Reasoning => String::new(),
-            PaletteMode::Skills => String::new(),
+            CommandPaletteMode::Models | CommandPaletteMode::Reasoning => String::new(),
+            CommandPaletteMode::Skills => String::new(),
         };
         let count_line = ListItem::new(Line::from(vec![Span::styled(
             footer_line,
@@ -885,13 +930,16 @@ impl CommandPalette {
         };
 
         let title = match self.mode {
-            PaletteMode::Models => "model · select".to_owned(),
-            PaletteMode::Reasoning => self
+            CommandPaletteMode::Models => "model · select".to_owned(),
+            CommandPaletteMode::Reasoning => self
                 .reasoning_model_label
                 .as_deref()
                 .map(|label| format!("model · reasoning · {label}"))
                 .unwrap_or_else(|| "model · reasoning".to_owned()),
-            PaletteMode::Commands | PaletteMode::Settings | PaletteMode::Skills => String::new(),
+            CommandPaletteMode::SlashCommands
+            | CommandPaletteMode::ResumePicker
+            | CommandPaletteMode::Settings
+            | CommandPaletteMode::Skills => String::new(),
         };
         f.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
@@ -905,9 +953,12 @@ impl CommandPalette {
 
         if filtered.is_empty() {
             let empty_text = match self.mode {
-                PaletteMode::Models => "  no models available",
-                PaletteMode::Reasoning => "  no reasoning options available",
-                PaletteMode::Commands | PaletteMode::Settings | PaletteMode::Skills => {
+                CommandPaletteMode::Models => "  no models available",
+                CommandPaletteMode::Reasoning => "  no reasoning options available",
+                CommandPaletteMode::SlashCommands
+                | CommandPaletteMode::ResumePicker
+                | CommandPaletteMode::Settings
+                | CommandPaletteMode::Skills => {
                     "  no results"
                 }
             };
@@ -1027,17 +1078,20 @@ impl CommandPalette {
 
     fn model_footer_line(&self) -> Line<'static> {
         let text = match self.mode {
-            PaletteMode::Models => self
+            CommandPaletteMode::Models => self
                 .model_status
                 .as_deref()
                 .map(str::to_owned)
                 .unwrap_or_else(|| "Enter choose model · Esc close · type to filter".to_owned()),
-            PaletteMode::Reasoning => self
+            CommandPaletteMode::Reasoning => self
                 .reasoning_status
                 .as_deref()
                 .map(str::to_owned)
                 .unwrap_or_else(|| "Enter apply · Esc back · type to filter".to_owned()),
-            PaletteMode::Commands | PaletteMode::Settings | PaletteMode::Skills => String::new(),
+            CommandPaletteMode::SlashCommands
+            | CommandPaletteMode::ResumePicker
+            | CommandPaletteMode::Settings
+            | CommandPaletteMode::Skills => String::new(),
         };
         Line::from(vec![Span::styled(
             text,
@@ -1048,12 +1102,12 @@ impl CommandPalette {
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<CommandAction> {
         match key.code {
             KeyCode::Esc => {
-                if self.mode == PaletteMode::Settings
+                if self.mode == CommandPaletteMode::Settings
                     && self.settings_focus != SettingsSurfaceFocus::Overview
                 {
                     Some(CommandAction::OpenSettings(SettingsSurfaceFocus::Overview))
-                } else if self.mode == PaletteMode::Reasoning {
-                    self.mode = PaletteMode::Models;
+                } else if self.mode == CommandPaletteMode::Reasoning {
+                    self.mode = CommandPaletteMode::Models;
                     self.model_focus = ModelSurfaceFocus::Models;
                     self.query.clear();
                     let selected_label = self.reasoning_model_label.clone();
@@ -1129,10 +1183,16 @@ impl CommandPalette {
                 self.scroll_state.reset();
                 None
             }
-            KeyCode::Char(':') if self.mode == PaletteMode::Commands && self.query.is_empty() => {
+            KeyCode::Char(':')
+                if self.mode == CommandPaletteMode::SlashCommands && self.query.is_empty() =>
+            {
                 None
             }
-            KeyCode::Char('$') if self.mode == PaletteMode::Skills && self.query.is_empty() => None,
+            KeyCode::Char('$')
+                if self.mode == CommandPaletteMode::Skills && self.query.is_empty() =>
+            {
+                None
+            }
             KeyCode::Char(c) => {
                 self.query.push(c);
                 self.scroll_state.reset();
@@ -1178,17 +1238,23 @@ impl CommandPalette {
                     return None;
                 }
                 let visible_rows = match self.mode {
-                    PaletteMode::Settings | PaletteMode::Models | PaletteMode::Reasoning => {
+                    CommandPaletteMode::Settings
+                    | CommandPaletteMode::Models
+                    | CommandPaletteMode::Reasoning => {
                         Self::visible_rows_for_total(filtered.len())
                             .min(area.height.saturating_sub(2) as usize)
                     }
-                    PaletteMode::Commands | PaletteMode::Skills => {
+                    CommandPaletteMode::SlashCommands
+                    | CommandPaletteMode::ResumePicker
+                    | CommandPaletteMode::Skills => {
                         Self::visible_rows_for_total(filtered.len())
                     }
                 };
                 let base_y = if matches!(
                     self.mode,
-                    PaletteMode::Settings | PaletteMode::Models | PaletteMode::Reasoning
+                    CommandPaletteMode::Settings
+                        | CommandPaletteMode::Models
+                        | CommandPaletteMode::Reasoning
                 ) {
                     area.y.saturating_add(1)
                 } else {
@@ -1238,11 +1304,12 @@ impl CommandPalette {
 
     fn filtered_items(&self) -> Vec<PaletteItem> {
         match self.mode {
-            PaletteMode::Commands => self.filtered_commands(),
-            PaletteMode::Settings => self.filtered_settings(),
-            PaletteMode::Models => self.filtered_models(),
-            PaletteMode::Reasoning => self.filtered_reasoning(),
-            PaletteMode::Skills => self.filtered_skills(),
+            CommandPaletteMode::SlashCommands => self.filtered_commands(),
+            CommandPaletteMode::ResumePicker => self.filtered_resume_entries(),
+            CommandPaletteMode::Settings => self.filtered_settings(),
+            CommandPaletteMode::Models => self.filtered_models(),
+            CommandPaletteMode::Reasoning => self.filtered_reasoning(),
+            CommandPaletteMode::Skills => self.filtered_skills(),
         }
     }
 
@@ -1264,6 +1331,40 @@ impl CommandPalette {
                 status_tag: None,
                 description: entry.description,
                 action: entry.action,
+                selectable: true,
+                match_target: None,
+                source_skill: None,
+            })
+            .collect()
+    }
+
+    fn filtered_resume_entries(&self) -> Vec<PaletteItem> {
+        let query = self.query.trim().to_ascii_lowercase();
+        self.resume_entries
+            .iter()
+            .filter(|entry| {
+                if query.is_empty() {
+                    return true;
+                }
+                entry
+                    .timestamp_label
+                    .to_ascii_lowercase()
+                    .contains(query.as_str())
+                    || entry
+                        .preview_text
+                        .to_ascii_lowercase()
+                        .contains(query.as_str())
+                    || entry
+                        .session_id
+                        .to_ascii_lowercase()
+                        .contains(query.as_str())
+            })
+            .cloned()
+            .map(|entry| PaletteItem {
+                label: entry.timestamp_label,
+                status_tag: None,
+                description: entry.preview_text,
+                action: CommandAction::Noop,
                 selectable: true,
                 match_target: None,
                 source_skill: None,

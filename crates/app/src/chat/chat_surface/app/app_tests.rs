@@ -6,7 +6,7 @@ use super::{
     StartupSkillOption, persist_startup_personalization, startup_eye_animation_for_state,
 };
 use crate::chat::chat_surface::command_palette::{
-    CommandAction, CommandPalette, SkillEntry, slash_command_specs,
+    CommandAction, CommandPalette, ResumePaletteEntry, SkillEntry, slash_command_specs,
 };
 use crate::chat::chat_surface::composer::Composer;
 use crate::chat::chat_surface::i18n::{I18nService, Language};
@@ -243,6 +243,24 @@ fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
         false,
     )
     .expect("chat surface runtime")
+}
+
+#[test]
+fn resume_picker_mode_renders_candidate_preview_and_timestamp() {
+    let mut palette = CommandPalette::new(Language::En, Vec::new());
+    palette.show_resume_candidates(
+        vec![ResumePaletteEntry {
+            session_id: "root-session".to_owned(),
+            timestamp_label: "2026-05-25 09:30".to_owned(),
+            preview_text: "summarize the repository".to_owned(),
+        }],
+        Some("Select a conversation to resume".to_owned()),
+    );
+
+    let rendered = super::render_command_palette_lines_for_test(&palette, 80).join("\n");
+    assert!(rendered.contains("2026-05-25 09:30"));
+    assert!(rendered.contains("summarize the repository"));
+    assert!(!rendered.contains("/resume is available"));
 }
 
 #[cfg(feature = "memory-sqlite")]
