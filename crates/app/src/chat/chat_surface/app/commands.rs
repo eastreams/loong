@@ -232,6 +232,7 @@ fn dispatch_palette_action(
             app.focus = Focus::Composer;
             Ok(Some(command.to_owned()))
         }
+        CommandAction::SelectResumeSession { .. } => Ok(None),
         CommandAction::OpenSettings(focus) => {
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);

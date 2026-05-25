@@ -18,6 +18,7 @@ use ratatui::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandAction {
     RunCommand(&'static str),
+    SelectResumeSession { session_id: String },
     OpenSettings(SettingsSurfaceFocus),
     ApplySettings(SettingsCommandAction),
     OpenModelReasoning(ProviderModelCatalogEntry),
@@ -428,15 +429,15 @@ impl CommandPalette {
     }
 
     pub fn desired_height(&self) -> usize {
-        let footer_rows = match self.mode {
+        let extra_rows = match self.mode {
+            CommandPaletteMode::ResumePicker => 2,
             CommandPaletteMode::SlashCommands
-            | CommandPaletteMode::ResumePicker
             | CommandPaletteMode::Settings
             | CommandPaletteMode::Models
             | CommandPaletteMode::Reasoning => Self::FOOTER_ROWS,
             CommandPaletteMode::Skills => Self::SKILL_HINT_ROWS,
         };
-        Self::visible_rows_for_total(self.filtered_item_count()) + footer_rows
+        Self::visible_rows_for_total(self.filtered_item_count()) + extra_rows
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
@@ -1379,6 +1380,8 @@ impl CommandPalette {
                     return None;
                 }
                 let visible_rows = match self.mode {
+                    CommandPaletteMode::ResumePicker => Self::visible_rows_for_total(filtered.len())
+                        .min(area.height.saturating_sub(2) as usize),
                     CommandPaletteMode::Settings
                     | CommandPaletteMode::Models
                     | CommandPaletteMode::Reasoning => {
@@ -1386,14 +1389,14 @@ impl CommandPalette {
                             .min(area.height.saturating_sub(2) as usize)
                     }
                     CommandPaletteMode::SlashCommands
-                    | CommandPaletteMode::ResumePicker
                     | CommandPaletteMode::Skills => {
                         Self::visible_rows_for_total(filtered.len())
                     }
                 };
                 let base_y = if matches!(
                     self.mode,
-                    CommandPaletteMode::Settings
+                    CommandPaletteMode::ResumePicker
+                        | CommandPaletteMode::Settings
                         | CommandPaletteMode::Models
                         | CommandPaletteMode::Reasoning
                 ) {
@@ -1505,7 +1508,9 @@ impl CommandPalette {
                 label: entry.timestamp_label,
                 status_tag: None,
                 description: entry.preview_text,
-                action: CommandAction::Noop,
+                action: CommandAction::SelectResumeSession {
+                    session_id: entry.session_id,
+                },
                 selectable: true,
                 match_target: None,
                 source_skill: None,
@@ -2183,7 +2188,10 @@ fn area_contains(area: Rect, column: u16, row: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandAction, CommandPalette, SettingsEntry, SettingsSurfaceFocus, SkillEntry};
+    use super::{
+        CommandAction, CommandPalette, ResumePaletteEntry, SettingsEntry,
+        SettingsSurfaceFocus, SkillEntry,
+    };
     use crate::chat::chat_surface::i18n::Language;
     use crate::chat::chat_surface::input::{
         ChatKeyCode as KeyCode, ChatKeyEvent as KeyEvent, ChatKeyModifiers as KeyModifiers,
@@ -3038,6 +3046,33 @@ mod tests {
         match action {
             Some(CommandAction::RunCommand("/permissions")) => {}
             other => panic!("expected mouse click to select /permissions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resume_picker_height_and_mouse_click_use_header_offset_and_preserve_session_id() {
+        let mut palette = CommandPalette::new(Language::En, Vec::new());
+        palette.show_resume_candidates(
+            vec![ResumePaletteEntry {
+                session_id: "root-session".to_owned(),
+                timestamp_label: "2026-05-25 09:30".to_owned(),
+                preview_text: "summarize the repository".to_owned(),
+            }],
+            Some("Select a conversation to resume".to_owned()),
+        );
+
+        assert_eq!(palette.desired_height(), 3);
+
+        let action = palette.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 1, 1),
+            Rect::new(0, 0, 60, 3),
+        );
+
+        match action {
+            Some(CommandAction::SelectResumeSession { session_id }) => {
+                assert_eq!(session_id, "root-session");
+            }
+            other => panic!("expected resume selection action, got {other:?}"),
         }
     }
 }
