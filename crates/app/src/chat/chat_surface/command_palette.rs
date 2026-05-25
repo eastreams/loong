@@ -448,6 +448,10 @@ impl CommandPalette {
             self.render_skills_mode(f, area, filtered, visible_rows);
             return;
         }
+        if self.mode == CommandPaletteMode::ResumePicker {
+            self.render_resume_picker_mode(f, area, filtered, visible_rows);
+            return;
+        }
         if self.mode == CommandPaletteMode::Settings {
             self.render_settings_mode(f, area, filtered, visible_rows);
             return;
@@ -589,6 +593,143 @@ impl CommandPalette {
         let mut visible_state = ListState::default();
         visible_state.select(Some(selected.saturating_sub(start)));
         f.render_stateful_widget(list, area, &mut visible_state);
+    }
+
+    fn render_resume_picker_mode(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        filtered: Vec<PaletteItem>,
+        visible_rows: usize,
+    ) {
+        let header_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        let list_area = Rect {
+            x: area.x,
+            y: area.y.saturating_add(1),
+            width: area.width,
+            height: area.height.saturating_sub(2).max(1),
+        };
+        let footer_area = Rect {
+            x: area.x,
+            y: area.y.saturating_add(area.height.saturating_sub(1)),
+            width: area.width,
+            height: 1,
+        };
+
+        let header_text = self
+            .resume_status
+            .as_deref()
+            .unwrap_or("Select a conversation to resume");
+        f.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                truncate(header_text, header_area.width as usize),
+                Style::default()
+                    .fg(SURFACE_CYAN)
+                    .add_modifier(Modifier::BOLD),
+            )])),
+            header_area,
+        );
+
+        if filtered.is_empty() {
+            let items = vec![ListItem::new(Line::from(vec![Span::styled(
+                "  no conversations available",
+                Style::default().fg(SURFACE_DIM_GRAY),
+            )]))];
+            let list = List::new(items).highlight_style(Style::default());
+            let mut visible_state = ListState::default();
+            f.render_stateful_widget(list, list_area, &mut visible_state);
+            f.render_widget(
+                Paragraph::new(Line::from(vec![Span::styled(
+                    "Enter resume · Esc close",
+                    Style::default().fg(SURFACE_DIM_GRAY),
+                )])),
+                footer_area,
+            );
+            return;
+        }
+
+        let selected = self.selected_index_for(&filtered);
+        let start = self
+            .scroll_state
+            .scroll_top
+            .min(filtered.len().saturating_sub(1));
+        let end = (start + visible_rows.min(list_area.height as usize)).min(filtered.len());
+        let visible = filtered.get(start..end).unwrap_or(&[]);
+        let label_width = filtered
+            .iter()
+            .map(|entry| crate::presentation::display_width(entry.label.as_str()))
+            .max()
+            .unwrap_or(0)
+            .clamp(10, 20);
+
+        let items: Vec<ListItem> = visible
+            .iter()
+            .enumerate()
+            .map(|(visible_index, entry)| {
+                let index = start + visible_index;
+                let is_selected = index == selected;
+                let prefix = if is_selected { "→ " } else { "  " };
+                let gap = " ".repeat(
+                    label_width
+                        .saturating_sub(crate::presentation::display_width(entry.label.as_str()))
+                        + 2,
+                );
+                let max_desc = list_area.width.saturating_sub(
+                    (crate::presentation::display_width(prefix) + label_width + 2) as u16,
+                ) as usize;
+                let desc = truncate(entry.description.as_str(), max_desc);
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        Style::default().fg(if is_selected {
+                            SURFACE_CYAN
+                        } else {
+                            SURFACE_DIM_GRAY
+                        }),
+                    ),
+                    Span::styled(
+                        entry.label.clone(),
+                        Style::default()
+                            .fg(if is_selected {
+                                SURFACE_CYAN
+                            } else {
+                                ratatui::style::Color::White
+                            })
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                    ),
+                    Span::raw(gap),
+                    Span::styled(
+                        desc,
+                        Style::default().fg(if is_selected {
+                            SURFACE_ACCENT
+                        } else {
+                            SURFACE_GRAY
+                        }),
+                    ),
+                ]))
+            })
+            .collect();
+
+        let list = List::new(items).highlight_style(Style::default());
+        let mut visible_state = ListState::default();
+        visible_state.select(Some(selected.saturating_sub(start)));
+        f.render_stateful_widget(list, list_area, &mut visible_state);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                "Enter resume · Esc close",
+                Style::default().fg(SURFACE_DIM_GRAY),
+            )])),
+            footer_area,
+        );
     }
 
     fn render_skills_mode(

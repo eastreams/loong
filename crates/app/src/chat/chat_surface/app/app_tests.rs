@@ -247,6 +247,8 @@ fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
 
 #[test]
 fn resume_picker_mode_renders_candidate_preview_and_timestamp() {
+    let backend = TestBackend::new(80, 8);
+    let mut terminal = Terminal::new(backend).expect("terminal");
     let mut palette = CommandPalette::new(Language::En, Vec::new());
     palette.show_resume_candidates(
         vec![ResumePaletteEntry {
@@ -257,9 +259,14 @@ fn resume_picker_mode_renders_candidate_preview_and_timestamp() {
         Some("Select a conversation to resume".to_owned()),
     );
 
-    let rendered = super::render_command_palette_lines_for_test(&palette, 80).join("\n");
+    terminal
+        .draw(|f| palette.render(f, f.area()))
+        .expect("draw palette");
+    let rendered = buffer_lines(&terminal).join("\n");
     assert!(rendered.contains("2026-05-25 09:30"));
     assert!(rendered.contains("summarize the repository"));
+    assert!(rendered.contains("Select a conversation to resume"));
+    assert!(!rendered.contains("(1/1)"));
     assert!(!rendered.contains("/resume is available"));
 }
 
