@@ -339,6 +339,26 @@ fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
     assert!(router.active_route().route_origin.is_created_this_run());
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_router_marks_startup_created_initial_route_for_cleanup() {
+    let created_route =
+        ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+            PathBuf::from("/tmp/loong-startup-created.toml"),
+            "loong-session-router-startup-created",
+        ));
+    let created_session_id = created_route.runtime.session_id.clone();
+
+    let router = SessionRouter::new(created_route);
+
+    assert_eq!(
+        router.created_this_run_session_ids(),
+        vec![created_session_id.clone()]
+    );
+    assert_eq!(router.active_session_id(), created_session_id);
+    assert!(router.active_route().route_origin.is_created_this_run());
+}
+
 #[test]
 fn resize_reflow_tracks_width_and_height_changes() {
     assert!(super::resize_reflow_required(80, 24, 72, 24));

@@ -20,6 +20,15 @@ pub(crate) struct ActiveSessionRoute {
 
 #[allow(dead_code)]
 impl ActiveSessionRoute {
+    pub(crate) fn from_runtime(runtime: crate::chat::CliTurnRuntime) -> Self {
+        match runtime.session_origin {
+            crate::chat::CliRuntimeSessionOrigin::Existing => Self::for_existing(runtime),
+            crate::chat::CliRuntimeSessionOrigin::CreatedThisRun => {
+                Self::for_created_this_run(runtime)
+            }
+        }
+    }
+
     pub(crate) fn for_existing(runtime: crate::chat::CliTurnRuntime) -> Self {
         Self {
             runtime,

@@ -286,12 +286,19 @@ fn format_onboard_command_hint(config_path: Option<&str>, resolved_config_path: 
     command
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliRuntimeSessionOrigin {
+    Existing,
+    CreatedThisRun,
+}
+
 #[derive(Clone)]
 pub(crate) struct CliTurnRuntime {
     pub(crate) resolved_path: PathBuf,
     pub(crate) config_present: bool,
     pub(crate) config: LoongConfig,
     pub(crate) session_id: String,
+    pub(crate) session_origin: CliRuntimeSessionOrigin,
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
     pub(crate) runtime_kernel: crate::runtime_bridge::RuntimeKernelOwner,

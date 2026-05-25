@@ -200,7 +200,7 @@ pub async fn run_app<B: Backend>(
     runtime: CliTurnRuntime,
     options: CliChatOptions,
 ) -> CliResult<()> {
-    let mut router = SessionRouter::new(ActiveSessionRoute::for_existing(runtime));
+    let mut router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
     let mut last_known_size = terminal
         .size()
         .map_err(|e| format!("failed to query terminal size: {e}"))?;

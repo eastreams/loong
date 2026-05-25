@@ -140,11 +140,11 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     let memory_label = "disabled".to_owned();
 
     #[cfg(feature = "memory-sqlite")]
-    let session_id =
+    let (session_id, session_origin) =
         resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, &memory_config)?;
 
     #[cfg(not(feature = "memory-sqlite"))]
-    let session_id =
+    let (session_id, session_origin) =
         resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, ())?;
 
     let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
@@ -155,6 +155,7 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
         config_present: true,
         config,
         session_id,
+        session_origin,
         session_address,
         turn_coordinator: ConversationTurnCoordinator::new(),
         runtime_kernel,
@@ -171,7 +172,7 @@ fn resolve_or_create_cli_runtime_session_id(
     session_hint: Option<&str>,
     session_requirement: CliSessionRequirement,
     _memory_store_unavailable: (),
-) -> CliResult<String> {
+) -> CliResult<(String, crate::chat::CliRuntimeSessionOrigin)> {
     let normalized = session_hint.map(str::trim).filter(|value| !value.is_empty());
 
     match (normalized, session_requirement) {
@@ -268,20 +269,23 @@ fn resolve_or_create_cli_runtime_session_id(
     session_hint: Option<&str>,
     session_requirement: CliSessionRequirement,
     memory_config: &SessionStoreConfig,
-) -> CliResult<String> {
+) -> CliResult<(String, crate::chat::CliRuntimeSessionOrigin)> {
     let normalized = session_hint.map(str::trim).filter(|value| !value.is_empty());
 
     match (normalized, session_requirement) {
         (None, CliSessionRequirement::AllowImplicitDefault) => {
             create_cli_startup_root_session(memory_config)
+                .map(|session_id| (session_id, crate::chat::CliRuntimeSessionOrigin::CreatedThisRun))
         }
         (None, CliSessionRequirement::RequireExplicit) => {
             Err("concurrent CLI host requires an explicit session id".to_owned())
         }
         (Some(session_id), _) if session_id == LATEST_SESSION_SELECTOR => {
             resolve_latest_cli_session_id(memory_config)
+                .map(|session_id| (session_id, crate::chat::CliRuntimeSessionOrigin::Existing))
         }
-        (Some(session_id), _) => ensure_existing_cli_session_id(session_id, memory_config),
+        (Some(session_id), _) => ensure_existing_cli_session_id(session_id, memory_config)
+            .map(|session_id| (session_id, crate::chat::CliRuntimeSessionOrigin::Existing)),
     }
 }
 
