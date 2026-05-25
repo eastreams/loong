@@ -233,8 +233,12 @@ fn cli_runtime_reopens_explicit_im_local_session_id() {
 }
 
 #[test]
-fn concurrent_cli_runtime_keeps_latest_literal_when_explicit_session_is_required() {
-    let (config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-latest");
+fn concurrent_cli_runtime_resolves_latest_when_explicit_session_is_required() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("concurrent-latest");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    create_root_session(&repo, "selected-session");
+    append_session_turn("selected-session", "user", "hello", &memory_config);
+
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         PathBuf::from("/tmp/loong.toml"),
         config,
@@ -246,7 +250,30 @@ fn concurrent_cli_runtime_keeps_latest_literal_when_explicit_session_is_required
     )
     .expect("concurrent runtime");
 
-    assert_eq!(runtime.session_id, "latest");
+    assert_eq!(runtime.session_id, "selected-session");
+
+    cleanup_chat_test_memory(&sqlite_path);
+}
+
+#[test]
+fn concurrent_cli_runtime_rejects_missing_literal_session_when_explicit_session_is_required() {
+    let (config, _memory_config, sqlite_path) =
+        init_chat_test_memory("concurrent-literal-missing");
+    let result = initialize_cli_turn_runtime_with_loaded_config(
+        PathBuf::from("/tmp/loong.toml"),
+        config,
+        Some("missing-session"),
+        &CliChatOptions::default(),
+        "cli-chat-concurrent-literal-missing-test",
+        CliSessionRequirement::RequireExplicit,
+        false,
+    );
+
+    let error = match result {
+        Ok(_) => panic!("missing explicit session should fail"),
+        Err(error) => error,
+    };
+    assert!(error.contains("missing-session"), "unexpected error: {error}");
 
     cleanup_chat_test_memory(&sqlite_path);
 }

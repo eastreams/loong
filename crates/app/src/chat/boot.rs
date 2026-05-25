@@ -165,6 +165,25 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     })
 }
 
+#[cfg(not(feature = "memory-sqlite"))]
+fn resolve_cli_session_id(
+    session_hint: Option<&str>,
+    session_requirement: CliSessionRequirement,
+) -> CliResult<String> {
+    match session_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(session_id) => Ok(session_id.to_owned()),
+        None => match session_requirement {
+            CliSessionRequirement::AllowImplicitDefault => Ok("default".to_owned()),
+            CliSessionRequirement::RequireExplicit => {
+                Err("concurrent CLI host requires an explicit session id".to_owned())
+            }
+        },
+    }
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn resolve_or_create_cli_runtime_session_id(
     session_hint: Option<&str>,
@@ -180,19 +199,10 @@ fn resolve_or_create_cli_runtime_session_id(
         (None, CliSessionRequirement::RequireExplicit) => {
             Err("concurrent CLI host requires an explicit session id".to_owned())
         }
-        (Some(session_id), CliSessionRequirement::RequireExplicit) => Ok(session_id.to_owned()),
-        (Some(session_id), CliSessionRequirement::AllowImplicitDefault)
-            if session_id == LATEST_SESSION_SELECTOR =>
-        {
-            let latest_session_id = latest_resumable_root_session_id(memory_config)?;
-            let latest_session_id = latest_session_id.ok_or_else(|| {
-                "CLI session selector `latest` did not find any resumable root session".to_owned()
-            })?;
-            Ok(latest_session_id)
+        (Some(session_id), _) if session_id == LATEST_SESSION_SELECTOR => {
+            resolve_latest_cli_session_id(memory_config)
         }
-        (Some(session_id), CliSessionRequirement::AllowImplicitDefault) => {
-            ensure_existing_cli_session_id(session_id, memory_config)
-        }
+        (Some(session_id), _) => ensure_existing_cli_session_id(session_id, memory_config),
     }
 }
 
@@ -208,6 +218,14 @@ fn create_cli_startup_root_session(memory_config: &SessionStoreConfig) -> CliRes
         state: crate::session::repository::SessionState::Ready,
     })?;
     Ok(session_id)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_latest_cli_session_id(memory_config: &SessionStoreConfig) -> CliResult<String> {
+    let latest_session_id = latest_resumable_root_session_id(memory_config)?;
+    latest_session_id.ok_or_else(|| {
+        "CLI session selector `latest` did not find any resumable root session".to_owned()
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
