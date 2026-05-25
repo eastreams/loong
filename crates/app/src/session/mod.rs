@@ -51,8 +51,9 @@ pub(crate) fn resume_candidates_for_root_sessions(
             continue;
         }
 
-        let turns = store::window_session_turns(&session.session_id, 64, store_config)?;
-        let Some(turn) = turns.iter().rev().find(|turn| turn.role == "user") else {
+        let Some(turn) =
+            store::latest_session_turn_by_role(&session.session_id, "user", store_config)?
+        else {
             continue;
         };
 
@@ -84,8 +85,7 @@ pub fn created_empty_sessions_for_cleanup(
         let Some(_session) = repo.load_session(session_id)? else {
             continue;
         };
-        let turns = store::window_session_turns(session_id, 64, store_config)?;
-        if turns.iter().all(|turn| turn.role != "user") {
+        if store::latest_session_turn_by_role(session_id, "user", store_config)?.is_none() {
             doomed.push(session_id.clone());
         }
     }
@@ -418,6 +418,95 @@ mod latest_cli_session_selector_tests {
                 .expect("load session")
                 .is_some()
         );
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn resume_candidates_keep_sessions_with_old_user_turn_outside_recent_window() {
+        let (root, memory_config) = init_selector_test_memory("resume-old-user-turn");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "current-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("current-session".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create current-session");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "root-user-buried".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: Some("current-session".to_owned()),
+            label: Some("root-user-buried".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root-user-buried");
+        append_session_turn(
+            &memory_config,
+            "root-user-buried",
+            "user",
+            "hello from buried root-user",
+        );
+        for index in 0..80 {
+            append_session_turn(
+                &memory_config,
+                "root-user-buried",
+                "assistant",
+                &format!("assistant follow-up {index}"),
+            );
+        }
+
+        let candidates = resume_candidates_for_root_sessions(&memory_config, "current-session")
+            .expect("load candidates");
+        let ids = candidates
+            .iter()
+            .map(|candidate| candidate.session_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["root-user-buried"]);
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn cleanup_keeps_sessions_with_old_user_turn_outside_recent_window() {
+        let (root, memory_config) = init_selector_test_memory("cleanup-old-user-turn");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "created-with-buried-user".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("created-with-buried-user".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create created-with-buried-user");
+
+        append_session_turn(
+            &memory_config,
+            "created-with-buried-user",
+            "user",
+            "keep me even if old",
+        );
+        for index in 0..80 {
+            append_session_turn(
+                &memory_config,
+                "created-with-buried-user",
+                "assistant",
+                &format!("assistant follow-up {index}"),
+            );
+        }
+
+        let doomed = created_empty_sessions_for_cleanup(
+            &memory_config,
+            &["created-with-buried-user".to_owned()],
+        )
+        .expect("select cleanup sessions");
+
+        assert!(doomed.is_empty());
 
         cleanup_selector_test_memory(&root);
     }

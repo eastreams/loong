@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 #[cfg(feature = "memory-sqlite")]
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::config::MemoryConfig;
@@ -169,6 +169,21 @@ pub fn window_session_turns(
 }
 
 #[cfg(feature = "memory-sqlite")]
+pub fn latest_session_turn_by_role(
+    session_id: &str,
+    role: &str,
+    config: &SessionStoreConfig,
+) -> Result<Option<SessionTranscriptTurn>, String> {
+    let sqlite_path = config
+        .sqlite_path
+        .clone()
+        .ok_or_else(|| "session store sqlite path is not configured".to_owned())?;
+    let conn = Connection::open(&sqlite_path)
+        .map_err(|error| format!("open session store sqlite failed: {error}"))?;
+    latest_session_turn_by_role_with_conn(&conn, session_id, role)
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub fn transcript_session_turns_paged(
     session_id: &str,
     page_size: usize,
@@ -232,6 +247,40 @@ pub(crate) fn transcript_session_turns_paged_with_conn(
     page_size: usize,
 ) -> Result<Vec<SessionTranscriptTurn>, String> {
     crate::memory::transcript_direct_paged_with_conn(conn, session_id, page_size)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn latest_session_turn_by_role_with_conn(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+) -> Result<Option<SessionTranscriptTurn>, String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_owned());
+    }
+    let role = role.trim();
+    if role.is_empty() {
+        return Err("role is required".to_owned());
+    }
+
+    conn.query_row(
+        "SELECT role, content, ts
+         FROM turns
+         WHERE session_id = ?1 AND role = ?2
+         ORDER BY ts DESC, id DESC
+         LIMIT 1",
+        params![session_id, role],
+        |row| {
+            Ok(SessionTranscriptTurn {
+                role: row.get(0)?,
+                content: row.get(1)?,
+                ts: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| format!("latest session turn by role query failed: {error}"))
 }
 
 #[cfg(all(test, feature = "memory-sqlite"))]
