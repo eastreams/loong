@@ -22,6 +22,14 @@ use crate::chat::{
 };
 use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 use crate::test_support::{ScopedEnv, unique_temp_dir};
+#[cfg(feature = "memory-sqlite")]
+use crate::{
+    config::AuditMode,
+    session::{
+        repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState},
+        store::{self, SessionStoreConfig},
+    },
+};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Style};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -207,33 +215,127 @@ fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
         .join("events.jsonl")
         .display()
         .to_string();
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let sqlite_root = unique_temp_dir("loong-chat-surface-memory");
+        config.audit.mode = AuditMode::InMemory;
+        config.memory.sqlite_path = sqlite_root.join("surface.sqlite3").display().to_string();
+        let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+        store::ensure_session_store_ready(Some(config.memory.resolved_sqlite_path()), &memory_config)
+            .expect("initialize chat surface sqlite memory");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "chat-surface-test".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("chat-surface-test".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create shared chat surface test session");
+    }
+
+    initialize_cli_turn_runtime_with_loaded_config(
+        path,
+        config,
+        Some("chat-surface-test"),
+        &CliChatOptions::default(),
+        "chat-surface-test",
+        CliSessionRequirement::RequireExplicit,
+        false,
+    )
+    .expect("chat surface runtime")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn test_router_memory(label: &str) -> (LoongConfig, SessionStoreConfig) {
+    let root = unique_temp_dir(label);
+    let sqlite_path = root.join("router.sqlite3");
+
+    let mut config = LoongConfig::default();
+    config.audit.mode = AuditMode::InMemory;
+    config.memory.sqlite_path = sqlite_path.display().to_string();
+
+    let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+    store::ensure_session_store_ready(Some(config.memory.resolved_sqlite_path()), &memory_config)
+        .expect("initialize router sqlite memory");
+
+    (config, memory_config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn existing_router_runtime_with_path(
+    path: PathBuf,
+    memory_label: &str,
+    session_id: &str,
+) -> crate::chat::CliTurnRuntime {
+    let (config, memory_config) = test_router_memory(memory_label);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some(session_id.to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create existing router session");
+
+    initialize_cli_turn_runtime_with_loaded_config(
+        path,
+        config,
+        Some(session_id),
+        &CliChatOptions::default(),
+        "chat-surface-router-existing-test",
+        CliSessionRequirement::RequireExplicit,
+        false,
+    )
+    .expect("existing router runtime")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn created_router_runtime_with_path(
+    path: PathBuf,
+    memory_label: &str,
+) -> crate::chat::CliTurnRuntime {
+    let (config, _memory_config) = test_router_memory(memory_label);
 
     initialize_cli_turn_runtime_with_loaded_config(
         path,
         config,
         None,
         &CliChatOptions::default(),
-        "chat-surface-test",
+        "chat-surface-router-created-test",
         CliSessionRequirement::AllowImplicitDefault,
         false,
     )
-    .expect("chat surface runtime")
+    .expect("created router runtime")
 }
 
+#[cfg(feature = "memory-sqlite")]
 #[test]
 fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
-    let mut router = SessionRouter::new(ActiveSessionRoute::for_existing(test_runtime_with_path(
-        PathBuf::from("/tmp/loong.toml"),
-    )));
-
-    router.install_created_route(ActiveSessionRoute::for_created_this_run(
-        test_runtime_with_path(PathBuf::from("/tmp/loong.toml")),
+    let existing_route = ActiveSessionRoute::for_existing(existing_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-existing.toml"),
+        "loong-session-router-existing",
+        "existing-session",
     ));
+    let existing_session_id = existing_route.runtime.session_id.clone();
+    let mut router = SessionRouter::new(existing_route);
+
+    let created_route = ActiveSessionRoute::for_created_this_run(created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-created.toml"),
+        "loong-session-router-created",
+    ));
+    let created_session_id = created_route.runtime.session_id.clone();
+    router.install_created_route(created_route);
+
+    let cleanup_ids = router.created_this_run_session_ids();
 
     assert_eq!(
-        router.created_this_run_session_ids(),
-        vec![router.active_session_id().to_owned()]
+        cleanup_ids,
+        vec![created_session_id.clone()]
     );
+    assert!(!cleanup_ids.contains(&existing_session_id));
+    assert_eq!(router.active_session_id(), created_session_id);
     assert!(router.active_route().route_origin.is_created_this_run());
 }
 
