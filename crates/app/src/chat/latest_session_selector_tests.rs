@@ -157,39 +157,48 @@ fn cli_runtime_rejects_latest_session_selector_when_no_resumable_root_exists() {
 }
 
 #[test]
-fn cli_runtime_keeps_default_session_when_no_hint_is_provided() {
-    let (config, _memory_config, sqlite_path) = init_chat_test_memory("default-selector");
+fn cli_runtime_creates_new_root_session_when_no_hint_is_provided() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("implicit-new-runtime");
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
         PathBuf::from("/tmp/loong.toml"),
         config,
         None,
         &CliChatOptions::default(),
-        "cli-chat-default-selector-test",
+        "cli-chat-implicit-new-runtime",
         CliSessionRequirement::AllowImplicitDefault,
         false,
     )
-    .expect("default session runtime");
+    .expect("implicit-new runtime");
 
-    assert_eq!(runtime.session_id, "default");
+    assert_ne!(runtime.session_id, "default");
+
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    assert!(repo
+        .load_session(runtime.session_id.as_str())
+        .expect("load startup session")
+        .is_some());
 
     cleanup_chat_test_memory(&sqlite_path);
 }
 
 #[test]
-fn cli_runtime_keeps_explicit_literal_session_id() {
-    let (config, _memory_config, sqlite_path) = init_chat_test_memory("literal-selector");
-    let runtime = initialize_cli_turn_runtime_with_loaded_config(
+fn cli_runtime_rejects_explicit_literal_session_id_when_target_does_not_exist() {
+    let (config, _memory_config, sqlite_path) = init_chat_test_memory("literal-missing");
+    let result = initialize_cli_turn_runtime_with_loaded_config(
         PathBuf::from("/tmp/loong.toml"),
         config,
-        Some("custom-session"),
+        Some("missing-session"),
         &CliChatOptions::default(),
-        "cli-chat-literal-selector-test",
+        "cli-chat-missing-literal",
         CliSessionRequirement::AllowImplicitDefault,
         false,
-    )
-    .expect("literal session runtime");
+    );
 
-    assert_eq!(runtime.session_id, "custom-session");
+    let error = match result {
+        Ok(_) => panic!("missing explicit session should fail"),
+        Err(error) => error,
+    };
+    assert!(error.contains("missing-session"), "unexpected error: {error}");
 
     cleanup_chat_test_memory(&sqlite_path);
 }

@@ -311,8 +311,8 @@ impl CliTurnRuntime {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CliSessionRequirement {
-    /// Interactive entrypoints may fall back to the implicit default session
-    /// (and, with sqlite memory enabled, resolve the `latest` selector).
+    /// Interactive entrypoints may create a startup root session implicitly
+    /// and, with sqlite memory enabled, resolve the `latest` selector.
     AllowImplicitDefault,
     /// Embedded or multiplexed hosts must provide a session id explicitly so
     /// they never attach to the wrong transcript by accident.
