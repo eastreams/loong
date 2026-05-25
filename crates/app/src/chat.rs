@@ -16,7 +16,7 @@ use crate::acp::{
 };
 
 mod boot;
-pub(crate) mod chat_surface;
+mod chat_surface;
 mod checkpoint;
 mod checkpoint_labels;
 #[cfg(test)]

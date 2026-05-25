@@ -17,6 +17,14 @@ pub mod frozen_result;
 pub const LATEST_SESSION_SELECTOR: &str = "latest";
 
 #[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeRootSessionCandidate {
+    pub session_id: String,
+    pub last_user_turn_at: i64,
+    pub preview_text: String,
+}
+
+#[cfg(feature = "memory-sqlite")]
 pub fn latest_resumable_root_session_id(
     store_config: &store::SessionStoreConfig,
 ) -> crate::CliResult<Option<String>> {
@@ -30,11 +38,38 @@ pub fn latest_resumable_root_session_id(
 pub(crate) fn resume_candidates_for_root_sessions(
     store_config: &store::SessionStoreConfig,
     current_session_id: &str,
-) -> crate::CliResult<Vec<crate::chat::chat_surface::app::resume_candidates::ResumeCandidate>> {
-    crate::chat::chat_surface::app::resume_candidates::load_resume_candidates(
-        current_session_id,
-        store_config,
-    )
+) -> crate::CliResult<Vec<ResumeRootSessionCandidate>> {
+    let repo = repository::SessionRepository::new(store_config)?;
+    let sessions = repo.list_visible_sessions(current_session_id)?;
+    let mut candidates = Vec::new();
+
+    for session in sessions {
+        if session.kind != repository::SessionKind::Root {
+            continue;
+        }
+        if session.session_id == current_session_id {
+            continue;
+        }
+
+        let turns = store::window_session_turns(&session.session_id, 64, store_config)?;
+        let Some(turn) = turns.iter().rev().find(|turn| turn.role == "user") else {
+            continue;
+        };
+
+        candidates.push(ResumeRootSessionCandidate {
+            session_id: session.session_id,
+            last_user_turn_at: turn.ts,
+            preview_text: turn.content.chars().take(20).collect(),
+        });
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .last_user_turn_at
+            .cmp(&left.last_user_turn_at)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    Ok(candidates)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -274,9 +309,18 @@ mod latest_cli_session_selector_tests {
         let repo = SessionRepository::new(&memory_config).expect("selector repository");
 
         repo.create_session(NewSessionRecord {
-            session_id: "empty-root".to_owned(),
+            session_id: "current-session".to_owned(),
             kind: SessionKind::Root,
             parent_session_id: None,
+            label: Some("current-session".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create current-session");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "empty-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: Some("current-session".to_owned()),
             label: Some("empty-root".to_owned()),
             state: SessionState::Ready,
         })
@@ -285,12 +329,27 @@ mod latest_cli_session_selector_tests {
         repo.create_session(NewSessionRecord {
             session_id: "root-user".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: None,
+            parent_session_id: Some("current-session".to_owned()),
             label: Some("root-user".to_owned()),
             state: SessionState::Ready,
         })
         .expect("create root-user");
         append_session_turn(&memory_config, "root-user", "user", "hello from root-user");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "unrelated-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("unrelated-root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create unrelated-root");
+        append_session_turn(
+            &memory_config,
+            "unrelated-root",
+            "user",
+            "hello from unrelated-root",
+        );
 
         let candidates = resume_candidates_for_root_sessions(&memory_config, "current-session")
             .expect("load candidates");
@@ -300,6 +359,31 @@ mod latest_cli_session_selector_tests {
             .map(|candidate| candidate.session_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["root-user"]);
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn resume_candidates_use_visibility_scope_for_legacy_current_session() {
+        let (root, memory_config) = init_selector_test_memory("resume-legacy-visibility");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        append_session_turn(&memory_config, "legacy-current", "user", "legacy current");
+
+        repo.create_session(NewSessionRecord {
+            session_id: "unrelated-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("unrelated-root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create unrelated-root");
+        append_session_turn(&memory_config, "unrelated-root", "user", "visible elsewhere");
+
+        let candidates = resume_candidates_for_root_sessions(&memory_config, "legacy-current")
+            .expect("load candidates");
+
+        assert!(candidates.is_empty());
 
         cleanup_selector_test_memory(&root);
     }
