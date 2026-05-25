@@ -205,8 +205,8 @@ pub async fn run_app<B: Backend>(
         .size()
         .map_err(|e| format!("failed to query terminal size: {e}"))?;
     let render_width = last_known_size.width as usize;
-    let mut app = App::new(&router.active_route().runtime, &options, render_width)?;
-    refresh_app_cwd_dependent_state(&mut app, &router.active_route().runtime);
+    let mut app = App::new(router.active_runtime(), &options, render_width)?;
+    refresh_app_cwd_dependent_state(&mut app, router.active_runtime());
     sync_app_terminal_title(&mut app);
     let mut startup_release_task = Some(tokio::spawn(load_startup_release_lines(render_width)));
     let mut dirty = true;
@@ -224,9 +224,7 @@ pub async fn run_app<B: Backend>(
             dirty = true;
         }
 
-        if maybe_finalize_pending_turn(terminal, &mut app, &mut router.active_route_mut().runtime)
-            .await?
-        {
+        if maybe_finalize_pending_turn(terminal, &mut app, router.active_runtime_mut()).await? {
             dirty = true;
         }
 
@@ -376,7 +374,7 @@ pub async fn run_app<B: Backend>(
                                 if let Some(action) = app.command_palette.handle_key(key)
                                     && let Some(command) = dispatch_palette_action(
                                         &mut app,
-                                        &mut router.active_route_mut().runtime,
+                                        router.active_runtime_mut(),
                                         current_render_width(terminal)?,
                                         action,
                                     )?
@@ -417,7 +415,7 @@ pub async fn run_app<B: Backend>(
                             run_surface_command(
                                 terminal,
                                 &mut app,
-                                &mut router.active_route_mut().runtime,
+                                router.active_runtime_mut(),
                                 &options,
                                 &command,
                             )
@@ -441,7 +439,7 @@ pub async fn run_app<B: Backend>(
                             .unwrap_or(StartupOnboardingAction::Ignored);
                         if app.apply_startup_onboarding_action(
                             action,
-                            &mut router.active_route_mut().runtime,
+                            router.active_runtime_mut(),
                         )? {
                             dirty = true;
                             continue;
@@ -491,7 +489,7 @@ pub async fn run_app<B: Backend>(
                             if let Some(action) = app.command_palette.handle_key(key)
                                 && let Some(command) = dispatch_palette_action(
                                     &mut app,
-                                    &mut router.active_route_mut().runtime,
+                                    router.active_runtime_mut(),
                                     current_render_width(terminal)?,
                                     action,
                                 )?
@@ -538,7 +536,7 @@ pub async fn run_app<B: Backend>(
                             start_turn(
                                 terminal,
                                 &mut app,
-                                &mut router.active_route_mut().runtime,
+                                router.active_runtime_mut(),
                                 msg,
                                 false,
                             )
@@ -547,7 +545,7 @@ pub async fn run_app<B: Backend>(
                             submit_user_turn(
                                 terminal,
                                 &mut app,
-                                &mut router.active_route_mut().runtime,
+                                router.active_runtime_mut(),
                                 msg,
                             )
                             .await?;
@@ -563,7 +561,7 @@ pub async fn run_app<B: Backend>(
                         run_surface_command(
                             terminal,
                             &mut app,
-                            &mut router.active_route_mut().runtime,
+                            router.active_runtime_mut(),
                             &options,
                             &command,
                         )
@@ -580,7 +578,7 @@ pub async fn run_app<B: Backend>(
                         run_surface_command(
                             terminal,
                             &mut app,
-                            &mut router.active_route_mut().runtime,
+                            router.active_runtime_mut(),
                             &options,
                             &command,
                         )

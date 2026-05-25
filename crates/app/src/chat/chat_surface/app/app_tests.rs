@@ -364,6 +364,27 @@ fn session_router_marks_startup_created_initial_route_for_cleanup() {
     ));
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_router_dedupes_created_session_cleanup_ids() {
+    let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-created-dedupe.toml"),
+        "loong-session-router-created-dedupe",
+    ));
+    let created_session_id = created_route.runtime.session_id.clone();
+    let mut router = SessionRouter::new(created_route);
+    let mut duplicate_created_route =
+        ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-created-dedupe-duplicate.toml"),
+        "loong-session-router-created-dedupe-duplicate",
+    ));
+    duplicate_created_route.runtime.session_id = created_session_id.clone();
+
+    router.install_created_route(duplicate_created_route);
+
+    assert_eq!(router.created_this_run_session_ids(), vec![created_session_id]);
+}
+
 #[test]
 fn resize_reflow_tracks_width_and_height_changes() {
     assert!(super::resize_reflow_required(80, 24, 72, 24));
