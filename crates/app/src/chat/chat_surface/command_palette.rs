@@ -18,7 +18,9 @@ use ratatui::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandAction {
     RunCommand(&'static str),
-    SelectResumeSession { session_id: String },
+    SelectResumeSession {
+        session_id: String,
+    },
     OpenSettings(SettingsSurfaceFocus),
     ApplySettings(SettingsCommandAction),
     OpenModelReasoning(ProviderModelCatalogEntry),
@@ -1100,9 +1102,7 @@ impl CommandPalette {
                 CommandPaletteMode::SlashCommands
                 | CommandPaletteMode::ResumePicker
                 | CommandPaletteMode::Settings
-                | CommandPaletteMode::Skills => {
-                    "  no results"
-                }
+                | CommandPaletteMode::Skills => "  no results",
             };
             let items = vec![ListItem::new(Line::from(vec![Span::styled(
                 empty_text,
@@ -1380,16 +1380,15 @@ impl CommandPalette {
                     return None;
                 }
                 let visible_rows = match self.mode {
-                    CommandPaletteMode::ResumePicker => Self::visible_rows_for_total(filtered.len())
-                        .min(area.height.saturating_sub(2) as usize),
-                    CommandPaletteMode::Settings
-                    | CommandPaletteMode::Models
-                    | CommandPaletteMode::Reasoning => {
+                    CommandPaletteMode::ResumePicker => {
                         Self::visible_rows_for_total(filtered.len())
                             .min(area.height.saturating_sub(2) as usize)
                     }
-                    CommandPaletteMode::SlashCommands
-                    | CommandPaletteMode::Skills => {
+                    CommandPaletteMode::Settings
+                    | CommandPaletteMode::Models
+                    | CommandPaletteMode::Reasoning => Self::visible_rows_for_total(filtered.len())
+                        .min(area.height.saturating_sub(2) as usize),
+                    CommandPaletteMode::SlashCommands | CommandPaletteMode::Skills => {
                         Self::visible_rows_for_total(filtered.len())
                     }
                 };
@@ -2192,8 +2191,8 @@ fn area_contains(area: Rect, column: u16, row: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandAction, CommandPalette, ResumePaletteEntry, SettingsEntry,
-        SettingsSurfaceFocus, SkillEntry,
+        CommandAction, CommandPalette, ResumePaletteEntry, SettingsEntry, SettingsSurfaceFocus,
+        SkillEntry,
     };
     use crate::chat::chat_surface::i18n::Language;
     use crate::chat::chat_surface::input::{

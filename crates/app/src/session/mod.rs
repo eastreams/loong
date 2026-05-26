@@ -146,8 +146,8 @@ mod delegate_cancelled_reason_tests {
 #[cfg(all(test, feature = "memory-sqlite"))]
 #[allow(clippy::expect_used)]
 mod latest_cli_session_selector_tests {
-    use super::created_empty_sessions_for_cleanup;
     use super::LATEST_SESSION_SELECTOR;
+    use super::created_empty_sessions_for_cleanup;
     use super::latest_resumable_root_session_id;
     use super::resume_candidates_for_root_sessions;
     use crate::session::repository::NewSessionRecord;
@@ -383,7 +383,12 @@ mod latest_cli_session_selector_tests {
             state: SessionState::Ready,
         })
         .expect("create unrelated-root");
-        append_session_turn(&memory_config, "unrelated-root", "user", "visible elsewhere");
+        append_session_turn(
+            &memory_config,
+            "unrelated-root",
+            "user",
+            "visible elsewhere",
+        );
 
         let candidates = resume_candidates_for_root_sessions(&memory_config, "legacy-current")
             .expect("load candidates");

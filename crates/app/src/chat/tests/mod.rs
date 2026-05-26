@@ -1,12 +1,12 @@
 use super::*;
 use crate::conversation::ConversationRuntimeBinding;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 use crate::test_support::{ScopedEnv, unique_temp_dir};
 use serde_json::json;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 #[cfg(feature = "memory-sqlite")]
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -554,7 +554,7 @@ fn concurrent_cli_host_exits_when_shutdown_is_requested() {
         shutdown,
         initialize_runtime_environment: false,
     })
-        .expect("concurrent host should stop cleanly when shutdown is requested");
+    .expect("concurrent host should stop cleanly when shutdown is requested");
 
     cleanup_chat_test_memory(&sqlite_path);
 }

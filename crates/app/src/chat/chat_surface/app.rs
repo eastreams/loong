@@ -89,7 +89,7 @@ include!("app/commands.rs");
 include!("app/pending.rs");
 include!("app/startup_catalog.rs");
 
+mod resume_candidates;
 #[cfg(test)]
 #[path = "app/app_tests.rs"]
 mod tests;
-mod resume_candidates;

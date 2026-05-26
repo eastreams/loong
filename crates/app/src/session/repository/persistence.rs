@@ -555,7 +555,9 @@ impl SessionRepository {
              WHERE session_id = ?1",
             params![session_id.as_str()],
         )
-        .map_err(|error| format!("delete session tool policy during session delete failed: {error}"))?;
+        .map_err(|error| {
+            format!("delete session tool policy during session delete failed: {error}")
+        })?;
         tx.execute(
             "DELETE FROM session_artifacts
              WHERE session_id = ?1",
@@ -606,17 +608,17 @@ impl SessionRepository {
         .map_err(|error| format!("delete session events failed: {error}"))?;
         let deleted_session_rows = tx
             .execute(
-            "DELETE FROM sessions
+                "DELETE FROM sessions
              WHERE session_id = ?1",
-            params![session_id.as_str()],
-        )
-        .map_err(|error| format!("delete session failed: {error}"))?;
-        tx.execute(
-                "DELETE FROM session_route_bindings
-                 WHERE active_session_id = ?1 OR route_session_id = ?1",
                 params![session_id.as_str()],
             )
-            .map_err(|error| format!("delete session route bindings failed: {error}"))?;
+            .map_err(|error| format!("delete session failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM session_route_bindings
+                 WHERE active_session_id = ?1 OR route_session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session route bindings failed: {error}"))?;
         tx.commit()
             .map_err(|error| format!("commit session delete transaction failed: {error}"))?;
         Ok(deleted_session_rows > 0)

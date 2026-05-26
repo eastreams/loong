@@ -140,8 +140,11 @@ pub(crate) fn initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
     let memory_label = "disabled".to_owned();
 
     #[cfg(feature = "memory-sqlite")]
-    let (session_id, session_origin) =
-        resolve_or_create_cli_runtime_session_id(session_hint, session_requirement, &memory_config)?;
+    let (session_id, session_origin) = resolve_or_create_cli_runtime_session_id(
+        session_hint,
+        session_requirement,
+        &memory_config,
+    )?;
 
     #[cfg(not(feature = "memory-sqlite"))]
     let (session_id, session_origin) =
@@ -173,7 +176,9 @@ fn resolve_or_create_cli_runtime_session_id(
     session_requirement: CliSessionRequirement,
     _memory_store_unavailable: (),
 ) -> CliResult<(String, crate::chat::CliRuntimeSessionOrigin)> {
-    let normalized = session_hint.map(str::trim).filter(|value| !value.is_empty());
+    let normalized = session_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     match (normalized, session_requirement) {
         (None, CliSessionRequirement::AllowImplicitDefault) => Err(
@@ -208,7 +213,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.contains("sqlite-backed memory"), "unexpected error: {error}");
+        assert!(
+            error.contains("sqlite-backed memory"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -260,7 +268,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.contains("sqlite-backed memory"), "unexpected error: {error}");
+        assert!(
+            error.contains("sqlite-backed memory"),
+            "unexpected error: {error}"
+        );
     }
 }
 
@@ -270,12 +281,18 @@ fn resolve_or_create_cli_runtime_session_id(
     session_requirement: CliSessionRequirement,
     memory_config: &SessionStoreConfig,
 ) -> CliResult<(String, crate::chat::CliRuntimeSessionOrigin)> {
-    let normalized = session_hint.map(str::trim).filter(|value| !value.is_empty());
+    let normalized = session_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     match (normalized, session_requirement) {
         (None, CliSessionRequirement::AllowImplicitDefault) => {
-            create_cli_startup_root_session(memory_config)
-                .map(|session_id| (session_id, crate::chat::CliRuntimeSessionOrigin::CreatedThisRun))
+            create_cli_startup_root_session(memory_config).map(|session_id| {
+                (
+                    session_id,
+                    crate::chat::CliRuntimeSessionOrigin::CreatedThisRun,
+                )
+            })
         }
         (None, CliSessionRequirement::RequireExplicit) => {
             Err("concurrent CLI host requires an explicit session id".to_owned())
