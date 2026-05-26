@@ -688,9 +688,29 @@ fn run_surface_command_new_is_blocked_while_pending_turn() {
     harness.app.pending_turn = true;
 
     let result = harness.run_command("/new");
+    let transcript = harness.latest_transcript();
 
     assert!(result.is_ok(), "blocked command still renders feedback");
-    assert!(harness.latest_transcript().contains("pending"));
+    assert!(transcript.contains("pending"));
+    assert!(transcript.contains("session unchanged"));
+    assert!(!transcript.contains("session updated"));
+    assert!(!transcript.contains("handled through the session router"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_is_blocked_while_pending_turn() {
+    let mut harness = resume_test_harness("resume-pending");
+    harness.app.pending_turn = true;
+
+    let result = harness.run_command("/resume latest");
+    let transcript = harness.latest_transcript();
+
+    assert!(result.is_ok(), "blocked command still renders feedback");
+    assert!(transcript.contains("pending"));
+    assert!(transcript.contains("session unchanged"));
+    assert!(!transcript.contains("session updated"));
+    assert!(!transcript.contains("handled through the session router"));
 }
 
 #[test]

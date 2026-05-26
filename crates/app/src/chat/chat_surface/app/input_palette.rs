@@ -547,7 +547,7 @@ async fn run_surface_command<B: Backend>(
         "/new" => {
             if app.pending_turn {
                 app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
-                    Ok("Cannot start a new session while a turn is pending.".to_owned()),
+                    Err("Cannot start a new session while a turn is pending.".to_owned()),
                     width,
                 ));
                 app.focus = Focus::Composer;
@@ -665,7 +665,7 @@ async fn run_surface_command<B: Backend>(
         "/resume" => {
             if app.pending_turn {
                 app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
-                    Ok("Cannot resume another session while a turn is pending.".to_owned()),
+                    Err("Cannot resume another session while a turn is pending.".to_owned()),
                     width,
                 ));
                 app.focus = Focus::Composer;

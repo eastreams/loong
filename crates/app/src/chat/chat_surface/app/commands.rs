@@ -783,16 +783,18 @@ fn render_session_transition_lines_with_width(
     result: Result<String, String>,
     width: usize,
 ) -> Vec<String> {
-    let (tone, title, lines) = match result {
+    let (tone, title, lines, footer_lines) = match result {
         Ok(message) => (
             TuiCalloutTone::Info,
             "session updated".to_owned(),
             vec![message],
+            vec!["The active session route was handled through the session router.".to_owned()],
         ),
         Err(error) => (
             TuiCalloutTone::Warning,
             "session unchanged".to_owned(),
             vec![error],
+            vec!["No session transition was applied.".to_owned()],
         ),
     };
     let message_spec = TuiMessageSpec {
@@ -803,7 +805,7 @@ fn render_session_transition_lines_with_width(
             title: Some(title),
             lines,
         }],
-        footer_lines: vec!["The active session route was handled through the session router.".to_owned()],
+        footer_lines,
     };
     super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
