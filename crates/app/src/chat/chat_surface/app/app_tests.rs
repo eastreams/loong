@@ -853,7 +853,15 @@ fn run_surface_command_resume_restores_history_as_chat_messages() {
         crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
             assert_eq!(text, "newer resume reply");
         }
-        _ => panic!("expected restored markdown assistant message"),
+        crate::chat::chat_surface::message_list::MessageContent::RenderedLines(_)
+        | crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
+            panic!("expected restored markdown assistant message")
+        }
     }
     assert_eq!(harness.app.message_list.messages[2].role, "System");
     assert!(!transcript_contains_internal_payload(&harness.app));
@@ -869,7 +877,14 @@ fn transcript_contains_internal_payload(app: &App) -> bool {
             crate::chat::chat_surface::message_list::MessageContent::RenderedLines(lines) => lines
                 .iter()
                 .any(|line| line.contains("\"_loong_internal\":true")),
-            _ => false,
+            crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
+                false
+            }
         })
     })
 }
