@@ -1,10 +1,12 @@
 use super::*;
 use crate::conversation::ConversationRuntimeBinding;
-use crate::test_support::ScopedEnv;
+use crate::test_support::{ScopedEnv, unique_temp_dir};
 use serde_json::json;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 #[cfg(feature = "memory-sqlite")]
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,6 +31,24 @@ fn test_config() -> LoongConfig {
     config.provider = crate::config::ProviderConfig::default();
     config.audit.mode = crate::config::AuditMode::InMemory;
     config
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn chat_test_config_path(label: &str) -> PathBuf {
+    unique_temp_dir(label).join("loong.toml")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_chat_test_root_session(memory_config: &SessionStoreConfig, session_id: &str) {
+    let repo = SessionRepository::new(memory_config).expect("chat test repository");
+    repo.create_session(NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some(session_id.to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create chat test root session");
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -517,32 +537,23 @@ fn concurrent_cli_host_requires_explicit_session_id() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[cfg(feature = "memory-sqlite")]
-async fn concurrent_cli_host_exits_when_shutdown_is_requested() {
-    let (mut config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-host");
+fn concurrent_cli_host_exits_when_shutdown_is_requested() {
+    let (mut config, memory_config, sqlite_path) = init_chat_test_memory("concurrent-host");
     config.audit.mode = crate::config::AuditMode::InMemory;
-    let options = CliChatOptions::default();
-    let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
-        config,
-        Some("cli-supervisor"),
-        &options,
-        "cli-chat-concurrent-test",
-        CliSessionRequirement::RequireExplicit,
-        false,
-    )
-    .expect("concurrent host runtime");
-    assert!(runtime.conversation_binding().is_kernel_bound());
-    assert_eq!(
-        runtime.runtime_kernel.kernel_context().agent_id(),
-        "cli-chat-concurrent-test"
-    );
+    create_chat_test_root_session(&memory_config, "cli-supervisor");
+
     let shutdown = ConcurrentCliShutdown::new();
     shutdown.request_shutdown();
 
-    run_concurrent_cli_host_loop(&runtime, &options, &shutdown)
-        .await
+    run_concurrent_cli_host(&ConcurrentCliHostOptions {
+        resolved_path: chat_test_config_path("concurrent-host-config"),
+        config,
+        session_id: "cli-supervisor".to_owned(),
+        shutdown,
+        initialize_runtime_environment: false,
+    })
         .expect("concurrent host should stop cleanly when shutdown is requested");
 
     cleanup_chat_test_memory(&sqlite_path);
