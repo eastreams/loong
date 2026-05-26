@@ -553,9 +553,11 @@ async fn run_surface_command<B: Backend>(
                 app.focus = Focus::Composer;
                 return Ok(());
             }
-            let result = router.begin_create_new_session(SessionTransitionReason::UserRequestedNew);
+            let result = router
+                .begin_create_new_session(SessionTransitionReason::UserRequestedNew)
+                .await;
             if result.is_ok() {
-                app.message_list.clear_transcript();
+                replace_app_transcript_with_active_route(app, router.active_route());
                 refresh_app_cwd_dependent_state(app, router.active_runtime());
             }
             app.message_list
@@ -711,13 +713,19 @@ async fn run_surface_command<B: Backend>(
                     let latest = router
                         .latest_resume_target_session_id()?
                         .ok_or_else(|| "No resumable session available.".to_owned());
-                    let result = latest.and_then(|session_id| {
-                        router.begin_resume_session(
-                            session_id.as_str(),
-                            SessionTransitionReason::UserRequestedResume,
-                        )
-                    });
+                    let result = match latest {
+                        Ok(session_id) => {
+                            router
+                                .begin_resume_session(
+                                    session_id.as_str(),
+                                    SessionTransitionReason::UserRequestedResume,
+                                )
+                                .await
+                        }
+                        Err(error) => Err(error),
+                    };
                     if result.is_ok() {
+                        replace_app_transcript_with_active_route(app, router.active_route());
                         refresh_app_cwd_dependent_state(app, router.active_runtime());
                     }
                     app.message_list
@@ -739,11 +747,14 @@ async fn run_surface_command<B: Backend>(
                     }
                 }
                 ResumeInvocation::SessionId(session_id) => {
-                    let result = router.begin_resume_session(
-                        session_id.as_str(),
-                        SessionTransitionReason::UserRequestedResume,
-                    );
+                    let result = router
+                        .begin_resume_session(
+                            session_id.as_str(),
+                            SessionTransitionReason::UserRequestedResume,
+                        )
+                        .await;
                     if result.is_ok() {
+                        replace_app_transcript_with_active_route(app, router.active_route());
                         refresh_app_cwd_dependent_state(app, router.active_runtime());
                     }
                     app.message_list
@@ -779,6 +790,14 @@ async fn run_surface_command<B: Backend>(
             app.focus = Focus::Composer;
             Ok(())
         }
+    }
+}
+
+fn replace_app_transcript_with_active_route(app: &mut App, route: &ActiveSessionRoute) {
+    app.message_list.clear_transcript();
+    if !route.loaded_history_lines.is_empty() {
+        app.message_list
+            .add_rendered_lines(route.loaded_history_lines.clone());
     }
 }
 

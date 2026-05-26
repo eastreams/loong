@@ -66,6 +66,8 @@ use self::ops::is_manual_compaction_command;
 use self::ops::is_turn_checkpoint_repair_command;
 #[cfg(test)]
 use self::ops::load_history_lines;
+#[cfg(all(feature = "memory-sqlite", not(test)))]
+use self::ops::load_history_lines;
 #[cfg(test)]
 use self::ops::load_manual_compaction_result;
 #[cfg(test)]
@@ -292,6 +294,8 @@ pub(crate) enum CliRuntimeSessionOrigin {
     CreatedThisRun,
 }
 
+pub(crate) type RouteOrigin = CliRuntimeSessionOrigin;
+
 #[derive(Clone)]
 pub(crate) struct CliTurnRuntime {
     pub(crate) resolved_path: PathBuf,
@@ -312,6 +316,24 @@ pub(crate) struct CliTurnRuntime {
 impl CliTurnRuntime {
     pub(crate) fn conversation_binding(&self) -> ConversationRuntimeBinding<'_> {
         self.runtime_kernel.conversation_binding()
+    }
+}
+
+pub(crate) struct RebuiltActiveSessionRoute {
+    pub(crate) runtime: CliTurnRuntime,
+    pub(crate) loaded_history_lines: Vec<String>,
+}
+
+impl RebuiltActiveSessionRoute {
+    pub(crate) fn new(
+        runtime: CliTurnRuntime,
+        loaded_history_lines: Vec<String>,
+        _route_origin: RouteOrigin,
+    ) -> Self {
+        Self {
+            runtime,
+            loaded_history_lines,
+        }
     }
 }
 
@@ -623,6 +645,37 @@ fn is_exit_command(config: &LoongConfig, input: &str) -> bool {
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .any(|value| !value.is_empty() && value == lower)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) async fn rebuild_active_session_route(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    session_id: &str,
+    options: &CliChatOptions,
+    route_origin: RouteOrigin,
+) -> CliResult<RebuiltActiveSessionRoute> {
+    let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        resolved_path,
+        config,
+        Some(session_id),
+        options,
+        "cli-chat-surface-route-rebuild",
+        CliSessionRequirement::AllowImplicitDefault,
+        false,
+    )?;
+    let history_lines = load_history_lines(
+        runtime.session_id.as_str(),
+        128,
+        runtime.conversation_binding(),
+        &runtime.memory_config,
+    )
+    .await?;
+    Ok(RebuiltActiveSessionRoute::new(
+        runtime,
+        history_lines,
+        route_origin,
+    ))
 }
 
 #[cfg(test)]

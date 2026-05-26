@@ -408,3 +408,31 @@ async fn cli_runtime_latest_session_selector_drives_history_loads() {
 
     cleanup_chat_test_memory(&sqlite_path);
 }
+
+#[tokio::test]
+async fn rebuild_active_route_loads_target_history_and_rebinds_runtime() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("route-rebuild-history");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+
+    create_root_session(&repo, "resume-target");
+    append_session_turn("resume-target", "user", "resume me", &memory_config);
+    append_session_turn("resume-target", "assistant", "loaded reply", &memory_config);
+
+    let route = rebuild_active_session_route(
+        PathBuf::from("/tmp/loong.toml"),
+        config,
+        "resume-target",
+        &CliChatOptions::default(),
+        RouteOrigin::Existing,
+    )
+    .await
+    .expect("rebuild route");
+
+    assert_eq!(route.runtime.session_id, "resume-target");
+    assert!(route
+        .loaded_history_lines
+        .iter()
+        .any(|line| line.contains("resume me")));
+
+    cleanup_chat_test_memory(&sqlite_path);
+}

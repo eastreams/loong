@@ -19,6 +19,7 @@ pub(crate) struct SessionTransitionOutcome {
 #[allow(dead_code)]
 pub(crate) struct ActiveSessionRoute {
     pub(crate) runtime: crate::chat::CliTurnRuntime,
+    pub(crate) loaded_history_lines: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -28,7 +29,17 @@ impl ActiveSessionRoute {
     }
 
     pub(crate) fn from_runtime(runtime: crate::chat::CliTurnRuntime) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            loaded_history_lines: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_rebuilt_route(route: crate::chat::RebuiltActiveSessionRoute) -> Self {
+        Self {
+            runtime: route.runtime,
+            loaded_history_lines: route.loaded_history_lines,
+        }
     }
 }
 
@@ -85,11 +96,16 @@ impl SessionRouter {
         self.install_route(active_route);
     }
 
-    pub(crate) fn begin_create_new_session(
+    pub(crate) async fn begin_create_new_session(
         &mut self,
         reason: SessionTransitionReason,
     ) -> crate::CliResult<SessionTransitionOutcome> {
-        let route = self.rebuild_route(None, crate::chat::CliSessionRequirement::AllowImplicitDefault)?;
+        let route = self
+            .rebuild_route(
+                None,
+                crate::chat::CliSessionRequirement::AllowImplicitDefault,
+            )
+            .await?;
         let session_id = route.runtime.session_id.clone();
         self.install_created_route(route);
         self.switch_confirm = None;
@@ -98,15 +114,17 @@ impl SessionRouter {
         })
     }
 
-    pub(crate) fn begin_resume_session(
+    pub(crate) async fn begin_resume_session(
         &mut self,
         target_session_id: &str,
         reason: SessionTransitionReason,
     ) -> crate::CliResult<SessionTransitionOutcome> {
-        let route = self.rebuild_route(
-            Some(target_session_id),
-            crate::chat::CliSessionRequirement::RequireExplicit,
-        )?;
+        let route = self
+            .rebuild_route(
+                Some(target_session_id),
+                crate::chat::CliSessionRequirement::RequireExplicit,
+            )
+            .await?;
         let session_id = route.runtime.session_id.clone();
         self.install_route(route);
         self.switch_confirm = None;
@@ -120,7 +138,7 @@ impl SessionRouter {
         crate::session::latest_resumable_root_session_id(&self.active_runtime().memory_config)
     }
 
-    fn rebuild_route(
+    async fn rebuild_route(
         &self,
         session_hint: Option<&str>,
         session_requirement: crate::chat::CliSessionRequirement,
@@ -134,15 +152,33 @@ impl SessionRouter {
                 .clone(),
             acp_working_directory: self.active_runtime().effective_working_directory.clone(),
         };
-        let runtime = crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+        let route_origin = match session_requirement {
+            crate::chat::CliSessionRequirement::AllowImplicitDefault => {
+                crate::chat::RouteOrigin::CreatedThisRun
+            }
+            crate::chat::CliSessionRequirement::RequireExplicit => crate::chat::RouteOrigin::Existing,
+        };
+        let session_id = match session_hint {
+            Some(session_id) => session_id.to_owned(),
+            None => crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+                self.active_runtime().resolved_path.clone(),
+                self.active_runtime().config.clone(),
+                None,
+                &preserved_options,
+                self.active_runtime().runtime_kernel.cloned_kernel_context(),
+                session_requirement,
+            )?
+            .session_id,
+        };
+        let route = crate::chat::rebuild_active_session_route(
             self.active_runtime().resolved_path.clone(),
             self.active_runtime().config.clone(),
-            session_hint,
+            session_id.as_str(),
             &preserved_options,
-            self.active_runtime().runtime_kernel.cloned_kernel_context(),
-            session_requirement,
-        )?;
-        Ok(ActiveSessionRoute::from_runtime(runtime))
+            route_origin,
+        )
+        .await?;
+        Ok(ActiveSessionRoute::from_rebuilt_route(route))
     }
 
     fn install_route(&mut self, active_route: ActiveSessionRoute) {

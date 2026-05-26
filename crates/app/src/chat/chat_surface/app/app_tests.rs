@@ -632,6 +632,19 @@ fn run_surface_command_resume_latest_switches_to_first_candidate() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn run_surface_command_resume_rebuilds_route_through_history_bootstrap_path() {
+    let mut harness = resume_test_harness("resume-history-rebuild");
+
+    let result = harness.run_command("/resume root-new");
+    let transcript = harness.latest_transcript();
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert!(transcript.contains("newer resume candidate"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn session_router_rebuild_preserves_runtime_acp_state_across_resume() {
     let mut harness = resume_test_harness("resume-preserves-acp-state");
     let preserved_cwd = PathBuf::from("/workspace/override");
