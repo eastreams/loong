@@ -322,17 +322,19 @@ impl CliTurnRuntime {
 pub(crate) struct RebuiltActiveSessionRoute {
     pub(crate) runtime: CliTurnRuntime,
     pub(crate) loaded_history_lines: Vec<String>,
+    pub(crate) route_origin: RouteOrigin,
 }
 
 impl RebuiltActiveSessionRoute {
     pub(crate) fn new(
         runtime: CliTurnRuntime,
         loaded_history_lines: Vec<String>,
-        _route_origin: RouteOrigin,
+        route_origin: RouteOrigin,
     ) -> Self {
         Self {
             runtime,
             loaded_history_lines,
+            route_origin,
         }
     }
 }

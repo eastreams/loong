@@ -20,16 +20,18 @@ pub(crate) struct SessionTransitionOutcome {
 pub(crate) struct ActiveSessionRoute {
     pub(crate) runtime: crate::chat::CliTurnRuntime,
     pub(crate) loaded_history_lines: Vec<String>,
+    route_origin: crate::chat::CliRuntimeSessionOrigin,
 }
 
 #[allow(dead_code)]
 impl ActiveSessionRoute {
     pub(crate) fn route_origin(&self) -> crate::chat::CliRuntimeSessionOrigin {
-        self.runtime.session_origin
+        self.route_origin
     }
 
     pub(crate) fn from_runtime(runtime: crate::chat::CliTurnRuntime) -> Self {
         Self {
+            route_origin: runtime.session_origin,
             runtime,
             loaded_history_lines: Vec::new(),
         }
@@ -37,6 +39,7 @@ impl ActiveSessionRoute {
 
     pub(crate) fn from_rebuilt_route(route: crate::chat::RebuiltActiveSessionRoute) -> Self {
         Self {
+            route_origin: route.route_origin,
             runtime: route.runtime,
             loaded_history_lines: route.loaded_history_lines,
         }

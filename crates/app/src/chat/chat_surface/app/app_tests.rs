@@ -24,6 +24,7 @@ use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 use crate::test_support::{ScopedEnv, unique_temp_dir};
 #[cfg(feature = "memory-sqlite")]
 use crate::{
+    chat::{CliRuntimeSessionOrigin, RouteOrigin, rebuild_active_session_route},
     config::AuditMode,
     session::{
         repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState},
@@ -510,6 +511,33 @@ fn session_router_dedupes_created_session_cleanup_ids() {
     router.install_created_route(duplicate_created_route);
 
     assert_eq!(router.created_this_run_session_ids(), vec![created_session_id]);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn rebuilt_new_route_preserves_created_this_run_origin() {
+    let created_runtime = created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-rebuilt-created.toml"),
+        "loong-session-router-rebuilt-created",
+    );
+    let session_id = created_runtime.session_id.clone();
+    let rebuilt_route = rebuild_active_session_route(
+        created_runtime.resolved_path.clone(),
+        created_runtime.config.clone(),
+        session_id.as_str(),
+        &CliChatOptions::default(),
+        RouteOrigin::CreatedThisRun,
+    )
+    .await
+    .expect("rebuild created route");
+
+    let active_route = ActiveSessionRoute::from_rebuilt_route(rebuilt_route);
+
+    assert_eq!(active_route.runtime.session_id, session_id);
+    assert_eq!(
+        active_route.route_origin(),
+        CliRuntimeSessionOrigin::CreatedThisRun
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
