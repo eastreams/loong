@@ -509,7 +509,7 @@ impl ResumeCommandHarness {
         repo.create_session(NewSessionRecord {
             session_id: "root-old".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: None,
+            parent_session_id: Some("current-root".to_owned()),
             label: Some("root-old".to_owned()),
             state: SessionState::Ready,
         })
@@ -517,7 +517,7 @@ impl ResumeCommandHarness {
         repo.create_session(NewSessionRecord {
             session_id: "root-new".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: None,
+            parent_session_id: Some("current-root".to_owned()),
             label: Some("root-new".to_owned()),
             state: SessionState::Ready,
         })
@@ -600,6 +600,29 @@ fn run_surface_command_resume_latest_switches_to_first_candidate() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn session_router_rebuild_preserves_runtime_acp_state_across_resume() {
+    let mut harness = resume_test_harness("resume-preserves-acp-state");
+    let preserved_cwd = PathBuf::from("/workspace/override");
+    harness.router.active_runtime_mut().effective_working_directory = Some(preserved_cwd.clone());
+    harness.router.active_runtime_mut().effective_bootstrap_mcp_servers =
+        vec!["filesystem".to_owned(), "search".to_owned()];
+
+    let result = harness.run_command("/resume root-new");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness.router.active_runtime().effective_working_directory.as_ref(),
+        Some(&preserved_cwd)
+    );
+    assert_eq!(
+        harness.router.active_runtime().effective_bootstrap_mcp_servers,
+        vec!["filesystem".to_owned(), "search".to_owned()]
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn dispatch_palette_resume_selection_returns_shared_resume_command() {
     let mut harness = resume_test_harness("resume-picker-dispatch");
     let original_session_id = harness.router.active_runtime().session_id.clone();
@@ -618,6 +641,44 @@ fn dispatch_palette_resume_selection_returns_shared_resume_command() {
     assert_eq!(command, Some("/resume root-new".to_owned()));
     assert_eq!(harness.router.active_runtime().session_id, original_session_id);
     assert_eq!(harness.latest_transcript(), transcript_before);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn mouse_resume_picker_selection_routes_through_shared_resume_command() {
+    let mut harness = resume_test_harness("resume-picker-mouse-route");
+    harness
+        .run_command("/resume")
+        .expect("open resume picker");
+    assert_eq!(harness.app.focus, Focus::CommandPalette);
+    harness
+        .terminal
+        .draw(|f| harness.app.render(f))
+        .expect("draw resume picker");
+
+    assert!(harness.app.last_palette_area.height >= 3);
+    assert_eq!(harness.app.command_palette.resume_entries().len(), 2);
+    assert_eq!(
+        harness.app.command_palette.resume_entries()[0].session_id,
+        "root-new"
+    );
+    let palette_row = harness.app.last_palette_area.y.saturating_add(1);
+    let palette_col = harness.app.last_palette_area.x.saturating_add(1);
+    let action = harness.app.command_palette.handle_mouse(
+        mouse(MouseEventKind::Down(MouseButton::Left), palette_col, palette_row),
+        harness.app.last_palette_area,
+    );
+
+    let result = harness.run_command(match action {
+        Some(CommandAction::SelectResumeSession { ref session_id }) => {
+            format!("/resume {session_id}")
+        }
+        other => panic!("expected resume selection action, got {other:?}"),
+    }
+    .as_str());
+
+    assert!(result.is_ok(), "mouse-selected resume command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
 }
 
 #[cfg(feature = "memory-sqlite")]

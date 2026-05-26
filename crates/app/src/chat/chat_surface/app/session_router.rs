@@ -128,11 +128,20 @@ impl SessionRouter {
         session_hint: Option<&str>,
         session_requirement: crate::chat::CliSessionRequirement,
     ) -> crate::CliResult<ActiveSessionRoute> {
+        let preserved_options = crate::chat::CliChatOptions {
+            acp_requested: false,
+            acp_event_stream: false,
+            acp_bootstrap_mcp_servers: self
+                .active_runtime()
+                .effective_bootstrap_mcp_servers
+                .clone(),
+            acp_working_directory: self.active_runtime().effective_working_directory.clone(),
+        };
         let runtime = crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
             self.active_runtime().resolved_path.clone(),
             self.active_runtime().config.clone(),
             session_hint,
-            &crate::chat::CliChatOptions::default(),
+            &preserved_options,
             self.active_runtime().runtime_kernel.cloned_kernel_context(),
             session_requirement,
         )?;
