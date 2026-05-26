@@ -363,14 +363,14 @@ mod latest_cli_session_selector_tests {
             .iter()
             .map(|candidate| candidate.session_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["root-user"]);
+        assert_eq!(ids, vec!["root-user", "unrelated-root"]);
 
         cleanup_selector_test_memory(&root);
     }
 
     #[test]
-    fn resume_candidates_use_visibility_scope_for_legacy_current_session() {
-        let (root, memory_config) = init_selector_test_memory("resume-legacy-visibility");
+    fn resume_candidates_include_global_roots_for_legacy_current_session() {
+        let (root, memory_config) = init_selector_test_memory("resume-legacy-global");
         let repo = SessionRepository::new(&memory_config).expect("selector repository");
 
         append_session_turn(&memory_config, "legacy-current", "user", "legacy current");
@@ -388,7 +388,11 @@ mod latest_cli_session_selector_tests {
         let candidates = resume_candidates_for_root_sessions(&memory_config, "legacy-current")
             .expect("load candidates");
 
-        assert!(candidates.is_empty());
+        let ids = candidates
+            .iter()
+            .map(|candidate| candidate.session_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["unrelated-root"]);
 
         cleanup_selector_test_memory(&root);
     }
