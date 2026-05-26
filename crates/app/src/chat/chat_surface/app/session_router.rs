@@ -95,6 +95,22 @@ impl SessionRouter {
         self.created_this_run_session_ids.clone()
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    pub(crate) fn cleanup_created_empty_sessions(
+        &self,
+        memory_config: &crate::session::store::SessionStoreConfig,
+    ) -> crate::CliResult<()> {
+        let repo = crate::session::repository::SessionRepository::new(memory_config)?;
+        for session_id in crate::session::created_empty_sessions_for_cleanup(
+            memory_config,
+            self.created_this_run_session_ids.as_slice(),
+        )? {
+            let _ = repo.delete_session_tool_policy(session_id.as_str());
+            let _ = crate::session::delete_session_by_id(memory_config, session_id.as_str())?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn install_created_route(&mut self, active_route: ActiveSessionRoute) {
         self.install_route(active_route);
     }

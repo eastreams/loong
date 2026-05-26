@@ -92,6 +92,15 @@ pub fn created_empty_sessions_for_cleanup(
     Ok(doomed)
 }
 
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn delete_session_by_id(
+    store_config: &store::SessionStoreConfig,
+    session_id: &str,
+) -> crate::CliResult<bool> {
+    let repo = repository::SessionRepository::new(store_config)?;
+    repo.delete_session(session_id)
+}
+
 pub(crate) const DELEGATE_CANCEL_REQUESTED_EVENT_KIND: &str = "delegate_cancel_requested";
 pub(crate) const DELEGATE_CANCELLED_EVENT_KIND: &str = "delegate_cancelled";
 pub(crate) const DELEGATE_CANCEL_REASON_OPERATOR_REQUESTED: &str = "operator_requested";

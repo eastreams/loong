@@ -546,11 +546,22 @@ fn resume_test_harness(label: &str) -> ResumeCommandHarness {
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn cleanup_test_harness(label: &str) -> CleanupTestHarness {
+    CleanupTestHarness::new(label)
+}
+
+#[cfg(feature = "memory-sqlite")]
 struct ResumeCommandHarness {
     terminal: Terminal<TestBackend>,
     app: App,
     router: SessionRouter,
     options: CliChatOptions,
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct CleanupTestHarness {
+    memory_config: SessionStoreConfig,
+    router: SessionRouter,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -633,6 +644,55 @@ impl ResumeCommandHarness {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl CleanupTestHarness {
+    fn new(label: &str) -> Self {
+        let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+            PathBuf::from(format!("/tmp/{label}.toml")),
+            label,
+        ));
+        let memory_config = created_route.runtime.memory_config.clone();
+        let router = SessionRouter::new(created_route);
+
+        Self {
+            memory_config,
+            router,
+        }
+    }
+
+    fn create_created_this_run_empty_session(&self) -> String {
+        self.router.active_runtime().session_id.clone()
+    }
+
+    fn create_created_this_run_session_with_user_turn(&self) -> String {
+        let session_id = self.router.active_runtime().session_id.clone();
+        store::append_session_turn_direct(
+            session_id.as_str(),
+            "user",
+            "keep this session",
+            &self.memory_config,
+        )
+        .expect("append user turn");
+        session_id
+    }
+
+    fn run_exit_cleanup(&self) -> crate::CliResult<()> {
+        self.router
+            .cleanup_created_empty_sessions(&self.memory_config)
+    }
+
+    fn session_exists(&self, session_id: &str) -> bool {
+        let repo = SessionRepository::new(&self.memory_config).expect("session repository");
+        repo.load_session(session_id)
+            .expect("load session")
+            .is_some()
+    }
+
+    fn session_missing(&self, session_id: &str) -> bool {
+        !self.session_exists(session_id)
     }
 }
 
@@ -4780,4 +4840,25 @@ fn finish_stage_turn_off_personalization_updates_finish_subtitle() {
 
     assert!(rendered.contains("Loong 不会再主动弹个性化提示"));
     assert!(rendered.contains("loong personalize"));
+}
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn exit_cleanup_deletes_created_empty_session() {
+    let harness = cleanup_test_harness("exit-cleanup-empty");
+    let doomed = harness.create_created_this_run_empty_session();
+
+    harness.run_exit_cleanup().expect("cleanup succeeds");
+
+    assert!(harness.session_missing(doomed.as_str()));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn exit_cleanup_keeps_created_session_after_user_turn() {
+    let harness = cleanup_test_harness("exit-cleanup-user-turn");
+    let kept = harness.create_created_this_run_session_with_user_turn();
+
+    harness.run_exit_cleanup().expect("cleanup succeeds");
+
+    assert!(harness.session_exists(kept.as_str()));
 }

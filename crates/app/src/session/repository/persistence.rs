@@ -543,6 +543,19 @@ impl SessionRepository {
         Ok(affected > 0)
     }
 
+    pub fn delete_session(&self, session_id: &str) -> Result<bool, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        let affected = conn
+            .execute(
+                "DELETE FROM sessions
+                 WHERE session_id = ?1",
+                params![session_id],
+            )
+            .map_err(|error| format!("delete session failed: {error}"))?;
+        Ok(affected > 0)
+    }
+
     pub fn ensure_control_plane_pairing_request(
         &self,
         record: NewControlPlanePairingRequestRecord,

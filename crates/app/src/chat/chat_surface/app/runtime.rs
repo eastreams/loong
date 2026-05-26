@@ -621,6 +621,13 @@ pub async fn run_app<B: Backend>(
             }
         }
     }
+
     clear_app_terminal_title(&mut app);
+
+    let cleanup_result = router.cleanup_created_empty_sessions(&router.active_runtime().memory_config);
+    if let Err(error) = cleanup_result {
+        eprintln!("non-fatal tui session cleanup failure: {error}");
+    }
+
     Ok(())
 }
