@@ -414,18 +414,6 @@ impl CommandPalette {
         self.mode == CommandPaletteMode::SlashCommands
     }
 
-    pub(crate) fn is_resume_picker_mode(&self) -> bool {
-        self.mode == CommandPaletteMode::ResumePicker
-    }
-
-    pub(crate) fn resume_entries(&self) -> &[ResumePaletteEntry] {
-        self.resume_entries.as_slice()
-    }
-
-    pub(crate) fn resume_status(&self) -> Option<&str> {
-        self.resume_status.as_deref()
-    }
-
     pub fn query_text(&self) -> &str {
         self.query.as_str()
     }

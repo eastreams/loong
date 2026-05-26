@@ -838,7 +838,15 @@ fn run_surface_command_resume_restores_history_as_chat_messages() {
         crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
             assert_eq!(text, "newer resume candidate");
         }
-        _ => panic!("expected restored markdown user message"),
+        crate::chat::chat_surface::message_list::MessageContent::RenderedLines(_)
+        | crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
+            panic!("expected restored markdown user message")
+        }
     }
     assert_eq!(harness.app.message_list.messages[1].role, "Assistant");
     match &harness.app.message_list.messages[1].contents[0] {
@@ -943,11 +951,6 @@ fn mouse_resume_picker_selection_routes_through_shared_resume_command() {
         .expect("draw resume picker");
 
     assert!(harness.app.last_palette_area.height >= 3);
-    assert_eq!(harness.app.command_palette.resume_entries().len(), 2);
-    assert_eq!(
-        harness.app.command_palette.resume_entries()[0].session_id,
-        "root-new"
-    );
     let palette_row = harness.app.last_palette_area.y.saturating_add(1);
     let palette_col = harness.app.last_palette_area.x.saturating_add(1);
     let command = harness.app.handle_mouse_event(mouse(

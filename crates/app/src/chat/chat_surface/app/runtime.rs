@@ -437,10 +437,9 @@ pub async fn run_app<B: Backend>(
                             .as_mut()
                             .map(|state| state.handle_key(key))
                             .unwrap_or(StartupOnboardingAction::Ignored);
-                        if app.apply_startup_onboarding_action(
-                            action,
-                            router.active_runtime_mut(),
-                        )? {
+                        if app
+                            .apply_startup_onboarding_action(action, router.active_runtime_mut())?
+                        {
                             dirty = true;
                             continue;
                         }
@@ -533,22 +532,11 @@ pub async fn run_app<B: Backend>(
                         if let Some(command) = recognized_surface_command(trimmed_msg) {
                             command_to_run = Some(command);
                         } else if submitted_message_is_follow_up(&app, &msg) {
-                            start_turn(
-                                terminal,
-                                &mut app,
-                                router.active_runtime_mut(),
-                                msg,
-                                false,
-                            )
-                            .await?;
+                            start_turn(terminal, &mut app, router.active_runtime_mut(), msg, false)
+                                .await?;
                         } else {
-                            submit_user_turn(
-                                terminal,
-                                &mut app,
-                                router.active_runtime_mut(),
-                                msg,
-                            )
-                            .await?;
+                            submit_user_turn(terminal, &mut app, router.active_runtime_mut(), msg)
+                                .await?;
                         }
                     }
 
@@ -558,14 +546,8 @@ pub async fn run_app<B: Backend>(
                             break;
                         }
 
-                        run_surface_command(
-                            terminal,
-                            &mut app,
-                            &mut router,
-                            &options,
-                            &command,
-                        )
-                        .await?;
+                        run_surface_command(terminal, &mut app, &mut router, &options, &command)
+                            .await?;
                     }
                     dirty = true;
                 }
@@ -575,14 +557,8 @@ pub async fn run_app<B: Backend>(
                             clear_app_terminal_title(&mut app);
                             break;
                         }
-                        run_surface_command(
-                            terminal,
-                            &mut app,
-                            &mut router,
-                            &options,
-                            &command,
-                        )
-                        .await?;
+                        run_surface_command(terminal, &mut app, &mut router, &options, &command)
+                            .await?;
                     }
                     dirty = true;
                 }
@@ -624,10 +600,7 @@ pub async fn run_app<B: Backend>(
 
     clear_app_terminal_title(&mut app);
 
-    let cleanup_result = router.cleanup_created_empty_sessions(&router.active_runtime().memory_config);
-    if let Err(error) = cleanup_result {
-        eprintln!("non-fatal tui session cleanup failure: {error}");
-    }
+    let _ = router.cleanup_created_empty_sessions(&router.active_runtime().memory_config);
 
     Ok(())
 }

@@ -768,23 +768,6 @@ fn current_working_directory_display(runtime: &CliTurnRuntime) -> String {
     current_directory.display().to_string()
 }
 
-fn render_new_conversation_lines_with_width(width: usize) -> Vec<String> {
-    let message_spec = TuiMessageSpec {
-        role: "new".to_owned(),
-        caption: Some("fresh conversation".to_owned()),
-        sections: vec![TuiSectionSpec::Callout {
-            tone: TuiCalloutTone::Info,
-            title: Some("ready".to_owned()),
-            lines: vec![
-                "The visible transcript has been cleared and the composer is ready for the next turn."
-                    .to_owned(),
-            ],
-        }],
-        footer_lines: vec!["Type immediately; no extra focus step is needed.".to_owned()],
-    };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
-}
-
 fn render_session_transition_lines_with_width(
     result: Result<String, String>,
     width: usize,
@@ -1269,4 +1252,3 @@ fn render_title_command_lines_with_width(command: &str, args: &str, width: usize
     };
     super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
-

@@ -546,10 +546,11 @@ async fn run_surface_command<B: Backend>(
         }
         "/new" => {
             if app.pending_turn {
-                app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
-                    Err("Cannot start a new session while a turn is pending.".to_owned()),
-                    width,
-                ));
+                app.message_list
+                    .add_rendered_lines(render_session_transition_lines_with_width(
+                        Err("Cannot start a new session while a turn is pending.".to_owned()),
+                        width,
+                    ));
                 app.focus = Focus::Composer;
                 return Ok(());
             }
@@ -666,10 +667,11 @@ async fn run_surface_command<B: Backend>(
         }
         "/resume" => {
             if app.pending_turn {
-                app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
-                    Err("Cannot resume another session while a turn is pending.".to_owned()),
-                    width,
-                ));
+                app.message_list
+                    .add_rendered_lines(render_session_transition_lines_with_width(
+                        Err("Cannot resume another session while a turn is pending.".to_owned()),
+                        width,
+                    ));
                 app.focus = Focus::Composer;
                 return Ok(());
             }
@@ -695,53 +697,58 @@ async fn run_surface_command<B: Backend>(
                         );
                         app.inline_skill_popup_active = false;
                         app.focus = Focus::CommandPalette;
-                        return Ok(());
+                        Ok(())
                     }
                     #[cfg(not(feature = "memory-sqlite"))]
                     {
-                        app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
-                            Err("Resume picker requires sqlite-backed memory".to_owned()),
-                            width,
-                        ));
+                        app.message_list.add_rendered_lines(
+                            render_session_transition_lines_with_width(
+                                Err("Resume picker requires sqlite-backed memory".to_owned()),
+                                width,
+                            ),
+                        );
                         app.focus = Focus::Composer;
-                        return Ok(());
+                        Ok(())
                     }
                 }
                 ResumeInvocation::Latest => {
                     #[cfg(feature = "memory-sqlite")]
                     {
-                    let latest = router
-                        .latest_resume_target_session_id()?
-                        .ok_or_else(|| "No resumable session available.".to_owned());
-                    let result = match latest {
-                        Ok(session_id) => {
-                            router
-                                .begin_resume_session(
-                                    session_id.as_str(),
-                                    SessionTransitionReason::UserRequestedResume,
-                                )
-                                .await
+                        let latest = router
+                            .latest_resume_target_session_id()?
+                            .ok_or_else(|| "No resumable session available.".to_owned());
+                        let result = match latest {
+                            Ok(session_id) => {
+                                router
+                                    .begin_resume_session(
+                                        session_id.as_str(),
+                                        SessionTransitionReason::UserRequestedResume,
+                                    )
+                                    .await
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if result.is_ok() {
+                            replace_app_transcript_with_active_route(app, router.active_route());
+                            refresh_app_cwd_dependent_state(app, router.active_runtime());
                         }
-                        Err(error) => Err(error),
-                    };
-                    if result.is_ok() {
-                        replace_app_transcript_with_active_route(app, router.active_route());
-                        refresh_app_cwd_dependent_state(app, router.active_runtime());
-                    }
-                    app.message_list
-                        .add_rendered_lines(render_session_transition_lines_with_width(
-                            result.map(|outcome| outcome.message),
-                            width,
-                        ));
-                    app.focus = Focus::Composer;
-                    Ok(())
+                        app.message_list.add_rendered_lines(
+                            render_session_transition_lines_with_width(
+                                result.map(|outcome| outcome.message),
+                                width,
+                            ),
+                        );
+                        app.focus = Focus::Composer;
+                        Ok(())
                     }
                     #[cfg(not(feature = "memory-sqlite"))]
                     {
-                        app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
-                            Err("Resume latest requires sqlite-backed memory".to_owned()),
-                            width,
-                        ));
+                        app.message_list.add_rendered_lines(
+                            render_session_transition_lines_with_width(
+                                Err("Resume latest requires sqlite-backed memory".to_owned()),
+                                width,
+                            ),
+                        );
                         app.focus = Focus::Composer;
                         Ok(())
                     }
@@ -757,11 +764,12 @@ async fn run_surface_command<B: Backend>(
                         replace_app_transcript_with_active_route(app, router.active_route());
                         refresh_app_cwd_dependent_state(app, router.active_runtime());
                     }
-                    app.message_list
-                        .add_rendered_lines(render_session_transition_lines_with_width(
+                    app.message_list.add_rendered_lines(
+                        render_session_transition_lines_with_width(
                             result.map(|outcome| outcome.message),
                             width,
-                        ));
+                        ),
+                    );
                     app.focus = Focus::Composer;
                     Ok(())
                 }
@@ -840,4 +848,3 @@ fn is_internal_history_payload(content: &str) -> bool {
     let trimmed = content.trim();
     trimmed.starts_with('{') && trimmed.contains("\"_loong_internal\":true")
 }
-
