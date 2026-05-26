@@ -39,13 +39,10 @@ pub(crate) fn resume_candidates_for_root_sessions(
     current_session_id: &str,
 ) -> crate::CliResult<Vec<ResumeRootSessionCandidate>> {
     let repo = repository::SessionRepository::new(store_config)?;
-    let sessions = repo.list_visible_sessions(current_session_id)?;
+    let sessions = repo.list_resumable_root_session_summaries()?;
     let mut candidates = Vec::new();
 
     for session in sessions {
-        if session.kind != repository::SessionKind::Root {
-            continue;
-        }
         if session.session_id == current_session_id {
             continue;
         }
@@ -475,6 +472,39 @@ mod latest_cli_session_selector_tests {
             .collect::<Vec<_>>();
 
         assert_eq!(ids, vec!["root-user-buried"]);
+
+        cleanup_selector_test_memory(&root);
+    }
+
+    #[test]
+    fn resume_candidates_include_other_independent_root_sessions() {
+        let (root, memory_config) = init_selector_test_memory("resume-independent-roots");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .clone()
+            .expect("selector sqlite path");
+        let repo = SessionRepository::new(&memory_config).expect("selector repository");
+
+        create_root_session(&repo, "current-root");
+        append_session_turn(&memory_config, "current-root", "user", "current root turn");
+        set_session_updated_at(&sqlite_path, "current-root", 100);
+
+        create_root_session(&repo, "other-root-new");
+        append_session_turn(&memory_config, "other-root-new", "user", "other newer turn");
+        set_session_updated_at(&sqlite_path, "other-root-new", 300);
+
+        create_root_session(&repo, "other-root-old");
+        append_session_turn(&memory_config, "other-root-old", "user", "other older turn");
+        set_session_updated_at(&sqlite_path, "other-root-old", 200);
+
+        let candidates = resume_candidates_for_root_sessions(&memory_config, "current-root")
+            .expect("load candidates");
+        let ids = candidates
+            .iter()
+            .map(|candidate| candidate.session_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["other-root-new", "other-root-old"]);
 
         cleanup_selector_test_memory(&root);
     }
