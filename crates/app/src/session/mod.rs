@@ -325,7 +325,7 @@ mod latest_cli_session_selector_tests {
         repo.create_session(NewSessionRecord {
             session_id: "empty-root".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: Some("current-session".to_owned()),
+            parent_session_id: None,
             label: Some("empty-root".to_owned()),
             state: SessionState::Ready,
         })
@@ -334,7 +334,7 @@ mod latest_cli_session_selector_tests {
         repo.create_session(NewSessionRecord {
             session_id: "root-user".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: Some("current-session".to_owned()),
+            parent_session_id: None,
             label: Some("root-user".to_owned()),
             state: SessionState::Ready,
         })
@@ -448,7 +448,7 @@ mod latest_cli_session_selector_tests {
         repo.create_session(NewSessionRecord {
             session_id: "root-user-buried".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: Some("current-session".to_owned()),
+            parent_session_id: None,
             label: Some("root-user-buried".to_owned()),
             state: SessionState::Ready,
         })

@@ -39,6 +39,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+fn test_config_path(label: &str) -> PathBuf {
+    unique_temp_dir(label).join("loong.toml")
+}
+
 fn blank_app() -> App {
     App {
         message_list: MessageList::new(),
@@ -581,7 +585,7 @@ impl ResumeCommandHarness {
         repo.create_session(NewSessionRecord {
             session_id: "root-old".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: Some("current-root".to_owned()),
+            parent_session_id: None,
             label: Some("root-old".to_owned()),
             state: SessionState::Ready,
         })
@@ -589,7 +593,7 @@ impl ResumeCommandHarness {
         repo.create_session(NewSessionRecord {
             session_id: "root-new".to_owned(),
             kind: SessionKind::Root,
-            parent_session_id: Some("current-root".to_owned()),
+            parent_session_id: None,
             label: Some("root-new".to_owned()),
             state: SessionState::Ready,
         })
@@ -611,7 +615,7 @@ impl ResumeCommandHarness {
         .expect("append internal assistant payload");
 
         let runtime = initialize_cli_turn_runtime_with_loaded_config(
-            PathBuf::from(format!("/tmp/{label}.toml")),
+            test_config_path(&format!("{label}-resume-harness")),
             config,
             Some("current-root"),
             &CliChatOptions::default(),
@@ -663,7 +667,7 @@ impl ResumeCommandHarness {
 impl CleanupTestHarness {
     fn new(label: &str) -> Self {
         let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
-            PathBuf::from(format!("/tmp/{label}.toml")),
+            test_config_path(&format!("{label}-cleanup-harness")),
             label,
         ));
         let memory_config = created_route.runtime.memory_config.clone();
