@@ -796,8 +796,39 @@ async fn run_surface_command<B: Backend>(
 fn replace_app_transcript_with_active_route(app: &mut App, route: &ActiveSessionRoute) {
     app.message_list.clear_transcript();
     if !route.loaded_history_lines.is_empty() {
-        app.message_list
-            .add_rendered_lines(route.loaded_history_lines.clone());
+        restore_message_list_history(app, route.loaded_history_lines.as_slice());
     }
+}
+
+fn restore_message_list_history(app: &mut App, history_lines: &[String]) {
+    for line in history_lines {
+        if let Some((role, content)) = parse_history_turn_line(line) {
+            if role.eq_ignore_ascii_case("user") {
+                app.message_list.add_user_message(content.to_owned());
+            } else if role.eq_ignore_ascii_case("assistant") {
+                app.message_list.add_assistant_message(content.to_owned());
+            } else {
+                app.message_list.add_rendered_lines(vec![line.clone()]);
+            }
+        } else if let Some(content) = line.strip_prefix("user: ") {
+            app.message_list.add_user_message(content.to_owned());
+        } else if let Some(content) = line.strip_prefix("assistant: ") {
+            app.message_list.add_assistant_message(content.to_owned());
+        } else {
+            app.message_list.add_rendered_lines(vec![line.clone()]);
+        }
+    }
+}
+
+fn parse_history_turn_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    let after_timestamp = if trimmed.starts_with('[') {
+        let end = trimmed.find(']')?;
+        trimmed.get(end + 1..)?.trim_start()
+    } else {
+        trimmed
+    };
+    let (role, content) = after_timestamp.split_once(": ")?;
+    Some((role.trim(), content))
 }
 

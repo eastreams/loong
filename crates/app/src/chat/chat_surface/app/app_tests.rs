@@ -596,8 +596,12 @@ impl ResumeCommandHarness {
         .expect("create new session");
         store::append_session_turn_direct("root-old", "user", "older resume candidate", &memory_config)
             .expect("append old session turn");
+        store::append_session_turn_direct("root-old", "assistant", "older resume reply", &memory_config)
+            .expect("append old session assistant turn");
         store::append_session_turn_direct("root-new", "user", "newer resume candidate", &memory_config)
             .expect("append new session turn");
+        store::append_session_turn_direct("root-new", "assistant", "newer resume reply", &memory_config)
+            .expect("append new session assistant turn");
 
         let runtime = initialize_cli_turn_runtime_with_loaded_config(
             PathBuf::from(format!("/tmp/{label}.toml")),
@@ -774,6 +778,33 @@ fn run_surface_command_resume_rebuilds_route_through_history_bootstrap_path() {
     assert!(result.is_ok(), "command should succeed");
     assert_eq!(harness.router.active_runtime().session_id, "root-new");
     assert!(transcript.contains("newer resume candidate"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_restores_history_as_chat_messages() {
+    let mut harness = resume_test_harness("resume-history-messages");
+
+    let result = harness.run_command("/resume root-new");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(harness.app.message_list.messages.len(), 3);
+    assert_eq!(harness.app.message_list.messages[0].role, "You");
+    match &harness.app.message_list.messages[0].contents[0] {
+        crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+            assert_eq!(text, "newer resume candidate");
+        }
+        _ => panic!("expected restored markdown user message"),
+    }
+    assert_eq!(harness.app.message_list.messages[1].role, "Assistant");
+    match &harness.app.message_list.messages[1].contents[0] {
+        crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+            assert_eq!(text, "newer resume reply");
+        }
+        _ => panic!("expected restored markdown assistant message"),
+    }
+    assert_eq!(harness.app.message_list.messages[2].role, "System");
 }
 
 #[cfg(feature = "memory-sqlite")]
