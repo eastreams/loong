@@ -253,21 +253,9 @@ fn dispatch_palette_action(
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
-            let result = router.begin_resume_session(
-                session_id.as_str(),
-                SessionTransitionReason::UserRequestedResume,
-            );
-            if result.is_ok() {
-                refresh_app_cwd_dependent_state(app, router.active_runtime());
-            }
-            app.message_list
-                .add_rendered_lines(render_session_transition_lines_with_width(
-                    result.map(|outcome| outcome.message),
-                    width,
-                ));
             app.inline_skill_popup_active = false;
             app.focus = Focus::Composer;
-            Ok(None)
+            Ok(Some(format!("/resume {session_id}")))
         }
         CommandAction::OpenSettings(focus) => {
             if should_clear_slash_buffer {

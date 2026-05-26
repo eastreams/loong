@@ -600,6 +600,28 @@ fn run_surface_command_resume_latest_switches_to_first_candidate() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn dispatch_palette_resume_selection_returns_shared_resume_command() {
+    let mut harness = resume_test_harness("resume-picker-dispatch");
+    let original_session_id = harness.router.active_runtime().session_id.clone();
+    let transcript_before = harness.latest_transcript();
+
+    let command = super::dispatch_palette_action(
+        &mut harness.app,
+        &mut harness.router,
+        80,
+        CommandAction::SelectResumeSession {
+            session_id: "root-new".to_owned(),
+        },
+    )
+    .expect("dispatch result");
+
+    assert_eq!(command, Some("/resume root-new".to_owned()));
+    assert_eq!(harness.router.active_runtime().session_id, original_session_id);
+    assert_eq!(harness.latest_transcript(), transcript_before);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn run_surface_command_new_is_blocked_while_pending_turn() {
     let mut harness = resume_test_harness("new-pending");
     harness.app.pending_turn = true;
