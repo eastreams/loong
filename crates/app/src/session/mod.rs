@@ -359,10 +359,11 @@ mod latest_cli_session_selector_tests {
         let candidates = resume_candidates_for_root_sessions(&memory_config, "current-session")
             .expect("load candidates");
 
-        let ids = candidates
+        let mut ids = candidates
             .iter()
             .map(|candidate| candidate.session_id.as_str())
             .collect::<Vec<_>>();
+        ids.sort();
         assert_eq!(ids, vec!["root-user", "unrelated-root"]);
 
         cleanup_selector_test_memory(&root);
