@@ -545,15 +545,57 @@ impl SessionRepository {
 
     pub fn delete_session(&self, session_id: &str) -> Result<bool, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
-        let conn = self.open_connection()?;
-        let affected = conn
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session delete transaction failed: {error}"))?;
+
+        tx.execute(
+            "DELETE FROM session_tool_policies
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session tool policy during session delete failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM session_artifacts
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session artifacts failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM session_heads
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session heads failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM session_nodes
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session nodes failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM session_events
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session events failed: {error}"))?;
+        let deleted_session_rows = tx
             .execute(
-                "DELETE FROM sessions
-                 WHERE session_id = ?1",
-                params![session_id],
+            "DELETE FROM sessions
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session failed: {error}"))?;
+        tx.execute(
+                "DELETE FROM session_route_bindings
+                 WHERE active_session_id = ?1 OR route_session_id = ?1",
+                params![session_id.as_str()],
             )
-            .map_err(|error| format!("delete session failed: {error}"))?;
-        Ok(affected > 0)
+            .map_err(|error| format!("delete session route bindings failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit session delete transaction failed: {error}"))?;
+        Ok(deleted_session_rows > 0)
     }
 
     pub fn ensure_control_plane_pairing_request(

@@ -694,6 +694,17 @@ impl CleanupTestHarness {
     fn session_missing(&self, session_id: &str) -> bool {
         !self.session_exists(session_id)
     }
+
+    fn session_tree_missing(&self, session_id: &str) -> bool {
+        let repo = SessionRepository::new(&self.memory_config).expect("session repository");
+        repo.list_session_nodes(session_id)
+            .expect("list session nodes")
+            .is_empty()
+            && repo
+                .list_session_heads(session_id)
+                .expect("list session heads")
+                .is_empty()
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4850,6 +4861,7 @@ fn exit_cleanup_deletes_created_empty_session() {
     harness.run_exit_cleanup().expect("cleanup succeeds");
 
     assert!(harness.session_missing(doomed.as_str()));
+    assert!(harness.session_tree_missing(doomed.as_str()));
 }
 
 #[cfg(feature = "memory-sqlite")]
