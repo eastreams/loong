@@ -14,7 +14,6 @@ pub(crate) enum SessionTransitionReason {
 #[allow(dead_code)]
 pub(crate) struct SessionTransitionOutcome {
     pub(crate) message: String,
-    pub(crate) switched_session_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -96,7 +95,6 @@ impl SessionRouter {
         self.switch_confirm = None;
         Ok(SessionTransitionOutcome {
             message: session_transition_success_message(reason, session_id.as_str()),
-            switched_session_id: Some(session_id),
         })
     }
 
@@ -114,7 +112,6 @@ impl SessionRouter {
         self.switch_confirm = None;
         Ok(SessionTransitionOutcome {
             message: session_transition_success_message(reason, session_id.as_str()),
-            switched_session_id: Some(session_id),
         })
     }
 
