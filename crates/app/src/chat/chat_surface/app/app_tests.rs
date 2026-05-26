@@ -32,6 +32,7 @@ use crate::{
     },
 };
 use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Style};
+use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
@@ -704,6 +705,39 @@ impl CleanupTestHarness {
                 .list_session_heads(session_id)
                 .expect("list session heads")
                 .is_empty()
+    }
+
+    fn session_owned_rows_missing(&self, session_id: &str) -> bool {
+        let sqlite_path = self
+            .memory_config
+            .sqlite_path
+            .clone()
+            .expect("sqlite path");
+        let conn = Connection::open(sqlite_path).expect("open cleanup sqlite connection");
+        let tables = [
+            ("session_artifacts", "session_id"),
+            ("session_terminal_outcomes", "session_id"),
+            ("approval_requests", "session_id"),
+            ("approval_grants", "scope_session_id"),
+            ("session_tool_consent", "scope_session_id"),
+        ];
+        let route_binding_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_route_bindings WHERE active_session_id = ?1 OR route_session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("count session route bindings");
+        if route_binding_count != 0 {
+            return false;
+        }
+        tables.iter().all(|(table, column)| {
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1");
+            let count: i64 = conn
+                .query_row(sql.as_str(), params![session_id], |row| row.get(0))
+                .expect("count session-owned rows");
+            count == 0
+        })
     }
 }
 
@@ -4862,6 +4896,7 @@ fn exit_cleanup_deletes_created_empty_session() {
 
     assert!(harness.session_missing(doomed.as_str()));
     assert!(harness.session_tree_missing(doomed.as_str()));
+    assert!(harness.session_owned_rows_missing(doomed.as_str()));
 }
 
 #[cfg(feature = "memory-sqlite")]

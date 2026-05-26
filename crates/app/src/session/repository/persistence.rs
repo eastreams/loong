@@ -563,6 +563,30 @@ impl SessionRepository {
         )
         .map_err(|error| format!("delete session artifacts failed: {error}"))?;
         tx.execute(
+            "DELETE FROM session_terminal_outcomes
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session terminal outcomes failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM approval_requests
+             WHERE session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete approval requests failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM approval_grants
+             WHERE scope_session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete approval grants failed: {error}"))?;
+        tx.execute(
+            "DELETE FROM session_tool_consent
+             WHERE scope_session_id = ?1",
+            params![session_id.as_str()],
+        )
+        .map_err(|error| format!("delete session tool consent failed: {error}"))?;
+        tx.execute(
             "DELETE FROM session_heads
              WHERE session_id = ?1",
             params![session_id.as_str()],
