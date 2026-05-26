@@ -806,14 +806,18 @@ fn restore_message_list_history(app: &mut App, history_lines: &[String]) {
             if role.eq_ignore_ascii_case("user") {
                 app.message_list.add_user_message(content.to_owned());
             } else if role.eq_ignore_ascii_case("assistant") {
-                app.message_list.add_assistant_message(content.to_owned());
+                if !is_internal_history_payload(content) {
+                    app.message_list.add_assistant_message(content.to_owned());
+                }
             } else {
                 app.message_list.add_rendered_lines(vec![line.clone()]);
             }
         } else if let Some(content) = line.strip_prefix("user: ") {
             app.message_list.add_user_message(content.to_owned());
         } else if let Some(content) = line.strip_prefix("assistant: ") {
-            app.message_list.add_assistant_message(content.to_owned());
+            if !is_internal_history_payload(content) {
+                app.message_list.add_assistant_message(content.to_owned());
+            }
         } else {
             app.message_list.add_rendered_lines(vec![line.clone()]);
         }
@@ -830,5 +834,10 @@ fn parse_history_turn_line(line: &str) -> Option<(&str, &str)> {
     };
     let (role, content) = after_timestamp.split_once(": ")?;
     Some((role.trim(), content))
+}
+
+fn is_internal_history_payload(content: &str) -> bool {
+    let trimmed = content.trim();
+    trimmed.starts_with('{') && trimmed.contains("\"_loong_internal\":true")
 }
 

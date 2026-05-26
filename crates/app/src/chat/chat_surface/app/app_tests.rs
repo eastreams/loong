@@ -602,6 +602,13 @@ impl ResumeCommandHarness {
             .expect("append new session turn");
         store::append_session_turn_direct("root-new", "assistant", "newer resume reply", &memory_config)
             .expect("append new session assistant turn");
+        store::append_session_turn_direct(
+            "root-new",
+            "assistant",
+            r#"{"_loong_internal":true,"event":"turn_checkpoint","payload":{"stage":"finalized"}}"#,
+            &memory_config,
+        )
+        .expect("append internal assistant payload");
 
         let runtime = initialize_cli_turn_runtime_with_loaded_config(
             PathBuf::from(format!("/tmp/{label}.toml")),
@@ -805,6 +812,22 @@ fn run_surface_command_resume_restores_history_as_chat_messages() {
         _ => panic!("expected restored markdown assistant message"),
     }
     assert_eq!(harness.app.message_list.messages[2].role, "System");
+    assert!(!transcript_contains_internal_payload(&harness.app));
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn transcript_contains_internal_payload(app: &App) -> bool {
+    app.message_list.messages.iter().any(|message| {
+        message.contents.iter().any(|content| match content {
+            crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+                text.contains("\"_loong_internal\":true")
+            }
+            crate::chat::chat_surface::message_list::MessageContent::RenderedLines(lines) => lines
+                .iter()
+                .any(|line| line.contains("\"_loong_internal\":true")),
+            _ => false,
+        })
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
