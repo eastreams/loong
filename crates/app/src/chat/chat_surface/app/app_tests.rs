@@ -638,7 +638,12 @@ fn dispatch_palette_resume_selection_returns_shared_resume_command() {
     )
     .expect("dispatch result");
 
-    assert_eq!(command, Some("/resume root-new".to_owned()));
+    assert_eq!(
+        command,
+        super::command_action_command(&CommandAction::SelectResumeSession {
+            session_id: "root-new".to_owned(),
+        })
+    );
     assert_eq!(harness.router.active_runtime().session_id, original_session_id);
     assert_eq!(harness.latest_transcript(), transcript_before);
 }
@@ -664,18 +669,24 @@ fn mouse_resume_picker_selection_routes_through_shared_resume_command() {
     );
     let palette_row = harness.app.last_palette_area.y.saturating_add(1);
     let palette_col = harness.app.last_palette_area.x.saturating_add(1);
-    let action = harness.app.command_palette.handle_mouse(
-        mouse(MouseEventKind::Down(MouseButton::Left), palette_col, palette_row),
-        harness.app.last_palette_area,
+    let command = harness.app.handle_mouse_event(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        palette_col,
+        palette_row,
+    ));
+
+    assert_eq!(
+        command,
+        super::command_action_command(&CommandAction::SelectResumeSession {
+            session_id: "root-new".to_owned(),
+        })
     );
 
-    let result = harness.run_command(match action {
-        Some(CommandAction::SelectResumeSession { ref session_id }) => {
-            format!("/resume {session_id}")
-        }
-        other => panic!("expected resume selection action, got {other:?}"),
-    }
-    .as_str());
+    let result = harness.run_command(
+        command
+            .as_deref()
+            .expect("mouse click should emit shared resume command"),
+    );
 
     assert!(result.is_ok(), "mouse-selected resume command should succeed");
     assert_eq!(harness.router.active_runtime().session_id, "root-new");

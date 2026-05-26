@@ -24,6 +24,20 @@ fn parse_resume_command(args: &str) -> ResumeInvocation {
     }
 }
 
+pub(super) fn command_action_command(action: &CommandAction) -> Option<String> {
+    match action {
+        CommandAction::RunCommand(command) => Some(command.to_string()),
+        CommandAction::SelectResumeSession { session_id } => Some(format!("/resume {session_id}")),
+        CommandAction::OpenSettings(_)
+        | CommandAction::ApplySettings(_)
+        | CommandAction::OpenModelReasoning(_)
+        | CommandAction::ApplyModelSelection { .. }
+        | CommandAction::Noop
+        | CommandAction::InsertText(_)
+        | CommandAction::Close => None,
+    }
+}
+
 fn is_known_surface_command(command: &str) -> bool {
     match command {
         super::super::CLI_CHAT_HELP_COMMAND
@@ -241,21 +255,13 @@ fn dispatch_palette_action(
 ) -> CliResult<Option<String>> {
     let should_clear_slash_buffer = app.command_palette.is_commands_mode();
     match action {
-        CommandAction::RunCommand(command) => {
+        CommandAction::RunCommand(_) | CommandAction::SelectResumeSession { .. } => {
             if should_clear_slash_buffer {
                 clear_slash_palette_composer(app);
             }
             app.inline_skill_popup_active = false;
             app.focus = Focus::Composer;
-            Ok(Some(command.to_owned()))
-        }
-        CommandAction::SelectResumeSession { session_id } => {
-            if should_clear_slash_buffer {
-                clear_slash_palette_composer(app);
-            }
-            app.inline_skill_popup_active = false;
-            app.focus = Focus::Composer;
-            Ok(Some(format!("/resume {session_id}")))
+            Ok(command_action_command(&action))
         }
         CommandAction::OpenSettings(focus) => {
             if should_clear_slash_buffer {

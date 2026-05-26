@@ -323,12 +323,11 @@ impl App {
 
     fn apply_palette_action(&mut self, action: CommandAction) -> Option<String> {
         match action {
-            CommandAction::RunCommand(command) => {
+            CommandAction::RunCommand(_) | CommandAction::SelectResumeSession { .. } => {
                 self.inline_skill_popup_active = false;
                 self.focus = Focus::Composer;
-                Some(command.to_owned())
+                command_action_command(&action)
             }
-            CommandAction::SelectResumeSession { session_id } => Some(format!("/resume {session_id}")),
             CommandAction::OpenSettings(_)
             | CommandAction::ApplySettings(_)
             | CommandAction::OpenModelReasoning(_)
