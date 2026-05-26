@@ -340,6 +340,38 @@ fn resume_picker_selection_preserves_matching_session_id_across_multiple_candida
     }
 }
 
+#[cfg(not(feature = "memory-sqlite"))]
+#[test]
+fn run_surface_command_resume_latest_requires_sqlite_memory() {
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut runtime = test_runtime_with_path(PathBuf::from("/tmp/no-sqlite-resume-latest.toml"));
+    let mut app = blank_app();
+
+    let result = super::run_surface_command(
+        &mut terminal,
+        &mut app,
+        &mut runtime,
+        &CliChatOptions::default(),
+        "/resume latest",
+    );
+
+    assert!(result.is_ok(), "command should render a clear fallback message");
+    let transcript = app
+        .message_list
+        .get_rendered_lines(80)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(transcript.contains("sqlite-backed memory") || transcript.contains("requires sqlite"));
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn test_router_memory(label: &str) -> (LoongConfig, SessionStoreConfig) {
     let root = unique_temp_dir(label);

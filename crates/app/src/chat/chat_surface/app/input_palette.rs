@@ -706,6 +706,8 @@ async fn run_surface_command<B: Backend>(
                     }
                 }
                 ResumeInvocation::Latest => {
+                    #[cfg(feature = "memory-sqlite")]
+                    {
                     let latest = router
                         .latest_resume_target_session_id()?
                         .ok_or_else(|| "No resumable session available.".to_owned());
@@ -725,6 +727,16 @@ async fn run_surface_command<B: Backend>(
                         ));
                     app.focus = Focus::Composer;
                     Ok(())
+                    }
+                    #[cfg(not(feature = "memory-sqlite"))]
+                    {
+                        app.message_list.add_rendered_lines(render_session_transition_lines_with_width(
+                            Err("Resume latest requires sqlite-backed memory".to_owned()),
+                            width,
+                        ));
+                        app.focus = Focus::Composer;
+                        Ok(())
+                    }
                 }
                 ResumeInvocation::SessionId(session_id) => {
                     let result = router.begin_resume_session(
