@@ -439,6 +439,21 @@ async fn rebuild_active_route_loads_target_history_and_rebinds_runtime() {
             "assistant: loaded reply".to_owned(),
         ]
     );
+    let rebound_history_lines = load_history_lines(
+        route.runtime.session_id.as_str(),
+        32,
+        route.runtime.conversation_binding(),
+        &memory_config,
+    )
+    .await
+    .expect("load rebuilt runtime history");
+    assert_eq!(
+        rebound_history_lines,
+        vec![
+            "user: resume me".to_owned(),
+            "assistant: loaded reply".to_owned(),
+        ]
+    );
 
     cleanup_chat_test_memory(&sqlite_path);
 }
