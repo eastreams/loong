@@ -429,10 +429,16 @@ async fn rebuild_active_route_loads_target_history_and_rebinds_runtime() {
     .expect("rebuild route");
 
     assert_eq!(route.runtime.session_id, "resume-target");
-    assert!(route
-        .loaded_history_lines
-        .iter()
-        .any(|line| line.contains("resume me")));
+    assert_eq!(route.runtime.session_address.session_id, "resume-target");
+    assert_eq!(route.runtime.session_origin, CliRuntimeSessionOrigin::Existing);
+    assert_eq!(route.route_origin, RouteOrigin::Existing);
+    assert_eq!(
+        route.loaded_history_lines,
+        vec![
+            "user: resume me".to_owned(),
+            "assistant: loaded reply".to_owned(),
+        ]
+    );
 
     cleanup_chat_test_memory(&sqlite_path);
 }
