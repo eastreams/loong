@@ -3,6 +3,7 @@ use super::*;
 use crate::conversation::ConversationRuntimeBinding;
 use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
 use crate::session::store;
+use crate::test_support::unique_temp_dir;
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
@@ -83,6 +84,10 @@ fn archive_chat_test_session(sqlite_path: &Path, session_id: &str, archived_at: 
     .expect("insert chat test archive event");
 }
 
+fn temp_config_path(label: &str) -> PathBuf {
+    unique_temp_dir(label).join("loong.toml")
+}
+
 #[test]
 fn cli_runtime_resolves_latest_session_selector_to_latest_resumable_root() {
     let (config, memory_config, sqlite_path) = init_chat_test_memory("latest-selector");
@@ -91,7 +96,7 @@ fn cli_runtime_resolves_latest_session_selector_to_latest_resumable_root() {
     append_session_turn("selected-session", "user", "hello", &memory_config);
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("latest-selector-config"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -115,7 +120,7 @@ fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
 
     let options = CliChatOptions::default();
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("latest-summary-config"),
         config,
         Some("latest"),
         &options,
@@ -138,7 +143,7 @@ fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
 fn cli_runtime_rejects_latest_session_selector_when_no_resumable_root_exists() {
     let (config, _memory_config, sqlite_path) = init_chat_test_memory("latest-selector-none");
     let result = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("latest-selector-none-config"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -157,39 +162,52 @@ fn cli_runtime_rejects_latest_session_selector_when_no_resumable_root_exists() {
 }
 
 #[test]
-fn cli_runtime_keeps_default_session_when_no_hint_is_provided() {
-    let (config, _memory_config, sqlite_path) = init_chat_test_memory("default-selector");
+fn cli_runtime_creates_new_root_session_when_no_hint_is_provided() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("implicit-new-runtime");
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("implicit-new-runtime-config"),
         config,
         None,
         &CliChatOptions::default(),
-        "cli-chat-default-selector-test",
+        "cli-chat-implicit-new-runtime",
         CliSessionRequirement::AllowImplicitDefault,
         false,
     )
-    .expect("default session runtime");
+    .expect("implicit-new runtime");
 
-    assert_eq!(runtime.session_id, "default");
+    assert_ne!(runtime.session_id, "default");
+
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    assert!(
+        repo.load_session(runtime.session_id.as_str())
+            .expect("load startup session")
+            .is_some()
+    );
 
     cleanup_chat_test_memory(&sqlite_path);
 }
 
 #[test]
-fn cli_runtime_keeps_explicit_literal_session_id() {
-    let (config, _memory_config, sqlite_path) = init_chat_test_memory("literal-selector");
-    let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+fn cli_runtime_rejects_explicit_literal_session_id_when_target_does_not_exist() {
+    let (config, _memory_config, sqlite_path) = init_chat_test_memory("literal-missing");
+    let result = initialize_cli_turn_runtime_with_loaded_config(
+        temp_config_path("literal-missing-config"),
         config,
-        Some("custom-session"),
+        Some("missing-session"),
         &CliChatOptions::default(),
-        "cli-chat-literal-selector-test",
+        "cli-chat-missing-literal",
         CliSessionRequirement::AllowImplicitDefault,
         false,
-    )
-    .expect("literal session runtime");
+    );
 
-    assert_eq!(runtime.session_id, "custom-session");
+    let error = match result {
+        Ok(_) => panic!("missing explicit session should fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("missing-session"),
+        "unexpected error: {error}"
+    );
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -208,7 +226,7 @@ fn cli_runtime_reopens_explicit_im_local_session_id() {
     );
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("im-local-session-config"),
         config,
         Some("feishu:cfg=work:lark_cli_a1b2c3:oc_123"),
         &CliChatOptions::default(),
@@ -224,10 +242,14 @@ fn cli_runtime_reopens_explicit_im_local_session_id() {
 }
 
 #[test]
-fn concurrent_cli_runtime_keeps_latest_literal_when_explicit_session_is_required() {
-    let (config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-latest");
+fn concurrent_cli_runtime_resolves_latest_when_explicit_session_is_required() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("concurrent-latest");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    create_root_session(&repo, "selected-session");
+    append_session_turn("selected-session", "user", "hello", &memory_config);
+
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("concurrent-latest-config"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -237,7 +259,32 @@ fn concurrent_cli_runtime_keeps_latest_literal_when_explicit_session_is_required
     )
     .expect("concurrent runtime");
 
-    assert_eq!(runtime.session_id, "latest");
+    assert_eq!(runtime.session_id, "selected-session");
+
+    cleanup_chat_test_memory(&sqlite_path);
+}
+
+#[test]
+fn concurrent_cli_runtime_rejects_missing_literal_session_when_explicit_session_is_required() {
+    let (config, _memory_config, sqlite_path) = init_chat_test_memory("concurrent-literal-missing");
+    let result = initialize_cli_turn_runtime_with_loaded_config(
+        temp_config_path("concurrent-literal-missing-config"),
+        config,
+        Some("missing-session"),
+        &CliChatOptions::default(),
+        "cli-chat-concurrent-literal-missing-test",
+        CliSessionRequirement::RequireExplicit,
+        false,
+    );
+
+    let error = match result {
+        Ok(_) => panic!("missing explicit session should fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("missing-session"),
+        "unexpected error: {error}"
+    );
 
     cleanup_chat_test_memory(&sqlite_path);
 }
@@ -279,7 +326,7 @@ fn cli_runtime_latest_session_selector_prefers_newest_resumable_root() {
     archive_chat_test_session(&sqlite_path, "root-archived", 600);
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("latest-runtime-order-config"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -343,7 +390,7 @@ async fn cli_runtime_latest_session_selector_drives_history_loads() {
     archive_chat_test_session(&sqlite_path, "root-archived", 600);
 
     let runtime = initialize_cli_turn_runtime_with_loaded_config(
-        PathBuf::from("/tmp/loong.toml"),
+        temp_config_path("latest-history-config"),
         config,
         Some("latest"),
         &CliChatOptions::default(),
@@ -369,6 +416,42 @@ async fn cli_runtime_latest_session_selector_drives_history_loads() {
             "assistant: selected assistant turn".to_owned(),
         ]
     );
+
+    cleanup_chat_test_memory(&sqlite_path);
+}
+
+#[tokio::test]
+async fn rebuild_active_route_loads_target_history_and_rebinds_runtime() {
+    let (config, memory_config, sqlite_path) = init_chat_test_memory("route-rebuild-history");
+    let repo = SessionRepository::new(&memory_config).expect("repository");
+    create_root_session(&repo, "resume-target");
+    append_session_turn("resume-target", "user", "resume me", &memory_config);
+    append_session_turn("resume-target", "assistant", "loaded reply", &memory_config);
+
+    let route = rebuild_active_session_route(
+        temp_config_path("route-rebuild-history-config"),
+        config,
+        "resume-target",
+        &CliChatOptions::default(),
+        RouteOrigin::Existing,
+    )
+    .await
+    .expect("rebuild route");
+    assert_eq!(route.runtime.session_id, "resume-target");
+    assert_eq!(route.runtime.session_address.session_id, "resume-target");
+    assert_eq!(
+        route.runtime.session_origin,
+        CliRuntimeSessionOrigin::Existing
+    );
+    assert_eq!(route.route_origin, RouteOrigin::Existing);
+    let _ = load_history_lines(
+        route.runtime.session_id.as_str(),
+        32,
+        route.runtime.conversation_binding(),
+        &memory_config,
+    )
+    .await
+    .expect("load rebuilt runtime history");
 
     cleanup_chat_test_memory(&sqlite_path);
 }

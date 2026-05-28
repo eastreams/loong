@@ -66,6 +66,8 @@ use self::ops::is_manual_compaction_command;
 use self::ops::is_turn_checkpoint_repair_command;
 #[cfg(test)]
 use self::ops::load_history_lines;
+#[cfg(all(feature = "memory-sqlite", not(test)))]
+use self::ops::load_history_lines;
 #[cfg(test)]
 use self::ops::load_manual_compaction_result;
 #[cfg(test)]
@@ -132,7 +134,6 @@ use super::conversation::{
     TurnCheckpointSessionState, TurnCheckpointStage, TurnCheckpointTailRepairOutcome,
     TurnCheckpointTailRepairReason, TurnCheckpointTailRepairStatus,
 };
-#[cfg(feature = "memory-sqlite")]
 use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
 use super::session::latest_resumable_root_session_id;
@@ -287,12 +288,21 @@ fn format_onboard_command_hint(config_path: Option<&str>, resolved_config_path: 
     command
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliRuntimeSessionOrigin {
+    Existing,
+    CreatedThisRun,
+}
+
+pub(crate) type RouteOrigin = CliRuntimeSessionOrigin;
+
 #[derive(Clone)]
 pub(crate) struct CliTurnRuntime {
     pub(crate) resolved_path: PathBuf,
     pub(crate) config_present: bool,
     pub(crate) config: LoongConfig,
     pub(crate) session_id: String,
+    pub(crate) session_origin: CliRuntimeSessionOrigin,
     pub(crate) session_address: ConversationSessionAddress,
     pub(crate) turn_coordinator: ConversationTurnCoordinator,
     pub(crate) runtime_kernel: crate::runtime_bridge::RuntimeKernelOwner,
@@ -309,10 +319,30 @@ impl CliTurnRuntime {
     }
 }
 
+pub(crate) struct RebuiltActiveSessionRoute {
+    pub(crate) runtime: CliTurnRuntime,
+    pub(crate) loaded_history_lines: Vec<String>,
+    pub(crate) route_origin: RouteOrigin,
+}
+
+impl RebuiltActiveSessionRoute {
+    pub(crate) fn new(
+        runtime: CliTurnRuntime,
+        loaded_history_lines: Vec<String>,
+        route_origin: RouteOrigin,
+    ) -> Self {
+        Self {
+            runtime,
+            loaded_history_lines,
+            route_origin,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CliSessionRequirement {
-    /// Interactive entrypoints may fall back to the implicit default session
-    /// (and, with sqlite memory enabled, resolve the `latest` selector).
+    /// Interactive entrypoints may create a startup root session implicitly
+    /// and, with sqlite memory enabled, resolve the `latest` selector.
     AllowImplicitDefault,
     /// Embedded or multiplexed hosts must provide a session id explicitly so
     /// they never attach to the wrong transcript by accident.
@@ -617,6 +647,37 @@ fn is_exit_command(config: &LoongConfig, input: &str) -> bool {
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .any(|value| !value.is_empty() && value == lower)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) async fn rebuild_active_session_route(
+    resolved_path: PathBuf,
+    config: LoongConfig,
+    session_id: &str,
+    options: &CliChatOptions,
+    route_origin: RouteOrigin,
+) -> CliResult<RebuiltActiveSessionRoute> {
+    let runtime = initialize_cli_turn_runtime_with_loaded_config(
+        resolved_path,
+        config,
+        Some(session_id),
+        options,
+        "cli-chat-surface-route-rebuild",
+        CliSessionRequirement::AllowImplicitDefault,
+        false,
+    )?;
+    let history_lines = load_history_lines(
+        runtime.session_id.as_str(),
+        128,
+        runtime.conversation_binding(),
+        &runtime.memory_config,
+    )
+    .await?;
+    Ok(RebuiltActiveSessionRoute::new(
+        runtime,
+        history_lines,
+        route_origin,
+    ))
 }
 
 #[cfg(test)]

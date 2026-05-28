@@ -528,10 +528,11 @@ fn apply_model_selection(
 async fn run_surface_command<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    runtime: &mut CliTurnRuntime,
+    router: &mut SessionRouter,
     options: &CliChatOptions,
     input: &str,
 ) -> CliResult<()> {
+    let runtime = router.active_runtime_mut();
     refresh_app_cwd_dependent_state(app, runtime);
     let trimmed = input.trim();
     let (command, args) = split_surface_command(trimmed);
@@ -544,9 +545,27 @@ async fn run_surface_command<B: Backend>(
             Ok(())
         }
         "/new" => {
-            app.message_list.clear_transcript();
+            if app.pending_turn {
+                app.message_list
+                    .add_rendered_lines(render_session_transition_lines_with_width(
+                        Err("Cannot start a new session while a turn is pending.".to_owned()),
+                        width,
+                    ));
+                app.focus = Focus::Composer;
+                return Ok(());
+            }
+            let result = router
+                .begin_create_new_session(SessionTransitionReason::UserRequestedNew)
+                .await;
+            if result.is_ok() {
+                replace_app_transcript_with_active_route(app, router.active_route());
+                refresh_app_cwd_dependent_state(app, router.active_runtime());
+            }
             app.message_list
-                .add_rendered_lines(render_new_conversation_lines_with_width(width));
+                .add_rendered_lines(render_session_transition_lines_with_width(
+                    result.map(|outcome| outcome.message),
+                    width,
+                ));
             app.focus = Focus::Composer;
             Ok(())
         }
@@ -646,11 +665,121 @@ async fn run_surface_command<B: Backend>(
             app.focus = Focus::Composer;
             Ok(())
         }
-        "/model" => open_model_palette(app, runtime, args).await,
+        "/resume" => {
+            if app.pending_turn {
+                app.message_list
+                    .add_rendered_lines(render_session_transition_lines_with_width(
+                        Err("Cannot resume another session while a turn is pending.".to_owned()),
+                        width,
+                    ));
+                app.focus = Focus::Composer;
+                return Ok(());
+            }
+            match parse_resume_command(args) {
+                ResumeInvocation::Picker => {
+                    #[cfg(feature = "memory-sqlite")]
+                    {
+                        let candidates = resume_candidates::load_resume_candidates(
+                            router.active_runtime().session_id.as_str(),
+                            &router.active_runtime().memory_config,
+                        )?;
+                        let entries = candidates
+                            .into_iter()
+                            .map(|candidate| ResumePaletteEntry {
+                                session_id: candidate.session_id,
+                                timestamp_label: candidate.last_user_turn_at.to_string(),
+                                preview_text: candidate.preview_text,
+                            })
+                            .collect();
+                        app.command_palette.show_resume_candidates(
+                            entries,
+                            Some("Select a conversation to resume".to_owned()),
+                        );
+                        app.inline_skill_popup_active = false;
+                        app.focus = Focus::CommandPalette;
+                        Ok(())
+                    }
+                    #[cfg(not(feature = "memory-sqlite"))]
+                    {
+                        app.message_list.add_rendered_lines(
+                            render_session_transition_lines_with_width(
+                                Err("Resume picker requires sqlite-backed memory".to_owned()),
+                                width,
+                            ),
+                        );
+                        app.focus = Focus::Composer;
+                        Ok(())
+                    }
+                }
+                ResumeInvocation::Latest => {
+                    #[cfg(feature = "memory-sqlite")]
+                    {
+                        let latest = router
+                            .latest_resume_target_session_id()?
+                            .ok_or_else(|| "No resumable session available.".to_owned());
+                        let result = match latest {
+                            Ok(session_id) => {
+                                router
+                                    .begin_resume_session(
+                                        session_id.as_str(),
+                                        SessionTransitionReason::UserRequestedResume,
+                                    )
+                                    .await
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if result.is_ok() {
+                            replace_app_transcript_with_active_route(app, router.active_route());
+                            refresh_app_cwd_dependent_state(app, router.active_runtime());
+                        }
+                        app.message_list.add_rendered_lines(
+                            render_session_transition_lines_with_width(
+                                result.map(|outcome| outcome.message),
+                                width,
+                            ),
+                        );
+                        app.focus = Focus::Composer;
+                        Ok(())
+                    }
+                    #[cfg(not(feature = "memory-sqlite"))]
+                    {
+                        app.message_list.add_rendered_lines(
+                            render_session_transition_lines_with_width(
+                                Err("Resume latest requires sqlite-backed memory".to_owned()),
+                                width,
+                            ),
+                        );
+                        app.focus = Focus::Composer;
+                        Ok(())
+                    }
+                }
+                ResumeInvocation::SessionId(session_id) => {
+                    let result = router
+                        .begin_resume_session(
+                            session_id.as_str(),
+                            SessionTransitionReason::UserRequestedResume,
+                        )
+                        .await;
+                    if result.is_ok() {
+                        replace_app_transcript_with_active_route(app, router.active_route());
+                        refresh_app_cwd_dependent_state(app, router.active_runtime());
+                    }
+                    app.message_list.add_rendered_lines(
+                        render_session_transition_lines_with_width(
+                            result.map(|outcome| outcome.message),
+                            width,
+                        ),
+                    );
+                    app.focus = Focus::Composer;
+                    Ok(())
+                }
+            }
+        }
+        "/model" => open_model_palette(app, router.active_runtime_mut(), args).await,
         "/settings" if args.trim().is_empty() => {
             open_settings_palette(
                 app,
-                runtime,
+                router.active_runtime(),
                 SettingsSurfaceFocus::Overview,
                 width,
                 None,
@@ -660,11 +789,11 @@ async fn run_surface_command<B: Backend>(
         }
         "/settings" if !args.trim().is_empty() => {
             let action = parse_settings_command_action(args)?;
-            let _ = dispatch_palette_action(app, runtime, width, action)?;
+            let _ = dispatch_palette_action(app, router, width, action)?;
             Ok(())
         }
         _ => {
-            let lines = build_command_lines(runtime, options, input, width).await?;
+            let lines = build_command_lines(router.active_runtime(), options, input, width).await?;
             app.message_list.add_rendered_lines(lines);
             app.focus = Focus::Composer;
             Ok(())
@@ -672,3 +801,50 @@ async fn run_surface_command<B: Backend>(
     }
 }
 
+fn replace_app_transcript_with_active_route(app: &mut App, route: &ActiveSessionRoute) {
+    app.message_list.clear_transcript();
+    if !route.loaded_history_lines.is_empty() {
+        restore_message_list_history(app, route.loaded_history_lines.as_slice());
+    }
+}
+
+fn restore_message_list_history(app: &mut App, history_lines: &[String]) {
+    for line in history_lines {
+        if let Some((role, content)) = parse_history_turn_line(line) {
+            if role.eq_ignore_ascii_case("user") {
+                app.message_list.add_user_message(content.to_owned());
+            } else if role.eq_ignore_ascii_case("assistant") {
+                if !is_internal_history_payload(content) {
+                    app.message_list.add_assistant_message(content.to_owned());
+                }
+            } else {
+                app.message_list.add_rendered_lines(vec![line.clone()]);
+            }
+        } else if let Some(content) = line.strip_prefix("user: ") {
+            app.message_list.add_user_message(content.to_owned());
+        } else if let Some(content) = line.strip_prefix("assistant: ") {
+            if !is_internal_history_payload(content) {
+                app.message_list.add_assistant_message(content.to_owned());
+            }
+        } else {
+            app.message_list.add_rendered_lines(vec![line.clone()]);
+        }
+    }
+}
+
+fn parse_history_turn_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim();
+    let after_timestamp = if trimmed.starts_with('[') {
+        let end = trimmed.find(']')?;
+        trimmed.get(end + 1..)?.trim_start()
+    } else {
+        trimmed
+    };
+    let (role, content) = after_timestamp.split_once(": ")?;
+    Some((role.trim(), content))
+}
+
+fn is_internal_history_payload(content: &str) -> bool {
+    let trimmed = content.trim();
+    trimmed.starts_with('{') && trimmed.contains("\"_loong_internal\":true")
+}

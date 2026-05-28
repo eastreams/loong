@@ -1,11 +1,12 @@
 use super::{
-    App, Focus, LiveTranscriptState, StartupBootstrapCapture, StartupOnboardingAction,
-    StartupOnboardingInteractionKind, StartupOnboardingStage, StartupOnboardingState,
-    StartupPersonalizationPreset, StartupProviderOption, StartupSetupPathChoice,
-    StartupSkillOption, persist_startup_personalization, startup_eye_animation_for_state,
+    ActiveSessionRoute, App, Focus, LiveTranscriptState, SessionRouter, StartupBootstrapCapture,
+    StartupOnboardingAction, StartupOnboardingInteractionKind, StartupOnboardingStage,
+    StartupOnboardingState, StartupPersonalizationPreset, StartupProviderOption,
+    StartupSetupPathChoice, StartupSkillOption, persist_startup_personalization,
+    startup_eye_animation_for_state,
 };
 use crate::chat::chat_surface::command_palette::{
-    CommandAction, CommandPalette, SkillEntry, slash_command_specs,
+    CommandAction, CommandPalette, ResumePaletteEntry, SkillEntry, slash_command_specs,
 };
 use crate::chat::chat_surface::composer::Composer;
 use crate::chat::chat_surface::i18n::{I18nService, Language};
@@ -21,12 +22,26 @@ use crate::chat::{
 };
 use crate::config::{LoongConfig, ProviderConfig, ProviderKind, ReasoningEffort};
 use crate::test_support::{ScopedEnv, unique_temp_dir};
+#[cfg(feature = "memory-sqlite")]
+use crate::{
+    chat::{CliRuntimeSessionOrigin, RouteOrigin, rebuild_active_session_route},
+    config::AuditMode,
+    session::{
+        repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState},
+        store::{self, SessionStoreConfig},
+    },
+};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Style};
+use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
+
+fn test_config_path(label: &str) -> PathBuf {
+    unique_temp_dir(label).join("loong.toml")
+}
 
 fn blank_app() -> App {
     App {
@@ -205,6 +220,27 @@ fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
         .join("events.jsonl")
         .display()
         .to_string();
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let sqlite_root = unique_temp_dir("loong-chat-surface-memory");
+        config.audit.mode = AuditMode::InMemory;
+        config.memory.sqlite_path = sqlite_root.join("surface.sqlite3").display().to_string();
+        let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+        store::ensure_session_store_ready(
+            Some(config.memory.resolved_sqlite_path()),
+            &memory_config,
+        )
+        .expect("initialize chat surface sqlite memory");
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "chat-surface-test".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("chat-surface-test".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create shared chat surface test session");
+    }
 
     initialize_cli_turn_runtime_with_loaded_config(
         path,
@@ -216,6 +252,778 @@ fn test_runtime_with_path(path: PathBuf) -> crate::chat::CliTurnRuntime {
         false,
     )
     .expect("chat surface runtime")
+}
+
+#[test]
+fn resume_picker_mode_renders_candidate_preview_and_timestamp() {
+    let backend = TestBackend::new(80, 8);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut palette = CommandPalette::new(Language::En, Vec::new());
+    palette.show_resume_candidates(
+        vec![ResumePaletteEntry {
+            session_id: "root-session".to_owned(),
+            timestamp_label: "2026-05-25 09:30".to_owned(),
+            preview_text: "summarize the repository".to_owned(),
+        }],
+        Some("Select a conversation to resume".to_owned()),
+    );
+
+    terminal
+        .draw(|f| palette.render(f, f.area()))
+        .expect("draw palette");
+    let rendered = buffer_lines(&terminal).join("\n");
+    assert!(rendered.contains("2026-05-25 09:30"));
+    assert!(rendered.contains("summarize the repository"));
+    assert!(rendered.contains("Select a conversation to resume"));
+    assert!(!rendered.contains("(1/1)"));
+    assert!(!rendered.contains("/resume is available"));
+}
+
+#[test]
+fn resume_picker_app_layout_mouse_row_uses_palette_list_offset() {
+    let backend = TestBackend::new(72, 18);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut app = blank_app();
+    app.command_palette.show_resume_candidates(
+        vec![ResumePaletteEntry {
+            session_id: "root-session".to_owned(),
+            timestamp_label: "2026-05-25 09:30".to_owned(),
+            preview_text: "summarize the repository".to_owned(),
+        }],
+        Some("Select a conversation to resume".to_owned()),
+    );
+    app.focus = Focus::CommandPalette;
+
+    terminal.draw(|f| app.render(f)).expect("draw");
+
+    assert_eq!(app.last_palette_area.height, 3);
+
+    let header_row = app.last_palette_area.y;
+    let list_row = app.last_palette_area.y.saturating_add(1);
+    let palette_col = app.last_palette_area.x.saturating_add(1);
+
+    let header_click = app.command_palette.handle_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            palette_col,
+            header_row,
+        ),
+        app.last_palette_area,
+    );
+    assert!(header_click.is_none());
+
+    let list_click = app.command_palette.handle_mouse(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            palette_col,
+            list_row,
+        ),
+        app.last_palette_area,
+    );
+    match list_click {
+        Some(CommandAction::SelectResumeSession { session_id }) => {
+            assert_eq!(session_id, "root-session");
+        }
+        other => panic!("expected resume selection from live palette row, got {other:?}"),
+    }
+}
+
+#[test]
+fn resume_picker_selection_preserves_matching_session_id_across_multiple_candidates() {
+    let mut palette = CommandPalette::new(Language::En, Vec::new());
+    palette.show_resume_candidates(
+        vec![
+            ResumePaletteEntry {
+                session_id: "root-session".to_owned(),
+                timestamp_label: "2026-05-25 09:30".to_owned(),
+                preview_text: "summarize the repository".to_owned(),
+            },
+            ResumePaletteEntry {
+                session_id: "child-session".to_owned(),
+                timestamp_label: "2026-05-25 10:45".to_owned(),
+                preview_text: "resume the child branch".to_owned(),
+            },
+        ],
+        Some("Select a conversation to resume".to_owned()),
+    );
+
+    let _ = palette.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+    match palette.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
+        Some(CommandAction::SelectResumeSession { session_id }) => {
+            assert_eq!(session_id, "child-session");
+        }
+        other => panic!("expected second resume selection action, got {other:?}"),
+    }
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+#[test]
+fn run_surface_command_resume_latest_requires_sqlite_memory() {
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut runtime = test_runtime_with_path(PathBuf::from("/tmp/no-sqlite-resume-latest.toml"));
+    let mut app = blank_app();
+
+    let result = super::run_surface_command(
+        &mut terminal,
+        &mut app,
+        &mut runtime,
+        &CliChatOptions::default(),
+        "/resume latest",
+    );
+
+    assert!(
+        result.is_ok(),
+        "command should render a clear fallback message"
+    );
+    let transcript = app
+        .message_list
+        .get_rendered_lines(80)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(transcript.contains("sqlite-backed memory") || transcript.contains("requires sqlite"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn test_router_memory(label: &str) -> (LoongConfig, SessionStoreConfig) {
+    let root = unique_temp_dir(label);
+    let sqlite_path = root.join("router.sqlite3");
+
+    let mut config = LoongConfig::default();
+    config.audit.mode = AuditMode::InMemory;
+    config.memory.sqlite_path = sqlite_path.display().to_string();
+
+    let memory_config = SessionStoreConfig::from_memory_config(&config.memory);
+    store::ensure_session_store_ready(Some(config.memory.resolved_sqlite_path()), &memory_config)
+        .expect("initialize router sqlite memory");
+
+    (config, memory_config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn existing_router_runtime_with_path(
+    path: PathBuf,
+    memory_label: &str,
+    session_id: &str,
+) -> crate::chat::CliTurnRuntime {
+    let (config, memory_config) = test_router_memory(memory_label);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some(session_id.to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create existing router session");
+
+    initialize_cli_turn_runtime_with_loaded_config(
+        path,
+        config,
+        Some(session_id),
+        &CliChatOptions::default(),
+        "chat-surface-router-existing-test",
+        CliSessionRequirement::RequireExplicit,
+        false,
+    )
+    .expect("existing router runtime")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn created_router_runtime_with_path(
+    path: PathBuf,
+    memory_label: &str,
+) -> crate::chat::CliTurnRuntime {
+    let (config, _memory_config) = test_router_memory(memory_label);
+
+    initialize_cli_turn_runtime_with_loaded_config(
+        path,
+        config,
+        None,
+        &CliChatOptions::default(),
+        "chat-surface-router-created-test",
+        CliSessionRequirement::AllowImplicitDefault,
+        false,
+    )
+    .expect("created router runtime")
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_router_marks_created_routes_for_cleanup_but_not_existing_routes() {
+    let existing_route = ActiveSessionRoute::from_runtime(existing_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-existing.toml"),
+        "loong-session-router-existing",
+        "existing-session",
+    ));
+    let existing_session_id = existing_route.runtime.session_id.clone();
+    let mut router = SessionRouter::new(existing_route);
+
+    let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-created.toml"),
+        "loong-session-router-created",
+    ));
+    let created_session_id = created_route.runtime.session_id.clone();
+    router.install_created_route(created_route);
+
+    let cleanup_ids = router.created_this_run_session_ids();
+
+    assert_eq!(cleanup_ids, vec![created_session_id.clone()]);
+    assert!(!cleanup_ids.contains(&existing_session_id));
+    assert_eq!(router.active_session_id(), created_session_id);
+    assert!(matches!(
+        router.active_route().route_origin(),
+        crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
+    ));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_router_marks_startup_created_initial_route_for_cleanup() {
+    let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-startup-created.toml"),
+        "loong-session-router-startup-created",
+    ));
+    let created_session_id = created_route.runtime.session_id.clone();
+
+    let router = SessionRouter::new(created_route);
+
+    assert_eq!(
+        router.created_this_run_session_ids(),
+        vec![created_session_id.clone()]
+    );
+    assert_eq!(router.active_session_id(), created_session_id);
+    assert!(matches!(
+        router.active_route().route_origin(),
+        crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
+    ));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_router_dedupes_created_session_cleanup_ids() {
+    let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-created-dedupe.toml"),
+        "loong-session-router-created-dedupe",
+    ));
+    let created_session_id = created_route.runtime.session_id.clone();
+    let mut router = SessionRouter::new(created_route);
+    let mut duplicate_created_route =
+        ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+            PathBuf::from("/tmp/loong-created-dedupe-duplicate.toml"),
+            "loong-session-router-created-dedupe-duplicate",
+        ));
+    duplicate_created_route.runtime.session_id = created_session_id.clone();
+
+    router.install_created_route(duplicate_created_route);
+
+    assert_eq!(
+        router.created_this_run_session_ids(),
+        vec![created_session_id]
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn rebuilt_new_route_preserves_created_this_run_origin() {
+    let created_runtime = created_router_runtime_with_path(
+        PathBuf::from("/tmp/loong-rebuilt-created.toml"),
+        "loong-session-router-rebuilt-created",
+    );
+    let session_id = created_runtime.session_id.clone();
+    let rebuilt_route = rebuild_active_session_route(
+        created_runtime.resolved_path.clone(),
+        created_runtime.config.clone(),
+        session_id.as_str(),
+        &CliChatOptions::default(),
+        RouteOrigin::CreatedThisRun,
+    )
+    .await
+    .expect("rebuild created route");
+
+    let active_route = ActiveSessionRoute::from_rebuilt_route(rebuilt_route);
+
+    assert_eq!(active_route.runtime.session_id, session_id);
+    assert_eq!(
+        active_route.route_origin(),
+        CliRuntimeSessionOrigin::CreatedThisRun
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resume_test_harness(label: &str) -> ResumeCommandHarness {
+    ResumeCommandHarness::new(label)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn cleanup_test_harness(label: &str) -> CleanupTestHarness {
+    CleanupTestHarness::new(label)
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct ResumeCommandHarness {
+    terminal: Terminal<TestBackend>,
+    app: App,
+    router: SessionRouter,
+    options: CliChatOptions,
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct CleanupTestHarness {
+    memory_config: SessionStoreConfig,
+    router: SessionRouter,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl ResumeCommandHarness {
+    fn new(label: &str) -> Self {
+        let (config, memory_config) = test_router_memory(label);
+        let repo = SessionRepository::new(&memory_config).expect("session repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "current-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("current-root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create current session");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-old".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("root-old".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create old session");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-new".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("root-new".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create new session");
+        store::append_session_turn_direct(
+            "root-old",
+            "user",
+            "older resume candidate",
+            &memory_config,
+        )
+        .expect("append old session turn");
+        store::append_session_turn_direct(
+            "root-old",
+            "assistant",
+            "older resume reply",
+            &memory_config,
+        )
+        .expect("append old session assistant turn");
+        store::append_session_turn_direct(
+            "root-new",
+            "user",
+            "newer resume candidate",
+            &memory_config,
+        )
+        .expect("append new session turn");
+        store::append_session_turn_direct(
+            "root-new",
+            "assistant",
+            "newer resume reply",
+            &memory_config,
+        )
+        .expect("append new session assistant turn");
+        store::append_session_turn_direct(
+            "root-new",
+            "assistant",
+            r#"{"_loong_internal":true,"event":"turn_checkpoint","payload":{"stage":"finalized"}}"#,
+            &memory_config,
+        )
+        .expect("append internal assistant payload");
+
+        let runtime = initialize_cli_turn_runtime_with_loaded_config(
+            test_config_path(&format!("{label}-resume-harness")),
+            config,
+            Some("current-root"),
+            &CliChatOptions::default(),
+            "chat-surface-resume-test",
+            CliSessionRequirement::RequireExplicit,
+            false,
+        )
+        .expect("resume harness runtime");
+        let terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let app = App::new(&runtime, &CliChatOptions::default(), 80).expect("app");
+        let router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
+
+        Self {
+            terminal,
+            app,
+            router,
+            options: CliChatOptions::default(),
+        }
+    }
+
+    fn run_command(&mut self, command: &str) -> crate::CliResult<()> {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(super::run_surface_command(
+            &mut self.terminal,
+            &mut self.app,
+            &mut self.router,
+            &self.options,
+            command,
+        ))
+    }
+
+    fn latest_transcript(&mut self) -> String {
+        self.app
+            .message_list
+            .get_rendered_lines(80)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl CleanupTestHarness {
+    fn new(label: &str) -> Self {
+        let created_route = ActiveSessionRoute::from_runtime(created_router_runtime_with_path(
+            test_config_path(&format!("{label}-cleanup-harness")),
+            label,
+        ));
+        let memory_config = created_route.runtime.memory_config.clone();
+        let router = SessionRouter::new(created_route);
+
+        Self {
+            memory_config,
+            router,
+        }
+    }
+
+    fn create_created_this_run_empty_session(&self) -> String {
+        self.router.active_runtime().session_id.clone()
+    }
+
+    fn create_created_this_run_session_with_user_turn(&self) -> String {
+        let session_id = self.router.active_runtime().session_id.clone();
+        store::append_session_turn_direct(
+            session_id.as_str(),
+            "user",
+            "keep this session",
+            &self.memory_config,
+        )
+        .expect("append user turn");
+        session_id
+    }
+
+    fn run_exit_cleanup(&self) -> crate::CliResult<()> {
+        self.router
+            .cleanup_created_empty_sessions(&self.memory_config)
+    }
+
+    fn session_exists(&self, session_id: &str) -> bool {
+        let repo = SessionRepository::new(&self.memory_config).expect("session repository");
+        repo.load_session(session_id)
+            .expect("load session")
+            .is_some()
+    }
+
+    fn session_missing(&self, session_id: &str) -> bool {
+        !self.session_exists(session_id)
+    }
+
+    fn session_tree_missing(&self, session_id: &str) -> bool {
+        let repo = SessionRepository::new(&self.memory_config).expect("session repository");
+        repo.list_session_nodes(session_id)
+            .expect("list session nodes")
+            .is_empty()
+            && repo
+                .list_session_heads(session_id)
+                .expect("list session heads")
+                .is_empty()
+    }
+
+    fn session_owned_rows_missing(&self, session_id: &str) -> bool {
+        let sqlite_path = self.memory_config.sqlite_path.clone().expect("sqlite path");
+        let conn = Connection::open(sqlite_path).expect("open cleanup sqlite connection");
+        let tables = [
+            ("session_artifacts", "session_id"),
+            ("session_terminal_outcomes", "session_id"),
+            ("approval_requests", "session_id"),
+            ("approval_grants", "scope_session_id"),
+            ("session_tool_consent", "scope_session_id"),
+        ];
+        let route_binding_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_route_bindings WHERE active_session_id = ?1 OR route_session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .expect("count session route bindings");
+        if route_binding_count != 0 {
+            return false;
+        }
+        tables.iter().all(|(table, column)| {
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1");
+            let count: i64 = conn
+                .query_row(sql.as_str(), params![session_id], |row| row.get(0))
+                .expect("count session-owned rows");
+            count == 0
+        })
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_new_creates_and_switches_to_real_session() {
+    let mut harness = resume_test_harness("surface-new-switch");
+    let original_session_id = harness.router.active_runtime().session_id.clone();
+
+    let result = harness.run_command("/new");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_ne!(
+        harness.router.active_runtime().session_id,
+        original_session_id
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_latest_switches_to_first_candidate() {
+    let mut harness = resume_test_harness("resume-latest-switch");
+    let result = harness.run_command("/resume latest");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_rebuilds_route_through_history_bootstrap_path() {
+    let mut harness = resume_test_harness("resume-history-rebuild");
+
+    let result = harness.run_command("/resume root-new");
+    let transcript = harness.latest_transcript();
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert!(transcript.contains("newer resume candidate"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_restores_history_as_chat_messages() {
+    let mut harness = resume_test_harness("resume-history-messages");
+
+    let result = harness.run_command("/resume root-new");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(harness.app.message_list.messages.len(), 3);
+    assert_eq!(harness.app.message_list.messages[0].role, "You");
+    match &harness.app.message_list.messages[0].contents[0] {
+        crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+            assert_eq!(text, "newer resume candidate");
+        }
+        crate::chat::chat_surface::message_list::MessageContent::RenderedLines(_)
+        | crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
+            panic!("expected restored markdown user message")
+        }
+    }
+    assert_eq!(harness.app.message_list.messages[1].role, "Assistant");
+    match &harness.app.message_list.messages[1].contents[0] {
+        crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+            assert_eq!(text, "newer resume reply");
+        }
+        crate::chat::chat_surface::message_list::MessageContent::RenderedLines(_)
+        | crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+        | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
+            panic!("expected restored markdown assistant message")
+        }
+    }
+    assert_eq!(harness.app.message_list.messages[2].role, "System");
+    assert!(!transcript_contains_internal_payload(&harness.app));
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn transcript_contains_internal_payload(app: &App) -> bool {
+    app.message_list.messages.iter().any(|message| {
+        message.contents.iter().any(|content| match content {
+            crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+                text.contains("\"_loong_internal\":true")
+            }
+            crate::chat::chat_surface::message_list::MessageContent::RenderedLines(lines) => lines
+                .iter()
+                .any(|line| line.contains("\"_loong_internal\":true")),
+            crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+            | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
+                false
+            }
+        })
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn session_router_rebuild_preserves_runtime_acp_state_across_resume() {
+    let mut harness = resume_test_harness("resume-preserves-acp-state");
+    let preserved_cwd = PathBuf::from("/workspace/override");
+    harness
+        .router
+        .active_runtime_mut()
+        .effective_working_directory = Some(preserved_cwd.clone());
+    harness
+        .router
+        .active_runtime_mut()
+        .effective_bootstrap_mcp_servers = vec!["filesystem".to_owned(), "search".to_owned()];
+
+    let result = harness.run_command("/resume root-new");
+
+    assert!(result.is_ok(), "command should succeed");
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+    assert_eq!(
+        harness
+            .router
+            .active_runtime()
+            .effective_working_directory
+            .as_ref(),
+        Some(&preserved_cwd)
+    );
+    assert_eq!(
+        harness
+            .router
+            .active_runtime()
+            .effective_bootstrap_mcp_servers,
+        vec!["filesystem".to_owned(), "search".to_owned()]
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn dispatch_palette_resume_selection_returns_shared_resume_command() {
+    let mut harness = resume_test_harness("resume-picker-dispatch");
+    let original_session_id = harness.router.active_runtime().session_id.clone();
+    let transcript_before = harness.latest_transcript();
+
+    let command = super::dispatch_palette_action(
+        &mut harness.app,
+        &mut harness.router,
+        80,
+        CommandAction::SelectResumeSession {
+            session_id: "root-new".to_owned(),
+        },
+    )
+    .expect("dispatch result");
+
+    assert_eq!(
+        command,
+        super::command_action_command(&CommandAction::SelectResumeSession {
+            session_id: "root-new".to_owned(),
+        })
+    );
+    assert_eq!(
+        harness.router.active_runtime().session_id,
+        original_session_id
+    );
+    assert_eq!(harness.latest_transcript(), transcript_before);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn mouse_resume_picker_selection_routes_through_shared_resume_command() {
+    let mut harness = resume_test_harness("resume-picker-mouse-route");
+    harness.run_command("/resume").expect("open resume picker");
+    assert_eq!(harness.app.focus, Focus::CommandPalette);
+    harness
+        .terminal
+        .draw(|f| harness.app.render(f))
+        .expect("draw resume picker");
+
+    assert!(harness.app.last_palette_area.height >= 3);
+    let palette_row = harness.app.last_palette_area.y.saturating_add(1);
+    let palette_col = harness.app.last_palette_area.x.saturating_add(1);
+    let command = harness.app.handle_mouse_event(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        palette_col,
+        palette_row,
+    ));
+
+    assert_eq!(
+        command,
+        super::command_action_command(&CommandAction::SelectResumeSession {
+            session_id: "root-new".to_owned(),
+        })
+    );
+
+    let result = harness.run_command(
+        command
+            .as_deref()
+            .expect("mouse click should emit shared resume command"),
+    );
+
+    assert!(
+        result.is_ok(),
+        "mouse-selected resume command should succeed"
+    );
+    assert_eq!(harness.router.active_runtime().session_id, "root-new");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_new_is_blocked_while_pending_turn() {
+    let mut harness = resume_test_harness("new-pending");
+    harness.app.pending_turn = true;
+
+    let result = harness.run_command("/new");
+    let transcript = harness.latest_transcript();
+
+    assert!(result.is_ok(), "blocked command still renders feedback");
+    assert!(transcript.contains("pending"));
+    assert!(transcript.contains("session unchanged"));
+    assert!(!transcript.contains("session updated"));
+    assert!(!transcript.contains("handled through the session router"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn run_surface_command_resume_is_blocked_while_pending_turn() {
+    let mut harness = resume_test_harness("resume-pending");
+    harness.app.pending_turn = true;
+
+    let result = harness.run_command("/resume latest");
+    let transcript = harness.latest_transcript();
+
+    assert!(result.is_ok(), "blocked command still renders feedback");
+    assert!(transcript.contains("pending"));
+    assert!(transcript.contains("session unchanged"));
+    assert!(!transcript.contains("session updated"));
+    assert!(!transcript.contains("handled through the session router"));
 }
 
 #[test]
@@ -485,30 +1293,29 @@ fn cwd_command_updates_runtime_and_app_cwd() {
     let config_path = PathBuf::from("/tmp/loong-terminal-title-cwd-command.toml");
     let mut runtime = test_runtime_with_path(config_path);
     runtime.effective_working_directory = Some(base.clone());
+    let expected_cwd = dunce::canonicalize(&nested).expect("canonical nested");
     let mut app = blank_app();
     app.cwd = base.display().to_string();
     let backend = TestBackend::new(72, 18);
     let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
 
     tokio::runtime::Runtime::new()
         .expect("runtime")
         .block_on(super::run_surface_command(
             &mut terminal,
             &mut app,
-            &mut runtime,
+            &mut router,
             &CliChatOptions::default(),
             "/cwd nested",
         ))
         .expect("run cwd command");
 
     assert_eq!(
-        runtime.effective_working_directory,
-        Some(dunce::canonicalize(&nested).expect("canonical nested"))
+        router.active_runtime().effective_working_directory,
+        Some(expected_cwd.clone())
     );
-    assert_eq!(
-        PathBuf::from(&app.cwd),
-        dunce::canonicalize(&nested).expect("canonical nested")
-    );
+    assert_eq!(PathBuf::from(&app.cwd), expected_cwd);
 }
 
 #[test]
@@ -1739,13 +2546,15 @@ fn model_command_opens_selector_surface_instead_of_static_card() {
     let mut app = blank_app();
     let backend = TestBackend::new(72, 18);
     let mut terminal = Terminal::new(backend).expect("terminal");
+    let current_model = runtime.config.provider.model.clone();
+    let mut router = SessionRouter::new(ActiveSessionRoute::from_runtime(runtime));
 
     tokio::runtime::Runtime::new()
         .expect("runtime")
         .block_on(super::run_surface_command(
             &mut terminal,
             &mut app,
-            &mut runtime,
+            &mut router,
             &CliChatOptions::default(),
             "/model",
         ))
@@ -1756,8 +2565,7 @@ fn model_command_opens_selector_surface_instead_of_static_card() {
         .command_palette
         .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
     {
-        Some(CommandAction::OpenModelReasoning(entry))
-            if entry.model == runtime.config.provider.model => {}
+        Some(CommandAction::OpenModelReasoning(entry)) if entry.model == current_model => {}
         other => panic!("expected /model to open model selector flow, got {other:?}"),
     }
 }
@@ -4201,4 +5009,27 @@ fn finish_stage_turn_off_personalization_updates_finish_subtitle() {
 
     assert!(rendered.contains("Loong 不会再主动弹个性化提示"));
     assert!(rendered.contains("loong personalize"));
+}
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn exit_cleanup_deletes_created_empty_session() {
+    let harness = cleanup_test_harness("exit-cleanup-empty");
+    let doomed = harness.create_created_this_run_empty_session();
+
+    harness.run_exit_cleanup().expect("cleanup succeeds");
+
+    assert!(harness.session_missing(doomed.as_str()));
+    assert!(harness.session_tree_missing(doomed.as_str()));
+    assert!(harness.session_owned_rows_missing(doomed.as_str()));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn exit_cleanup_keeps_created_session_after_user_turn() {
+    let harness = cleanup_test_harness("exit-cleanup-user-turn");
+    let kept = harness.create_created_this_run_session_with_user_turn();
+
+    harness.run_exit_cleanup().expect("cleanup succeeds");
+
+    assert!(harness.session_exists(kept.as_str()));
 }

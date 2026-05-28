@@ -35,8 +35,8 @@ use crate::tools::bundled_preinstall_targets;
 use crate::tui_surface::{TuiCalloutTone, TuiKeyValueSpec, TuiMessageSpec, TuiSectionSpec};
 
 use super::command_palette::{
-    CommandAction, CommandPalette, SettingsCommandAction, SettingsEntry, SettingsSurfaceFocus,
-    SkillEntry, slash_command_specs,
+    CommandAction, CommandPalette, ResumePaletteEntry, SettingsCommandAction, SettingsEntry,
+    SettingsSurfaceFocus, SkillEntry, slash_command_specs,
 };
 use super::composer::Composer;
 use super::i18n::{I18nService, Language, SurfaceCopy, resolve_default_language};
@@ -80,6 +80,8 @@ const PENDING_TOOL_BODY_COLORS: [Color; 6] = [
 
 include!("app/state.rs");
 include!("app/surface.rs");
+include!("app/session_router.rs");
+include!("app/switch_confirm.rs");
 include!("app/runtime.rs");
 include!("app/startup.rs");
 include!("app/input_palette.rs");
@@ -87,6 +89,7 @@ include!("app/commands.rs");
 include!("app/pending.rs");
 include!("app/startup_catalog.rs");
 
+mod resume_candidates;
 #[cfg(test)]
 #[path = "app/app_tests.rs"]
 mod tests;

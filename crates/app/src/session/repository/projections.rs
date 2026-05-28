@@ -26,6 +26,13 @@ impl SessionRepository {
         Self::latest_resumable_root_session_summary_with_conn(&conn)
     }
 
+    pub fn list_resumable_root_session_summaries(
+        &self,
+    ) -> Result<Vec<SessionSummaryRecord>, String> {
+        let conn = self.open_connection()?;
+        Self::list_resumable_root_session_summaries_with_conn(&conn)
+    }
+
     pub fn load_session_observation(
         &self,
         session_id: &str,

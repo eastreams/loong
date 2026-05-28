@@ -117,6 +117,7 @@ crossterm = "0.29.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pulldown-cmark = "0.13.0"
 similar = "3.1.0"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 axum.workspace = true

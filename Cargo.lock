@@ -3112,6 +3112,7 @@ dependencies = [
  "unicode-normalization",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "uuid",
  "wait-timeout",
  "which",
  "zip",
