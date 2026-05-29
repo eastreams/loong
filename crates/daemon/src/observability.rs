@@ -2,6 +2,13 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::io::{self, IsTerminal, Write};
 
+use opentelemetry::trace::{Span, Tracer, TracerProvider};
+use opentelemetry::{KeyValue, global};
+use opentelemetry_otlp::{OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, SpanExporter, WithHttpConfig};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::runtime;
+use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
@@ -332,6 +339,128 @@ fn structured_json_field_value(field_name: &str, value: &str) -> Option<(&'stati
     parsed.is_array().then_some((PAYLOAD_KEYS_FIELD, parsed))
 }
 
+pub struct OtelGuard {
+    provider: Option<SdkTracerProvider>,
+}
+
+impl OtelGuard {
+    /// Explicitly shut down the tracer provider, flushing any buffered spans.
+    ///
+    /// Safe to call multiple times; subsequent calls are no-ops.
+    /// Must be called manually before `std::process::exit()` since that
+    /// function skips stack destructors.
+    pub fn shutdown(&mut self) {
+        if let Some(provider) = self.provider.take()
+            && let Err(e) = provider.shutdown()
+        {
+            let mut stderr = io::stderr();
+            let _ = writeln!(stderr, "loong.daemon otel shutdown error: {e}");
+        }
+    }
+}
+
+impl Drop for OtelGuard {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn otel_traces_export_is_enabled() -> bool {
+    let generic_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let traces_endpoint = std::env::var(OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).ok();
+
+    endpoint_env_is_present(generic_endpoint.as_deref())
+        || endpoint_env_is_present(traces_endpoint.as_deref())
+}
+
+fn endpoint_env_is_present(value: Option<&str>) -> bool {
+    value.is_some_and(|entry| !entry.trim().is_empty())
+}
+
+fn build_otel_exporter() -> Option<SpanExporter> {
+    let mut client_builder = reqwest::Client::builder();
+
+    if let Ok(ca_path) = std::env::var("OTEL_CA_CERT_FILE") {
+        let pem = match std::fs::read(&ca_path) {
+            Ok(pem) => pem,
+            Err(e) => {
+                let mut stderr = io::stderr();
+                let _ = writeln!(
+                    stderr,
+                    "loong.daemon otel CA cert read failed ({ca_path}): {e}"
+                );
+                return None;
+            }
+        };
+        let ca = match reqwest::Certificate::from_pem(&pem) {
+            Ok(ca) => ca,
+            Err(e) => {
+                let mut stderr = io::stderr();
+                let _ = writeln!(
+                    stderr,
+                    "loong.daemon otel CA cert parse failed ({ca_path}): {e}"
+                );
+                return None;
+            }
+        };
+        client_builder = client_builder.add_root_certificate(ca);
+    }
+
+    let client = match client_builder.build() {
+        Ok(client) => client,
+        Err(e) => {
+            let mut stderr = io::stderr();
+            let _ = writeln!(stderr, "loong.daemon otel reqwest client build failed: {e}");
+            return None;
+        }
+    };
+
+    match SpanExporter::builder()
+        .with_http()
+        .with_http_client(client)
+        .build()
+    {
+        Ok(exporter) => Some(exporter),
+        Err(e) => {
+            let mut stderr = io::stderr();
+            let _ = writeln!(stderr, "loong.daemon otel exporter init failed: {e}");
+            None
+        }
+    }
+}
+
+pub fn init_otel() -> OtelGuard {
+    if !otel_traces_export_is_enabled() {
+        return OtelGuard { provider: None };
+    }
+
+    let service_name = std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "loong".to_owned());
+
+    let Some(exporter) = build_otel_exporter() else {
+        return OtelGuard { provider: None };
+    };
+
+    let resource = Resource::builder()
+        .with_attributes([KeyValue::new("service.name", service_name)])
+        .build();
+
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(BatchSpanProcessor::builder(exporter, runtime::Tokio).build())
+        .with_resource(resource)
+        .build();
+
+    global::set_tracer_provider(provider.clone());
+
+    let tracer = provider.tracer("loong");
+    let mut startup_span = tracer.span_builder("loong.init").start(&tracer);
+    startup_span.set_attribute(KeyValue::new("otel.status", "initialized"));
+    startup_span.end();
+
+    OtelGuard {
+        provider: Some(provider),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -451,6 +580,16 @@ mod tests {
         let filter = build_env_filter("[broken");
         let rendered = filter.to_string();
         assert_eq!(rendered, "warn");
+    }
+
+    #[test]
+    fn endpoint_env_is_present_rejects_empty_values() {
+        assert!(super::endpoint_env_is_present(Some(
+            "http://localhost:4318"
+        )));
+        assert!(!super::endpoint_env_is_present(Some("")));
+        assert!(!super::endpoint_env_is_present(Some("   ")));
+        assert!(!super::endpoint_env_is_present(None));
     }
 
     #[test]

@@ -5,6 +5,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::Stream;
+use opentelemetry::trace::{Span, SpanKind, Tracer, TracerProvider};
+use opentelemetry::{KeyValue, global};
 use serde_json::Value;
 use tokio::time::sleep;
 
@@ -931,6 +933,34 @@ where
     PreStatusError: FnMut(&ProviderApiError) -> bool,
 {
     let model_name = runtime.model.to_owned();
+    let provider_name = runtime.provider.kind.as_str().to_owned();
+    let base_url = runtime.provider.base_url.clone();
+
+    let otel_tracer = global::tracer_provider().tracer("loong");
+    let capture_content =
+        std::env::var("LOONG_OTEL_CAPTURE_CONTENT").is_ok_and(|v| v == "1" || v == "true");
+    let mut otel_span = otel_tracer
+        .span_builder(format!("chat {model_name}"))
+        .with_kind(SpanKind::Client)
+        .with_attributes([
+            KeyValue::new("gen_ai.operation.name", "chat"),
+            KeyValue::new("gen_ai.request.model", model_name.clone()),
+            KeyValue::new("gen_ai.provider.name", provider_name),
+            KeyValue::new("gen_ai.request.stream", true),
+            KeyValue::new(
+                "gen_ai.conversation.id",
+                session_id.unwrap_or("").to_owned(),
+            ),
+            KeyValue::new("server.address", base_url),
+        ])
+        .start(&otel_tracer);
+
+    if capture_content
+        && !_messages.is_empty()
+        && let Ok(input_json) = serde_json::to_string(_messages)
+    {
+        otel_span.set_attribute(KeyValue::new("gen_ai.input.messages", input_json));
+    }
     let transport_mode = runtime.runtime_contract.transport_mode;
     let mut build_body = build_body;
     let mut retry_state = StreamingRetryState {
@@ -1090,10 +1120,14 @@ where
     };
 
     if let Some(error) = accumulator.error {
+        otel_span.set_attribute(KeyValue::new("error.type", "streaming_error"));
+        otel_span.end();
         return Err(error);
     }
 
     if !accumulator.done {
+        otel_span.set_attribute(KeyValue::new("error.type", "incomplete_stream"));
+        otel_span.end();
         return Err(build_model_request_error(
             "streaming response ended without message_stop event".to_owned(),
             false,
@@ -1134,6 +1168,46 @@ where
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    otel_span.set_attribute(KeyValue::new(
+        "gen_ai.response.finish_reasons",
+        if tool_intents.is_empty() {
+            "[\"stop\"]".to_owned()
+        } else {
+            "[\"tool_calls\"]".to_owned()
+        },
+    ));
+    if capture_content {
+        let mut output_parts = serde_json::json!({"parts": []});
+        if !accumulator.text.is_empty()
+            && let Some(arr) = output_parts.get_mut("parts").and_then(|v| v.as_array_mut())
+        {
+            arr.push(serde_json::json!({"type": "text", "content": &accumulator.text}));
+        }
+        for tc in &tool_intents {
+            if let Some(arr) = output_parts.get_mut("parts").and_then(|v| v.as_array_mut()) {
+                arr.push(serde_json::json!({
+                    "type": "tool_call",
+                    "name": &tc.tool_name,
+                    "arguments": &tc.args_json,
+                }));
+            }
+        }
+        if let Ok(output_json) = serde_json::to_string(&output_parts) {
+            otel_span.set_attribute(KeyValue::new("gen_ai.output.messages", output_json));
+        }
+    }
+    if let Some(meta_obj) = accumulator.meta.as_object()
+        && let Some(usage) = meta_obj.get("usage")
+    {
+        if let Some(input_tokens) = usage.get("input_tokens").and_then(|v| v.as_i64()) {
+            otel_span.set_attribute(KeyValue::new("gen_ai.usage.input_tokens", input_tokens));
+        }
+        if let Some(output_tokens) = usage.get("output_tokens").and_then(|v| v.as_i64()) {
+            otel_span.set_attribute(KeyValue::new("gen_ai.usage.output_tokens", output_tokens));
+        }
+    }
+    otel_span.end();
 
     Ok(ProviderTurn {
         assistant_text: accumulator.text,

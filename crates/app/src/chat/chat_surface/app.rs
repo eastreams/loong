@@ -1,4 +1,7 @@
 use crossterm::terminal::SetTitle;
+use opentelemetry::context::FutureExt;
+use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer, TracerProvider};
+use opentelemetry::{Context, KeyValue, global};
 use ratatui::{
     Frame, Terminal,
     backend::Backend,

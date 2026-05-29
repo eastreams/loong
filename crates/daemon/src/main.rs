@@ -188,8 +188,12 @@ fn main() {
         command = %redacted_command,
         "resolved CLI command"
     );
-    let result = build_daemon_runtime(&command)
-        .and_then(|runtime| runtime.block_on(run_command(command, invoked_as_default_entry)));
+    let result = build_daemon_runtime(&command).and_then(|runtime| {
+        runtime.block_on(async {
+            let _otel_guard = init_otel();
+            run_command(command, invoked_as_default_entry).await
+        })
+    });
     if let Err(error) = result {
         let error_code = error_code(error.as_str());
         tracing::error!(
