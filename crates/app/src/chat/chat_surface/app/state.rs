@@ -9,6 +9,8 @@ struct PendingRenderCache {
 struct LiveTranscriptState {
     draft_preview: Option<String>,
     tool_activity_lines: Vec<String>,
+    provisional_rendered: Option<Vec<Line<'static>>>,
+    provisional_render_width: u16,
 }
 
 impl LiveTranscriptState {
@@ -850,6 +852,10 @@ pub struct App {
     pub spinner_seed: u64,
     pub last_pending_signature: Option<u64>,
     last_live_transcript_signature: Option<u64>,
+    pub last_spinner_frame: &'static str,
+    pub last_spinner_verb: &'static str,
+    pub last_spinner_row: Option<u16>,
+    pub last_composer_cursor: Option<(u16, u16)>,
     pending_render_cache: Option<PendingRenderCache>,
     inline_skill_popup_active: bool,
     pub last_render_width: u16,

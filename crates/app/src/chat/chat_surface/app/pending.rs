@@ -36,7 +36,29 @@ impl App {
             && cache.signature == signature
             && cache.max_pending_height == max_pending_height
         {
-            return cache.lines.clone();
+            let mut lines = cache.lines.clone();
+            if let Some(last) = lines.last_mut() {
+                let start = self.turn_start.unwrap_or_else(std::time::Instant::now);
+                *last = Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("{} ", focus_ring_frame(start)),
+                        Style::default()
+                            .fg(SURFACE_CYAN)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(
+                            "{}...",
+                            get_spinner_verb_with_seed(start, self.spinner_seed)
+                        ),
+                        Style::default()
+                            .fg(SURFACE_CYAN)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]);
+            }
+            return lines;
         }
 
         let max_pending_preview_lines = max_pending_height.saturating_sub(2).max(1) as usize;
@@ -89,11 +111,22 @@ async fn start_turn<B: Backend>(
 
     let sink = {
         let live_transcript = Arc::clone(&app.live_transcript);
+        let render_width = Arc::clone(&app.live_render_width);
         Arc::new(
             move |payload: super::super::CliChatLiveSurfaceRenderPayload| {
+                let width = render_width.load(Ordering::Relaxed).max(1) as u16;
+                let rendered = payload
+                    .draft_preview
+                    .as_deref()
+                    .filter(|t| !t.trim().is_empty())
+                    .map(|text| {
+                        super::message_list::render_provisional_markdown(text, width)
+                    });
                 if let Ok(mut state) = live_transcript.lock() {
                     state.draft_preview = payload.draft_preview;
                     state.tool_activity_lines = payload.tool_activity_lines;
+                    state.provisional_rendered = rendered;
+                    state.provisional_render_width = width;
                 }
             },
         )
@@ -1754,10 +1787,7 @@ fn pending_render_signature(app: &App) -> Option<u64> {
         if !app.pending_turn {
             return None;
         }
-        let start = app.turn_start?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        focus_ring_frame(start).hash(&mut hasher);
-        get_spinner_verb_with_seed(start, app.spinner_seed).hash(&mut hasher);
         app.pending_steers
             .iter()
             .for_each(|message| message.hash(&mut hasher));
@@ -1845,14 +1875,11 @@ fn pending_render_signature_for_geometry(
     if !app.pending_turn {
         return None;
     }
-    let start = app.turn_start?;
     let max_pending_preview_lines =
         pending_signature_preview_budget_for_geometry(height, composer_height, palette_height);
     let visible_lines =
         pending_live_tool_activity_lines(&app.live_transcript, max_pending_preview_lines);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    focus_ring_frame(start).hash(&mut hasher);
-    get_spinner_verb_with_seed(start, app.spinner_seed).hash(&mut hasher);
     width.hash(&mut hasher);
     height.hash(&mut hasher);
     visible_lines.hash(&mut hasher);

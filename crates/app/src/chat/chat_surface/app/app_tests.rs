@@ -63,6 +63,10 @@ fn blank_app() -> App {
         spinner_seed: 1,
         last_pending_signature: None,
         last_live_transcript_signature: None,
+        last_spinner_frame: "",
+        last_spinner_verb: "",
+        last_spinner_row: None,
+        last_composer_cursor: None,
         pending_render_cache: None,
         inline_skill_popup_active: false,
         last_render_width: 0,
@@ -3528,6 +3532,8 @@ fn pending_live_lines_trim_outer_blank_lines_and_collapse_repeats() {
             String::new(),
         ],
         draft_preview: None,
+        provisional_rendered: None,
+        provisional_render_width: 0,
     }));
 
     let normalized = super::pending_live_lines(&lines, 6);
@@ -3551,6 +3557,8 @@ fn pending_live_lines_expand_with_larger_preview_budget() {
             "reply-4".to_owned(),
         ],
         draft_preview: None,
+        provisional_rendered: None,
+        provisional_render_width: 0,
     }));
 
     let compact = super::pending_live_lines(&lines, 4);
