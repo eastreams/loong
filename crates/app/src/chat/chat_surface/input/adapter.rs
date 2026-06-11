@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event};
 
-use super::{ChatInputEvent, ChatKeyEvent, ChatKeyEventKind, ChatMouseEvent};
+use super::{
+    ChatInputEvent, ChatKeyCode, ChatKeyEvent, ChatKeyEventKind, ChatKeyModifiers, ChatMouseEvent,
+};
 
 pub(crate) struct InputAdapter;
 
@@ -32,7 +34,7 @@ impl InputAdapter {
 fn normalize_crossterm_event(event: Event) -> Option<ChatInputEvent> {
     match event {
         Event::Key(key) => {
-            let key = ChatKeyEvent::from(key);
+            let key = normalize_key_event(ChatKeyEvent::from(key));
             match key.kind {
                 ChatKeyEventKind::Release => None,
                 ChatKeyEventKind::Press | ChatKeyEventKind::Repeat => {
@@ -46,4 +48,12 @@ fn normalize_crossterm_event(event: Event) -> Option<ChatInputEvent> {
         Event::FocusGained => Some(ChatInputEvent::FocusGained),
         Event::FocusLost => Some(ChatInputEvent::FocusLost),
     }
+}
+
+fn normalize_key_event(mut key: ChatKeyEvent) -> ChatKeyEvent {
+    if key.code == ChatKeyCode::Char('h') && key.modifiers.contains(ChatKeyModifiers::CONTROL) {
+        key.code = ChatKeyCode::Backspace;
+        key.modifiers = key.modifiers.without(ChatKeyModifiers::CONTROL);
+    }
+    key
 }

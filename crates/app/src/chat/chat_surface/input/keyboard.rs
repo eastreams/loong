@@ -105,6 +105,10 @@ impl ChatKeyModifiers {
     pub(crate) fn intersects(self, other: Self) -> bool {
         self.0.intersects(other.0)
     }
+
+    pub(crate) fn without(self, other: Self) -> Self {
+        Self(self.0.difference(other.0))
+    }
 }
 
 impl std::ops::BitOr for ChatKeyModifiers {

@@ -27,6 +27,86 @@ fn normalize_keeps_press_key_events() {
 }
 
 #[test]
+fn normalize_legacy_ctrl_h_as_backspace() {
+    let normalized = InputAdapter::normalize_raw_event_for_test(Event::Key(KeyEvent {
+        code: KeyCode::Char('h'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }));
+
+    assert_eq!(
+        normalized,
+        Some(ChatInputEvent::Key(ChatKeyEvent {
+            code: ChatKeyCode::Backspace,
+            modifiers: ChatKeyModifiers::NONE,
+            kind: ChatKeyEventKind::Press,
+            state: Default::default(),
+        }))
+    );
+}
+
+#[test]
+fn normalize_legacy_ctrl_h_preserves_non_control_modifiers() {
+    let normalized = InputAdapter::normalize_raw_event_for_test(Event::Key(KeyEvent {
+        code: KeyCode::Char('h'),
+        modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }));
+
+    assert_eq!(
+        normalized,
+        Some(ChatInputEvent::Key(ChatKeyEvent {
+            code: ChatKeyCode::Backspace,
+            modifiers: ChatKeyModifiers::ALT,
+            kind: ChatKeyEventKind::Press,
+            state: Default::default(),
+        }))
+    );
+}
+
+#[test]
+fn normalize_keeps_plain_h_as_character() {
+    let normalized = InputAdapter::normalize_raw_event_for_test(Event::Key(KeyEvent {
+        code: KeyCode::Char('h'),
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }));
+
+    assert_eq!(
+        normalized,
+        Some(ChatInputEvent::Key(ChatKeyEvent {
+            code: ChatKeyCode::Char('h'),
+            modifiers: ChatKeyModifiers::NONE,
+            kind: ChatKeyEventKind::Press,
+            state: Default::default(),
+        }))
+    );
+}
+
+#[test]
+fn normalize_keeps_direct_backspace() {
+    let normalized = InputAdapter::normalize_raw_event_for_test(Event::Key(KeyEvent {
+        code: KeyCode::Backspace,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }));
+
+    assert_eq!(
+        normalized,
+        Some(ChatInputEvent::Key(ChatKeyEvent {
+            code: ChatKeyCode::Backspace,
+            modifiers: ChatKeyModifiers::NONE,
+            kind: ChatKeyEventKind::Press,
+            state: Default::default(),
+        }))
+    );
+}
+
+#[test]
 fn normalize_keeps_repeat_key_events() {
     let normalized = InputAdapter::normalize_raw_event_for_test(Event::Key(KeyEvent {
         code: KeyCode::Left,
