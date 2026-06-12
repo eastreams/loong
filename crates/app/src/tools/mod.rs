@@ -146,10 +146,9 @@ pub(crate) use tool_lease::{peek_tool_invoke_request, resolve_tool_invoke_reques
 pub(crate) use tool_lease::{
     synthesize_test_provider_tool_call, synthesize_test_provider_tool_call_with_scope,
 };
-pub(crate) use tool_lease_binding::{
-    TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TOKEN_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD,
-    inject_tool_lease_binding,
-};
+pub(crate) use tool_lease_binding::inject_tool_lease_binding;
+#[cfg(test)]
+pub(crate) use tool_lease_binding::{TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD};
 pub(crate) use tool_path::normalize_without_fs;
 pub use tool_runtime_view::runtime_tool_view_from_loong_config;
 pub(crate) use tool_runtime_view::{

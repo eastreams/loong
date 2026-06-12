@@ -354,9 +354,8 @@ fn load_prompt_context_with_diagnostics_omits_legacy_identity_from_profile_proje
 fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_profile_note() {
     use crate::config::MemoryProfile;
 
-    let workspace_root = crate::test_utils::unique_temp_dir(
-        "loong-test-memory-profile-diagnostics-personalization",
-    );
+    let workspace_root =
+        crate::test_utils::unique_temp_dir("loong-test-memory-profile-diagnostics-personalization");
     std::fs::create_dir_all(&workspace_root).expect("create diagnostics workspace");
 
     let db_path = workspace_root.join("profile-diagnostics-personalization.sqlite3");

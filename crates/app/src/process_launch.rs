@@ -284,11 +284,8 @@ mod tests {
         let root = crate::test_utils::unique_temp_dir("loong-process-launch-sh");
         std::fs::create_dir_all(&root).expect("create temp dir");
         let script_path = root.join("script.sh");
-        crate::test_utils::write_executable_script_atomically(
-            &script_path,
-            "#!/bin/sh\nexit 0\n",
-        )
-        .expect("write script");
+        crate::test_utils::write_executable_script_atomically(&script_path, "#!/bin/sh\nexit 0\n")
+            .expect("write script");
 
         let resolved =
             resolve_command_invocation(script_path.to_string_lossy().as_ref(), ["--flag", "value"]);
@@ -374,11 +371,8 @@ mod tests {
         let bin_dir = root.join("bin");
         let script_path = bin_dir.join("path-script");
         std::fs::create_dir_all(&bin_dir).expect("create bin dir");
-        crate::test_utils::write_executable_script_atomically(
-            &script_path,
-            "#!/bin/sh\nexit 0\n",
-        )
-        .expect("write path-discovered script");
+        crate::test_utils::write_executable_script_atomically(&script_path, "#!/bin/sh\nexit 0\n")
+            .expect("write path-discovered script");
 
         let mut env = crate::test_utils::ScopedEnv::new();
         let original_path = std::env::var_os("PATH").unwrap_or_default();
