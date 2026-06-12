@@ -78,6 +78,7 @@ mod tool_identity;
 mod tool_internal_context;
 mod tool_lease;
 mod tool_lease_authority;
+mod tool_lease_binding;
 mod tool_path;
 mod tool_runtime_view;
 mod tool_search;
@@ -122,10 +123,8 @@ pub use security_posture::{
 pub use shell_request_prep::summarize_tool_request_for_display;
 #[cfg(feature = "tool-shell")]
 pub(crate) use shell_request_prep::{
-    TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TOKEN_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD,
-    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, inject_tool_lease_binding,
-    normalize_shell_payload_for_request, normalize_shell_request_for_execution,
-    prepare_kernel_tool_request,
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, normalize_shell_payload_for_request,
+    normalize_shell_request_for_execution, prepare_kernel_tool_request,
 };
 pub(crate) use tool_dispatch::execute_discoverable_tool_core_with_config;
 pub use tool_dispatch::execute_tool_core_with_config;
@@ -147,6 +146,9 @@ pub(crate) use tool_lease::{peek_tool_invoke_request, resolve_tool_invoke_reques
 pub(crate) use tool_lease::{
     synthesize_test_provider_tool_call, synthesize_test_provider_tool_call_with_scope,
 };
+pub(crate) use tool_lease_binding::inject_tool_lease_binding;
+#[cfg(test)]
+pub(crate) use tool_lease_binding::{TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD};
 pub(crate) use tool_path::normalize_without_fs;
 pub use tool_runtime_view::runtime_tool_view_from_loong_config;
 pub(crate) use tool_runtime_view::{

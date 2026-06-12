@@ -3,10 +3,9 @@ use std::collections::BTreeSet;
 use loong_contracts::{Capability, ToolCoreRequest};
 use serde_json::Value;
 
+use super::tool_lease_binding::inject_tool_lease_binding;
+
 pub(crate) const TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: &str = "_granted_capabilities";
-pub(crate) const TOOL_LEASE_TOKEN_ID_FIELD: &str = "_lease_token_id";
-pub(crate) const TOOL_LEASE_SESSION_ID_FIELD: &str = "_lease_session_id";
-pub(crate) const TOOL_LEASE_TURN_ID_FIELD: &str = "_lease_turn_id";
 
 pub(crate) fn normalize_shell_payload_for_request(tool_name: &str, payload: Value) -> Value {
     match super::canonical_tool_name(tool_name) {
@@ -175,32 +174,6 @@ fn split_shell_command_if_safe(command: &str) -> Option<(String, Vec<String>)> {
     }
 
     Some((command, args))
-}
-
-pub(crate) fn inject_tool_lease_binding(
-    payload: &mut serde_json::Map<String, Value>,
-    token_id: Option<&str>,
-    session_id: Option<&str>,
-    turn_id: Option<&str>,
-) {
-    if let Some(token_id) = token_id {
-        payload.insert(
-            TOOL_LEASE_TOKEN_ID_FIELD.to_owned(),
-            Value::String(token_id.to_owned()),
-        );
-    }
-    if let Some(session_id) = session_id {
-        payload.insert(
-            TOOL_LEASE_SESSION_ID_FIELD.to_owned(),
-            Value::String(session_id.to_owned()),
-        );
-    }
-    if let Some(turn_id) = turn_id {
-        payload.insert(
-            TOOL_LEASE_TURN_ID_FIELD.to_owned(),
-            Value::String(turn_id.to_owned()),
-        );
-    }
 }
 
 #[cfg(test)]

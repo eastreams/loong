@@ -18,6 +18,8 @@ use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 
+use super::tool_lease_binding::extract_tool_lease_binding;
+
 const TOOL_LEASE_TTL_SECONDS: u64 = 300;
 const TOOL_LEASE_SECRET_BYTES: usize = 32;
 const TOOL_LEASE_SECRET_FILE_NAME: &str = "tool-lease-secret.hex";
@@ -29,13 +31,6 @@ struct ToolLeaseClaims {
     tool_id: String,
     catalog_digest: String,
     expires_at_unix: u64,
-    token_id: Option<String>,
-    session_id: Option<String>,
-    turn_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-struct ToolLeaseBinding {
     token_id: Option<String>,
     session_id: Option<String>,
     turn_id: Option<String>,
@@ -119,26 +114,6 @@ pub(crate) fn validate_tool_lease(
     }
 
     Ok(())
-}
-
-fn extract_tool_lease_binding(payload: &serde_json::Map<String, Value>) -> ToolLeaseBinding {
-    let token_id = payload
-        .get(super::TOOL_LEASE_TOKEN_ID_FIELD)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let session_id = payload
-        .get(super::TOOL_LEASE_SESSION_ID_FIELD)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let turn_id = payload
-        .get(super::TOOL_LEASE_TURN_ID_FIELD)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    ToolLeaseBinding {
-        token_id,
-        session_id,
-        turn_id,
-    }
 }
 
 fn sign_tool_lease(encoded_claims: &str) -> Result<String, String> {
