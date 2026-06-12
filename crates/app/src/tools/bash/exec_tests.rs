@@ -424,7 +424,7 @@ fn bash_exec_empty_path_probe() {
     let root = unique_temp_dir("loong-bash-empty-path-fallback");
     fs::create_dir_all(&root).expect("create fixture root");
 
-    let mut env = ScopedEnv::new();
+    let mut env = crate::test_utils::ScopedEnv::new();
     env.set("PATH", "");
 
     let mut config = test_tool_runtime_config(root.clone());
