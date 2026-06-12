@@ -12,7 +12,7 @@ use crate::chat::chat_surface::input::{
 };
 use crate::chat::chat_surface::utils::{
     SURFACE_ACCENT, SURFACE_DIM_GRAY, SURFACE_GRAY, SURFACE_GREEN, SURFACE_RED, SURFACE_TOOL_BG,
-    SURFACE_USER_MSG_BG, 
+    SURFACE_USER_MSG_BG,
 };
 use crate::test_utils::ScopedEnv;
 use ratatui::{Terminal, backend::TestBackend, style::Color, text::Line};
