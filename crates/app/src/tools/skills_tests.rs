@@ -102,6 +102,7 @@
             Self { _env: env, path }
         }
 
+        #[cfg(unix)]
         fn set_env(&mut self, key: &'static str, value: impl AsRef<std::ffi::OsStr>) {
             self._env.set(key, value);
         }

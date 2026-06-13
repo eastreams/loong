@@ -1,3 +1,4 @@
+#[cfg(any(unix, test))]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
