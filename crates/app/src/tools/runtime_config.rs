@@ -2766,4 +2766,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "runtime_config_delegate_prompt_tests.rs"]
-mod delegate_prompt_tests;
+mod tests_delegate_prompt;

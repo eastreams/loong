@@ -502,3 +502,7 @@ mod tests {
         assert_eq!(timeout_ms, 1_000);
     }
 }
+
+#[cfg(test)]
+#[path = "bash/exec_tests.rs"]
+mod tests_exec;

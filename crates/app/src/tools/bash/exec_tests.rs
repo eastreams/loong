@@ -398,7 +398,7 @@ fn bash_exec_succeeds_when_path_is_empty_but_stable_search_path_can_find_runtime
     let _subprocess_guard = crate::test_utils::acquire_subprocess_test_guard();
     let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
         .arg("--exact")
-        .arg("tools::bash::exec_tests::bash_exec_empty_path_probe")
+        .arg("tools::bash::tests_exec::bash_exec_empty_path_probe")
         .arg("--nocapture")
         .env(BASH_EMPTY_PATH_PROBE_ENV, "1")
         .output()

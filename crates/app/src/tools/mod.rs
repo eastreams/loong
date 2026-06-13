@@ -60,8 +60,6 @@ mod payload;
 mod process_exec;
 mod provider_schema;
 mod provider_switch;
-#[cfg(test)]
-mod required_capabilities_tests;
 mod routing;
 pub mod runtime_config;
 pub(crate) mod runtime_events;
@@ -94,9 +92,6 @@ mod tool_surface;
 mod web_fetch;
 pub(crate) mod web_http;
 mod web_search;
-
-#[cfg(test)]
-mod workspace_root_tests;
 
 pub use catalog::{
     CapabilityActionClass, ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor,
@@ -460,6 +455,14 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
 
 #[cfg(test)]
 mod test_utils;
+
+#[cfg(test)]
+#[path = "required_capabilities_tests.rs"]
+mod tests_required_capabilities;
+
+#[cfg(test)]
+#[path = "workspace_root_tests.rs"]
+mod tests_workspace_root;
 
 #[cfg(test)]
 mod tests;

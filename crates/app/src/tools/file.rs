@@ -2432,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_no_match_errors() {
+    fn file_edit_rejects_missing_old_text_match() {
         let base = unique_temp_dir("loong-file-edit-nomatch");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
@@ -2452,7 +2452,7 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_multiple_match_errors() {
+    fn file_edit_rejects_non_unique_old_text_match() {
         let base = unique_temp_dir("loong-file-edit-multi");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
@@ -2610,7 +2610,7 @@ mod tests {
     }
 
     #[test]
-    fn file_edit_empty_old_string_errors() {
+    fn file_edit_rejects_empty_old_text() {
         let base = unique_temp_dir("loong-file-edit-empty");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");

@@ -2289,4 +2289,5 @@ fn execute_feishu_calendar_freebusy_tool_with_config(
 }
 
 #[cfg(test)]
-mod payload_tests;
+#[path = "feishu/payload_tests.rs"]
+mod tests_payload;
