@@ -1,4 +1,8 @@
-use crossterm::terminal::SetTitle;
+use crossterm::{
+    cursor::MoveTo,
+    style::{Attribute, Print, SetAttribute, SetForegroundColor},
+    terminal::{Clear, ClearType, SetTitle},
+};
 use opentelemetry::context::FutureExt;
 use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer, TracerProvider};
 use opentelemetry::{Context, KeyValue, global};

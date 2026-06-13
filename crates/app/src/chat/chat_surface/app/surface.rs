@@ -27,6 +27,10 @@ impl App {
             spinner_seed: spinner_seed(),
             last_pending_signature: None,
             last_live_transcript_signature: None,
+            last_spinner_frame: "",
+            last_spinner_verb: "",
+            last_spinner_row: None,
+            last_composer_cursor: None,
             pending_render_cache: None,
             inline_skill_popup_active: false,
             last_render_width: render_width as u16,
@@ -79,12 +83,33 @@ impl App {
             self.interstitial_lines_for(size.width, size.height, composer_height, palette_height);
         let interstitial_height = interstitial_lines.len() as u16;
         let provisional_assistant_text = provisional_assistant_text(&self.live_transcript);
-        let transcript_line_count = self
-            .message_list
-            .rendered_line_count_with_provisional_assistant(
-                size.width,
-                provisional_assistant_text.as_deref(),
-            ) as u16;
+        let provisional_rendered = provisional_assistant_text
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .and_then(|_text| {
+                self.live_transcript
+                    .lock()
+                    .ok()
+                    .and_then(|state| {
+                        if state.provisional_render_width == size.width {
+                            state.provisional_rendered.clone()
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .or_else(|| {
+                provisional_assistant_text
+                    .as_deref()
+                    .filter(|t| !t.trim().is_empty())
+                    .map(|text| {
+                        self.message_list
+                            .render_provisional_assistant_message_lines(text, size.width)
+                    })
+            });
+        let transcript_line_count = (self.message_list.rendered_line_count(size.width)
+            + provisional_rendered.as_ref().map_or(0, |l| l.len()))
+            as u16;
         let bottom_band_height = interstitial_height
             + 1
             + composer_height
@@ -142,10 +167,17 @@ impl App {
             Rect::default()
         };
 
-        self.message_list.render_with_provisional_assistant(
+        if self.pending_turn && interstitial_height > 0 {
+            self.last_spinner_row = Some(pending_area.y + interstitial_height - 1);
+        } else {
+            self.last_spinner_row = None;
+        }
+
+        self.message_list.render_with_provisional_extension(
             f,
             *transcript_area,
-            provisional_assistant_text.as_deref(),
+            provisional_rendered,
+            self.message_list.startup_mode_active(),
         );
 
         if interstitial_height > 0 {
@@ -171,6 +203,9 @@ impl App {
         if matches!(self.focus, Focus::Composer) {
             let (x, y) = self.composer.cursor_position(*composer_area);
             f.set_cursor_position((x, y));
+            self.last_composer_cursor = Some((x, y));
+        } else {
+            self.last_composer_cursor = None;
         }
 
         if palette_visible {

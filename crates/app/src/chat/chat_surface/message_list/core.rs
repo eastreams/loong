@@ -99,6 +99,7 @@ pub struct MessageList {
     viewport_cache: Option<ViewportRenderCache>,
     startup_animation_started_at: Instant,
     last_startup_animation_signature: Option<u64>,
+    provisional_text_cache: Option<(String, u16, Vec<Line<'static>>)>,
 }
 
 struct RenderCache {
@@ -130,6 +131,7 @@ impl MessageList {
             viewport_cache: None,
             startup_animation_started_at: Instant::now(),
             last_startup_animation_signature: None,
+            provisional_text_cache: None,
         }
     }
 
@@ -317,18 +319,6 @@ impl MessageList {
 
     pub fn rendered_line_count(&mut self, width: u16) -> usize {
         self.ensure_render_cache(width).len()
-    }
-
-    pub fn rendered_line_count_with_provisional_assistant(
-        &mut self,
-        width: u16,
-        provisional_assistant_text: Option<&str>,
-    ) -> usize {
-        if provisional_assistant_text.is_none_or(|text| text.trim().is_empty()) {
-            return self.rendered_line_count(width);
-        }
-        self.rendered_lines_with_provisional_assistant(width, provisional_assistant_text)
-            .len()
     }
 
     fn ensure_render_cache(&mut self, width: u16) -> &Vec<Line<'static>> {
@@ -564,42 +554,7 @@ impl MessageList {
         f.render_widget(paragraph, area);
     }
 
-    pub fn render_with_provisional_assistant(
-        &mut self,
-        f: &mut Frame,
-        area: Rect,
-        provisional_assistant_text: Option<&str>,
-    ) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        if provisional_assistant_text.is_none_or(|text| text.trim().is_empty()) {
-            self.render(f, area);
-            return;
-        }
-
-        let rendered_lines =
-            self.rendered_lines_with_provisional_assistant(area.width, provisional_assistant_text);
-        self.render_explicit_lines(f, area, rendered_lines, self.startup_mode_active());
-    }
-
-    fn rendered_lines_with_provisional_assistant(
-        &mut self,
-        width: u16,
-        provisional_assistant_text: Option<&str>,
-    ) -> Vec<Line<'static>> {
-        let mut rendered_lines = self.get_rendered_lines(width);
-        let Some(text) = provisional_assistant_text.map(str::trim) else {
-            return rendered_lines;
-        };
-        if text.is_empty() {
-            return rendered_lines;
-        }
-        rendered_lines.extend(render_provisional_assistant_message_lines(text, width));
-        rendered_lines
-    }
-
-    fn render_explicit_lines(
+    pub fn render_explicit_lines(
         &mut self,
         f: &mut Frame,
         area: Rect,
@@ -657,6 +612,86 @@ impl MessageList {
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(Text::from(visible_lines));
 
+        f.render_widget(paragraph, area);
+    }
+
+    pub fn render_with_provisional_extension(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        provisional_lines: Option<Vec<Line<'static>>>,
+        startup_mode: bool,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let provisional_len = provisional_lines.as_ref().map_or(0, |l| l.len());
+        // Extract count first, drop reference before mutating self fields
+        let total_cached = self.ensure_render_cache(area.width).len();
+
+        self.page_step = page_step_for_height(area.height);
+        self.mouse_step = mouse_step_for_height(area.height);
+        let top_padding = if startup_mode {
+            startup_top_padding(total_cached + provisional_len, area.height)
+        } else {
+            0
+        };
+
+        let total_lines = total_cached
+            .saturating_add(provisional_len)
+            .saturating_add(top_padding);
+        if total_lines == 0 {
+            self.last_render_height = area.height;
+            self.scroll_state.reset_for_empty_render();
+            f.render_widget(
+                Paragraph::new(Text::from(Vec::<Line<'static>>::new())),
+                area,
+            );
+            return;
+        }
+        let max_scroll_start = total_lines.saturating_sub(area.height as usize);
+        let raw_scroll_val = self.scroll_state.raw_scroll_start(max_scroll_start);
+        let scroll_start = if self.scroll_state.follow_tail() {
+            raw_scroll_val
+        } else if !self.scroll_state.snap_on_next_render() {
+            self.scroll_state.last_scroll_start().min(max_scroll_start)
+        } else {
+            // Non-tail snap path: needs full line list, materialize once
+            let cached = self.ensure_render_cache(area.width);
+            let all_lines = build_full_with_provisional(cached, provisional_lines.as_deref());
+            let centered = if startup_mode {
+                vertically_center_startup_lines(all_lines, area.height)
+            } else {
+                all_lines
+            };
+            adjust_scroll_start_for_message_boundary(&centered, raw_scroll_val)
+        };
+        let scroll_start = scroll_start.min(max_scroll_start);
+        self.last_render_height = area.height;
+        self.scroll_state
+            .apply_rendered_scroll_start(max_scroll_start, scroll_start);
+
+        // Re-acquire reference for viewport slicing
+        let cached = self.ensure_render_cache(area.width);
+        let visible_end = scroll_start.saturating_add(area.height as usize);
+        let visible_lines = (scroll_start..visible_end)
+            .filter_map(|visual_index| {
+                if visual_index < top_padding {
+                    Some(Line::from(""))
+                } else {
+                    let content_index = visual_index.saturating_sub(top_padding);
+                    if content_index < total_cached {
+                        cached.get(content_index).cloned()
+                    } else if let Some(prov) = provisional_lines.as_ref() {
+                        prov.get(content_index.saturating_sub(total_cached)).cloned()
+                    } else {
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let paragraph = Paragraph::new(Text::from(visible_lines));
         f.render_widget(paragraph, area);
     }
 
@@ -891,7 +926,7 @@ impl MessageList {
             })
     }
 
-    fn startup_mode_active(&self) -> bool {
+    pub fn startup_mode_active(&self) -> bool {
         self.messages.iter().all(|message| message.role == "System") && self.has_startup_header()
     }
 
@@ -909,6 +944,19 @@ fn page_step_for_height(height: u16) -> u16 {
 
 fn mouse_step_for_height(height: u16) -> u16 {
     page_step_for_height(height).saturating_add(3) / 4
+}
+
+fn build_full_with_provisional(
+    cached: &[Line<'static>],
+    provisional: Option<&[Line<'static>]>,
+) -> Vec<Line<'static>> {
+    let prov_len = provisional.map_or(0, |p| p.len());
+    let mut all = Vec::with_capacity(cached.len() + prov_len);
+    all.extend_from_slice(cached);
+    if let Some(prov) = provisional {
+        all.extend_from_slice(prov);
+    }
+    all
 }
 
 fn pad_and_bg(line: &mut Line, width: u16, bg: Color) {
@@ -1033,10 +1081,29 @@ fn normalize_rendered_system_line(line: &str) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
-fn render_provisional_assistant_message_lines(text: &str, width: u16) -> Vec<Line<'static>> {
+pub fn render_provisional_markdown(text: &str, width: u16) -> Vec<Line<'static>> {
     let mut list = MessageList::new();
     list.add_assistant_message(text.to_owned());
     list.get_rendered_lines(width)
+}
+
+impl MessageList {
+    pub(crate) fn render_provisional_assistant_message_lines(
+        &mut self,
+        text: &str,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        if let Some((cached_text, cached_width, cached_lines)) = &self.provisional_text_cache {
+            if *cached_width == width && cached_text.as_str() == text {
+                return cached_lines.clone();
+            }
+        }
+        let mut list = MessageList::new();
+        list.add_assistant_message(text.to_owned());
+        let lines = list.get_rendered_lines(width);
+        self.provisional_text_cache = Some((text.to_owned(), width, lines.clone()));
+        lines
+    }
 }
 
 fn render_rendered_system_line(line: &str, width: u16) -> Vec<Line<'static>> {

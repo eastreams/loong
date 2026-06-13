@@ -195,6 +195,42 @@ fn clear_app_terminal_title(app: &mut App) {
     }
 }
 
+/// 绕过 ratatui，直接向 stdout 写 spinner 行，避免全量 buffer 分配 + diff。
+/// 只在 pending turn 且 spinner 位置已知时生效。
+fn write_spinner_line(app: &App) -> std::io::Result<()> {
+    let Some(start) = app.turn_start else {
+        return Ok(());
+    };
+    if !app.pending_turn {
+        return Ok(());
+    }
+    let Some(row) = app.last_spinner_row else {
+        return Ok(());
+    };
+
+    let frame = focus_ring_frame(start);
+    let verb = get_spinner_verb_with_seed(start, app.spinner_seed);
+
+    crossterm::execute!(
+        std::io::stdout(),
+        MoveTo(0, row),
+        Clear(ClearType::CurrentLine),
+        SetForegroundColor(crossterm::style::Color::Rgb {
+            r: 112,
+            g: 193,
+            b: 255,
+        }),
+        SetAttribute(Attribute::Bold),
+        Print(format!(" {} {}...", frame, verb)),
+        SetAttribute(Attribute::Reset),
+    )?;
+
+    if let Some((x, y)) = app.last_composer_cursor {
+        crossterm::execute!(std::io::stdout(), MoveTo(x, y))?;
+    }
+    Ok(())
+}
+
 pub async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     runtime: CliTurnRuntime,
@@ -268,6 +304,18 @@ pub async fn run_app<B: Backend>(
             dirty = false;
             if !pending_live_resize_rerender {
                 last_resize_at = None;
+            }
+        }
+
+        // 轻量 spinner 刷新：绕过 ratatui，直接写 stdout
+        if app.pending_turn {
+            let start = app.turn_start.unwrap_or_else(std::time::Instant::now);
+            let frame = focus_ring_frame(start);
+            let verb = get_spinner_verb_with_seed(start, app.spinner_seed);
+            if frame != app.last_spinner_frame || verb != app.last_spinner_verb {
+                app.last_spinner_frame = frame;
+                app.last_spinner_verb = verb;
+                let _ = write_spinner_line(&app);
             }
         }
 
