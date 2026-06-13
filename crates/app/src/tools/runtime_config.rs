@@ -560,12 +560,14 @@ impl ToolRuntimeConfig {
         let selected_memory_system_id = memory_system_selection.id;
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
+        #[cfg(feature = "tool-shell")]
         let shell_allow: BTreeSet<String> = config
             .tools
             .shell_allow
             .iter()
             .map(|value| value.to_ascii_lowercase())
             .collect();
+        #[cfg(feature = "tool-shell")]
         let shell_deny: BTreeSet<String> = config
             .tools
             .shell_deny
