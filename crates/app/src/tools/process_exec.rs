@@ -866,9 +866,6 @@ mod tests {
         retry_executable_file_busy_async, should_retry_executable_file_busy,
     };
 
-    #[cfg(unix)]
-    use crate::test_utils::ScopedEnv;
-
     #[test]
     fn should_retry_spawn_error_matches_executable_file_busy() {
         let busy_error = Error::from(ErrorKind::ExecutableFileBusy);
@@ -907,7 +904,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_process_program_falls_back_to_stable_search_path() {
-        let mut env = ScopedEnv::new();
+        let mut env = crate::test_utils::ScopedEnv::new();
         env.remove("PATH");
         let cwd = std::env::current_dir().expect("current dir");
 

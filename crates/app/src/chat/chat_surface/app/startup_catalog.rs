@@ -1,8 +1,10 @@
-fn format_cwd(runtime: &CliTurnRuntime) -> String {
+use super::*;
+
+pub(super) fn format_cwd(runtime: &CliTurnRuntime) -> String {
     current_working_directory_display(runtime)
 }
 
-fn build_chat_startup_content(
+pub(super) fn build_chat_startup_content(
     runtime: &CliTurnRuntime,
     _options: &CliChatOptions,
     _render_width: usize,
@@ -36,11 +38,11 @@ fn build_chat_startup_content(
     (version, tutorial, sections, tips)
 }
 
-fn startup_version_line() -> String {
+pub(super) fn startup_version_line() -> String {
     format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
-fn detect_available_skills(root: Option<&Path>) -> Vec<SkillEntry> {
+pub(super) fn detect_available_skills(root: Option<&Path>) -> Vec<SkillEntry> {
     let mut seen_dirs = HashSet::new();
     let mut seen_names = HashSet::new();
     let mut skills = Vec::new();
@@ -80,13 +82,13 @@ fn detect_available_skills(root: Option<&Path>) -> Vec<SkillEntry> {
     skills
 }
 
-struct SkillSearchRoot {
-    directory: std::path::PathBuf,
-    category_tag: &'static str,
-    search_label: &'static str,
+pub(super) struct SkillSearchRoot {
+    pub(super) directory: std::path::PathBuf,
+    pub(super) category_tag: &'static str,
+    pub(super) search_label: &'static str,
 }
 
-fn skill_search_roots(root: Option<&Path>) -> Vec<SkillSearchRoot> {
+pub(super) fn skill_search_roots(root: Option<&Path>) -> Vec<SkillSearchRoot> {
     let mut roots = Vec::new();
     let repo_skills_dir = root
         .map(|path| path.join("skills"))
@@ -122,7 +124,7 @@ fn skill_search_roots(root: Option<&Path>) -> Vec<SkillSearchRoot> {
     roots
 }
 
-fn skill_dirs_in(skills_dir: &Path) -> Vec<std::path::PathBuf> {
+pub(super) fn skill_dirs_in(skills_dir: &Path) -> Vec<std::path::PathBuf> {
     let Ok(entries) = std::fs::read_dir(skills_dir) else {
         return Vec::new();
     };
@@ -154,7 +156,7 @@ fn skill_dirs_in(skills_dir: &Path) -> Vec<std::path::PathBuf> {
     skill_dirs
 }
 
-fn skill_source_priority(category_tag: &str) -> u8 {
+pub(super) fn skill_source_priority(category_tag: &str) -> u8 {
     match category_tag {
         "[Repo]" => 0,
         "[Skill]" => 1,
@@ -162,7 +164,7 @@ fn skill_source_priority(category_tag: &str) -> u8 {
     }
 }
 
-fn read_skill_metadata(
+pub(super) fn read_skill_metadata(
     folder_name: String,
     skill_doc_path: std::path::PathBuf,
     category_tag: &'static str,
@@ -201,7 +203,11 @@ fn read_skill_metadata(
     }
 }
 
-fn build_skill_search_terms(folder_name: &str, name: &str, source_label: &str) -> Vec<String> {
+pub(super) fn build_skill_search_terms(
+    folder_name: &str,
+    name: &str,
+    source_label: &str,
+) -> Vec<String> {
     let mut terms = Vec::new();
     for value in [folder_name, name, source_label] {
         if !terms.iter().any(|term| term == value) {
@@ -217,7 +223,7 @@ fn build_skill_search_terms(folder_name: &str, name: &str, source_label: &str) -
     terms
 }
 
-fn parse_skill_frontmatter_value(contents: &str, key: &str) -> Option<String> {
+pub(super) fn parse_skill_frontmatter_value(contents: &str, key: &str) -> Option<String> {
     let lines = contents.lines().collect::<Vec<_>>();
     let mut inside_frontmatter = false;
     let mut frontmatter_consumed = false;
@@ -242,7 +248,7 @@ fn parse_skill_frontmatter_value(contents: &str, key: &str) -> Option<String> {
     None
 }
 
-fn fallback_skill_description(contents: &str) -> Option<String> {
+pub(super) fn fallback_skill_description(contents: &str) -> Option<String> {
     contents
         .lines()
         .map(str::trim)
@@ -250,7 +256,7 @@ fn fallback_skill_description(contents: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn render_chat_surface_help_lines_with_width(width: usize) -> Vec<String> {
+pub(super) fn render_chat_surface_help_lines_with_width(width: usize) -> Vec<String> {
     let queue_restore_shortcut = queue_restore_shortcut_label();
     let mut slash_command_items = slash_command_specs()
         .iter()
@@ -321,18 +327,18 @@ fn render_chat_surface_help_lines_with_width(width: usize) -> Vec<String> {
                 .to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    published_at: Option<String>,
-    html_url: Option<String>,
-    body: Option<String>,
+pub(super) struct GithubRelease {
+    pub(super) tag_name: String,
+    pub(super) published_at: Option<String>,
+    pub(super) html_url: Option<String>,
+    pub(super) body: Option<String>,
 }
 
-async fn load_startup_release_lines(width: usize) -> Option<Vec<String>> {
+pub(super) async fn load_startup_release_lines(width: usize) -> Option<Vec<String>> {
     let current = format!("v{}", env!("CARGO_PKG_VERSION"));
     let client = reqwest::Client::builder()
         .user_agent("loong-chat-surface")
@@ -354,7 +360,7 @@ async fn load_startup_release_lines(width: usize) -> Option<Vec<String>> {
     format_startup_release_lines(&release, &current, width)
 }
 
-fn format_startup_release_lines(
+pub(super) fn format_startup_release_lines(
     release: &GithubRelease,
     current: &str,
     width: usize,
@@ -405,11 +411,11 @@ fn format_startup_release_lines(
     Some(lines)
 }
 
-fn normalize_tag(tag: &str) -> String {
+pub(super) fn normalize_tag(tag: &str) -> String {
     tag.trim().trim_start_matches('v').to_ascii_lowercase()
 }
 
-fn resize_reflow_required(
+pub(super) fn resize_reflow_required(
     previous_width: u16,
     previous_height: u16,
     next_width: u16,
@@ -418,7 +424,7 @@ fn resize_reflow_required(
     previous_width != next_width || previous_height != next_height
 }
 
-fn resize_live_rerender_ready(
+pub(super) fn resize_live_rerender_ready(
     pending_live_resize_rerender: bool,
     since_last_resize: Option<Duration>,
 ) -> bool {

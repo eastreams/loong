@@ -1,4 +1,6 @@
-fn split_surface_command(input: &str) -> (&str, &str) {
+use super::*;
+
+pub(super) fn split_surface_command(input: &str) -> (&str, &str) {
     let trimmed = input.trim();
     if let Some((command, rest)) = trimmed.split_once(char::is_whitespace) {
         (command, rest.trim())
@@ -7,13 +9,13 @@ fn split_surface_command(input: &str) -> (&str, &str) {
     }
 }
 
-enum ResumeInvocation {
+pub(super) enum ResumeInvocation {
     Picker,
     Latest,
     SessionId(String),
 }
 
-fn parse_resume_command(args: &str) -> ResumeInvocation {
+pub(super) fn parse_resume_command(args: &str) -> ResumeInvocation {
     let trimmed = args.trim();
     if trimmed.is_empty() {
         ResumeInvocation::Picker
@@ -38,12 +40,12 @@ pub(super) fn command_action_command(action: &CommandAction) -> Option<String> {
     }
 }
 
-fn is_known_surface_command(command: &str) -> bool {
+pub(super) fn is_known_surface_command(command: &str) -> bool {
     match command {
-        super::super::CLI_CHAT_HELP_COMMAND
-        | super::super::CLI_CHAT_STATUS_COMMAND
-        | super::super::CLI_CHAT_HISTORY_COMMAND
-        | super::super::CLI_CHAT_COMPACT_COMMAND
+        crate::chat::CLI_CHAT_HELP_COMMAND
+        | crate::chat::CLI_CHAT_STATUS_COMMAND
+        | crate::chat::CLI_CHAT_HISTORY_COMMAND
+        | crate::chat::CLI_CHAT_COMPACT_COMMAND
         | "/model"
         | "/settings"
         | "/permissions"
@@ -77,7 +79,7 @@ fn is_known_surface_command(command: &str) -> bool {
     }
 }
 
-fn recognized_surface_command(input: &str) -> Option<String> {
+pub(super) fn recognized_surface_command(input: &str) -> Option<String> {
     let trimmed = input.trim();
     if !(trimmed.starts_with('/') || trimmed.starts_with(':')) {
         return None;
@@ -91,7 +93,7 @@ fn recognized_surface_command(input: &str) -> Option<String> {
     is_known_surface_command(command).then_some(normalized)
 }
 
-fn parse_settings_command_action(args: &str) -> Result<CommandAction, String> {
+pub(super) fn parse_settings_command_action(args: &str) -> Result<CommandAction, String> {
     let tokens = args.split_whitespace().collect::<Vec<_>>();
     match tokens.as_slice() {
         [] => Ok(CommandAction::OpenSettings(SettingsSurfaceFocus::Overview)),
@@ -124,7 +126,7 @@ fn parse_settings_command_action(args: &str) -> Result<CommandAction, String> {
     }
 }
 
-fn apply_settings_command(
+pub(super) fn apply_settings_command(
     app: &mut App,
     runtime: &mut CliTurnRuntime,
     action: SettingsCommandAction,
@@ -247,7 +249,7 @@ fn apply_settings_command(
     }
 }
 
-fn dispatch_palette_action(
+pub(super) fn dispatch_palette_action(
     app: &mut App,
     router: &mut SessionRouter,
     width: usize,
@@ -327,7 +329,7 @@ fn dispatch_palette_action(
     }
 }
 
-fn open_settings_palette(
+pub(super) fn open_settings_palette(
     app: &mut App,
     runtime: &CliTurnRuntime,
     focus: SettingsSurfaceFocus,
@@ -342,7 +344,7 @@ fn open_settings_palette(
     app.inline_skill_popup_active = false;
 }
 
-fn build_settings_palette_entries(
+pub(super) fn build_settings_palette_entries(
     runtime: &CliTurnRuntime,
     focus: SettingsSurfaceFocus,
     width: usize,
@@ -541,7 +543,7 @@ fn build_settings_palette_entries(
     entries
 }
 
-fn build_settings_overview_entries(
+pub(super) fn build_settings_overview_entries(
     runtime: &CliTurnRuntime,
     width: usize,
     installed_skill_ids: &BTreeSet<String>,
@@ -611,7 +613,7 @@ fn build_settings_overview_entries(
     entries
 }
 
-fn render_current_web_search_summary(runtime: &CliTurnRuntime) -> String {
+pub(super) fn render_current_web_search_summary(runtime: &CliTurnRuntime) -> String {
     let provider_id =
         normalize_web_search_provider(runtime.config.tools.web_search.default_provider.as_str())
             .unwrap_or(runtime.config.tools.web_search.default_provider.as_str());
@@ -636,7 +638,7 @@ fn render_current_web_search_summary(runtime: &CliTurnRuntime) -> String {
     format!("{provider_label} · {credential_state}")
 }
 
-fn render_provider_settings_entry(
+pub(super) fn render_provider_settings_entry(
     runtime: &CliTurnRuntime,
     kind: ProviderKind,
     is_current: bool,
@@ -689,14 +691,14 @@ fn render_provider_settings_entry(
     )
 }
 
-fn web_search_provider_env_api_key_name(provider_id: &str) -> Option<String> {
+pub(super) fn web_search_provider_env_api_key_name(provider_id: &str) -> Option<String> {
     web_search_provider_api_key_env_names(provider_id)
         .iter()
         .find(|env_name| std::env::var_os(env_name).is_some())
         .map(|env_name| (*env_name).to_owned())
 }
 
-fn render_web_provider_settings_entry(
+pub(super) fn render_web_provider_settings_entry(
     runtime: &CliTurnRuntime,
     provider_id: &str,
     provider_label: &str,
@@ -733,7 +735,7 @@ fn render_web_provider_settings_entry(
     )
 }
 
-fn persist_runtime_settings(
+pub(super) fn persist_runtime_settings(
     runtime: &mut CliTurnRuntime,
     app: &mut App,
     mutate: impl FnOnce(&mut LoongConfig) -> Result<String, String>,
@@ -755,7 +757,7 @@ fn persist_runtime_settings(
     app.model = runtime.config.provider.model.clone();
     Ok(summary)
 }
-fn current_working_directory(runtime: &CliTurnRuntime) -> PathBuf {
+pub(super) fn current_working_directory(runtime: &CliTurnRuntime) -> PathBuf {
     runtime
         .effective_working_directory
         .clone()
@@ -763,12 +765,12 @@ fn current_working_directory(runtime: &CliTurnRuntime) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn current_working_directory_display(runtime: &CliTurnRuntime) -> String {
+pub(super) fn current_working_directory_display(runtime: &CliTurnRuntime) -> String {
     let current_directory = current_working_directory(runtime);
     current_directory.display().to_string()
 }
 
-fn render_session_transition_lines_with_width(
+pub(super) fn render_session_transition_lines_with_width(
     result: Result<String, String>,
     width: usize,
 ) -> Vec<String> {
@@ -796,10 +798,10 @@ fn render_session_transition_lines_with_width(
         }],
         footer_lines,
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn copy_command_text(app: &App, args: &str) -> Result<String, String> {
+pub(super) fn copy_command_text(app: &App, args: &str) -> Result<String, String> {
     if !args.trim().is_empty() {
         return Ok(args.trim().to_owned());
     }
@@ -808,7 +810,7 @@ fn copy_command_text(app: &App, args: &str) -> Result<String, String> {
         .ok_or_else(|| "nothing copyable yet".to_owned())
 }
 
-fn copy_to_system_clipboard(text: &str) -> Result<(), String> {
+pub(super) fn copy_to_system_clipboard(text: &str) -> Result<(), String> {
     let candidates: &[(&str, &[&str])] = if cfg!(target_os = "macos") {
         &[("pbcopy", &[])]
     } else {
@@ -850,7 +852,7 @@ fn copy_to_system_clipboard(text: &str) -> Result<(), String> {
     Err(last_error)
 }
 
-fn render_copy_command_lines_with_width(
+pub(super) fn render_copy_command_lines_with_width(
     result: Result<String, String>,
     width: usize,
 ) -> Vec<String> {
@@ -883,10 +885,10 @@ fn render_copy_command_lines_with_width(
             "/copy copies the latest reply, or /copy <text> copies explicit text.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn run_git_capture(cwd: &Path, args: &[&str]) -> Result<String, String> {
+pub(super) fn run_git_capture(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -904,7 +906,7 @@ fn run_git_capture(cwd: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-fn render_git_diff_command_lines_with_width(cwd: &Path, width: usize) -> Vec<String> {
+pub(super) fn render_git_diff_command_lines_with_width(cwd: &Path, width: usize) -> Vec<String> {
     let status = run_git_capture(cwd, &["status", "--short"]);
     let stat = run_git_capture(cwd, &["diff", "--stat"]);
     let shortstat = run_git_capture(cwd, &["diff", "--shortstat"]);
@@ -959,10 +961,10 @@ fn render_git_diff_command_lines_with_width(cwd: &Path, width: usize) -> Vec<Str
         sections,
         footer_lines: vec![format!("cwd: {}", cwd.display())],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn safe_file_component(value: &str) -> String {
+pub(super) fn safe_file_component(value: &str) -> String {
     value
         .chars()
         .map(|ch| {
@@ -979,7 +981,7 @@ fn safe_file_component(value: &str) -> String {
         .collect::<String>()
 }
 
-fn write_transcript_export(
+pub(super) fn write_transcript_export(
     cwd: &Path,
     session_id: &str,
     label: &str,
@@ -1004,7 +1006,7 @@ fn write_transcript_export(
     Ok(path)
 }
 
-fn render_export_command_lines_with_width(
+pub(super) fn render_export_command_lines_with_width(
     command: &str,
     result: Result<PathBuf, String>,
     width: usize,
@@ -1033,10 +1035,10 @@ fn render_export_command_lines_with_width(
             "Artifacts stay local until you explicitly move or publish them.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn resolve_import_path(cwd: &Path, input: &str) -> PathBuf {
+pub(super) fn resolve_import_path(cwd: &Path, input: &str) -> PathBuf {
     let trimmed = input.trim().trim_matches('"').trim_matches('\'');
     let path = PathBuf::from(trimmed);
     if path.is_absolute() {
@@ -1046,7 +1048,10 @@ fn resolve_import_path(cwd: &Path, input: &str) -> PathBuf {
     }
 }
 
-fn resolve_cwd_change_path(runtime: &CliTurnRuntime, input: &str) -> Result<PathBuf, String> {
+pub(super) fn resolve_cwd_change_path(
+    runtime: &CliTurnRuntime,
+    input: &str,
+) -> Result<PathBuf, String> {
     let trimmed = input.trim().trim_matches('"').trim_matches('\'');
     if trimmed.is_empty() {
         return Err("Usage: /cwd <path>".to_owned());
@@ -1079,7 +1084,7 @@ fn resolve_cwd_change_path(runtime: &CliTurnRuntime, input: &str) -> Result<Path
     Ok(normalized)
 }
 
-fn render_cwd_change_command_lines_with_width(
+pub(super) fn render_cwd_change_command_lines_with_width(
     result: Result<PathBuf, String>,
     width: usize,
 ) -> Vec<String> {
@@ -1107,10 +1112,14 @@ fn render_cwd_change_command_lines_with_width(
             "Use /cwd with no arguments to inspect the current working directory.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn import_context_into_composer(app: &mut App, cwd: &Path, args: &str) -> Result<PathBuf, String> {
+pub(super) fn import_context_into_composer(
+    app: &mut App,
+    cwd: &Path,
+    args: &str,
+) -> Result<PathBuf, String> {
     let path = resolve_import_path(cwd, args);
     let content = fs::read_to_string(path.as_path())
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
@@ -1128,7 +1137,7 @@ fn import_context_into_composer(app: &mut App, cwd: &Path, args: &str) -> Result
     Ok(path)
 }
 
-fn render_import_command_lines_with_width(
+pub(super) fn render_import_command_lines_with_width(
     result: Result<PathBuf, String>,
     width: usize,
 ) -> Vec<String> {
@@ -1159,10 +1168,10 @@ fn render_import_command_lines_with_width(
             "Review the staged draft before sending if the file is large.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn latest_text_or_args(app: &App, args: &str) -> Result<String, String> {
+pub(super) fn latest_text_or_args(app: &App, args: &str) -> Result<String, String> {
     if !args.trim().is_empty() {
         return Ok(args.trim().to_owned());
     }
@@ -1171,7 +1180,7 @@ fn latest_text_or_args(app: &App, args: &str) -> Result<String, String> {
         .ok_or_else(|| "no previous content to use".to_owned())
 }
 
-fn stage_simplify_prompt(app: &mut App, args: &str) -> Result<(), String> {
+pub(super) fn stage_simplify_prompt(app: &mut App, args: &str) -> Result<(), String> {
     let source = latest_text_or_args(app, args)?;
     app.composer.set_input(format!(
         "Please simplify and clarify the following content without losing important details:\n\n{source}"
@@ -1179,7 +1188,7 @@ fn stage_simplify_prompt(app: &mut App, args: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn stage_plan_prompt(app: &mut App, args: &str) -> Result<(), String> {
+pub(super) fn stage_plan_prompt(app: &mut App, args: &str) -> Result<(), String> {
     let subject = if args.trim().is_empty() {
         "the current task".to_owned()
     } else {
@@ -1191,7 +1200,7 @@ fn stage_plan_prompt(app: &mut App, args: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn stage_feedback_prompt(app: &mut App, args: &str) -> Result<(), String> {
+pub(super) fn stage_feedback_prompt(app: &mut App, args: &str) -> Result<(), String> {
     let body = if args.trim().is_empty() {
         "Feedback: ".to_owned()
     } else {
@@ -1201,7 +1210,7 @@ fn stage_feedback_prompt(app: &mut App, args: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn render_prompt_staging_lines_with_width(
+pub(super) fn render_prompt_staging_lines_with_width(
     role: &str,
     result: Result<(), String>,
     width: usize,
@@ -1228,10 +1237,14 @@ fn render_prompt_staging_lines_with_width(
         }],
         footer_lines: vec!["Typing continues in the composer immediately.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_title_command_lines_with_width(command: &str, args: &str, width: usize) -> Vec<String> {
+pub(super) fn render_title_command_lines_with_width(
+    command: &str,
+    args: &str,
+    width: usize,
+) -> Vec<String> {
     let lines = if args.trim().is_empty() {
         vec![format!("Usage: {command} <title>")]
     } else {
@@ -1250,5 +1263,5 @@ fn render_title_command_lines_with_width(command: &str, args: &str, width: usize
         }],
         footer_lines: vec!["The title is reflected in the footer for this TUI session.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }

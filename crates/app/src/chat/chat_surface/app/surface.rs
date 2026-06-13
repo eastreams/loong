@@ -1,3 +1,93 @@
+use super::*;
+
+pub struct RenderSectionHeights {
+    transcript: u16,
+    spacer: u16,
+    pending: u16,
+    composer_separator: u16,
+    comsposer: u16,
+    palette_separator: u16,
+    palette: u16,
+    footer_separator: u16,
+    footer: u16,
+    footer_bottom_spacing: u16,
+}
+
+impl RenderSectionHeights {
+    pub fn iter(&self) -> impl Iterator<Item = u16> {
+        [
+            self.transcript,
+            self.spacer,
+            self.pending,
+            self.composer_separator,
+            self.comsposer,
+            self.palette_separator,
+            self.palette,
+            self.footer_separator,
+            self.footer,
+            self.footer_bottom_spacing,
+        ]
+        .into_iter()
+    }
+    pub fn constraints(&self) -> impl Iterator<Item = Constraint> {
+        self.iter().map(Constraint::Length)
+    }
+}
+
+struct RenderSections {
+    transcript: Rect,
+    #[allow(unused)]
+    spacer: Rect,
+    pending: Rect,
+    composer_separator: Rect,
+    /// Input area
+    composer: Rect,
+    palette_separator: Rect,
+    /// Drop-down menu
+    palette: Rect,
+    footer_separator: Rect,
+    footer: Rect,
+    footer_bottom_spacing: Rect,
+}
+
+impl RenderSections {
+    fn split_with(size: Rect, heights: &RenderSectionHeights) -> Option<Self> {
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(heights.constraints())
+            .split(size);
+
+        let &[
+            transcript,
+            spacer,
+            pending,
+            composer_separator,
+            composer,
+            palette_separator,
+            palette,
+            footer_separator,
+            footer,
+            footer_bottom_spacing,
+        ] = main_layout.as_ref()
+        else {
+            return None;
+        };
+
+        Some(Self {
+            transcript,
+            spacer,
+            pending,
+            composer_separator,
+            composer,
+            palette_separator,
+            palette,
+            footer_separator,
+            footer,
+            footer_bottom_spacing,
+        })
+    }
+}
+
 impl App {
     pub fn new(
         runtime: &CliTurnRuntime,
@@ -63,21 +153,32 @@ impl App {
         Ok(app)
     }
 
-    pub fn render(&mut self, f: &mut Frame) {
-        let size = f.area();
-        self.last_render_width = size.width;
-        self.last_render_height = size.height;
-        let composer_height = self.composer.height_for_area(size.width, size.height);
-        let palette_visible =
-            matches!(self.focus, Focus::CommandPalette) || self.inline_skill_popup_active;
-        let palette_height = if palette_visible {
+    pub fn command_palette_visible(&self) -> bool {
+        matches!(self.focus, Focus::CommandPalette) || self.inline_skill_popup_active
+    }
+
+    pub fn palette_height(&self) -> u16 {
+        if self.command_palette_visible() {
             self.command_palette.desired_height() as u16
         } else {
             0
-        };
-        let interstitial_lines =
-            self.interstitial_lines_for(size.width, size.height, composer_height, palette_height);
-        let interstitial_height = interstitial_lines.len() as u16;
+        }
+    }
+
+    fn compute_interstitial_lines(&mut self, size: Rect) -> Vec<Line<'static>> {
+        let composer_height = self.composer.height_for_area(size.width, size.height);
+        let palette_height = self.palette_height();
+        self.interstitial_lines_for(size.width, size.height, composer_height, palette_height)
+    }
+
+    fn compute_render_section_heights(
+        &mut self,
+        size: Rect,
+        interstitial_lines_count: u16,
+    ) -> RenderSectionHeights {
+        let composer_height = self.composer.height_for_area(size.width, size.height);
+        let palette_height = self.palette_height();
+        let interstitial_height = interstitial_lines_count;
         let provisional_assistant_text = provisional_assistant_text(&self.live_transcript);
         let transcript_line_count = self
             .message_list
@@ -85,6 +186,7 @@ impl App {
                 size.width,
                 provisional_assistant_text.as_deref(),
             ) as u16;
+        // TODO: translate magic numbers
         let bottom_band_height = interstitial_height
             + 1
             + composer_height
@@ -102,95 +204,91 @@ impl App {
         } else {
             transcript_line_count.min(available_transcript_height)
         };
-        let main_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(transcript_height),
-                Constraint::Length(0),
-                Constraint::Length(interstitial_height),
-                Constraint::Length(1),
-                Constraint::Length(composer_height),
-                Constraint::Length(if palette_height > 0 { 1 } else { 0 }),
-                Constraint::Length(palette_height),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(FOOTER_BOTTOM_BREATHING_HEIGHT),
-            ])
-            .split(size);
 
-        let [
-            transcript_area,
-            _spacer_area,
-            pending_area,
-            composer_separator_area,
-            composer_area,
-            palette_separator_area,
-            palette_area,
-            footer_separator_area,
-            footer_area,
-            footer_bottom_spacing_area,
-        ] = main_layout.as_ref()
-        else {
+        RenderSectionHeights {
+            transcript: transcript_height,
+            spacer: 0,
+            pending: interstitial_height,
+            composer_separator: 1,
+            comsposer: composer_height,
+            palette_separator: if palette_height > 0 { 1 } else { 0 },
+            palette: palette_height,
+            footer_separator: 1,
+            footer: 1,
+            footer_bottom_spacing: FOOTER_BOTTOM_BREATHING_HEIGHT,
+        }
+    }
+
+    pub fn render(&mut self, f: &mut Frame) {
+        let size = f.area();
+        self.last_render_width = size.width;
+        self.last_render_height = size.height;
+
+        let interstitial_lines = self.compute_interstitial_lines(size);
+
+        let heights1 = self.compute_render_section_heights(size, interstitial_lines.len() as u16);
+        let Some(areas) = RenderSections::split_with(size, &heights1) else {
             return;
         };
 
-        self.last_transcript_area = *transcript_area;
-        self.last_composer_area = *composer_area;
-        self.last_palette_area = if palette_visible {
-            *palette_area
+        self.last_transcript_area = areas.transcript;
+        self.last_composer_area = areas.composer;
+        self.last_palette_area = if self.command_palette_visible() {
+            areas.palette
         } else {
             Rect::default()
         };
 
+        let provisional_assistant_text = provisional_assistant_text(&self.live_transcript);
         self.message_list.render_with_provisional_assistant(
             f,
-            *transcript_area,
+            areas.transcript,
             provisional_assistant_text.as_deref(),
         );
 
-        if interstitial_height > 0 {
-            f.render_widget(Paragraph::new(interstitial_lines), *pending_area);
+        if areas.pending.height > 0 {
+            f.render_widget(Paragraph::new(interstitial_lines), areas.pending);
         }
 
         let line_color = SURFACE_COTTON_CANDY;
         let composer_separator_is_blank =
-            interstitial_height == 0 && self.message_list.trailing_colored_block(size.width);
+            areas.pending.height == 0 && self.message_list.trailing_colored_block(size.width);
         if composer_separator_is_blank {
-            f.render_widget(Paragraph::new(""), *composer_separator_area);
+            f.render_widget(Paragraph::new(""), areas.composer_separator);
         } else {
             f.render_widget(
                 Block::default()
                     .borders(Borders::TOP)
                     .border_style(Style::default().fg(line_color)),
-                *composer_separator_area,
+                areas.composer_separator,
             );
         }
 
         self.composer
-            .render(f, *composer_area, matches!(self.focus, Focus::Composer));
+            .render(f, areas.composer, matches!(self.focus, Focus::Composer));
         if matches!(self.focus, Focus::Composer) {
-            let (x, y) = self.composer.cursor_position(*composer_area);
+            let (x, y) = self.composer.cursor_position(areas.composer);
             f.set_cursor_position((x, y));
         }
 
-        if palette_visible {
+        if self.command_palette_visible() {
             f.render_widget(
                 Block::default()
                     .borders(Borders::TOP)
                     .border_style(Style::default().fg(line_color)),
-                *palette_separator_area,
+                areas.palette_separator,
             );
-            self.command_palette.render(f, *palette_area);
+            self.command_palette.render(f, areas.palette);
         }
 
         f.render_widget(
             Block::default()
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(line_color)),
-            *footer_separator_area,
+            areas.footer_separator,
         );
 
-        let footer_content_area = footer_content_area(*footer_area);
+        let footer_content_area = footer_content_area(areas.footer);
         let footer_line = if self.pending_turn && !self.composer.is_empty() {
             build_queue_footer_line(
                 &self.i18n,
@@ -211,10 +309,10 @@ impl App {
             build_status_footer_line(&self.cwd, &self.model, footer_content_area.width)
         };
         f.render_widget(Paragraph::new(footer_line), footer_content_area);
-        f.render_widget(Paragraph::new(""), *footer_bottom_spacing_area);
+        f.render_widget(Paragraph::new(""), areas.footer_bottom_spacing);
     }
 
-    fn refresh_startup_header(&mut self) {
+    pub(super) fn refresh_startup_header(&mut self) {
         let tutorial = self.i18n.text(SurfaceCopy::Tutorial).to_owned();
         let sections = vec![
             (
@@ -243,7 +341,7 @@ impl App {
         );
     }
 
-    fn apply_startup_onboarding_action(
+    pub(super) fn apply_startup_onboarding_action(
         &mut self,
         action: StartupOnboardingAction,
         runtime: &mut CliTurnRuntime,
@@ -304,7 +402,7 @@ impl App {
         }
     }
 
-    fn interstitial_lines_for(
+    pub(super) fn interstitial_lines_for(
         &mut self,
         width: u16,
         height: u16,
@@ -321,7 +419,7 @@ impl App {
             .unwrap_or_default()
     }
 
-    fn apply_palette_action(&mut self, action: CommandAction) -> Option<String> {
+    pub(super) fn apply_palette_action(&mut self, action: CommandAction) -> Option<String> {
         match action {
             CommandAction::RunCommand(_) | CommandAction::SelectResumeSession { .. } => {
                 self.inline_skill_popup_active = false;
@@ -353,7 +451,7 @@ impl App {
         }
     }
 
-    fn handle_mouse_event(&mut self, mouse_event: ChatMouseEvent) -> Option<String> {
+    pub(super) fn handle_mouse_event(&mut self, mouse_event: ChatMouseEvent) -> Option<String> {
         if rect_contains_point(self.last_palette_area, mouse_event.column, mouse_event.row)
             && (matches!(self.focus, Focus::CommandPalette) || self.inline_skill_popup_active)
         {
@@ -394,7 +492,7 @@ impl App {
         None
     }
 
-    fn sync_inline_skill_popup(&mut self) {
+    pub(super) fn sync_inline_skill_popup(&mut self) {
         if !matches!(self.focus, Focus::Composer) {
             self.inline_skill_popup_active = false;
             return;
@@ -410,7 +508,7 @@ impl App {
         }
     }
 
-    fn confirm_inline_skill_popup(&mut self) {
+    pub(super) fn confirm_inline_skill_popup(&mut self) {
         if let Some(action) = self
             .command_palette
             .handle_key(ChatKeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
@@ -421,7 +519,7 @@ impl App {
         }
     }
 
-    fn handle_inline_skill_popup_key(&mut self, key: ChatKeyEvent) -> bool {
+    pub(super) fn handle_inline_skill_popup_key(&mut self, key: ChatKeyEvent) -> bool {
         if !self.inline_skill_popup_active {
             return false;
         }

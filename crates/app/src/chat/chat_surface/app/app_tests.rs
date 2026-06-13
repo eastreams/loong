@@ -2,8 +2,8 @@ use super::{
     ActiveSessionRoute, App, Focus, LiveTranscriptState, SessionRouter, StartupBootstrapCapture,
     StartupOnboardingAction, StartupOnboardingInteractionKind, StartupOnboardingStage,
     StartupOnboardingState, StartupPersonalizationPreset, StartupProviderOption,
-    StartupSetupPathChoice, StartupSkillOption, persist_startup_personalization,
-    startup_eye_animation_for_state,
+    StartupSetupPathChoice, persist_startup_personalization, startup_eye_animation_for_state,
+    state::StartupSkillOption,
 };
 use crate::chat::chat_surface::command_palette::{
     CommandAction, CommandPalette, ResumePaletteEntry, SkillEntry, slash_command_specs,
@@ -864,29 +864,33 @@ fn run_surface_command_resume_restores_history_as_chat_messages() {
         }
     }
     assert_eq!(harness.app.message_list.messages[2].role, "System");
-    assert!(!transcript_contains_internal_payload(&harness.app));
+    assert!(!harness.app.transcript_contains_internal_payload());
 }
 
-#[cfg(feature = "memory-sqlite")]
-fn transcript_contains_internal_payload(app: &App) -> bool {
-    app.message_list.messages.iter().any(|message| {
-        message.contents.iter().any(|content| match content {
-            crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
-                text.contains("\"_loong_internal\":true")
-            }
-            crate::chat::chat_surface::message_list::MessageContent::RenderedLines(lines) => lines
-                .iter()
-                .any(|line| line.contains("\"_loong_internal\":true")),
-            crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
-            | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
-            | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
-            | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
-            | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
-            | crate::chat::chat_surface::message_list::MessageContent::StartupHeader { .. } => {
-                false
-            }
+impl App {
+    #[cfg(feature = "memory-sqlite")]
+    fn transcript_contains_internal_payload(&self) -> bool {
+        self.message_list.messages.iter().any(|message| {
+            message.contents.iter().any(|content| match content {
+                crate::chat::chat_surface::message_list::MessageContent::Markdown(text) => {
+                    text.contains("\"_loong_internal\":true")
+                }
+                crate::chat::chat_surface::message_list::MessageContent::RenderedLines(lines) => {
+                    lines
+                        .iter()
+                        .any(|line| line.contains("\"_loong_internal\":true"))
+                }
+                crate::chat::chat_surface::message_list::MessageContent::Diff { .. }
+                | crate::chat::chat_surface::message_list::MessageContent::Image { .. }
+                | crate::chat::chat_surface::message_list::MessageContent::ToolCall { .. }
+                | crate::chat::chat_surface::message_list::MessageContent::Error { .. }
+                | crate::chat::chat_surface::message_list::MessageContent::Compaction { .. }
+                | crate::chat::chat_surface::message_list::MessageContent::StartupHeader {
+                    ..
+                } => false,
+            })
         })
-    })
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1175,26 +1179,26 @@ fn middle_truncation_preserves_both_path_ends() {
 #[test]
 fn compact_path_label_prefers_last_path_component() {
     assert_eq!(
-        super::compact_path_label("/tmp/workspace/project-x"),
+        super::runtime::compact_path_label("/tmp/workspace/project-x"),
         "project-x"
     );
-    assert_eq!(super::compact_path_label("/"), "/");
-    assert_eq!(super::compact_path_label(""), "~");
+    assert_eq!(super::runtime::compact_path_label("/"), "/");
+    assert_eq!(super::runtime::compact_path_label(""), "~");
 }
 
 #[test]
 fn build_loong_terminal_title_switches_prefix_by_activity() {
     assert_eq!(
-        super::build_loong_terminal_title(
+        super::runtime::build_loong_terminal_title(
             "/tmp/workspace/project-x",
-            super::LoongTerminalActivity::Idle,
+            super::runtime::LoongTerminalActivity::Idle,
             None
         ),
         "🐉 - project-x"
     );
-    let working = super::build_loong_terminal_title(
+    let working = super::runtime::build_loong_terminal_title(
         "/tmp/workspace/project-x",
-        super::LoongTerminalActivity::Working,
+        super::runtime::LoongTerminalActivity::Working,
         Some(std::time::Instant::now()),
     );
     assert!(working.ends_with(" - project-x"));
@@ -1204,7 +1208,7 @@ fn build_loong_terminal_title_switches_prefix_by_activity() {
 
 #[test]
 fn terminal_title_braille_frame_uses_known_frames() {
-    let frame = super::terminal_title_braille_frame(Some(std::time::Instant::now()));
+    let frame = super::runtime::terminal_title_braille_frame(Some(std::time::Instant::now()));
     assert!(super::TERMINAL_TITLE_BRAILLE_FRAMES.contains(&frame));
 }
 
@@ -1214,8 +1218,8 @@ fn terminal_title_activity_requires_attention_for_bootstrap_reply() {
     app.awaiting_first_turn_bootstrap_reply = true;
 
     assert_eq!(
-        super::app_terminal_title_activity(&app),
-        super::LoongTerminalActivity::AttentionRequired
+        super::runtime::app_terminal_title_activity(&app),
+        super::runtime::LoongTerminalActivity::AttentionRequired
     );
 }
 
@@ -1225,8 +1229,8 @@ fn terminal_title_activity_requires_attention_for_approval_latch() {
     app.title_attention_required = true;
 
     assert_eq!(
-        super::app_terminal_title_activity(&app),
-        super::LoongTerminalActivity::AttentionRequired
+        super::runtime::app_terminal_title_activity(&app),
+        super::runtime::LoongTerminalActivity::AttentionRequired
     );
 }
 
@@ -1236,8 +1240,8 @@ fn terminal_title_activity_requires_attention_for_pending_approval_count() {
     app.title_pending_approval_count = 2;
 
     assert_eq!(
-        super::app_terminal_title_activity(&app),
-        super::LoongTerminalActivity::AttentionRequired
+        super::runtime::app_terminal_title_activity(&app),
+        super::runtime::LoongTerminalActivity::AttentionRequired
     );
 }
 
@@ -1250,8 +1254,8 @@ fn terminal_title_activity_requires_attention_for_live_needs_approval() {
     }
 
     assert_eq!(
-        super::app_terminal_title_activity(&app),
-        super::LoongTerminalActivity::AttentionRequired
+        super::runtime::app_terminal_title_activity(&app),
+        super::runtime::LoongTerminalActivity::AttentionRequired
     );
 }
 
@@ -1263,7 +1267,7 @@ fn refresh_app_cwd_uses_runtime_working_directory() {
     let mut app = blank_app();
     app.cwd = "/tmp/example".to_owned();
 
-    super::refresh_app_cwd(&mut app, &runtime);
+    super::runtime::refresh_app_cwd(&mut app, &runtime);
 
     assert_eq!(app.cwd, "/tmp/workspace/actual-project");
 }
@@ -1388,14 +1392,14 @@ fn render_cwd_command_uses_runtime_working_directory_fallback() {
 
 #[test]
 fn sanitize_terminal_title_collapses_whitespace_and_controls() {
-    let sanitized = super::sanitize_terminal_title("  🐉 \n\t loong \u{202E} project  ");
+    let sanitized = super::runtime::sanitize_terminal_title("  🐉 \n\t loong \u{202E} project  ");
     assert_eq!(sanitized, "🐉 loong project");
 }
 
 #[test]
 fn sanitize_terminal_title_truncates_to_max_chars() {
     let title = "a".repeat(super::MAX_TERMINAL_TITLE_CHARS + 24);
-    let sanitized = super::sanitize_terminal_title(&title);
+    let sanitized = super::runtime::sanitize_terminal_title(&title);
     assert_eq!(sanitized.chars().count(), super::MAX_TERMINAL_TITLE_CHARS);
 }
 

@@ -195,7 +195,7 @@ mod tests {
     }
 
     fn shell_test_env() -> ScopedEnv {
-        let mut env = ScopedEnv::new();
+        let mut env = crate::test_utils::ScopedEnv::new();
 
         #[cfg(unix)]
         env.set("PATH", "/bin:/usr/bin:/usr/local/bin");

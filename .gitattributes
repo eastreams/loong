@@ -1,0 +1,30 @@
+* text=auto eol=lf
+
+# Rust / repo text files
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+
+# Windows scripts use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.sqlite binary
+*.sqlite3 binary

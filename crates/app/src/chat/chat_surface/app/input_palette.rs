@@ -1,4 +1,6 @@
-fn render_onboarding_option_line(
+use super::*;
+
+pub(super) fn render_onboarding_option_line(
     selected: bool,
     label: &str,
     badge: Option<&str>,
@@ -21,7 +23,7 @@ fn render_onboarding_option_line(
     ))]
 }
 
-fn render_onboarding_wrapped_line(
+pub(super) fn render_onboarding_wrapped_line(
     prefix: &str,
     text: &str,
     prefix_style: Style,
@@ -54,7 +56,7 @@ fn render_onboarding_wrapped_line(
         .collect()
 }
 
-fn paste_into_composer(app: &mut App, text: &str) {
+pub(super) fn paste_into_composer(app: &mut App, text: &str) {
     if text.is_empty() {
         return;
     }
@@ -66,7 +68,7 @@ fn paste_into_composer(app: &mut App, text: &str) {
     app.sync_inline_skill_popup();
 }
 
-fn open_slash_command_palette(app: &mut App, prefix: char, query: &str) {
+pub(super) fn open_slash_command_palette(app: &mut App, prefix: char, query: &str) {
     let normalized_prefix = if prefix == ':' { ':' } else { '/' };
     app.command_palette.show_commands(query);
     app.composer
@@ -75,7 +77,7 @@ fn open_slash_command_palette(app: &mut App, prefix: char, query: &str) {
     app.focus = Focus::CommandPalette;
 }
 
-fn sync_slash_palette_composer(app: &mut App) {
+pub(super) fn sync_slash_palette_composer(app: &mut App) {
     if !app.command_palette.is_commands_mode() {
         return;
     }
@@ -90,7 +92,7 @@ fn sync_slash_palette_composer(app: &mut App) {
         .set_input(format!("{prefix}{}", app.command_palette.query_text()));
 }
 
-fn clear_slash_palette_composer(app: &mut App) {
+pub(super) fn clear_slash_palette_composer(app: &mut App) {
     if app.command_palette.is_commands_mode()
         && app
             .composer
@@ -104,7 +106,7 @@ fn clear_slash_palette_composer(app: &mut App) {
     }
 }
 
-fn push_unique_model_candidate(out: &mut Vec<String>, model: &str) {
+pub(super) fn push_unique_model_candidate(out: &mut Vec<String>, model: &str) {
     let trimmed = model.trim();
     if trimmed.is_empty() || out.iter().any(|existing| existing == trimmed) {
         return;
@@ -112,7 +114,7 @@ fn push_unique_model_candidate(out: &mut Vec<String>, model: &str) {
     out.push(trimmed.to_owned());
 }
 
-fn local_model_candidates(provider: &ProviderConfig) -> Vec<String> {
+pub(super) fn local_model_candidates(provider: &ProviderConfig) -> Vec<String> {
     let mut models = Vec::new();
     push_unique_model_candidate(&mut models, provider.model.as_str());
     for preferred in &provider.preferred_models {
@@ -127,7 +129,7 @@ fn local_model_candidates(provider: &ProviderConfig) -> Vec<String> {
     models
 }
 
-fn merged_model_catalog_entries(
+pub(super) fn merged_model_catalog_entries(
     provider: &ProviderConfig,
     catalog: &[crate::provider::ProviderModelCatalogEntry],
     include_hidden_and_deprecated: bool,
@@ -167,7 +169,7 @@ fn merged_model_catalog_entries(
     merged
 }
 
-fn find_exact_model_catalog_entry<'a>(
+pub(super) fn find_exact_model_catalog_entry<'a>(
     catalog: &'a [crate::provider::ProviderModelCatalogEntry],
     query: &str,
 ) -> Option<&'a crate::provider::ProviderModelCatalogEntry> {
@@ -185,14 +187,14 @@ fn find_exact_model_catalog_entry<'a>(
     })
 }
 
-fn model_entry_label(entry: &crate::provider::ProviderModelCatalogEntry) -> String {
+pub(super) fn model_entry_label(entry: &crate::provider::ProviderModelCatalogEntry) -> String {
     entry
         .display_name
         .clone()
         .unwrap_or_else(|| entry.model.clone())
 }
 
-fn model_entry_description(
+pub(super) fn model_entry_description(
     provider: &ProviderConfig,
     entry: &crate::provider::ProviderModelCatalogEntry,
     reasoning_efforts: &[ReasoningEffort],
@@ -232,7 +234,7 @@ fn model_entry_description(
     parts.join(" · ")
 }
 
-fn current_reasoning_label(runtime: &CliTurnRuntime) -> String {
+pub(super) fn current_reasoning_label(runtime: &CliTurnRuntime) -> String {
     runtime
         .config
         .provider
@@ -241,7 +243,7 @@ fn current_reasoning_label(runtime: &CliTurnRuntime) -> String {
         .unwrap_or_else(|| "default".to_owned())
 }
 
-fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> String {
+pub(super) fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> String {
     match reasoning_effort {
         None => "use the provider or model default reasoning behavior".to_owned(),
         Some(ReasoningEffort::None) => {
@@ -257,7 +259,7 @@ fn reasoning_option_description(reasoning_effort: Option<ReasoningEffort>) -> St
     }
 }
 
-fn reasoning_option_description_for_entry(
+pub(super) fn reasoning_option_description_for_entry(
     entry: &crate::provider::ProviderModelCatalogEntry,
     reasoning_effort: ReasoningEffort,
 ) -> String {
@@ -266,7 +268,7 @@ fn reasoning_option_description_for_entry(
         .unwrap_or_else(|| reasoning_option_description(Some(reasoning_effort)))
 }
 
-fn default_reasoning_option_description(
+pub(super) fn default_reasoning_option_description(
     runtime: &CliTurnRuntime,
     entry: &crate::provider::ProviderModelCatalogEntry,
 ) -> String {
@@ -282,7 +284,7 @@ fn default_reasoning_option_description(
         .unwrap_or_else(|| "use the provider or model default reasoning behavior".to_owned())
 }
 
-fn build_model_palette_entries(
+pub(super) fn build_model_palette_entries(
     runtime: &CliTurnRuntime,
     catalog: &[crate::provider::ProviderModelCatalogEntry],
 ) -> Vec<SettingsEntry> {
@@ -375,7 +377,7 @@ fn build_model_palette_entries(
         .collect()
 }
 
-fn build_reasoning_palette_entries(
+pub(super) fn build_reasoning_palette_entries(
     runtime: &CliTurnRuntime,
     entry: &crate::provider::ProviderModelCatalogEntry,
 ) -> (Vec<SettingsEntry>, String) {
@@ -423,7 +425,7 @@ fn build_reasoning_palette_entries(
     (entries, selected_label)
 }
 
-async fn open_model_palette(
+pub(super) async fn open_model_palette(
     app: &mut App,
     runtime: &mut CliTurnRuntime,
     query: &str,
@@ -483,7 +485,7 @@ async fn open_model_palette(
     Ok(())
 }
 
-fn open_reasoning_palette(
+pub(super) fn open_reasoning_palette(
     app: &mut App,
     runtime: &CliTurnRuntime,
     entry: &crate::provider::ProviderModelCatalogEntry,
@@ -502,7 +504,7 @@ fn open_reasoning_palette(
     app.focus = Focus::CommandPalette;
 }
 
-fn apply_model_selection(
+pub(super) fn apply_model_selection(
     app: &mut App,
     runtime: &mut CliTurnRuntime,
     model: String,
@@ -525,7 +527,7 @@ fn apply_model_selection(
     Ok(())
 }
 
-async fn run_surface_command<B: Backend>(
+pub(super) async fn run_surface_command<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     router: &mut SessionRouter,
@@ -801,14 +803,14 @@ async fn run_surface_command<B: Backend>(
     }
 }
 
-fn replace_app_transcript_with_active_route(app: &mut App, route: &ActiveSessionRoute) {
+pub(super) fn replace_app_transcript_with_active_route(app: &mut App, route: &ActiveSessionRoute) {
     app.message_list.clear_transcript();
     if !route.loaded_history_lines.is_empty() {
         restore_message_list_history(app, route.loaded_history_lines.as_slice());
     }
 }
 
-fn restore_message_list_history(app: &mut App, history_lines: &[String]) {
+pub(super) fn restore_message_list_history(app: &mut App, history_lines: &[String]) {
     for line in history_lines {
         if let Some((role, content)) = parse_history_turn_line(line) {
             if role.eq_ignore_ascii_case("user") {
@@ -832,7 +834,7 @@ fn restore_message_list_history(app: &mut App, history_lines: &[String]) {
     }
 }
 
-fn parse_history_turn_line(line: &str) -> Option<(&str, &str)> {
+pub(super) fn parse_history_turn_line(line: &str) -> Option<(&str, &str)> {
     let trimmed = line.trim();
     let after_timestamp = if trimmed.starts_with('[') {
         let end = trimmed.find(']')?;
@@ -844,7 +846,7 @@ fn parse_history_turn_line(line: &str) -> Option<(&str, &str)> {
     Some((role.trim(), content))
 }
 
-fn is_internal_history_payload(content: &str) -> bool {
+pub(super) fn is_internal_history_payload(content: &str) -> bool {
     let trimmed = content.trim();
     trimmed.starts_with('{') && trimmed.contains("\"_loong_internal\":true")
 }

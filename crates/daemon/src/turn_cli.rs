@@ -43,6 +43,7 @@ pub async fn run_chat_cli(
     _acp_bootstrap_mcp_server: &[String],
     _acp_cwd: Option<&str>,
 ) -> CliResult<()> {
+    // TODO: Should this be run directly?
     run_spine_chat_cli(
         config_path,
         session,

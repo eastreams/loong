@@ -81,16 +81,32 @@ const PENDING_TOOL_BODY_COLORS: [Color; 6] = [
     SURFACE_ACCENT,
 ];
 
-include!("app/state.rs");
-include!("app/surface.rs");
-include!("app/session_router.rs");
-include!("app/switch_confirm.rs");
-include!("app/runtime.rs");
-include!("app/startup.rs");
-include!("app/input_palette.rs");
-include!("app/commands.rs");
-include!("app/pending.rs");
-include!("app/startup_catalog.rs");
+mod commands;
+mod input_palette;
+mod pending;
+mod runtime;
+mod session_router;
+mod startup;
+mod startup_catalog;
+mod state;
+mod surface;
+
+use self::commands::*;
+use self::input_palette::*;
+use self::pending::*;
+use self::runtime::refresh_app_cwd_dependent_state;
+pub use self::runtime::run_app;
+use self::session_router::*;
+use self::startup::*;
+use self::startup_catalog::*;
+pub use self::state::App;
+use self::state::{
+    LiveTranscriptState, PendingRenderCache, StartupBootstrapCapture,
+    StartupChannelFollowUpDescriptor, StartupOnboardingAction, StartupOnboardingInteractionKind,
+    StartupOnboardingStage, StartupOnboardingState, StartupPersonalizationPreset,
+    StartupProviderAuthBindingKind, StartupProviderOption, StartupSetupPathChoice,
+    detected_startup_auth_binding, startup_provider_config_for_kind,
+};
 
 mod resume_candidates;
 #[cfg(test)]
