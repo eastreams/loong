@@ -127,7 +127,7 @@ fn shell_exec_empty_path_probe() {
     let root = unique_temp_dir("loong-shell-empty-path-fallback");
     std::fs::create_dir_all(&root).expect("create root");
 
-    let mut env = ScopedEnv::new();
+    let mut env = crate::test_utils::ScopedEnv::new();
     env.set("PATH", "");
 
     let config = test_tool_runtime_config(root.clone());
@@ -525,7 +525,7 @@ fn shell_exec_rejects_non_lowercase_command_names_before_execution() {
     perms.set_mode(0o755);
     fs::set_permissions(&script, perms).expect("mark script executable");
 
-    let mut env = ScopedEnv::new();
+    let mut env = crate::test_utils::ScopedEnv::new();
     let original_path = std::env::var_os("PATH").unwrap_or_default();
     let mut path_value = root.clone().into_os_string();
     if !original_path.is_empty() {

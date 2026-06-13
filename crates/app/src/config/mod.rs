@@ -132,6 +132,7 @@ pub use shared::{
     detect_invoked_cli_command_name_from_arg0, detect_legacy_home, expand_path,
     set_active_cli_command_name,
 };
+#[cfg(test)]
 pub(crate) use shared::{
     pop_default_loong_home_env_override_for_tests, push_default_loong_home_env_override_for_tests,
 };

@@ -44,6 +44,7 @@ pub(crate) async fn with_trusted_internal_tool_payload_async<T>(
     TRUSTED_INTERNAL_TOOL_PAYLOAD_TASK.scope(true, future).await
 }
 
+#[cfg(test)]
 pub(crate) fn reset_runtime_home_state_for_tests() {
     super::tool_lease_authority::clear_tool_lease_secret_cache_for_tests();
 }

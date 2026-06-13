@@ -578,20 +578,16 @@ pub(crate) fn pop_default_loong_home_override_for_tests() {
     });
 }
 
+#[cfg(test)]
 pub(crate) fn push_default_loong_home_env_override_for_tests() {
-    #[cfg(test)]
-    {
-        DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.fetch_add(1, Ordering::Relaxed);
-    }
+    DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+#[cfg(test)]
 pub(crate) fn pop_default_loong_home_env_override_for_tests() {
-    #[cfg(test)]
-    {
-        let current = DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.load(Ordering::Relaxed);
-        if current > 0 {
-            DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.fetch_sub(1, Ordering::Relaxed);
-        }
+    let current = DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.load(Ordering::Relaxed);
+    if current > 0 {
+        DEFAULT_LOONG_HOME_ENV_OVERRIDE_COUNT.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
