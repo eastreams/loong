@@ -745,8 +745,6 @@ mod tests {
 
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongConfig};
-    #[cfg(unix)]
-    use crate::test_utils::ScopedEnv;
 
     const ACPX_RUNTIME_TEST_TIMEOUT_SECONDS: f64 = 45.0;
 

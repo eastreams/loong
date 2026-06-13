@@ -866,9 +866,6 @@ mod tests {
         retry_executable_file_busy_async, should_retry_executable_file_busy,
     };
 
-    #[cfg(unix)]
-    use crate::test_utils::ScopedEnv;
-
     #[test]
     fn should_retry_spawn_error_matches_executable_file_busy() {
         let busy_error = Error::from(ErrorKind::ExecutableFileBusy);

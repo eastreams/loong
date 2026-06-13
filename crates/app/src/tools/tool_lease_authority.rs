@@ -456,6 +456,7 @@ fn now_unix_seconds() -> u64 {
     duration.as_secs()
 }
 
+#[cfg(test)]
 pub(crate) fn clear_tool_lease_secret_cache_for_tests() {
     let cache = tool_lease_secret_cache();
     let guard = cache.lock();
