@@ -7,7 +7,9 @@ use serde_json::json;
 use super::state::GatewayStopRequestOutcome;
 use crate::CliResult;
 
+#[cfg(unix)]
 pub(super) const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
+#[cfg(unix)]
 pub(super) const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 
 type GatewayControlJsonResponse = (StatusCode, Json<serde_json::Value>);

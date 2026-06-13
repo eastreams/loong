@@ -2,9 +2,6 @@ pub mod ast;
 pub mod governance;
 pub mod rules;
 
-#[cfg(test)]
-mod exec_tests;
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;

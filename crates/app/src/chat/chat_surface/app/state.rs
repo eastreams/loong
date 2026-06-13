@@ -1,18 +1,20 @@
+use super::*;
+
 #[derive(Clone)]
-struct PendingRenderCache {
-    signature: u64,
-    max_pending_height: u16,
-    lines: Vec<Line<'static>>,
+pub(super) struct PendingRenderCache {
+    pub(super) signature: u64,
+    pub(super) max_pending_height: u16,
+    pub(super) lines: Vec<Line<'static>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct LiveTranscriptState {
-    draft_preview: Option<String>,
-    tool_activity_lines: Vec<String>,
+pub(super) struct LiveTranscriptState {
+    pub(super) draft_preview: Option<String>,
+    pub(super) tool_activity_lines: Vec<String>,
 }
 
 impl LiveTranscriptState {
-    fn has_needs_approval(&self) -> bool {
+    pub(super) fn has_needs_approval(&self) -> bool {
         self.tool_activity_lines.iter().any(|line| {
             let trimmed = line.trim_start();
             trimmed.starts_with("[needs_approval]") || trimmed.contains("[needs_approval]")
@@ -21,7 +23,7 @@ impl LiveTranscriptState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupOnboardingStage {
+pub(super) enum StartupOnboardingStage {
     Language,
     Provider,
     Skills,
@@ -31,7 +33,7 @@ enum StartupOnboardingStage {
 }
 
 impl StartupOnboardingStage {
-    const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 6] = [
         Self::Language,
         Self::Provider,
         Self::Skills,
@@ -40,7 +42,7 @@ impl StartupOnboardingStage {
         Self::Finish,
     ];
 
-    fn title(self, language: Language) -> &'static str {
+    pub(super) fn title(self, language: Language) -> &'static str {
         match self {
             Self::Language => match language {
                 Language::ZhCn => "语言",
@@ -81,7 +83,7 @@ impl StartupOnboardingStage {
         }
     }
 
-    fn step_index(self) -> usize {
+    pub(super) fn step_index(self) -> usize {
         Self::ALL
             .iter()
             .position(|stage| *stage == self)
@@ -89,11 +91,11 @@ impl StartupOnboardingStage {
             + 1
     }
 
-    fn total_steps() -> usize {
+    pub(super) fn total_steps() -> usize {
         Self::ALL.len()
     }
 
-    fn next(self) -> Self {
+    pub(super) fn next(self) -> Self {
         match self {
             Self::Language => Self::Provider,
             Self::Provider => Self::Skills,
@@ -104,7 +106,7 @@ impl StartupOnboardingStage {
         }
     }
 
-    fn previous(self) -> Self {
+    pub(super) fn previous(self) -> Self {
         match self {
             Self::Language => Self::Language,
             Self::Provider => Self::Language,
@@ -117,7 +119,7 @@ impl StartupOnboardingStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupSetupPathChoice {
+pub(super) enum StartupSetupPathChoice {
     ChatNow,
     ProviderAndWeb,
     ChannelsAndDelivery,
@@ -125,14 +127,14 @@ enum StartupSetupPathChoice {
 }
 
 impl StartupSetupPathChoice {
-    const ALL: [Self; 4] = [
+    pub(super) const ALL: [Self; 4] = [
         Self::ChatNow,
         Self::ProviderAndWeb,
         Self::ChannelsAndDelivery,
         Self::McpAndSkills,
     ];
 
-    fn label(self, language: Language) -> &'static str {
+    pub(super) fn label(self, language: Language) -> &'static str {
         match self {
             Self::ChatNow => match language {
                 Language::ZhCn => "先聊天",
@@ -165,7 +167,7 @@ impl StartupSetupPathChoice {
         }
     }
 
-    fn detail(self, language: Language) -> &'static str {
+    pub(super) fn detail(self, language: Language) -> &'static str {
         match self {
             Self::ChatNow => match language {
                 Language::ZhCn => "先保持 shell 简洁，等真实任务需要时再展开更深配置。",
@@ -226,7 +228,7 @@ impl StartupSetupPathChoice {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupPersonalizationPreset {
+pub(super) enum StartupPersonalizationPreset {
     Balanced,
     Concise,
     Thorough,
@@ -235,7 +237,7 @@ enum StartupPersonalizationPreset {
 }
 
 impl StartupPersonalizationPreset {
-    const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 5] = [
         Self::Balanced,
         Self::Concise,
         Self::Thorough,
@@ -243,7 +245,7 @@ impl StartupPersonalizationPreset {
         Self::TurnOff,
     ];
 
-    fn label(self, language: Language) -> &'static str {
+    pub(super) fn label(self, language: Language) -> &'static str {
         match self {
             Self::Balanced => match language {
                 Language::ZhCn => "平衡模式",
@@ -283,7 +285,7 @@ impl StartupPersonalizationPreset {
         }
     }
 
-    fn detail(self, language: Language) -> &'static str {
+    pub(super) fn detail(self, language: Language) -> &'static str {
         match self {
             Self::Balanced => match language {
                 Language::ZhCn => "默认保持平衡的密度与主动性。",
@@ -327,7 +329,7 @@ impl StartupPersonalizationPreset {
         }
     }
 
-    fn response_density(self) -> Option<ResponseDensity> {
+    pub(super) fn response_density(self) -> Option<ResponseDensity> {
         match self {
             Self::Balanced => Some(ResponseDensity::Balanced),
             Self::Concise => Some(ResponseDensity::Concise),
@@ -336,7 +338,7 @@ impl StartupPersonalizationPreset {
         }
     }
 
-    fn initiative_level(self) -> Option<InitiativeLevel> {
+    pub(super) fn initiative_level(self) -> Option<InitiativeLevel> {
         match self {
             Self::Balanced => Some(InitiativeLevel::Balanced),
             Self::Concise => Some(InitiativeLevel::AskBeforeActing),
@@ -347,74 +349,74 @@ impl StartupPersonalizationPreset {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StartupProviderOption {
-    kind: ProviderKind,
-    auth_env_name: Option<String>,
-    is_current: bool,
-    label: String,
-    detail: String,
-    recommended: bool,
+pub(super) struct StartupProviderOption {
+    pub(super) kind: ProviderKind,
+    pub(super) auth_env_name: Option<String>,
+    pub(super) is_current: bool,
+    pub(super) label: String,
+    pub(super) detail: String,
+    pub(super) recommended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StartupSkillOption {
-    install_id: String,
-    display_name: String,
-    summary: String,
-    recommended: bool,
+pub(super) struct StartupSkillOption {
+    pub(super) install_id: String,
+    pub(super) display_name: String,
+    pub(super) summary: String,
+    pub(super) recommended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StartupChannelFollowUpDescriptor {
-    label: String,
-    serve_command: Option<String>,
-    status_command: String,
-    repair_command: Option<String>,
+pub(super) struct StartupChannelFollowUpDescriptor {
+    pub(super) label: String,
+    pub(super) serve_command: Option<String>,
+    pub(super) status_command: String,
+    pub(super) repair_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct StartupBootstrapCapture {
-    preferred_address: Option<String>,
-    pronouns: Option<String>,
-    agent_name: Option<String>,
-    creature: Option<String>,
-    vibe: Option<String>,
-    emoji: Option<String>,
-    timezone: Option<String>,
-    standing_boundaries: Option<String>,
-    notes: Option<String>,
+pub(super) struct StartupBootstrapCapture {
+    pub(super) preferred_address: Option<String>,
+    pub(super) pronouns: Option<String>,
+    pub(super) agent_name: Option<String>,
+    pub(super) creature: Option<String>,
+    pub(super) vibe: Option<String>,
+    pub(super) emoji: Option<String>,
+    pub(super) timezone: Option<String>,
+    pub(super) standing_boundaries: Option<String>,
+    pub(super) notes: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StartupOnboardingState {
-    stage: StartupOnboardingStage,
-    language_options: Vec<Language>,
-    language_index: usize,
-    provider_options: Vec<StartupProviderOption>,
-    provider_index: usize,
-    skill_options: Vec<StartupSkillOption>,
-    selected_skill_ids: BTreeSet<String>,
-    skill_cursor: usize,
-    setup_path_index: usize,
-    personalization_index: usize,
-    selected_personalization: Option<StartupPersonalizationPreset>,
-    web_search_provider_label: String,
-    web_search_provider_detail: String,
-    provider_auth_env_name: Option<String>,
-    provider_configuration_hint: Option<String>,
-    enabled_channel_labels: Vec<String>,
-    channel_follow_up_commands: Vec<String>,
-    channel_status_commands: Vec<String>,
-    channel_repair_commands: Vec<String>,
-    startup_mcp_count: usize,
-    detected_skill_count: usize,
-    feedback: Option<String>,
-    last_interaction_at: std::time::Instant,
-    last_interaction_kind: StartupOnboardingInteractionKind,
+pub(super) struct StartupOnboardingState {
+    pub(super) stage: StartupOnboardingStage,
+    pub(super) language_options: Vec<Language>,
+    pub(super) language_index: usize,
+    pub(super) provider_options: Vec<StartupProviderOption>,
+    pub(super) provider_index: usize,
+    pub(super) skill_options: Vec<StartupSkillOption>,
+    pub(super) selected_skill_ids: BTreeSet<String>,
+    pub(super) skill_cursor: usize,
+    pub(super) setup_path_index: usize,
+    pub(super) personalization_index: usize,
+    pub(super) selected_personalization: Option<StartupPersonalizationPreset>,
+    pub(super) web_search_provider_label: String,
+    pub(super) web_search_provider_detail: String,
+    pub(super) provider_auth_env_name: Option<String>,
+    pub(super) provider_configuration_hint: Option<String>,
+    pub(super) enabled_channel_labels: Vec<String>,
+    pub(super) channel_follow_up_commands: Vec<String>,
+    pub(super) channel_status_commands: Vec<String>,
+    pub(super) channel_repair_commands: Vec<String>,
+    pub(super) startup_mcp_count: usize,
+    pub(super) detected_skill_count: usize,
+    pub(super) feedback: Option<String>,
+    pub(super) last_interaction_at: std::time::Instant,
+    pub(super) last_interaction_kind: StartupOnboardingInteractionKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupOnboardingInteractionKind {
+pub(super) enum StartupOnboardingInteractionKind {
     Passive,
     Navigate,
     Confirm,
@@ -422,12 +424,12 @@ enum StartupOnboardingInteractionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupProviderAuthBindingKind {
+pub(super) enum StartupProviderAuthBindingKind {
     ApiKey,
     OauthAccessToken,
 }
 
-fn startup_provider_config_for_kind(kind: ProviderKind) -> ProviderConfig {
+pub(super) fn startup_provider_config_for_kind(kind: ProviderKind) -> ProviderConfig {
     let mut provider = ProviderConfig::fresh_for_kind(kind);
     if let Some((env_name, binding_kind)) = detected_startup_auth_binding(kind) {
         apply_startup_auth_binding(&mut provider, env_name.as_str(), binding_kind);
@@ -435,7 +437,7 @@ fn startup_provider_config_for_kind(kind: ProviderKind) -> ProviderConfig {
     provider
 }
 
-fn detected_startup_auth_binding(
+pub(super) fn detected_startup_auth_binding(
     kind: ProviderKind,
 ) -> Option<(String, StartupProviderAuthBindingKind)> {
     if let Some(env_name) = kind
@@ -472,7 +474,7 @@ fn detected_startup_auth_binding(
     None
 }
 
-fn apply_startup_auth_binding(
+pub(super) fn apply_startup_auth_binding(
     provider: &mut ProviderConfig,
     env_name: &str,
     binding_kind: StartupProviderAuthBindingKind,
@@ -488,7 +490,7 @@ fn apply_startup_auth_binding(
 }
 
 impl StartupOnboardingState {
-    fn new(runtime: &CliTurnRuntime, preferred_language: Language) -> Option<Self> {
+    pub(super) fn new(runtime: &CliTurnRuntime, preferred_language: Language) -> Option<Self> {
         if !startup_onboarding_enabled(runtime) {
             return None;
         }
@@ -548,7 +550,7 @@ impl StartupOnboardingState {
         Some(state)
     }
 
-    fn refresh_localized_runtime_content(&mut self, runtime: &CliTurnRuntime) {
+    pub(super) fn refresh_localized_runtime_content(&mut self, runtime: &CliTurnRuntime) {
         let language = self.current_language();
         let selected_provider_kind = self
             .provider_options
@@ -604,19 +606,19 @@ impl StartupOnboardingState {
             .collect();
     }
 
-    fn mark_interaction(&mut self, kind: StartupOnboardingInteractionKind) {
+    pub(super) fn mark_interaction(&mut self, kind: StartupOnboardingInteractionKind) {
         self.last_interaction_at = std::time::Instant::now();
         self.last_interaction_kind = kind;
     }
 
-    fn current_language(&self) -> Language {
+    pub(super) fn current_language(&self) -> Language {
         self.language_options
             .get(self.language_index)
             .copied()
             .unwrap_or(Language::En)
     }
 
-    fn handle_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         match self.stage {
             StartupOnboardingStage::Language => self.handle_language_key(key),
             StartupOnboardingStage::Provider => self.handle_provider_key(key),
@@ -627,7 +629,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_language_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_language_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.language_index = self.language_index.saturating_sub(1);
@@ -656,7 +658,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_provider_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_provider_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.provider_index = self.provider_index.saturating_sub(1);
@@ -684,7 +686,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_skills_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_skills_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.skill_cursor = self.skill_cursor.saturating_sub(1);
@@ -730,7 +732,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_setup_path_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_setup_path_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.setup_path_index = self.setup_path_index.saturating_sub(1);
@@ -770,7 +772,10 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_personalization_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_personalization_key(
+        &mut self,
+        key: ChatKeyEvent,
+    ) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Up {
             self.personalization_index = self.personalization_index.saturating_sub(1);
@@ -793,7 +798,7 @@ impl StartupOnboardingState {
         }
     }
 
-    fn handle_finish_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
+    pub(super) fn handle_finish_key(&mut self, key: ChatKeyEvent) -> StartupOnboardingAction {
         let code = key.code;
         if code == KeyCode::Enter {
             StartupOnboardingAction::Complete
@@ -806,14 +811,14 @@ impl StartupOnboardingState {
         }
     }
 
-    fn current_setup_path_choice(&self) -> StartupSetupPathChoice {
+    pub(super) fn current_setup_path_choice(&self) -> StartupSetupPathChoice {
         StartupSetupPathChoice::ALL
             .get(self.setup_path_index)
             .copied()
             .unwrap_or(StartupSetupPathChoice::ChatNow)
     }
 
-    fn current_personalization_preset(&self) -> StartupPersonalizationPreset {
+    pub(super) fn current_personalization_preset(&self) -> StartupPersonalizationPreset {
         StartupPersonalizationPreset::ALL
             .get(self.personalization_index)
             .copied()
@@ -822,7 +827,7 @@ impl StartupOnboardingState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum StartupOnboardingAction {
+pub(super) enum StartupOnboardingAction {
     Ignored,
     Handled,
     ApplyLanguage(Language),
@@ -838,34 +843,34 @@ pub struct App {
     pub focus: Focus,
     pub pending_turn: bool,
     pub turn_start: Option<std::time::Instant>,
-    live_transcript: Arc<StdMutex<LiveTranscriptState>>,
+    pub(super) live_transcript: Arc<StdMutex<LiveTranscriptState>>,
     pub pending_task: Option<JoinHandle<CliResult<String>>>,
     pub pending_steers: VecDeque<String>,
     pub pending_queue: VecDeque<String>,
     pub composer_follow_up_intent: bool,
-    pending_first_turn_bootstrap_addendum: Option<String>,
-    awaiting_first_turn_bootstrap_reply: bool,
+    pub(super) pending_first_turn_bootstrap_addendum: Option<String>,
+    pub(super) awaiting_first_turn_bootstrap_reply: bool,
     pub live_render_width: Arc<AtomicUsize>,
-    pub live_rerender: Option<super::super::CliChatLiveSurfaceRerender>,
+    pub live_rerender: Option<crate::chat::CliChatLiveSurfaceRerender>,
     pub spinner_seed: u64,
     pub last_pending_signature: Option<u64>,
-    last_live_transcript_signature: Option<u64>,
-    pending_render_cache: Option<PendingRenderCache>,
-    inline_skill_popup_active: bool,
+    pub(super) last_live_transcript_signature: Option<u64>,
+    pub(super) pending_render_cache: Option<PendingRenderCache>,
+    pub(super) inline_skill_popup_active: bool,
     pub last_render_width: u16,
     pub last_render_height: u16,
     pub last_transcript_area: Rect,
     pub last_composer_area: Rect,
     pub last_palette_area: Rect,
-    startup_onboarding: Option<StartupOnboardingState>,
-    startup_version: String,
-    startup_mcp_count: usize,
-    detected_skills: Vec<SkillEntry>,
+    pub(super) startup_onboarding: Option<StartupOnboardingState>,
+    pub(super) startup_version: String,
+    pub(super) startup_mcp_count: usize,
+    pub(super) detected_skills: Vec<SkillEntry>,
     pub cwd: String,
     pub model: String,
     pub title: Option<String>,
-    last_terminal_title: Option<String>,
-    title_attention_required: bool,
-    title_pending_approval_count: usize,
+    pub(super) last_terminal_title: Option<String>,
+    pub(super) title_attention_required: bool,
+    pub(super) title_pending_approval_count: usize,
     pub i18n: I18nService,
 }

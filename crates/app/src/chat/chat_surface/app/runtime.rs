@@ -1,11 +1,13 @@
+use super::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoongTerminalActivity {
+pub(super) enum LoongTerminalActivity {
     Idle,
     Working,
     AttentionRequired,
 }
 
-fn loong_terminal_title_prefix(activity: LoongTerminalActivity) -> &'static str {
+pub(super) fn loong_terminal_title_prefix(activity: LoongTerminalActivity) -> &'static str {
     match activity {
         LoongTerminalActivity::Idle => "🐉",
         LoongTerminalActivity::Working => "⠋",
@@ -13,7 +15,7 @@ fn loong_terminal_title_prefix(activity: LoongTerminalActivity) -> &'static str 
     }
 }
 
-fn compact_path_label(path: &str) -> String {
+pub(super) fn compact_path_label(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return "~".to_owned();
@@ -32,7 +34,7 @@ fn compact_path_label(path: &str) -> String {
         .unwrap_or_else(|| normalized.to_owned())
 }
 
-fn terminal_title_braille_frame(start: Option<std::time::Instant>) -> &'static str {
+pub(super) fn terminal_title_braille_frame(start: Option<std::time::Instant>) -> &'static str {
     let elapsed_ms = start
         .map(|value| value.elapsed().as_millis() as u64)
         .unwrap_or_default();
@@ -44,7 +46,7 @@ fn terminal_title_braille_frame(start: Option<std::time::Instant>) -> &'static s
         .unwrap_or(TERMINAL_TITLE_BRAILLE_FRAMES[0])
 }
 
-fn build_loong_terminal_title(
+pub(super) fn build_loong_terminal_title(
     cwd: &str,
     activity: LoongTerminalActivity,
     turn_start: Option<std::time::Instant>,
@@ -57,11 +59,11 @@ fn build_loong_terminal_title(
     format!("{} - {}", prefix, compact_path_label(cwd))
 }
 
-fn refresh_app_cwd(app: &mut App, runtime: &CliTurnRuntime) {
+pub(super) fn refresh_app_cwd(app: &mut App, runtime: &CliTurnRuntime) {
     app.cwd = format_cwd(runtime);
 }
 
-fn refresh_app_cwd_dependent_state(app: &mut App, runtime: &CliTurnRuntime) {
+pub(super) fn refresh_app_cwd_dependent_state(app: &mut App, runtime: &CliTurnRuntime) {
     let preserved_skill_query = app
         .command_palette
         .is_skills_mode()
@@ -77,7 +79,7 @@ fn refresh_app_cwd_dependent_state(app: &mut App, runtime: &CliTurnRuntime) {
     app.sync_inline_skill_popup();
 }
 
-fn current_pending_approval_count(runtime: &CliTurnRuntime) -> CliResult<usize> {
+pub(super) fn current_pending_approval_count(runtime: &CliTurnRuntime) -> CliResult<usize> {
     #[cfg(feature = "memory-sqlite")]
     {
         let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
@@ -91,7 +93,7 @@ fn current_pending_approval_count(runtime: &CliTurnRuntime) -> CliResult<usize> 
     }
 }
 
-fn app_terminal_title_requires_attention(app: &App) -> bool {
+pub(super) fn app_terminal_title_requires_attention(app: &App) -> bool {
     app.title_attention_required
         || app.awaiting_first_turn_bootstrap_reply
         || app.title_pending_approval_count > 0
@@ -102,7 +104,7 @@ fn app_terminal_title_requires_attention(app: &App) -> bool {
             .is_some_and(|state| state.has_needs_approval())
 }
 
-fn app_terminal_title_activity(app: &App) -> LoongTerminalActivity {
+pub(super) fn app_terminal_title_activity(app: &App) -> LoongTerminalActivity {
     if app.pending_turn {
         LoongTerminalActivity::Working
     } else if app_terminal_title_requires_attention(app) {
@@ -112,7 +114,7 @@ fn app_terminal_title_activity(app: &App) -> LoongTerminalActivity {
     }
 }
 
-fn sanitize_terminal_title(title: &str) -> String {
+pub(super) fn sanitize_terminal_title(title: &str) -> String {
     let mut sanitized = String::new();
     let mut chars_written = 0usize;
     let mut pending_space = false;
@@ -144,7 +146,7 @@ fn sanitize_terminal_title(title: &str) -> String {
     sanitized
 }
 
-fn is_disallowed_terminal_title_char(ch: char) -> bool {
+pub(super) fn is_disallowed_terminal_title_char(ch: char) -> bool {
     ch.is_control()
         || matches!(
             ch,
@@ -159,7 +161,7 @@ fn is_disallowed_terminal_title_char(ch: char) -> bool {
         )
 }
 
-fn write_terminal_title(title: &str) -> std::io::Result<()> {
+pub(super) fn write_terminal_title(title: &str) -> std::io::Result<()> {
     if !std::io::stdout().is_terminal() {
         return Ok(());
     }
@@ -167,7 +169,7 @@ fn write_terminal_title(title: &str) -> std::io::Result<()> {
     crossterm::execute!(std::io::stdout(), SetTitle(title))
 }
 
-fn sync_app_terminal_title(app: &mut App) {
+pub(super) fn sync_app_terminal_title(app: &mut App) {
     let title = sanitize_terminal_title(
         build_loong_terminal_title(&app.cwd, app_terminal_title_activity(app), app.turn_start)
             .as_str(),
@@ -181,7 +183,7 @@ fn sync_app_terminal_title(app: &mut App) {
     }
 }
 
-fn clear_app_terminal_title(app: &mut App) {
+pub(super) fn clear_app_terminal_title(app: &mut App) {
     let stable_title = sanitize_terminal_title(
         build_loong_terminal_title(&app.cwd, LoongTerminalActivity::Idle, None).as_str(),
     );

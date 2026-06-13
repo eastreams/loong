@@ -12,6 +12,7 @@ fn execute_tool_core_for_subprocess_test(
     execute_tool_core_with_config(request, config)
 }
 
+#[cfg(unix)]
 fn execute_tool_core_with_trusted_subprocess_test_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,

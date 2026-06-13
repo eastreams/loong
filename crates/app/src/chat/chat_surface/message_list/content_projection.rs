@@ -688,4 +688,3 @@ fn render_section_markdown(section: &TuiSectionSpec) -> String {
         }
     }
 }
-

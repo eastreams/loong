@@ -1,10 +1,12 @@
-fn startup_onboarding_enabled(runtime: &CliTurnRuntime) -> bool {
+use super::*;
+
+pub(super) fn startup_onboarding_enabled(runtime: &CliTurnRuntime) -> bool {
     startup_env_truthy("LOONG_TUI_ONBOARD")
         || (runtime.config.provider.api_key().is_none()
             && runtime.config.provider.oauth_access_token().is_none())
 }
 
-fn startup_env_truthy(name: &str) -> bool {
+pub(super) fn startup_env_truthy(name: &str) -> bool {
     std::env::var(name).ok().is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
@@ -13,7 +15,7 @@ fn startup_env_truthy(name: &str) -> bool {
     })
 }
 
-fn build_startup_provider_options(
+pub(super) fn build_startup_provider_options(
     runtime: &CliTurnRuntime,
     language: Language,
 ) -> Vec<StartupProviderOption> {
@@ -50,7 +52,10 @@ fn build_startup_provider_options(
         .collect()
 }
 
-fn startup_current_provider_detail(runtime: &CliTurnRuntime, language: Language) -> String {
+pub(super) fn startup_current_provider_detail(
+    runtime: &CliTurnRuntime,
+    language: Language,
+) -> String {
     if let Some(env_name) = runtime.config.provider.resolved_auth_env_name() {
         return match language {
             Language::ZhCn => {
@@ -122,7 +127,7 @@ fn startup_current_provider_detail(runtime: &CliTurnRuntime, language: Language)
     }
 }
 
-fn startup_provider_migration_detail(
+pub(super) fn startup_provider_migration_detail(
     provider_label: &str,
     env_name: &str,
     language: Language,
@@ -146,7 +151,7 @@ fn startup_provider_migration_detail(
     }
 }
 
-fn startup_provider_kind_detail(provider_label: &str, language: Language) -> String {
+pub(super) fn startup_provider_kind_detail(provider_label: &str, language: Language) -> String {
     match language {
         Language::ZhCn => format!(
             "先切到 {provider_label}；后续 base_url、model 和鉴权还可以回到 config.toml 里细调。"
@@ -166,7 +171,7 @@ fn startup_provider_kind_detail(provider_label: &str, language: Language) -> Str
     }
 }
 
-fn persist_startup_provider_selection(
+pub(super) fn persist_startup_provider_selection(
     runtime: &mut CliTurnRuntime,
     option: StartupProviderOption,
     language: Language,
@@ -231,7 +236,7 @@ fn persist_startup_provider_selection(
     Ok(summary)
 }
 
-fn startup_language_label(language: Language) -> &'static str {
+pub(super) fn startup_language_label(language: Language) -> &'static str {
     match language {
         Language::En => "English",
         Language::ZhCn => "简体中文",
@@ -241,7 +246,7 @@ fn startup_language_label(language: Language) -> &'static str {
     }
 }
 
-fn startup_onboarding_footer_text(stage: StartupOnboardingStage) -> &'static str {
+pub(super) fn startup_onboarding_footer_text(stage: StartupOnboardingStage) -> &'static str {
     match stage {
         StartupOnboardingStage::Skills => "↑/↓ move · Space toggle · Enter continue · Esc back",
         StartupOnboardingStage::Language
@@ -252,7 +257,7 @@ fn startup_onboarding_footer_text(stage: StartupOnboardingStage) -> &'static str
     }
 }
 
-fn startup_onboarding_footer_text_for_language(
+pub(super) fn startup_onboarding_footer_text_for_language(
     stage: StartupOnboardingStage,
     language: Language,
 ) -> &'static str {
@@ -293,7 +298,10 @@ fn startup_onboarding_footer_text_for_language(
     }
 }
 
-fn startup_onboarding_subtitle(stage: StartupOnboardingStage, language: Language) -> &'static str {
+pub(super) fn startup_onboarding_subtitle(
+    stage: StartupOnboardingStage,
+    language: Language,
+) -> &'static str {
     match language {
         Language::ZhCn => match stage {
             StartupOnboardingStage::Language => "先选 TUI 语言，之后仍可继续细调 config.toml。",
@@ -394,7 +402,9 @@ fn startup_onboarding_subtitle(stage: StartupOnboardingStage, language: Language
     }
 }
 
-fn startup_onboarding_subtitle_for_state(state: &StartupOnboardingState) -> &'static str {
+pub(super) fn startup_onboarding_subtitle_for_state(
+    state: &StartupOnboardingState,
+) -> &'static str {
     if state.stage != StartupOnboardingStage::Finish {
         return startup_onboarding_subtitle(state.stage, state.current_language());
     }
@@ -434,7 +444,7 @@ fn startup_onboarding_subtitle_for_state(state: &StartupOnboardingState) -> &'st
     }
 }
 
-fn startup_feedback_prefix(kind: &str, language: Language) -> &'static str {
+pub(super) fn startup_feedback_prefix(kind: &str, language: Language) -> &'static str {
     match language {
         Language::ZhCn => match kind {
             "language_set" => "语言已设为",
@@ -528,7 +538,7 @@ fn startup_feedback_prefix(kind: &str, language: Language) -> &'static str {
     }
 }
 
-fn startup_feedback_selected_skill_packs(language: Language, count: usize) -> String {
+pub(super) fn startup_feedback_selected_skill_packs(language: Language, count: usize) -> String {
     match language {
         Language::ZhCn => format!("已选 {count} 个 skill pack。"),
         Language::ZhTw => format!("已選 {count} 個 skill pack。"),
@@ -538,7 +548,7 @@ fn startup_feedback_selected_skill_packs(language: Language, count: usize) -> St
     }
 }
 
-fn startup_feedback_queued_skill_packs(language: Language, count: usize) -> String {
+pub(super) fn startup_feedback_queued_skill_packs(language: Language, count: usize) -> String {
     match language {
         Language::ZhCn => format!("已加入 {count} 个 skill pack，后面仍可继续细调。"),
         Language::ZhTw => format!("已加入 {count} 個 skill pack，之後仍可繼續微調。"),
@@ -552,7 +562,7 @@ fn startup_feedback_queued_skill_packs(language: Language, count: usize) -> Stri
     }
 }
 
-fn startup_recommended_badge(language: Language) -> &'static str {
+pub(super) fn startup_recommended_badge(language: Language) -> &'static str {
     match language {
         Language::ZhCn => "推荐",
         Language::ZhTw => "推薦",
@@ -562,7 +572,7 @@ fn startup_recommended_badge(language: Language) -> &'static str {
     }
 }
 
-fn startup_personalization_footer_detail(language: Language) -> &'static str {
+pub(super) fn startup_personalization_footer_detail(language: Language) -> &'static str {
     match language {
         Language::ZhCn => {
             "Loong 会把这项写进 memory.personalization，只有当这套风格应该投射到 Session Profile 时，才会升级 memory.profile。"
@@ -582,7 +592,7 @@ fn startup_personalization_footer_detail(language: Language) -> &'static str {
     }
 }
 
-fn startup_no_preinstalled_skills_text(language: Language) -> &'static str {
+pub(super) fn startup_no_preinstalled_skills_text(language: Language) -> &'static str {
     match language {
         Language::ZhCn => "没有预装 skills",
         Language::ZhTw => "沒有預裝 skills",
@@ -592,7 +602,7 @@ fn startup_no_preinstalled_skills_text(language: Language) -> &'static str {
     }
 }
 
-fn startup_selected_skill_count_text(language: Language, count: usize) -> String {
+pub(super) fn startup_selected_skill_count_text(language: Language, count: usize) -> String {
     match language {
         Language::ZhCn => format!("已选 {count} 项"),
         Language::ZhTw => format!("已選 {count} 項"),
@@ -602,7 +612,7 @@ fn startup_selected_skill_count_text(language: Language, count: usize) -> String
     }
 }
 
-fn startup_not_saved_text(language: Language) -> &'static str {
+pub(super) fn startup_not_saved_text(language: Language) -> &'static str {
     match language {
         Language::ZhCn => "未保存",
         Language::ZhTw => "未保存",
@@ -612,7 +622,7 @@ fn startup_not_saved_text(language: Language) -> &'static str {
     }
 }
 
-fn startup_summary_label(kind: &str, language: Language) -> &'static str {
+pub(super) fn startup_summary_label(kind: &str, language: Language) -> &'static str {
     match language {
         Language::ZhCn => match kind {
             "language" => "语言",
@@ -657,7 +667,7 @@ fn startup_summary_label(kind: &str, language: Language) -> &'static str {
     }
 }
 
-fn startup_finish_prompt(language: Language) -> &'static str {
+pub(super) fn startup_finish_prompt(language: Language) -> &'static str {
     match language {
         Language::ZhCn => "按 Enter 关闭引导并开始聊天。",
         Language::ZhTw => "按 Enter 關閉引導並開始聊天。",
@@ -667,7 +677,9 @@ fn startup_finish_prompt(language: Language) -> &'static str {
     }
 }
 
-fn startup_eye_animation_for_state(state: Option<&StartupOnboardingState>) -> StartupEyeAnimation {
+pub(super) fn startup_eye_animation_for_state(
+    state: Option<&StartupOnboardingState>,
+) -> StartupEyeAnimation {
     let Some(state) = state else {
         return StartupEyeAnimation::Ambient;
     };
@@ -806,7 +818,7 @@ fn startup_eye_animation_for_state(state: Option<&StartupOnboardingState>) -> St
     }
 }
 
-fn startup_list_focus(index: usize, total: usize) -> StartupEyeFocus {
+pub(super) fn startup_list_focus(index: usize, total: usize) -> StartupEyeFocus {
     if total <= 1 {
         return StartupEyeFocus::DownCenter;
     }
@@ -820,7 +832,7 @@ fn startup_list_focus(index: usize, total: usize) -> StartupEyeFocus {
     }
 }
 
-fn build_startup_onboarding_footer_line(
+pub(super) fn build_startup_onboarding_footer_line(
     state: &StartupOnboardingState,
     width: u16,
 ) -> Line<'static> {
@@ -831,7 +843,7 @@ fn build_startup_onboarding_footer_line(
     ))
 }
 
-fn render_startup_onboarding_lines(
+pub(super) fn render_startup_onboarding_lines(
     state: &StartupOnboardingState,
     width: u16,
 ) -> Vec<Line<'static>> {
@@ -1076,7 +1088,7 @@ fn render_startup_onboarding_lines(
     lines
 }
 
-fn startup_setup_path_detail_lines(state: &StartupOnboardingState) -> Vec<String> {
+pub(super) fn startup_setup_path_detail_lines(state: &StartupOnboardingState) -> Vec<String> {
     let language = state.current_language();
     match state.current_setup_path_choice() {
         StartupSetupPathChoice::ChatNow => match language {
@@ -1361,7 +1373,7 @@ fn startup_setup_path_detail_lines(state: &StartupOnboardingState) -> Vec<String
     }
 }
 
-fn startup_web_search_detail(
+pub(super) fn startup_web_search_detail(
     runtime: &CliTurnRuntime,
     provider: &str,
     language: Language,
@@ -1460,7 +1472,7 @@ fn startup_web_search_detail(
     }
 }
 
-fn startup_channel_follow_up_descriptors(
+pub(super) fn startup_channel_follow_up_descriptors(
     runtime: &CliTurnRuntime,
     language: Language,
 ) -> Vec<StartupChannelFollowUpDescriptor> {
@@ -1479,7 +1491,7 @@ fn startup_channel_follow_up_descriptors(
         .collect()
 }
 
-fn startup_suggested_channel_follow_up_descriptors(
+pub(super) fn startup_suggested_channel_follow_up_descriptors(
     language: Language,
 ) -> Vec<StartupChannelFollowUpDescriptor> {
     preferred_startup_channel_ids(language)
@@ -1499,7 +1511,7 @@ fn startup_suggested_channel_follow_up_descriptors(
         .collect()
 }
 
-fn preferred_startup_channel_ids(language: Language) -> &'static [&'static str] {
+pub(super) fn preferred_startup_channel_ids(language: Language) -> &'static [&'static str] {
     match language {
         Language::ZhCn | Language::ZhTw => &["feishu", "wecom", "dingtalk", "weixin"],
         Language::Ja => &["line", "telegram", "discord", "slack"],
@@ -1508,7 +1520,7 @@ fn preferred_startup_channel_ids(language: Language) -> &'static [&'static str] 
     }
 }
 
-fn channel_enabled_in_config(config: &LoongConfig, channel_id: &str) -> bool {
+pub(super) fn channel_enabled_in_config(config: &LoongConfig, channel_id: &str) -> bool {
     match channel_id {
         "cli" => config.cli.enabled,
         "telegram" => config.telegram.enabled,
@@ -1539,7 +1551,11 @@ fn channel_enabled_in_config(config: &LoongConfig, channel_id: &str) -> bool {
     }
 }
 
-fn startup_channel_label(channel_id: &str, fallback_label: &str, language: Language) -> String {
+pub(super) fn startup_channel_label(
+    channel_id: &str,
+    fallback_label: &str,
+    language: Language,
+) -> String {
     match language {
         Language::ZhCn => match channel_id {
             "feishu" => "飞书".to_owned(),
@@ -1559,7 +1575,7 @@ fn startup_channel_label(channel_id: &str, fallback_label: &str, language: Langu
     }
 }
 
-fn startup_personalization_locale(language: Language) -> &'static str {
+pub(super) fn startup_personalization_locale(language: Language) -> &'static str {
     match language {
         Language::En => "en-US",
         Language::ZhCn => "zh-CN",
@@ -1569,7 +1585,7 @@ fn startup_personalization_locale(language: Language) -> &'static str {
     }
 }
 
-fn startup_first_turn_bootstrap_addendum(
+pub(super) fn startup_first_turn_bootstrap_addendum(
     preset: StartupPersonalizationPreset,
     language: Language,
 ) -> Option<String> {
@@ -1661,7 +1677,7 @@ fn startup_first_turn_bootstrap_addendum(
     Some(instruction.to_owned())
 }
 
-fn apply_first_turn_bootstrap_addendum(runtime: &mut CliTurnRuntime, addendum: String) {
+pub(super) fn apply_first_turn_bootstrap_addendum(runtime: &mut CliTurnRuntime, addendum: String) {
     if addendum.trim().is_empty() {
         return;
     }
@@ -1677,7 +1693,7 @@ fn apply_first_turn_bootstrap_addendum(runtime: &mut CliTurnRuntime, addendum: S
     }
 }
 
-fn maybe_capture_and_persist_first_turn_bootstrap_reply(
+pub(super) fn maybe_capture_and_persist_first_turn_bootstrap_reply(
     app: &mut App,
     runtime: &mut CliTurnRuntime,
     input: &str,
@@ -1698,7 +1714,7 @@ fn maybe_capture_and_persist_first_turn_bootstrap_reply(
     persist_startup_bootstrap_capture(runtime, &capture)
 }
 
-fn detect_startup_bootstrap_reply_opt_out(input: &str) -> bool {
+pub(super) fn detect_startup_bootstrap_reply_opt_out(input: &str) -> bool {
     let lowered = input.to_ascii_lowercase();
     [
         "skip for now",
@@ -1722,7 +1738,7 @@ fn detect_startup_bootstrap_reply_opt_out(input: &str) -> bool {
         .any(|pattern| input.contains(pattern))
 }
 
-fn infer_startup_bootstrap_capture(input: &str) -> Option<StartupBootstrapCapture> {
+pub(super) fn infer_startup_bootstrap_capture(input: &str) -> Option<StartupBootstrapCapture> {
     let capture = StartupBootstrapCapture {
         preferred_address: extract_bootstrap_field_value(
             input,
@@ -1832,7 +1848,7 @@ fn infer_startup_bootstrap_capture(input: &str) -> Option<StartupBootstrapCaptur
     }
 }
 
-fn extract_bootstrap_field_value(input: &str, patterns: &[&str]) -> Option<String> {
+pub(super) fn extract_bootstrap_field_value(input: &str, patterns: &[&str]) -> Option<String> {
     for pattern in patterns {
         let value = if pattern.is_ascii() {
             extract_ascii_pattern_value(input, pattern)
@@ -1846,20 +1862,20 @@ fn extract_bootstrap_field_value(input: &str, patterns: &[&str]) -> Option<Strin
     None
 }
 
-fn extract_ascii_pattern_value(input: &str, pattern: &str) -> Option<String> {
+pub(super) fn extract_ascii_pattern_value(input: &str, pattern: &str) -> Option<String> {
     let haystack = input.to_ascii_lowercase();
     let index = haystack.find(pattern)?;
     let start = index + pattern.len();
     normalize_bootstrap_value(&input[start..])
 }
 
-fn extract_direct_pattern_value(input: &str, pattern: &str) -> Option<String> {
+pub(super) fn extract_direct_pattern_value(input: &str, pattern: &str) -> Option<String> {
     let index = input.find(pattern)?;
     let start = index + pattern.len();
     normalize_bootstrap_value(&input[start..])
 }
 
-fn normalize_bootstrap_value(value: &str) -> Option<String> {
+pub(super) fn normalize_bootstrap_value(value: &str) -> Option<String> {
     let trimmed = value
         .trim_start_matches([' ', ':', '：', '=', '-', '—'])
         .trim();
@@ -1892,7 +1908,7 @@ fn normalize_bootstrap_value(value: &str) -> Option<String> {
     Some(normalized.to_owned())
 }
 
-fn persist_startup_bootstrap_capture(
+pub(super) fn persist_startup_bootstrap_capture(
     runtime: &mut CliTurnRuntime,
     capture: &StartupBootstrapCapture,
 ) -> CliResult<()> {
@@ -1934,7 +1950,7 @@ fn persist_startup_bootstrap_capture(
     persist_startup_bootstrap_runtime_self_files(workspace_root.as_path(), capture)
 }
 
-fn persist_startup_bootstrap_runtime_self_files(
+pub(super) fn persist_startup_bootstrap_runtime_self_files(
     workspace_root: &Path,
     capture: &StartupBootstrapCapture,
 ) -> CliResult<()> {
@@ -1956,7 +1972,7 @@ fn persist_startup_bootstrap_runtime_self_files(
     Ok(())
 }
 
-fn render_bootstrap_user_block(capture: &StartupBootstrapCapture) -> Option<String> {
+pub(super) fn render_bootstrap_user_block(capture: &StartupBootstrapCapture) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(preferred_address) = capture.preferred_address.as_deref() {
         lines.push(format!("- Preferred address: {preferred_address}"));
@@ -1980,7 +1996,7 @@ fn render_bootstrap_user_block(capture: &StartupBootstrapCapture) -> Option<Stri
     Some(lines.join("\n"))
 }
 
-fn render_bootstrap_identity_block(capture: &StartupBootstrapCapture) -> Option<String> {
+pub(super) fn render_bootstrap_identity_block(capture: &StartupBootstrapCapture) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(agent_name) = capture.agent_name.as_deref() {
         lines.push(format!("- Name: {agent_name}"));
@@ -2001,7 +2017,7 @@ fn render_bootstrap_identity_block(capture: &StartupBootstrapCapture) -> Option<
     }
 }
 
-fn render_bootstrap_soul_block(capture: &StartupBootstrapCapture) -> Option<String> {
+pub(super) fn render_bootstrap_soul_block(capture: &StartupBootstrapCapture) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(vibe) = capture.vibe.as_deref() {
         lines.push(format!("- Preferred vibe: {vibe}"));
@@ -2016,7 +2032,7 @@ fn render_bootstrap_soul_block(capture: &StartupBootstrapCapture) -> Option<Stri
     }
 }
 
-fn upsert_bootstrap_runtime_self_file(
+pub(super) fn upsert_bootstrap_runtime_self_file(
     path: &Path,
     heading: &str,
     block_body: Option<String>,
@@ -2054,7 +2070,7 @@ fn upsert_bootstrap_runtime_self_file(
     })
 }
 
-fn persist_startup_personalization(
+pub(super) fn persist_startup_personalization(
     runtime: &mut CliTurnRuntime,
     preset: StartupPersonalizationPreset,
     language: Language,
@@ -2149,4 +2165,3 @@ fn persist_startup_personalization(
     runtime.config = config;
     Ok(message)
 }
-

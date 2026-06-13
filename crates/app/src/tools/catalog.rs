@@ -684,6 +684,7 @@ fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
     }
 }
 
+// TODO: Split Tool Desc by tool
 fn build_tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
         ToolDescriptor {

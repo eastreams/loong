@@ -801,21 +801,24 @@ fn sync_parent_dir(path: &Path, context: &str) -> CliResult<()> {
     #[cfg(windows)]
     {
         let _ = (path, context, parent);
-        return Ok(());
+        Ok(())
     }
 
-    let dir = fs::File::open(parent).map_err(|error| {
-        format!(
-            "open {context} parent directory failed for {}: {error}",
-            parent.display()
-        )
-    })?;
-    dir.sync_all().map_err(|error| {
-        format!(
-            "sync {context} parent directory failed for {}: {error}",
-            parent.display()
-        )
-    })
+    #[cfg(not(windows))]
+    {
+        let dir = fs::File::open(parent).map_err(|error| {
+            format!(
+                "open {context} parent directory failed for {}: {error}",
+                parent.display()
+            )
+        })?;
+        dir.sync_all().map_err(|error| {
+            format!(
+                "sync {context} parent directory failed for {}: {error}",
+                parent.display()
+            )
+        })
+    }
 }
 
 fn remove_active_owner_if_owned(path: &Path, owner_token: &str) -> CliResult<()> {

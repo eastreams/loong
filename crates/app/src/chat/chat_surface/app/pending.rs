@@ -1,4 +1,8 @@
-async fn submit_user_turn<B: Backend>(
+use super::*;
+
+use super::super::{command_palette, i18n};
+
+pub(super) async fn submit_user_turn<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     runtime: &mut CliTurnRuntime,
@@ -8,7 +12,7 @@ async fn submit_user_turn<B: Backend>(
 }
 
 impl App {
-    fn pending_lines_for(
+    pub(super) fn pending_lines_for(
         &mut self,
         width: u16,
         height: u16,
@@ -60,7 +64,7 @@ impl App {
     }
 }
 
-async fn start_turn<B: Backend>(
+pub(super) async fn start_turn<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     runtime: &mut CliTurnRuntime,
@@ -90,7 +94,7 @@ async fn start_turn<B: Backend>(
     let sink = {
         let live_transcript = Arc::clone(&app.live_transcript);
         Arc::new(
-            move |payload: super::super::CliChatLiveSurfaceRenderPayload| {
+            move |payload: crate::chat::CliChatLiveSurfaceRenderPayload| {
                 if let Ok(mut state) = live_transcript.lock() {
                     state.draft_preview = payload.draft_preview;
                     state.tool_activity_lines = payload.tool_activity_lines;
@@ -98,7 +102,7 @@ async fn start_turn<B: Backend>(
             },
         )
     };
-    let (observer, rerender) = super::super::build_cli_chat_live_compact_observer_controller(
+    let (observer, rerender) = crate::chat::build_cli_chat_live_compact_observer_controller(
         Arc::clone(&app.live_render_width),
         sink,
     );
@@ -112,7 +116,7 @@ async fn start_turn<B: Backend>(
     Ok(())
 }
 
-fn queue_pending_steer(app: &mut App, input: String) {
+pub(super) fn queue_pending_steer(app: &mut App, input: String) {
     if input.trim().is_empty() {
         return;
     }
@@ -120,7 +124,7 @@ fn queue_pending_steer(app: &mut App, input: String) {
     app.focus = Focus::Composer;
 }
 
-fn queue_pending_message(app: &mut App) {
+pub(super) fn queue_pending_message(app: &mut App) {
     let input = app.composer.take_input();
     if input.trim().is_empty() {
         return;
@@ -130,7 +134,7 @@ fn queue_pending_message(app: &mut App) {
     app.focus = Focus::Composer;
 }
 
-fn dequeue_pending_steer(app: &mut App) -> bool {
+pub(super) fn dequeue_pending_steer(app: &mut App) -> bool {
     if let Some(input) = app.pending_queue.pop_back() {
         app.composer.set_input(input);
         app.focus = Focus::Composer;
@@ -144,7 +148,7 @@ fn dequeue_pending_steer(app: &mut App) -> bool {
     true
 }
 
-fn is_transcript_navigation_key(key: ChatKeyEvent) -> bool {
+pub(super) fn is_transcript_navigation_key(key: ChatKeyEvent) -> bool {
     matches!(
         key.code,
         KeyCode::Up
@@ -156,7 +160,7 @@ fn is_transcript_navigation_key(key: ChatKeyEvent) -> bool {
     )
 }
 
-fn should_focus_composer_for_transcript_key(key: ChatKeyEvent) -> bool {
+pub(super) fn should_focus_composer_for_transcript_key(key: ChatKeyEvent) -> bool {
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
@@ -175,32 +179,32 @@ fn should_focus_composer_for_transcript_key(key: ChatKeyEvent) -> bool {
     )
 }
 
-fn route_transcript_key_to_composer(app: &mut App, key: ChatKeyEvent) -> Option<String> {
+pub(super) fn route_transcript_key_to_composer(app: &mut App, key: ChatKeyEvent) -> Option<String> {
     app.focus = Focus::Composer;
     let submitted = app.composer.handle_key(key);
     app.sync_inline_skill_popup();
     submitted
 }
 
-fn should_route_composer_key_to_transcript(app: &App, key: ChatKeyEvent) -> bool {
+pub(super) fn should_route_composer_key_to_transcript(app: &App, key: ChatKeyEvent) -> bool {
     matches!(
         key.code,
         KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
     ) || (app.composer.is_empty() && is_transcript_navigation_key(key))
 }
 
-fn submitted_message_is_follow_up(app: &App, msg: &str) -> bool {
+pub(super) fn submitted_message_is_follow_up(app: &App, msg: &str) -> bool {
     app.pending_turn
         && app.composer_follow_up_intent
         && !msg.starts_with('/')
         && !msg.starts_with(':')
 }
 
-fn display_columns(text: &str) -> usize {
+pub(super) fn display_columns(text: &str) -> usize {
     crate::presentation::display_width(text)
 }
 
-fn truncate_right_for_width(text: &str, width: usize) -> String {
+pub(super) fn truncate_right_for_width(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
@@ -224,7 +228,7 @@ fn truncate_right_for_width(text: &str, width: usize) -> String {
     out
 }
 
-fn truncate_middle_for_width(text: &str, width: usize) -> String {
+pub(super) fn truncate_middle_for_width(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
@@ -265,21 +269,21 @@ fn truncate_middle_for_width(text: &str, width: usize) -> String {
     format!("{prefix}…{suffix}")
 }
 
-fn rect_contains_point(area: Rect, column: u16, row: u16) -> bool {
+pub(super) fn rect_contains_point(area: Rect, column: u16, row: u16) -> bool {
     column >= area.x
         && column < area.x.saturating_add(area.width)
         && row >= area.y
         && row < area.y.saturating_add(area.height)
 }
 
-fn current_skill_token_query(composer: &Composer) -> Option<String> {
+pub(super) fn current_skill_token_query(composer: &Composer) -> Option<String> {
     let range = current_skill_token_range(composer)?;
     composer.text()[range]
         .strip_prefix('$')
         .map(|query| query.to_owned())
 }
 
-fn current_skill_token_range(composer: &Composer) -> Option<std::ops::Range<usize>> {
+pub(super) fn current_skill_token_range(composer: &Composer) -> Option<std::ops::Range<usize>> {
     let text = composer.text();
     let cursor = composer.cursor().min(text.len());
     if text.is_empty() {
@@ -306,7 +310,7 @@ fn current_skill_token_range(composer: &Composer) -> Option<std::ops::Range<usiz
     token.starts_with('$').then_some(token_start..token_end)
 }
 
-fn inline_skill_replacement_text(
+pub(super) fn inline_skill_replacement_text(
     text: &str,
     range: &std::ops::Range<usize>,
     replacement: &str,
@@ -324,7 +328,7 @@ fn inline_skill_replacement_text(
     }
 }
 
-fn build_status_footer_line(cwd: &str, model: &str, width: u16) -> Line<'static> {
+pub(super) fn build_status_footer_line(cwd: &str, model: &str, width: u16) -> Line<'static> {
     let width = width as usize;
     if width == 0 {
         return Line::from(String::new());
@@ -369,7 +373,7 @@ fn build_status_footer_line(cwd: &str, model: &str, width: u16) -> Line<'static>
     ])
 }
 
-fn single_footer_span(text: &str, width: usize, style: Style) -> Line<'static> {
+pub(super) fn single_footer_span(text: &str, width: usize, style: Style) -> Line<'static> {
     let mut rendered = truncate_right_for_width(text, width);
     let rendered_width = display_columns(&rendered);
     if rendered_width < width {
@@ -378,7 +382,7 @@ fn single_footer_span(text: &str, width: usize, style: Style) -> Line<'static> {
     Line::from(vec![Span::styled(rendered, style)])
 }
 
-fn footer_content_area(area: Rect) -> Rect {
+pub(super) fn footer_content_area(area: Rect) -> Rect {
     if area.width <= FOOTER_HORIZONTAL_INDENT {
         return area;
     }
@@ -391,7 +395,11 @@ fn footer_content_area(area: Rect) -> Rect {
     }
 }
 
-fn build_queue_footer_line(i18n: &I18nService, queued: usize, width: u16) -> Line<'static> {
+pub(super) fn build_queue_footer_line(
+    i18n: &I18nService,
+    queued: usize,
+    width: u16,
+) -> Line<'static> {
     let max_width = width as usize;
     if max_width == 0 {
         return Line::from(String::new());
@@ -454,7 +462,11 @@ fn build_queue_footer_line(i18n: &I18nService, queued: usize, width: u16) -> Lin
     ])
 }
 
-fn build_restore_footer_line(i18n: &I18nService, queued: usize, width: u16) -> Line<'static> {
+pub(super) fn build_restore_footer_line(
+    i18n: &I18nService,
+    queued: usize,
+    width: u16,
+) -> Line<'static> {
     let max_width = width as usize;
     if max_width == 0 {
         return Line::from(String::new());
@@ -490,7 +502,11 @@ fn build_restore_footer_line(i18n: &I18nService, queued: usize, width: u16) -> L
     )])
 }
 
-fn build_follow_footer_line(i18n: &I18nService, model: &str, width: u16) -> Line<'static> {
+pub(super) fn build_follow_footer_line(
+    i18n: &I18nService,
+    model: &str,
+    width: u16,
+) -> Line<'static> {
     let max_width = width as usize;
     if max_width == 0 {
         return Line::from(String::new());
@@ -530,7 +546,7 @@ fn build_follow_footer_line(i18n: &I18nService, model: &str, width: u16) -> Line
     ])
 }
 
-fn queue_restore_shortcut_label() -> &'static str {
+pub(super) fn queue_restore_shortcut_label() -> &'static str {
     if cfg!(target_os = "macos") {
         "Option + Up"
     } else {
@@ -538,7 +554,7 @@ fn queue_restore_shortcut_label() -> &'static str {
     }
 }
 
-async fn build_command_lines(
+pub(super) async fn build_command_lines(
     runtime: &CliTurnRuntime,
     options: &CliChatOptions,
     input: &str,
@@ -547,24 +563,24 @@ async fn build_command_lines(
     let trimmed = input.trim();
 
     match trimmed {
-        super::super::CLI_CHAT_HELP_COMMAND => Ok(render_chat_surface_help_lines_with_width(width)),
-        super::super::CLI_CHAT_STATUS_COMMAND => {
-            let summary = super::super::ops::build_cli_chat_startup_summary(runtime, options)?;
-            Ok(super::super::ops::render_cli_chat_status_lines_with_width(
+        crate::chat::CLI_CHAT_HELP_COMMAND => Ok(render_chat_surface_help_lines_with_width(width)),
+        crate::chat::CLI_CHAT_STATUS_COMMAND => {
+            let summary = crate::chat::ops::build_cli_chat_startup_summary(runtime, options)?;
+            Ok(crate::chat::ops::render_cli_chat_status_lines_with_width(
                 &summary, width,
             ))
         }
-        super::super::CLI_CHAT_HISTORY_COMMAND => {
+        crate::chat::CLI_CHAT_HISTORY_COMMAND => {
             #[cfg(feature = "memory-sqlite")]
             {
-                let history_lines = super::super::ops::load_history_lines(
+                let history_lines = crate::chat::ops::load_history_lines(
                     &runtime.session_id,
                     runtime.config.memory.sliding_window,
                     runtime.conversation_binding(),
                     &runtime.memory_config,
                 )
                 .await?;
-                Ok(super::super::ops::render_cli_chat_history_lines_with_width(
+                Ok(crate::chat::ops::render_cli_chat_history_lines_with_width(
                     &runtime.session_id,
                     runtime.config.memory.sliding_window,
                     &history_lines,
@@ -574,7 +590,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "history",
                         "history unavailable: memory-sqlite feature disabled",
                         width,
@@ -582,28 +598,26 @@ async fn build_command_lines(
                 )
             }
         }
-        super::super::CLI_CHAT_COMPACT_COMMAND => {
+        crate::chat::CLI_CHAT_COMPACT_COMMAND => {
             #[cfg(feature = "memory-sqlite")]
             {
-                let result = super::super::ops::load_manual_compaction_result(
+                let result = crate::chat::ops::load_manual_compaction_result(
                     &runtime.config,
                     &runtime.session_id,
                     &runtime.turn_coordinator,
                     runtime.conversation_binding(),
                 )
                 .await?;
-                Ok(
-                    super::super::ops::render_manual_compaction_lines_with_width(
-                        &runtime.session_id,
-                        &result,
-                        width,
-                    ),
-                )
+                Ok(crate::chat::ops::render_manual_compaction_lines_with_width(
+                    &runtime.session_id,
+                    &result,
+                    width,
+                ))
             }
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "compact",
                         "manual compaction unavailable: memory-sqlite feature disabled",
                         width,
@@ -630,7 +644,7 @@ async fn build_command_lines(
                     &runtime.memory_config,
                 )
                 .await?;
-                Ok(super::super::render_fast_lane_summary_lines_with_width(
+                Ok(crate::chat::render_fast_lane_summary_lines_with_width(
                     &runtime.session_id,
                     runtime.config.memory.sliding_window,
                     &summary,
@@ -640,7 +654,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "fast_lane_summary",
                         "fast lane summary unavailable: memory-sqlite feature disabled",
                         width,
@@ -658,7 +672,7 @@ async fn build_command_lines(
                     &runtime.memory_config,
                 )
                 .await?;
-                Ok(super::super::render_safe_lane_summary_lines_with_width(
+                Ok(crate::chat::render_safe_lane_summary_lines_with_width(
                     &runtime.session_id,
                     runtime.config.memory.sliding_window,
                     &runtime.config.conversation,
@@ -669,7 +683,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "safe_lane_summary",
                         "safe lane summary unavailable: memory-sqlite feature disabled",
                         width,
@@ -690,7 +704,7 @@ async fn build_command_lines(
                     )
                     .await?;
                 Ok(
-                    super::super::render_turn_checkpoint_summary_lines_with_width(
+                    crate::chat::render_turn_checkpoint_summary_lines_with_width(
                         &runtime.session_id,
                         runtime.config.memory.sliding_window,
                         &diagnostics,
@@ -701,7 +715,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "turn_checkpoint_summary",
                         "turn checkpoint summary unavailable: memory-sqlite feature disabled",
                         width,
@@ -720,18 +734,16 @@ async fn build_command_lines(
                         runtime.conversation_binding(),
                     )
                     .await?;
-                Ok(
-                    super::super::render_turn_checkpoint_repair_lines_with_width(
-                        &runtime.session_id,
-                        &outcome,
-                        width,
-                    ),
-                )
+                Ok(crate::chat::render_turn_checkpoint_repair_lines_with_width(
+                    &runtime.session_id,
+                    &outcome,
+                    width,
+                ))
             }
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "turn_checkpoint_repair",
                         "turn checkpoint repair unavailable: memory-sqlite feature disabled",
                         width,
@@ -747,7 +759,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "sessions",
                         "session queue unavailable: memory-sqlite feature disabled",
                         width,
@@ -763,7 +775,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "workers",
                         "worker queue unavailable: memory-sqlite feature disabled",
                         width,
@@ -779,7 +791,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "review",
                         "review queue unavailable: memory-sqlite feature disabled",
                         width,
@@ -795,7 +807,7 @@ async fn build_command_lines(
             #[cfg(not(feature = "memory-sqlite"))]
             {
                 Ok(
-                    super::super::render_cli_chat_feature_unavailable_lines_with_width(
+                    crate::chat::render_cli_chat_feature_unavailable_lines_with_width(
                         "mission",
                         "mission control unavailable: memory-sqlite feature disabled",
                         width,
@@ -816,7 +828,7 @@ async fn build_command_lines(
     }
 }
 
-fn render_slash_command_usage_lines_with_width(width: usize) -> Vec<String> {
+pub(super) fn render_slash_command_usage_lines_with_width(width: usize) -> Vec<String> {
     let command_items = slash_command_specs()
         .iter()
         .map(|spec| TuiKeyValueSpec::Plain {
@@ -846,11 +858,11 @@ fn render_slash_command_usage_lines_with_width(width: usize) -> Vec<String> {
             "Enter runs the command or opens its detail card without permission ceremony.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_slash_command_detail_lines_with_width(
-    spec: &super::command_palette::SlashCommandSpec,
+pub(super) fn render_slash_command_detail_lines_with_width(
+    spec: &command_palette::SlashCommandSpec,
     width: usize,
 ) -> Vec<String> {
     let message_spec = TuiMessageSpec {
@@ -872,14 +884,17 @@ fn render_slash_command_detail_lines_with_width(
         ],
         footer_lines: vec!["Use /usage to see the complete command deck.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn slash_command_help_value(spec: &super::command_palette::SlashCommandSpec) -> String {
+pub(super) fn slash_command_help_value(spec: &command_palette::SlashCommandSpec) -> String {
     spec.description.to_owned()
 }
 
-fn render_model_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -> Vec<String> {
+pub(super) fn render_model_command_lines_with_width(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> Vec<String> {
     let provider = &runtime.config.provider;
     let active_profile = runtime
         .config
@@ -922,10 +937,10 @@ fn render_model_command_lines_with_width(runtime: &CliTurnRuntime, width: usize)
             "Use /model <selector> to switch when you want a different model.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_permissions_command_lines_with_width(width: usize) -> Vec<String> {
+pub(super) fn render_permissions_command_lines_with_width(width: usize) -> Vec<String> {
     let message_spec = TuiMessageSpec {
         role: "permissions".to_owned(),
         caption: Some("YOLO".to_owned()),
@@ -973,10 +988,10 @@ fn render_permissions_command_lines_with_width(width: usize) -> Vec<String> {
         footer_lines: vec!["The default local TUI stays open; stricter deployments can still configure policy explicitly."
             .to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_experimental_command_lines_with_width(width: usize) -> Vec<String> {
+pub(super) fn render_experimental_command_lines_with_width(width: usize) -> Vec<String> {
     let message_spec = TuiMessageSpec {
         role: "experimental".to_owned(),
         caption: Some("experimental features".to_owned()),
@@ -1011,10 +1026,10 @@ fn render_experimental_command_lines_with_width(width: usize) -> Vec<String> {
         }],
         footer_lines: vec!["No toggle ceremony in the default TUI path.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_themes_command_lines_with_width(width: usize) -> Vec<String> {
+pub(super) fn render_themes_command_lines_with_width(width: usize) -> Vec<String> {
     let message_spec = TuiMessageSpec {
         role: "themes".to_owned(),
         caption: Some("theme".to_owned()),
@@ -1046,10 +1061,13 @@ fn render_themes_command_lines_with_width(width: usize) -> Vec<String> {
         ],
         footer_lines: vec!["The terminal-adaptive theme is active for this session.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_cwd_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -> Vec<String> {
+pub(super) fn render_cwd_command_lines_with_width(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> Vec<String> {
     let cwd = current_working_directory_display(runtime);
     let message_spec = TuiMessageSpec {
         role: "cwd".to_owned(),
@@ -1069,10 +1087,10 @@ fn render_cwd_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -
         }],
         footer_lines: vec!["Use /cwd <path> to move the chat working directory.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_language_command_lines_with_width(width: usize) -> Vec<String> {
+pub(super) fn render_language_command_lines_with_width(width: usize) -> Vec<String> {
     let language = resolve_default_language();
     let message_spec = TuiMessageSpec {
         role: "language".to_owned(),
@@ -1086,20 +1104,23 @@ fn render_language_command_lines_with_width(width: usize) -> Vec<String> {
         }],
         footer_lines: vec!["Use /language <locale> to switch the UI language.".to_owned()],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn language_label(language: super::i18n::Language) -> &'static str {
+pub(super) fn language_label(language: i18n::Language) -> &'static str {
     match language {
-        super::i18n::Language::En => "English",
-        super::i18n::Language::ZhCn => "简体中文",
-        super::i18n::Language::ZhTw => "繁體中文",
-        super::i18n::Language::Ja => "日本語",
-        super::i18n::Language::Ru => "Русский",
+        i18n::Language::En => "English",
+        i18n::Language::ZhCn => "简体中文",
+        i18n::Language::ZhTw => "繁體中文",
+        i18n::Language::Ja => "日本語",
+        i18n::Language::Ru => "Русский",
     }
 }
 
-fn render_mcp_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -> Vec<String> {
+pub(super) fn render_mcp_command_lines_with_width(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> Vec<String> {
     let mut items = runtime
         .effective_bootstrap_mcp_servers
         .iter()
@@ -1130,10 +1151,13 @@ fn render_mcp_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -
             "Startup keeps this compact; /mcp shows the details on demand.".to_owned(),
         ],
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
-fn render_skills_command_lines_with_width(runtime: &CliTurnRuntime, width: usize) -> Vec<String> {
+pub(super) fn render_skills_command_lines_with_width(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> Vec<String> {
     let skills = detect_available_skills(runtime.effective_working_directory.as_deref());
     let mut items = skills
         .iter()
@@ -1177,11 +1201,14 @@ fn render_skills_command_lines_with_width(runtime: &CliTurnRuntime, width: usize
         }],
         footer_lines,
     };
-    super::super::render_cli_chat_message_spec_with_width(&message_spec, width)
+    crate::chat::render_cli_chat_message_spec_with_width(&message_spec, width)
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn render_sessions_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec<String>> {
+pub(super) fn render_sessions_lines(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
     let sessions = store.visible_sessions(&runtime.session_id, 24)?;
     let mut items = Vec::new();
@@ -1260,14 +1287,17 @@ fn render_sessions_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Ve
             "Use /subagents for delegate lanes and /review for approvals.".to_owned(),
         ],
     };
-    Ok(super::super::render_cli_chat_message_spec_with_width(
+    Ok(crate::chat::render_cli_chat_message_spec_with_width(
         &message_spec,
         width,
     ))
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn render_workers_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec<String>> {
+pub(super) fn render_workers_lines(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
     let workers = store.visible_worker_sessions(&runtime.session_id, 24)?;
     let mut items = Vec::new();
@@ -1340,14 +1370,17 @@ fn render_workers_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec
             "Use /sessions for the full lineage and /mission for lane rollups.".to_owned(),
         ],
     };
-    Ok(super::super::render_cli_chat_message_spec_with_width(
+    Ok(crate::chat::render_cli_chat_message_spec_with_width(
         &message_spec,
         width,
     ))
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn render_review_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec<String>> {
+pub(super) fn render_review_lines(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
     let approvals = store.approval_queue(&runtime.session_id, 16)?;
     let mut sections = Vec::new();
@@ -1411,14 +1444,17 @@ fn render_review_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec<
             "Governed actions will surface approval screens here when needed.".to_owned(),
         ],
     };
-    Ok(super::super::render_cli_chat_message_spec_with_width(
+    Ok(crate::chat::render_cli_chat_message_spec_with_width(
         &message_spec,
         width,
     ))
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn render_mission_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec<String>> {
+pub(super) fn render_mission_lines(
+    runtime: &CliTurnRuntime,
+    width: usize,
+) -> CliResult<Vec<String>> {
     let store = ChatControlPlaneStore::new(&runtime.memory_config)?;
     let sessions = store.visible_sessions(&runtime.session_id, 32)?;
     let workers = store.visible_worker_sessions(&runtime.session_id, 32)?;
@@ -1499,14 +1535,14 @@ fn render_mission_lines(runtime: &CliTurnRuntime, width: usize) -> CliResult<Vec
             "Use /sessions, /subagents, and /review to drill into each lane.".to_owned(),
         ],
     };
-    Ok(super::super::render_cli_chat_message_spec_with_width(
+    Ok(crate::chat::render_cli_chat_message_spec_with_width(
         &message_spec,
         width,
     ))
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn summarize_state_mix<'a>(states: impl Iterator<Item = &'a str>) -> Option<String> {
+pub(super) fn summarize_state_mix<'a>(states: impl Iterator<Item = &'a str>) -> Option<String> {
     let mut counts = std::collections::BTreeMap::new();
     for state in states {
         *counts.entry(state.to_owned()).or_insert(0usize) += 1;
@@ -1523,7 +1559,7 @@ fn summarize_state_mix<'a>(states: impl Iterator<Item = &'a str>) -> Option<Stri
     )
 }
 
-async fn maybe_finalize_pending_turn<B: Backend>(
+pub(super) async fn maybe_finalize_pending_turn<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     runtime: &mut CliTurnRuntime,
@@ -1551,11 +1587,11 @@ async fn maybe_finalize_pending_turn<B: Backend>(
     clear_live_transcript(&app.live_transcript);
     app.focus = Focus::Composer;
     let produced_approval_screen =
-        super::super::build_cli_chat_approval_screen_spec(&assistant_text).is_some();
+        crate::chat::build_cli_chat_approval_screen_spec(&assistant_text).is_some();
     app.title_attention_required = produced_approval_screen;
     if produced_approval_screen {
         app.message_list.add_rendered_lines(
-            super::super::render_cli_chat_assistant_lines_with_width(&assistant_text, width),
+            crate::chat::render_cli_chat_assistant_lines_with_width(&assistant_text, width),
         );
     } else {
         app.message_list.add_assistant_message(assistant_text);
@@ -1568,14 +1604,14 @@ async fn maybe_finalize_pending_turn<B: Backend>(
     Ok(true)
 }
 
-fn current_render_width<B: Backend>(terminal: &Terminal<B>) -> CliResult<usize> {
+pub(super) fn current_render_width<B: Backend>(terminal: &Terminal<B>) -> CliResult<usize> {
     terminal
         .size()
         .map(|size| size.width as usize)
         .map_err(|e| format!("failed to query terminal size: {e}"))
 }
 
-fn spawn_pending_turn(
+pub(super) fn spawn_pending_turn(
     runtime: CliTurnRuntime,
     input: String,
     observer: crate::conversation::ConversationTurnObserverHandle,
@@ -1642,13 +1678,13 @@ fn spawn_pending_turn(
     )
 }
 
-fn clear_live_transcript(live_transcript: &Arc<StdMutex<LiveTranscriptState>>) {
+pub(super) fn clear_live_transcript(live_transcript: &Arc<StdMutex<LiveTranscriptState>>) {
     if let Ok(mut state) = live_transcript.lock() {
         *state = LiveTranscriptState::default();
     }
 }
 
-fn pending_live_lines(
+pub(super) fn pending_live_lines(
     live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
     max_lines: usize,
 ) -> Vec<String> {
@@ -1710,7 +1746,7 @@ fn pending_live_lines(
         .unwrap_or_default()
 }
 
-fn pending_live_tool_activity_lines(
+pub(super) fn pending_live_tool_activity_lines(
     live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
     max_lines: usize,
 ) -> Vec<String> {
@@ -1720,7 +1756,7 @@ fn pending_live_tool_activity_lines(
         .collect()
 }
 
-fn provisional_assistant_text(
+pub(super) fn provisional_assistant_text(
     live_transcript: &Arc<StdMutex<LiveTranscriptState>>,
 ) -> Option<String> {
     live_transcript
@@ -1730,7 +1766,7 @@ fn provisional_assistant_text(
         .filter(|text| !text.trim().is_empty())
 }
 
-fn pending_line_is_tool_activity(line: &str) -> bool {
+pub(super) fn pending_line_is_tool_activity(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with('•')
         || trimmed.starts_with("[running]")
@@ -1749,7 +1785,7 @@ fn pending_line_is_tool_activity(line: &str) -> bool {
         || trimmed.starts_with("↳ ")
 }
 
-fn pending_render_signature(app: &App) -> Option<u64> {
+pub(super) fn pending_render_signature(app: &App) -> Option<u64> {
     if app.last_render_width == 0 || app.last_render_height == 0 {
         if !app.pending_turn {
             return None;
@@ -1785,7 +1821,7 @@ fn pending_render_signature(app: &App) -> Option<u64> {
     )
 }
 
-fn transcript_preview_signature(app: &App) -> Option<u64> {
+pub(super) fn transcript_preview_signature(app: &App) -> Option<u64> {
     let preview = provisional_assistant_text(&app.live_transcript)?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     app.last_render_width.hash(&mut hasher);
@@ -1794,7 +1830,7 @@ fn transcript_preview_signature(app: &App) -> Option<u64> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn pending_signature_preview_budget(app: &App) -> usize {
+pub(super) fn pending_signature_preview_budget(app: &App) -> usize {
     if app.last_render_width == 0 || app.last_render_height == 0 {
         return 6;
     }
@@ -1812,7 +1848,7 @@ fn pending_signature_preview_budget(app: &App) -> usize {
     )
 }
 
-fn pending_signature_preview_budget_for_geometry(
+pub(super) fn pending_signature_preview_budget_for_geometry(
     height: u16,
     composer_height: u16,
     palette_height: u16,
@@ -1821,7 +1857,11 @@ fn pending_signature_preview_budget_for_geometry(
     max_pending_height.saturating_sub(2).max(1) as usize
 }
 
-fn pending_band_max_height(height: u16, composer_height: u16, palette_height: u16) -> u16 {
+pub(super) fn pending_band_max_height(
+    height: u16,
+    composer_height: u16,
+    palette_height: u16,
+) -> u16 {
     let reserved_without_pending = 1
         + composer_height
         + if palette_height > 0 {
@@ -1835,7 +1875,7 @@ fn pending_band_max_height(height: u16, composer_height: u16, palette_height: u1
     height.saturating_sub(reserved_without_pending).max(3)
 }
 
-fn pending_render_signature_for_geometry(
+pub(super) fn pending_render_signature_for_geometry(
     app: &App,
     width: u16,
     height: u16,
@@ -1865,7 +1905,7 @@ fn pending_render_signature_for_geometry(
     Some(hasher.finish())
 }
 
-fn build_pending_lines(
+pub(super) fn build_pending_lines(
     turn_start: Option<std::time::Instant>,
     live_lines: &[String],
     spinner_seed: u64,
@@ -1938,7 +1978,7 @@ fn build_pending_lines(
     lines
 }
 
-fn render_pending_live_line(
+pub(super) fn render_pending_live_line(
     line: &str,
     content_width: usize,
     default_style: Style,
@@ -1962,7 +2002,7 @@ fn render_pending_live_line(
         .collect()
 }
 
-fn render_pending_tool_headline_line(
+pub(super) fn render_pending_tool_headline_line(
     line: &str,
     content_width: usize,
     start: std::time::Instant,
@@ -2003,7 +2043,7 @@ fn render_pending_tool_headline_line(
     )
 }
 
-fn pending_tool_headline_parts(
+pub(super) fn pending_tool_headline_parts(
     trimmed: &str,
     start: std::time::Instant,
 ) -> Option<(&'static str, &str, Style, Style)> {
@@ -2056,31 +2096,34 @@ fn pending_tool_headline_parts(
     None
 }
 
-fn pending_tool_animation_frame(start: std::time::Instant) -> usize {
+pub(super) fn pending_tool_animation_frame(start: std::time::Instant) -> usize {
     if reduced_motion_enabled() {
         return PENDING_TOOL_LABEL_COLORS.len().saturating_sub(2);
     }
     pending_tool_animation_frame_for_elapsed(start.elapsed())
 }
 
-fn pending_tool_animation_frame_for_elapsed(elapsed: Duration) -> usize {
+pub(super) fn pending_tool_animation_frame_for_elapsed(elapsed: Duration) -> usize {
     let frame_count = PENDING_TOOL_LABEL_COLORS.len().max(1) as u64;
     ((elapsed.as_millis() as u64 / PENDING_TOOL_ANIMATION_FRAME_MS.max(1)) % frame_count) as usize
 }
 
-fn pending_tool_label_color(start: std::time::Instant) -> Color {
+pub(super) fn pending_tool_label_color(start: std::time::Instant) -> Color {
     let frame = pending_tool_animation_frame(start);
     *PENDING_TOOL_LABEL_COLORS
         .get(frame)
         .unwrap_or(&SURFACE_CYAN)
 }
 
-fn pending_tool_body_color(start: std::time::Instant) -> Color {
+pub(super) fn pending_tool_body_color(start: std::time::Instant) -> Color {
     let frame = pending_tool_animation_frame(start);
     *PENDING_TOOL_BODY_COLORS.get(frame).unwrap_or(&Color::White)
 }
 
-fn render_pending_tool_child_line(line: &str, content_width: usize) -> Option<Vec<Line<'static>>> {
+pub(super) fn render_pending_tool_child_line(
+    line: &str,
+    content_width: usize,
+) -> Option<Vec<Line<'static>>> {
     let trimmed = line.trim_start();
     let body = trimmed.strip_prefix("↳ ")?;
     let (label, rest) = body.split_once(' ').unwrap_or((body, ""));
@@ -2125,7 +2168,7 @@ fn render_pending_tool_child_line(line: &str, content_width: usize) -> Option<Ve
     )
 }
 
-fn pending_tool_child_styles(label: &str) -> (Style, Style) {
+pub(super) fn pending_tool_child_styles(label: &str) -> (Style, Style) {
     match label {
         "stdout" => (
             Style::default()
@@ -2164,7 +2207,10 @@ fn pending_tool_child_styles(label: &str) -> (Style, Style) {
     }
 }
 
-fn render_pending_tool_sample_line(line: &str, content_width: usize) -> Option<Vec<Line<'static>>> {
+pub(super) fn render_pending_tool_sample_line(
+    line: &str,
+    content_width: usize,
+) -> Option<Vec<Line<'static>>> {
     if !line.starts_with("    ") {
         return None;
     }
@@ -2199,14 +2245,14 @@ fn render_pending_tool_sample_line(line: &str, content_width: usize) -> Option<V
     )
 }
 
-fn append_pending_input_preview_lines(
+pub(super) fn append_pending_input_preview_lines(
     lines: &mut Vec<Line<'static>>,
     pending_steers: &VecDeque<String>,
     pending_queue: &VecDeque<String>,
     width: u16,
     has_live_preview: bool,
 ) {
-    const MAX_PENDING_PREVIEW_MESSAGES: usize = 3;
+    pub(super) const MAX_PENDING_PREVIEW_MESSAGES: usize = 3;
 
     if pending_steers.is_empty() && pending_queue.is_empty() {
         return;
@@ -2273,7 +2319,7 @@ fn append_pending_input_preview_lines(
     }
 }
 
-fn push_pending_input_header(
+pub(super) fn push_pending_input_header(
     lines: &mut Vec<Line<'static>>,
     content_width: usize,
     title: &str,
@@ -2330,7 +2376,7 @@ fn push_pending_input_header(
     }
 }
 
-fn push_pending_input_lines(
+pub(super) fn push_pending_input_lines(
     lines: &mut Vec<Line<'static>>,
     messages: &[(&str, Style)],
     content_width: usize,
@@ -2378,7 +2424,7 @@ fn push_pending_input_lines(
     displayed_messages
 }
 
-fn compact_pending_lines_for_height(
+pub(super) fn compact_pending_lines_for_height(
     mut lines: Vec<Line<'static>>,
     max_height: u16,
 ) -> Vec<Line<'static>> {

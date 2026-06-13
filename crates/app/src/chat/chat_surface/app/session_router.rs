@@ -20,7 +20,7 @@ pub(crate) struct SessionTransitionOutcome {
 pub(crate) struct ActiveSessionRoute {
     pub(crate) runtime: crate::chat::CliTurnRuntime,
     pub(crate) loaded_history_lines: Vec<String>,
-    route_origin: crate::chat::CliRuntimeSessionOrigin,
+    pub(super) route_origin: crate::chat::CliRuntimeSessionOrigin,
 }
 
 #[allow(dead_code)]
@@ -48,9 +48,9 @@ impl ActiveSessionRoute {
 
 #[allow(dead_code)]
 pub(crate) struct SessionRouter {
-    active_route: ActiveSessionRoute,
-    created_this_run_session_ids: Vec<String>,
-    switch_confirm: Option<SwitchConfirmState>,
+    pub(super) active_route: ActiveSessionRoute,
+    pub(super) created_this_run_session_ids: Vec<String>,
+    pub(super) switch_confirm: Option<SwitchConfirmState>,
 }
 
 #[allow(dead_code)]
@@ -155,7 +155,7 @@ impl SessionRouter {
         crate::session::latest_resumable_root_session_id(&self.active_runtime().memory_config)
     }
 
-    async fn rebuild_route(
+    pub(super) async fn rebuild_route(
         &self,
         session_hint: Option<&str>,
         session_requirement: crate::chat::CliSessionRequirement,
@@ -173,19 +173,23 @@ impl SessionRouter {
             crate::chat::CliSessionRequirement::AllowImplicitDefault => {
                 crate::chat::RouteOrigin::CreatedThisRun
             }
-            crate::chat::CliSessionRequirement::RequireExplicit => crate::chat::RouteOrigin::Existing,
+            crate::chat::CliSessionRequirement::RequireExplicit => {
+                crate::chat::RouteOrigin::Existing
+            }
         };
         let session_id = match session_hint {
             Some(session_id) => session_id.to_owned(),
-            None => crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
-                self.active_runtime().resolved_path.clone(),
-                self.active_runtime().config.clone(),
-                None,
-                &preserved_options,
-                self.active_runtime().runtime_kernel.cloned_kernel_context(),
-                session_requirement,
-            )?
-            .session_id,
+            None => {
+                crate::chat::initialize_cli_turn_runtime_with_loaded_config_and_kernel_ctx(
+                    self.active_runtime().resolved_path.clone(),
+                    self.active_runtime().config.clone(),
+                    None,
+                    &preserved_options,
+                    self.active_runtime().runtime_kernel.cloned_kernel_context(),
+                    session_requirement,
+                )?
+                .session_id
+            }
         };
         let route = crate::chat::rebuild_active_session_route(
             self.active_runtime().resolved_path.clone(),
@@ -198,7 +202,7 @@ impl SessionRouter {
         Ok(ActiveSessionRoute::from_rebuilt_route(route))
     }
 
-    fn install_route(&mut self, active_route: ActiveSessionRoute) {
+    pub(super) fn install_route(&mut self, active_route: ActiveSessionRoute) {
         if matches!(
             active_route.route_origin(),
             crate::chat::CliRuntimeSessionOrigin::CreatedThisRun
@@ -213,7 +217,7 @@ impl SessionRouter {
     }
 }
 
-fn session_transition_success_message(
+pub(super) fn session_transition_success_message(
     reason: SessionTransitionReason,
     session_id: &str,
 ) -> String {

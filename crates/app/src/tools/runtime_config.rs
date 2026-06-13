@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "tool-shell")]
 use super::bash;
-#[cfg(feature = "tool-shell")]
 use super::shell_policy_ext::ShellPolicyDefault;
 
 use crate::config::{AutonomyProfile, LoongConfig};

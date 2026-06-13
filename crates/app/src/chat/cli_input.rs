@@ -13,6 +13,7 @@ use tokio::io::{self as tokio_io, AsyncBufReadExt, BufReader};
 
 use crate::CliResult;
 
+#[cfg(any(unix, test))]
 pub(super) fn extract_cli_input_line_from_buffer(
     buffer: &mut Vec<u8>,
 ) -> CliResult<Option<String>> {
@@ -28,6 +29,7 @@ pub(super) fn extract_cli_input_line_from_buffer(
     Ok(Some(line))
 }
 
+#[cfg(any(unix, test))]
 pub(super) fn finalize_cli_input_buffer(buffer: &mut Vec<u8>) -> CliResult<Option<String>> {
     if buffer.is_empty() {
         return Ok(None);
@@ -41,6 +43,7 @@ pub(super) fn finalize_cli_input_buffer(buffer: &mut Vec<u8>) -> CliResult<Optio
     Ok(Some(line))
 }
 
+#[cfg(any(unix, test))]
 fn normalize_cli_input_line_bytes(mut bytes: Vec<u8>) -> Vec<u8> {
     if bytes.last() == Some(&b'\n') {
         bytes.pop();
