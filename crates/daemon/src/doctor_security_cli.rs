@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -922,6 +923,7 @@ fn config_file_permission_issue(config_path: &Path) -> CliResult<Option<String>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     use loong_contracts::SecretRef;
     use std::path::PathBuf;

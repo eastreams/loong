@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::ToolConfig;
-use crate::test_support::{ScopedEnv, ScopedLoongHome, unique_temp_dir};
+use crate::test_support::{ScopedLoongHome, unique_temp_dir};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use loong_contracts::Capability;
@@ -173,19 +173,6 @@ fn unique_tool_temp_dir(prefix: &str) -> PathBuf {
 }
 
 mod bash_exec_tests;
-
-#[cfg(windows)]
-fn write_agent_browser_cli_script(root: &Path, log_path: &Path) -> PathBuf {
-    use std::fs;
-
-    let path = root.join("agent-browser.cmd");
-    let script = format!(
-        "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo agent-browser 0.23.0\r\n  exit /b 0\r\n)\r\n> \"{log}\" (\r\n  for %%A in (%*) do @echo %%~A\r\n)\r\nset \"CMD=\"\r\nset \"NEXT_IS_SESSION=\"\r\n:parse\r\nif \"%~1\"==\"\" goto parsed\r\nif /I \"%~1\"==\"--session\" (\r\n  set \"SESSION=%~2\"\r\n  shift\r\n  shift\r\n  goto parse\r\n)\r\nif /I \"%~1\"==\"--json\" (\r\n  shift\r\n  goto parse\r\n)\r\nset \"CMD=%~1\"\r\nshift\r\ngoto parsed\r\n:parsed\r\nif /I \"%CMD%\"==\"open\" (\r\n  echo {{\"success\":true,\"data\":{{\"title\":\"Example Domain\",\"url\":\"%~1\"}},\"error\":null}}\r\n  exit /b 0\r\n)\r\nif /I \"%CMD%\"==\"snapshot\" (\r\n  echo {{\"success\":true,\"data\":{{\"origin\":\"https://example.com/\",\"snapshot\":\"- link \\\"Learn more\\\" [ref=e1]\"}},\"error\":null}}\r\n  exit /b 0\r\n)\r\nif /I \"%CMD%\"==\"click\" (\r\n  echo {{\"success\":true,\"data\":{{\"clicked\":\"%~1\",\"session\":\"%SESSION%\"}},\"error\":null}}\r\n  exit /b 0\r\n)\r\nif /I \"%CMD%\"==\"close\" (\r\n  echo {{\"success\":true,\"data\":{{\"closed\":true}},\"error\":null}}\r\n  exit /b 0\r\n)\r\necho {{\"success\":false,\"data\":null,\"error\":\"unsupported command\"}}\r\nexit /b 1\r\n",
-        log = log_path.display()
-    );
-    fs::write(&path, script).expect("write fake agent-browser cli script");
-    path
-}
 
 #[test]
 fn capability_snapshot_is_deterministic() {

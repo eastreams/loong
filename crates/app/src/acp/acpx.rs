@@ -748,6 +748,7 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::ScopedEnv;
 
+    #[cfg(unix)]
     const ACPX_RUNTIME_TEST_TIMEOUT_SECONDS: f64 = 45.0;
 
     #[cfg(unix)]

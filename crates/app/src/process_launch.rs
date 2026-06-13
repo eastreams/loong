@@ -272,10 +272,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    #[cfg(unix)]
+    use super::resolve_command_invocation;
     use super::{
-        resolve_command_invocation, retry_executable_file_busy_async,
-        retry_executable_file_busy_blocking, retry_executable_file_busy_with_pause,
-        should_retry_executable_file_busy,
+        retry_executable_file_busy_async, retry_executable_file_busy_blocking,
+        retry_executable_file_busy_with_pause, should_retry_executable_file_busy,
     };
 
     #[cfg(unix)]

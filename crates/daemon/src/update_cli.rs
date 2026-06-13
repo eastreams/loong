@@ -419,6 +419,7 @@ fn stable_release_script_url(release_base_url: &str, tag_name: &str, script_name
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -426,8 +427,10 @@ mod tests {
         thread,
     };
 
+    #[cfg(unix)]
     use tempfile::TempDir;
 
+    #[cfg(unix)]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]

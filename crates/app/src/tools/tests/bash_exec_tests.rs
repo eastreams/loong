@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(all(feature = "tool-shell", unix))]
 use crate::test_support::ScopedCurrentDir;
 
 fn execute_tool_core_for_subprocess_test(
@@ -10,6 +11,7 @@ fn execute_tool_core_for_subprocess_test(
     execute_tool_core_with_config(request, config)
 }
 
+#[cfg(all(feature = "tool-shell", unix))]
 fn execute_tool_core_with_trusted_subprocess_test_context(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,

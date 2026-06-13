@@ -44,7 +44,7 @@ tasks:
       - ./scripts/test_changed_rust_packages.sh --all-features
 
   test:packages:
-    desc: Run targeted package tests (example: task test:packages PACKAGES='-p loong-app -p loong-spec')
+    desc: "Run targeted package tests (example: task test:packages PACKAGES='-p loong-app -p loong-spec')"
     preconditions:
       - sh: test -n "{{.PACKAGES}}"
         msg: "set PACKAGES, e.g. task test:packages PACKAGES='-p loong-app -p loong-spec'"
@@ -147,7 +147,7 @@ tasks:
   check:conventions:
     desc: Validate repo convention contracts
     vars:
-      SKILL_DIR: '{{.HOME}}/.claude/skills/convention-engineering'
+      SKILL_DIR: "{{.HOME}}/.claude/skills/convention-engineering"
       CONFIG_FILE: '{{default ".convention-engineering.json" .CONFIG}}'
     preconditions:
       - sh: test -f "{{.SKILL_DIR}}/scripts/main.go"

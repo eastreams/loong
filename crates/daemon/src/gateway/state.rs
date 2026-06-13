@@ -775,8 +775,12 @@ fn ensure_parent_dir(path: &Path, context: &str) -> CliResult<()> {
     if parent.as_os_str().is_empty() {
         return Ok(());
     }
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {context} parent directory failed: {error}"))
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "create {context} parent directory failed for {}: {error}",
+            parent.display()
+        )
+    })
 }
 
 fn atomic_temp_path(path: &Path) -> PathBuf {
@@ -795,12 +799,6 @@ fn sync_parent_dir(path: &Path, context: &str) -> CliResult<()> {
         return Ok(());
     };
     if parent.as_os_str().is_empty() {
-        return Ok(());
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = (path, context, parent);
         return Ok(());
     }
 

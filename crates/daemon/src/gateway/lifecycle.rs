@@ -7,7 +7,9 @@ use serde_json::json;
 use super::state::GatewayStopRequestOutcome;
 use crate::CliResult;
 
+#[cfg(unix)]
 pub(super) const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
+#[cfg(unix)]
 pub(super) const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 
 type GatewayControlJsonResponse = (StatusCode, Json<serde_json::Value>);
@@ -27,6 +29,7 @@ pub(super) fn write_gateway_control_token_file(path: &Path, token: &str) -> CliR
 
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
+    // TODO: add non-unix ACL support
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -101,6 +104,7 @@ fn harden_gateway_control_parent_dir(path: &Path) -> CliResult<()> {
 
 #[cfg(not(unix))]
 fn harden_gateway_control_parent_dir(_path: &Path) -> CliResult<()> {
+    // TODO: add windows ACL support
     Ok(())
 }
 
