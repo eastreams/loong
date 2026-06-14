@@ -30,7 +30,7 @@ use crate::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
     },
-    tool::{
+    tool_v1::{
         CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
         ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
     },

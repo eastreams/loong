@@ -23,7 +23,7 @@ use crate::runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest,
 };
-use crate::tool::{
+use crate::tool_v1::{
     CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
     ToolExtensionRequest,
 };

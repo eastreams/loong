@@ -20,7 +20,7 @@ pub mod policy;
 pub mod policy_ext;
 pub mod runtime;
 pub mod task_supervisor;
-pub mod tool;
+pub mod tool_v1;
 
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
@@ -84,7 +84,7 @@ pub use runtime::{
     RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,
 };
 pub use task_supervisor::TaskSupervisor;
-pub use tool::{
+pub use tool_v1::{
     CoreToolAdapter, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
     ToolExtensionOutcome, ToolExtensionRequest, ToolPlane, ToolTier,
 };
