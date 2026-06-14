@@ -9,27 +9,78 @@ use super::download_guard::ByteBudget;
 const DEFAULT_HTTP_REQUEST_USER_AGENT: &str = "Loong-HttpRequest/0.1";
 const MAX_HEADER_COUNT: usize = 64;
 
+struct HttpRequestInput {
+    method: Method,
+    raw_url: String,
+    url: reqwest::Url,
+    headers: Vec<(String, String)>,
+    body: Option<String>,
+    content_type: Option<String>,
+    max_bytes: usize,
+}
+
+struct HttpRequestPreflight {
+    host: String,
+    timeout_seconds: u64,
+    allow_private_hosts: bool,
+}
+
 pub(super) fn execute_http_request_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let payload = request
-        .payload
-        .as_object()
-        .ok_or_else(|| "http.request payload must be an object".to_owned())?;
+    let tool_name = request.tool_name;
+    let payload = http_request_payload_object(&request.payload)?;
+    preflight_http_request_enabled(config)?;
+    let input = parse_http_request_input(payload, config)?;
+    let preflight = preflight_http_request(&input.url, config)?;
+    super::web_http::run_async(send_http_request(tool_name, input, preflight))?
+}
 
+fn http_request_payload_object(payload: &Value) -> Result<&Map<String, Value>, String> {
+    payload
+        .as_object()
+        .ok_or_else(|| "http.request payload must be an object".to_owned())
+}
+
+fn preflight_http_request_enabled(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<(), String> {
     if !config.web_fetch.enabled {
         return Err("http.request is disabled by config.tools.web.enabled=false".to_owned());
     }
 
+    Ok(())
+}
+
+fn parse_http_request_input(
+    payload: &Map<String, Value>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<HttpRequestInput, String> {
     let method = parse_method(payload)?;
     let raw_url = required_string_field(payload, "url", "http.request")?.to_owned();
+    let url = reqwest::Url::parse(raw_url.as_str())
+        .map_err(|error| format!("invalid http.request url `{raw_url}`: {error}"))?;
     let max_bytes = parse_max_bytes(payload, config)?;
     let headers = parse_headers(payload)?;
     let body = optional_string_field(payload.get("body")).map(str::to_owned);
     let content_type = optional_string_field(payload.get("content_type")).map(str::to_owned);
-    let url = reqwest::Url::parse(raw_url.as_str())
-        .map_err(|error| format!("invalid http.request url `{raw_url}`: {error}"))?;
+
+    Ok(HttpRequestInput {
+        method,
+        raw_url,
+        url,
+        headers,
+        body,
+        content_type,
+        max_bytes,
+    })
+}
+
+fn preflight_http_request(
+    url: &reqwest::Url,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<HttpRequestPreflight, String> {
     let options = super::web_http::HttpTargetValidationOptions {
         allow_private_hosts: config.web_fetch.allow_private_hosts,
         reject_userinfo: true,
@@ -38,80 +89,85 @@ pub(super) fn execute_http_request_tool_with_config(
         allowed_domains: Some(&config.web_fetch.allowed_domains),
         blocked_domains: Some(&config.web_fetch.blocked_domains),
     };
-    let host = super::web_http::validate_http_target(&url, &options, "http.request")?;
-    let timeout_seconds = config.web_fetch.timeout_seconds;
-    let allow_private_hosts = config.web_fetch.allow_private_hosts;
-    let tool_name = request.tool_name;
+    let host = super::web_http::validate_http_target(url, &options, "http.request")?;
 
-    super::web_http::run_async(async move {
-        let client = super::web_http::build_ssrf_safe_client(
-            allow_private_hosts,
-            timeout_seconds,
-            DEFAULT_HTTP_REQUEST_USER_AGENT,
-        )?;
-        let mut request_builder = client.request(method.clone(), url.clone());
+    Ok(HttpRequestPreflight {
+        host,
+        timeout_seconds: config.web_fetch.timeout_seconds,
+        allow_private_hosts: config.web_fetch.allow_private_hosts,
+    })
+}
 
-        for (header_name, header_value) in &headers {
-            request_builder = request_builder.header(header_name, header_value);
-        }
+async fn send_http_request(
+    tool_name: String,
+    input: HttpRequestInput,
+    preflight: HttpRequestPreflight,
+) -> Result<ToolCoreOutcome, String> {
+    let client = super::web_http::build_ssrf_safe_client(
+        preflight.allow_private_hosts,
+        preflight.timeout_seconds,
+        DEFAULT_HTTP_REQUEST_USER_AGENT,
+    )?;
+    let mut request_builder = client.request(input.method.clone(), input.url.clone());
 
-        if let Some(content_type_value) = content_type.as_deref() {
-            request_builder =
-                request_builder.header(reqwest::header::CONTENT_TYPE, content_type_value);
-        }
+    for (header_name, header_value) in &input.headers {
+        request_builder = request_builder.header(header_name, header_value);
+    }
 
-        if let Some(body_value) = body {
-            request_builder = request_builder.body(body_value);
-        }
+    if let Some(content_type_value) = input.content_type.as_deref() {
+        request_builder = request_builder.header(reqwest::header::CONTENT_TYPE, content_type_value);
+    }
 
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|error| format!("http.request failed: {error}"))?;
-        let status = response.status();
-        let final_url = response.url().to_string();
-        let response_headers = response_headers_json(response.headers());
-        let content_type_header = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let mut budget = ByteBudget::new(max_bytes);
-        budget
-            .reject_if_content_length_exceeds(response.content_length(), "http.request response")?;
+    if let Some(body_value) = input.body {
+        request_builder = request_builder.body(body_value);
+    }
 
-        let mut body_bytes = Vec::new();
-        let mut stream = response.bytes_stream();
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|error| format!("http.request failed: {error}"))?;
+    let status = response.status();
+    let final_url = response.url().to_string();
+    let response_headers = response_headers_json(response.headers());
+    let content_type_header = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let mut budget = ByteBudget::new(input.max_bytes);
+    budget.reject_if_content_length_exceeds(response.content_length(), "http.request response")?;
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|error| format!("failed to read http.request response body: {error}"))?;
-            budget.try_consume(chunk.len(), "http.request response")?;
-            body_bytes.extend_from_slice(&chunk);
-        }
+    let mut body_bytes = Vec::new();
+    let mut stream = response.bytes_stream();
 
-        let response_body =
-            response_body_payload(content_type_header.as_deref(), body_bytes.as_slice());
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result
+            .map_err(|error| format!("failed to read http.request response body: {error}"))?;
+        budget.try_consume(chunk.len(), "http.request response")?;
+        body_bytes.extend_from_slice(&chunk);
+    }
 
-        Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "core-tools",
-                "tool_name": tool_name,
-                "method": method.as_str(),
-                "requested_url": raw_url,
-                "final_url": final_url,
-                "host": host,
-                "status_code": status.as_u16(),
-                "status_text": status.canonical_reason(),
-                "headers": response_headers,
-                "content_type": content_type_header,
-                "body_kind": response_body.kind,
-                "body": response_body.value,
-                "bytes_downloaded": budget.consumed(),
-            }),
-        })
-    })?
+    let response_body =
+        response_body_payload(content_type_header.as_deref(), body_bytes.as_slice());
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": tool_name,
+            "method": input.method.as_str(),
+            "requested_url": input.raw_url,
+            "final_url": final_url,
+            "host": preflight.host,
+            "status_code": status.as_u16(),
+            "status_text": status.canonical_reason(),
+            "headers": response_headers,
+            "content_type": content_type_header,
+            "body_kind": response_body.kind,
+            "body": response_body.value,
+            "bytes_downloaded": budget.consumed(),
+        }),
+    })
 }
 
 fn parse_method(payload: &Map<String, Value>) -> Result<Method, String> {
@@ -290,6 +346,41 @@ mod tests {
 
         ready_rx.recv().expect("wait for ready");
         format!("http://{}", address)
+    }
+
+    #[test]
+    fn http_request_rejects_non_object_payload_before_config_preflight() {
+        let request = ToolCoreRequest {
+            tool_name: "http.request".to_owned(),
+            payload: json!("not an object"),
+        };
+        let mut runtime_config = ToolRuntimeConfig::default();
+        runtime_config.web_fetch.enabled = false;
+
+        let error = execute_http_request_tool_with_config(request, &runtime_config)
+            .expect_err("non-object payload should fail before config preflight");
+
+        assert_eq!(error, "http.request payload must be an object");
+    }
+
+    #[test]
+    fn http_request_disabled_config_preflight_runs_before_field_parsing() {
+        let request = ToolCoreRequest {
+            tool_name: "http.request".to_owned(),
+            payload: json!({
+                "url": "not a valid url"
+            }),
+        };
+        let mut runtime_config = ToolRuntimeConfig::default();
+        runtime_config.web_fetch.enabled = false;
+
+        let error = execute_http_request_tool_with_config(request, &runtime_config)
+            .expect_err("disabled runtime should fail before parsing url");
+
+        assert_eq!(
+            error,
+            "http.request is disabled by config.tools.web.enabled=false"
+        );
     }
 
     #[test]
