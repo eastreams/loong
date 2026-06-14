@@ -20,6 +20,8 @@ pub mod policy;
 pub mod policy_ext;
 pub mod runtime;
 pub mod task_supervisor;
+pub mod tool;
+#[deprecated]
 pub mod tool_v1;
 
 pub use architecture::{

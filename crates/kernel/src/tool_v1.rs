@@ -49,7 +49,7 @@ pub trait ToolExtensionAdapter: Send + Sync {
     async fn execute_tool_extension(
         &self,
         request: ToolExtensionRequest,
-        core: &(dyn CoreToolAdapter + Sync),
+        core: &(dyn CoreToolAdapter + Sync), // this is not proper
     ) -> Result<ToolExtensionOutcome, ToolPlaneError>;
 }
 

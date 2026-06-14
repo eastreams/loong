@@ -184,6 +184,7 @@ pub(crate) struct ResolvedToolExecution {
 }
 
 pub(crate) fn resolve_tool_execution(raw: &str) -> Option<ResolvedToolExecution> {
+    // TODO: Add tool-path support
     let catalog = tool_catalog();
     if let Some(descriptor) = catalog.resolve(raw) {
         return Some(ResolvedToolExecution {

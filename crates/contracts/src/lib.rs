@@ -50,9 +50,12 @@ pub use secret_ref::SecretRef;
 pub use secret_resolver::{SecretResolutionError, SecretResolver};
 pub use secret_value::SecretValue;
 pub use task_state::TaskState;
+pub use tool_types::ToolTier;
+#[deprecated]
 pub use tool_types::{
-    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
+    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest,
 };
+pub use tool_types::{ToolOutcome, ToolRequest};
 pub use work_types::{
     WorkRuntimeHealthSnapshot, WorkSourceKind, WorkUnitEventRecord, WorkUnitKind,
     WorkUnitLeaseRecord, WorkUnitPriority, WorkUnitRecord, WorkUnitRetryPolicy, WorkUnitSnapshot,

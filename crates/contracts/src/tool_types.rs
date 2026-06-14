@@ -1,3 +1,7 @@
+pub mod tool_spec;
+
+pub use tool_spec::ToolTier;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,12 +15,6 @@ impl ToolPath {
     pub fn is_root(&self) -> bool {
         self.segments.is_empty()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ToolTier {
-    Core,
-    Extension,
 }
 
 #[deprecated]
