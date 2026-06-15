@@ -1,4 +1,6 @@
+use loong_contracts::ToolSpec;
 pub use loong_contracts::{ToolOutcome, ToolRequest};
+mod tool_impl;
 
 use async_trait::async_trait;
 
@@ -12,16 +14,22 @@ mod sealed {
     pub trait Sealed {}
 }
 
+// TODO
+type ToolContext = ();
+
 #[async_trait]
 pub trait ToolAdapter: Send + Sync + Sealed {
-    fn name(&self) -> &str;
+    async fn execute(&self, ctx: &ToolContext, request: ToolRequest) -> Result<ToolOutcome, ToolPlaneError>;
+}
 
-    async fn execute(&self, request: ToolRequest) -> Result<ToolOutcome, ToolPlaneError>;
+pub struct Tool {
+    spec: ToolSpec,
+    adapter: Arc<dyn ToolAdapter>,
 }
 
 #[derive(Default)]
 pub struct ToolPlane {
-    adapters: BTreeMap<String, Arc<dyn ToolAdapter>>,
+    tools: BTreeMap<String, Tool>,
     default_adapter: Option<String>,
 }
 
@@ -29,22 +37,26 @@ impl ToolPlane {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            adapters: BTreeMap::new(),
+            tools: BTreeMap::new(),
             default_adapter: None,
         }
     }
 
-    pub fn register_core_adapter<A: ToolAdapter + 'static>(&mut self, adapter: A) {
-        let name = adapter.name().to_owned();
+    // TODO: Add path
+    pub fn register_core_tool<A: ToolAdapter>(&mut self, spec: ToolSpec, adapter: Arc<A>) {
         if self.default_adapter.is_none() {
             self.default_adapter = Some(name.clone());
         }
-        self.adapters.insert(name, Arc::new(adapter));
+        self.tools.insert(spec.name, Tool {
+            spec, adapter
+        });
     }
 
-    pub fn register_extension_adapter<A: ToolAdapter + 'static>(&mut self, adapter: A) {
-        let name = adapter.name().to_owned();
-        self.adapters.insert(name, Arc::new(adapter));
+    // TODO: Add path
+    pub fn register_extension_adapter<A: ToolAdapter>(&mut self, spec: ToolSpec, adapter: Arc<A>) {
+        self.adapters.insert(spec.name.clone(), Tool {
+            spec, adapter
+        });
     }
 
     pub fn set_default_core_adapter(&mut self, name: &str) -> Result<(), ToolPlaneError> {

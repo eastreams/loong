@@ -1,6 +1,6 @@
-pub mod tool_spec;
+mod tool_spec;
 
-pub use tool_spec::ToolTier;
+pub use tool_spec::{ToolSpec, ToolOrigin};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

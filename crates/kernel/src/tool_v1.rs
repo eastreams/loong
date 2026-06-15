@@ -5,7 +5,7 @@ use serde::Serialize;
 
 // Re-export data types from contracts
 pub use loong_contracts::{
-    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
+    ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolOrigin,
 };
 
 use crate::errors::ToolPlaneError;
