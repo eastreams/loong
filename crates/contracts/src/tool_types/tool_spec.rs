@@ -147,12 +147,24 @@ impl ToolSpecBuilder {
     }
 
     pub fn build(self) -> Result<ToolSpec, ToolSpecBuildError> {
+        let ToolSpecBuilder {
+            name,
+            provider,
+            description,
+            aliases: _,
+            origin,
+            scheduling_class,
+            required_capabilities,
+            input_schema,
+            output_schema,
+        } = self;
+
         let mut error = ToolSpecBuildError {
             missing_fields: Vec::new(),
             unsatisfied_constraints: Vec::new(),
         };
 
-        match self.name {
+        match &name {
             Some(name) => {
                 if name.contains(&['.', '/', '\\']) {
                     error
@@ -164,24 +176,24 @@ impl ToolSpecBuilder {
                 error.missing_fields.push("name".to_string());
             }
         }
-        if self.provider.is_none() {
+        if provider.is_none() {
             error.missing_fields.push("provider".to_string());
         }
-        if self.description.is_none() {
+        if description.is_none() {
             error.missing_fields.push("description".to_string());
         }
-        if self.origin.is_none() {
+        if origin.is_none() {
             error.missing_fields.push("tier".to_string());
         }
-        if self.scheduling_class.is_none() {
+        if scheduling_class.is_none() {
             error.missing_fields.push("scheduling_class".to_string());
         }
-        if self.required_capabilities.is_none() {
+        if required_capabilities.is_none() {
             error
                 .missing_fields
                 .push("required_capabilities".to_string());
         }
-        match self.input_schema {
+        match &input_schema {
             Some(schema) => {
                 if !schema.is_object() {
                     error
@@ -194,20 +206,37 @@ impl ToolSpecBuilder {
             }
         }
 
-        if !error.missing_fields.is_empty() || !error.unsatisfied_constraints.is_empty() {
-            return Err(error);
+        match (
+            name,
+            provider,
+            description,
+            origin,
+            scheduling_class,
+            required_capabilities,
+            input_schema,
+        ) {
+            (
+                Some(name),
+                Some(provider),
+                Some(description),
+                Some(origin),
+                Some(scheduling_class),
+                Some(required_capabilities),
+                Some(input_schema),
+            ) if error.missing_fields.is_empty() && error.unsatisfied_constraints.is_empty() => {
+                Ok(ToolSpec {
+                    name,
+                    provider,
+                    description,
+                    origin,
+                    scheduling_class,
+                    required_capabilities,
+                    input_schema,
+                    output_schema,
+                })
+            }
+            _ => Err(error),
         }
-
-        Ok(ToolSpec {
-            name: self.name.unwrap(),
-            provider: self.provider.unwrap(),
-            description: self.description.unwrap(),
-            origin: self.origin.unwrap(),
-            scheduling_class: self.scheduling_class.unwrap(),
-            required_capabilities: self.required_capabilities.unwrap(),
-            input_schema: self.input_schema.unwrap(),
-            output_schema: self.output_schema,
-        })
     }
 }
 

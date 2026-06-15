@@ -19,7 +19,11 @@ type ToolContext = ();
 
 #[async_trait]
 pub trait ToolAdapter: Send + Sync + Sealed {
-    async fn execute(&self, ctx: &ToolContext, request: ToolRequest) -> Result<ToolOutcome, ToolPlaneError>;
+    async fn execute(
+        &self,
+        ctx: &ToolContext,
+        request: ToolRequest,
+    ) -> Result<ToolOutcome, ToolPlaneError>;
 }
 
 pub struct Tool {
@@ -43,24 +47,20 @@ impl ToolPlane {
     }
 
     // TODO: Add path
-    pub fn register_core_tool<A: ToolAdapter>(&mut self, spec: ToolSpec, adapter: Arc<A>) {
+    pub fn register_core_tool(&mut self, spec: ToolSpec, adapter: Arc<dyn ToolAdapter>) {
         if self.default_adapter.is_none() {
-            self.default_adapter = Some(name.clone());
+            self.default_adapter = Some(spec.name.clone());
         }
-        self.tools.insert(spec.name, Tool {
-            spec, adapter
-        });
+        self.tools.insert(spec.name.clone(), Tool { spec, adapter });
     }
 
     // TODO: Add path
-    pub fn register_extension_adapter<A: ToolAdapter>(&mut self, spec: ToolSpec, adapter: Arc<A>) {
-        self.adapters.insert(spec.name.clone(), Tool {
-            spec, adapter
-        });
+    pub fn register_extension_adapter(&mut self, spec: ToolSpec, adapter: Arc<dyn ToolAdapter>) {
+        self.tools.insert(spec.name.clone(), Tool { spec, adapter });
     }
 
     pub fn set_default_core_adapter(&mut self, name: &str) -> Result<(), ToolPlaneError> {
-        if !self.adapters.contains_key(name) {
+        if !self.tools.contains_key(name) {
             return Err(ToolPlaneError::CoreAdapterNotFound(name.to_owned()));
         }
         self.default_adapter = Some(name.to_owned());
@@ -85,14 +85,13 @@ impl ToolPlane {
                 .ok_or(ToolPlaneError::NoDefaultCoreAdapter)?
         };
 
-        let adapter = self
-            .adapters
+        let tool = self
+            .tools
             .get(resolved_name)
             .ok_or(ToolPlaneError::CoreAdapterNotFound(
                 resolved_name.to_owned(),
-            ))?
-            .clone();
+            ))?;
 
-        return adapter.execute(request).await;
+        return tool.adapter.execute(&(), request).await;
     }
 }
