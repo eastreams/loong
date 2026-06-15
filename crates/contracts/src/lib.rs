@@ -55,7 +55,7 @@ pub use task_state::TaskState;
 pub use tool_types::{
     ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest,
 };
-pub use tool_types::{ToolOrigin, ToolSpec};
+pub use tool_types::{ToolEffectClass, ToolOrigin, ToolSchedulingClass, ToolSpec};
 pub use tool_types::{ToolOutcome, ToolRequest};
 
 pub use work_types::{

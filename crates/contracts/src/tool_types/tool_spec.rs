@@ -14,6 +14,32 @@ pub enum ToolOrigin {
     Runtime,
 }
 
+impl ToolOrigin {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "built_in",
+            Self::Extension => "extension",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffectClass {
+    ReadOnly,
+    Mutating,
+}
+
+impl ToolEffectClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Mutating => "mutating",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSchedulingClass {
@@ -24,6 +50,34 @@ pub enum ToolSchedulingClass {
     SerialOnly,
     /// This tool can run with any other task in parallel
     ParallelSafe,
+}
+
+impl ToolSchedulingClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exclusive => "exclusive",
+            Self::SerialOnly => "serial_only",
+            Self::ParallelSafe => "parallel_safe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExposureClass {
+    Direct,
+    Gateway,
+    Discoverable,
+}
+
+impl ToolExposureClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Gateway => "gateway",
+            Self::Discoverable => "discoverable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +94,7 @@ pub struct ToolSpec {
     pub origin: ToolOrigin,
 
     // --- Runtime Info ---
+    pub effect_class: ToolEffectClass,
     pub scheduling_class: ToolSchedulingClass,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_capabilities: Vec<Capability>,
@@ -61,6 +116,7 @@ impl ToolSpec {
             description: None,
             aliases: Vec::new(),
             origin: None,
+            effect_class: None,
             scheduling_class: None,
             required_capabilities: None,
             input_schema: None,
@@ -75,16 +131,11 @@ pub struct ToolSpecBuilder {
     description: Option<String>,
     aliases: Vec<String>,
     origin: Option<ToolOrigin>,
+    effect_class: Option<ToolEffectClass>,
     scheduling_class: Option<ToolSchedulingClass>,
     required_capabilities: Option<Vec<Capability>>,
     input_schema: Option<Value>,
     output_schema: Option<Value>,
-}
-
-pub enum ToolExposureClass {
-    Direct,
-    Gateway,
-    Discoverable,
 }
 
 impl ToolSpecBuilder {
@@ -116,6 +167,13 @@ impl ToolSpecBuilder {
     pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
         self.aliases.push(alias.into());
         self
+    }
+
+    pub fn effect_class(self, effect_class: ToolEffectClass) -> Self {
+        Self {
+            effect_class: Some(effect_class),
+            ..self
+        }
     }
 
     pub fn scheduling_class(self, scheduling_class: ToolSchedulingClass) -> Self {
@@ -153,6 +211,7 @@ impl ToolSpecBuilder {
             description,
             aliases: _,
             origin,
+            effect_class,
             scheduling_class,
             required_capabilities,
             input_schema,
@@ -185,8 +244,22 @@ impl ToolSpecBuilder {
         if origin.is_none() {
             error.missing_fields.push("tier".to_string());
         }
+        if effect_class.is_none() {
+            error.missing_fields.push("effect_class".to_string());
+        }
         if scheduling_class.is_none() {
             error.missing_fields.push("scheduling_class".to_string());
+        }
+        if matches!(
+            (effect_class, scheduling_class),
+            (
+                Some(ToolEffectClass::Mutating),
+                Some(ToolSchedulingClass::ParallelSafe)
+            )
+        ) {
+            error
+                .unsatisfied_constraints
+                .push("mutating tools should not use parallel_safe scheduling".to_string());
         }
         if required_capabilities.is_none() {
             error
@@ -211,6 +284,7 @@ impl ToolSpecBuilder {
             provider,
             description,
             origin,
+            effect_class,
             scheduling_class,
             required_capabilities,
             input_schema,
@@ -220,6 +294,7 @@ impl ToolSpecBuilder {
                 Some(provider),
                 Some(description),
                 Some(origin),
+                Some(effect_class),
                 Some(scheduling_class),
                 Some(required_capabilities),
                 Some(input_schema),
@@ -229,6 +304,7 @@ impl ToolSpecBuilder {
                     provider,
                     description,
                     origin,
+                    effect_class,
                     scheduling_class,
                     required_capabilities,
                     input_schema,
