@@ -15,6 +15,8 @@ We care about clear ownership, thoughtful engineering, and kind collaboration.
 
 - you are preparing a real patch against this repository
 - you need the repository-native validation, branch, or PR rules
+- you need code-standard expectations for maintainability, test placement, or
+  review checks
 - you want crate-level contribution recipes instead of the shorter public docs
   summary
 
@@ -25,6 +27,7 @@ We care about clear ownership, thoughtful engineering, and kind collaboration.
 | land a small docs, test, or contained bug-fix patch | [Contribution Workflow](site/build-on-loong/contribution-workflow.mdx) and [Contribution Tracks](#contribution-tracks) | [Standard Workflow](#standard-workflow) |
 | improve docs placement, Mintlify structure, or public docs wording | [Docs Workflow](site/build-on-loong/docs-workflow.mdx) | [Documentation Language Scope](#documentation-language-scope) and [Standard Workflow](#standard-workflow) |
 | change runtime behavior, policy, or architecture-sensitive code | [Architecture](site/build-on-loong/architecture.mdx) | [Contribution Tracks](#contribution-tracks), [CI And Required Checks](#ci-and-required-checks), and [Repository Recipes](#repository-recipes) |
+| check repository code standards, test organization, or review expectations | [Code Standards](docs/references/code-standards.md) | [Core Workflow And Validation](#core-workflow-and-validation) |
 | understand where your background is most useful | [Contribution Areas We Especially Welcome](docs/references/contribution-areas.md) | [How To Join In](#how-to-join-in) |
 | read the full repository-native contributor guide directly | this file | the [Section Map](#section-map) and the sections below |
 
@@ -51,6 +54,7 @@ material:
 
 - branch, release, CI, and review expectations
 - source-level contribution tracks and validation rules
+- code-standard routing for maintainability, test organization, and review checks
 - crate-level contribution recipes
 - responsible agent-assisted contribution guidance
 - repository observability and maintainer-facing contribution boundaries
