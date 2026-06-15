@@ -32,7 +32,7 @@ use crate::{
     },
     tool_v1::{
         CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-        ToolExtensionOutcome, ToolExtensionRequest, ToolPlane,
+        ToolExtensionOutcome, ToolExtensionRequest, ToolPlane as ToolPlaneV1,
     },
 };
 
@@ -67,7 +67,8 @@ pub struct LoongKernel<P: PolicyEngine> {
     harness: HarnessBroker,
     connector_plane: ConnectorPlane,
     runtime_plane: RuntimePlane,
-    tool_plane: ToolPlane,
+    #[deprecated]
+    tool_plane_v1: ToolPlaneV1,
     memory_plane: MemoryPlane,
     policy_extensions: PolicyExtensionChain,
     clock: Arc<dyn Clock>,
@@ -122,7 +123,7 @@ impl<P: PolicyEngine> LoongKernel<P> {
             harness: HarnessBroker::new(),
             connector_plane: ConnectorPlane::new(),
             runtime_plane: RuntimePlane::new(),
-            tool_plane: ToolPlane::new(),
+            tool_plane_v1: ToolPlaneV1::new(),
             memory_plane: MemoryPlane::new(),
             policy_extensions: PolicyExtensionChain::new(),
             clock,
@@ -198,18 +199,18 @@ impl<P: PolicyEngine> LoongKernel<P> {
     }
 
     pub fn register_core_tool_adapter<A: CoreToolAdapter + 'static>(&mut self, adapter: A) {
-        self.tool_plane.register_core_adapter(adapter);
+        self.tool_plane_v1.register_core_adapter(adapter);
     }
 
     pub fn register_tool_extension_adapter<A: ToolExtensionAdapter + 'static>(
         &mut self,
         adapter: A,
     ) {
-        self.tool_plane.register_extension_adapter(adapter);
+        self.tool_plane_v1.register_extension_adapter(adapter);
     }
 
     pub fn set_default_core_tool_adapter(&mut self, name: &str) -> Result<(), KernelError> {
-        self.tool_plane
+        self.tool_plane_v1
             .set_default_core_adapter(name)
             .map_err(KernelError::from)
     }
@@ -611,14 +612,14 @@ impl<P: PolicyEngine> LoongKernel<P> {
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
             .or_else(|| {
-                self.tool_plane
+                self.tool_plane_v1
                     .default_core_adapter_name()
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
         let tool_name = request.tool_name.clone();
         let outcome = self
-            .tool_plane
+            .tool_plane_v1
             .execute_core(core_name, request)
             .await
             .map_err(KernelError::from)?;
@@ -661,14 +662,14 @@ impl<P: PolicyEngine> LoongKernel<P> {
         let resolved_core_adapter = core_name
             .map(std::string::ToString::to_string)
             .or_else(|| {
-                self.tool_plane
+                self.tool_plane_v1
                     .default_core_adapter_name()
                     .map(std::string::ToString::to_string)
             })
             .unwrap_or_else(|| "default".to_owned());
         let action = request.extension_action.clone();
         let outcome = self
-            .tool_plane
+            .tool_plane_v1
             .execute_extension(extension_name, core_name, request)
             .await
             .map_err(KernelError::from)?;

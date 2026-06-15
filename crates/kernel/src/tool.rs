@@ -1,5 +1,7 @@
-use loong_contracts::ToolSpec;
+use loong_contracts::{SharedStr, ToolSpec};
 pub use loong_contracts::{ToolOutcome, ToolRequest};
+
+mod tool_directory;
 mod tool_impl;
 
 use async_trait::async_trait;
@@ -33,8 +35,8 @@ pub struct Tool {
 
 #[derive(Default)]
 pub struct ToolPlane {
-    tools: BTreeMap<String, Tool>,
-    default_adapter: Option<String>,
+    tools: BTreeMap<SharedStr, Tool>,
+    default_adapter: Option<SharedStr>,
 }
 
 impl ToolPlane {
@@ -59,11 +61,11 @@ impl ToolPlane {
         self.tools.insert(spec.name.clone(), Tool { spec, adapter });
     }
 
-    pub fn set_default_core_adapter(&mut self, name: &str) -> Result<(), ToolPlaneError> {
-        if !self.tools.contains_key(name) {
-            return Err(ToolPlaneError::CoreAdapterNotFound(name.to_owned()));
+    pub fn set_default_core_adapter(&mut self, name: SharedStr) -> Result<(), ToolPlaneError> {
+        if !self.tools.contains_key(&name) {
+            return Err(ToolPlaneError::CoreAdapterNotFound((*name).to_owned()));
         }
-        self.default_adapter = Some(name.to_owned());
+        self.default_adapter = Some(name);
         Ok(())
     }
 

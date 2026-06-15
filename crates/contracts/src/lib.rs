@@ -15,6 +15,7 @@ mod runtime_types;
 mod secret_ref;
 mod secret_resolver;
 mod secret_value;
+mod shared_types;
 mod task_state;
 mod tool_types;
 mod work_types;
@@ -49,6 +50,7 @@ pub use runtime_types::{
 pub use secret_ref::SecretRef;
 pub use secret_resolver::{SecretResolutionError, SecretResolver};
 pub use secret_value::SecretValue;
+pub use shared_types::SharedStr;
 pub use task_state::TaskState;
 
 #[deprecated]

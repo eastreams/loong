@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::Capability;
+use crate::{Capability, SharedStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +62,7 @@ impl ToolSchedulingClass {
     }
 }
 
+// TODO: consider whether should this be used
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolExposureClass {
@@ -85,11 +86,11 @@ impl ToolExposureClass {
 pub struct ToolSpec {
     // --- Basic Info ---
     /// Should not include '.', '\' or '/'
-    pub name: String,
+    pub name: SharedStr,
     /// eg. loong, feishu, ...
-    pub provider: String,
+    pub provider: SharedStr,
     /// A brief introduction to this tool
-    pub description: String,
+    pub description: SharedStr,
     /// Tool register location
     pub origin: ToolOrigin,
 
@@ -126,10 +127,10 @@ impl ToolSpec {
 }
 
 pub struct ToolSpecBuilder {
-    name: Option<String>,
-    provider: Option<String>,
-    description: Option<String>,
-    aliases: Vec<String>,
+    name: Option<SharedStr>,
+    provider: Option<SharedStr>,
+    description: Option<SharedStr>,
+    aliases: Vec<SharedStr>,
     origin: Option<ToolOrigin>,
     effect_class: Option<ToolEffectClass>,
     scheduling_class: Option<ToolSchedulingClass>,
@@ -139,19 +140,19 @@ pub struct ToolSpecBuilder {
 }
 
 impl ToolSpecBuilder {
-    pub fn name(self, name: impl Into<String>) -> Self {
+    pub fn name(self, name: impl Into<SharedStr>) -> Self {
         Self {
             name: Some(name.into()),
             ..self
         }
     }
-    pub fn provider(self, provider: impl Into<String>) -> Self {
+    pub fn provider(self, provider: impl Into<SharedStr>) -> Self {
         Self {
             provider: Some(provider.into()),
             ..self
         }
     }
-    pub fn description(self, description: impl Into<String>) -> Self {
+    pub fn description(self, description: impl Into<SharedStr>) -> Self {
         Self {
             description: Some(description.into()),
             ..self
@@ -164,7 +165,7 @@ impl ToolSpecBuilder {
         }
     }
 
-    pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
+    pub fn with_alias(mut self, alias: impl Into<SharedStr>) -> Self {
         self.aliases.push(alias.into());
         self
     }
@@ -225,7 +226,7 @@ impl ToolSpecBuilder {
 
         match &name {
             Some(name) => {
-                if name.contains(&['.', '/', '\\']) {
+                if name.0.contains(['.', '/', '\\']) {
                     error
                         .unsatisfied_constraints
                         .push("name should not contain '.', '/' or '\\'".to_string());
