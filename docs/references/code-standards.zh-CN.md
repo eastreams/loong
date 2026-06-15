@@ -1,114 +1,147 @@
 # 代码规范
 
-本文档定义 Loong 维护者、贡献者和 agent 协作开发需要遵守的仓库原生代码规范。
-
-当规则比 `docs/design-docs/core-beliefs.md` 中的项目原则更具体，但又不只属于某个
-crate 或某个功能时，应记录在这里。只要规则可以被机械化执行，就优先使用脚本、
-lint 或 CI 门禁，而不是依赖人工 review。
+本文档定义 Loong 源码变更必须遵守的代码规范。英文版和简体中文版必须描述同一组规则。
 
 ## 范围
 
-本文档覆盖：
+除非某条规则明确缩小适用范围，否则这些规则适用于仓库中的新增和修改代码。
 
-- Rust 代码形态和可维护性预期
-- 函数、模块和文件大小指导
-- 测试位置和测试文件组织方式
-- fixture、snapshot 和生成产物的处理方式
-- 错误处理和可观测性约定
-- 代码规范漂移的 review 检查项
-- 当前和计划中的执行门禁
+Vendored 第三方源码只有位于明确的 vendored 路径下才豁免。
+
+本文档不替代 `AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、
+`docs/design-docs/core-beliefs.md` 或 `docs/design-docs/layered-kernel-design.md`。
+
+## 规则术语
+
+- `MUST` 表示必须遵守。
+- `MUST NOT` 表示禁止使用。
 
 ## Rust 代码形态
 
-当项目级 Rust 风格规则超出 rustfmt 和 Clippy 默认能力时，将其记录在这里。
+### RUST-1：公共 API 保持增量
 
-- 优先使用显式、狭窄的数据流，避免隐藏的全局状态。
-- 除非已有文档化的破坏性变更决策，否则公共 API 保持增量演进。
-- 除非相关架构文档明确允许，否则不要把领域特定行为放进更底层的 crate。
-- 只有在能让调用点更清晰，或能消除有意义的重复时，才引入局部 helper 函数。
-- 对于可以用标准库或现有 workspace 依赖清晰表达的小工具，避免引入新依赖。
+公共 API 必须保持增量演进，除非变更链接到已文档化的破坏性变更决策。
 
-## 函数和模块大小
+### RUST-2：分层边界是强制规则
 
-本节用于记录具体的大小预算和重构触发条件。
+低层 crate 禁止包含领域特定行为，除非相关架构文档明确允许该依赖方向。
 
-- 函数应保持在 reviewer 可以一次性看清控制流的范围内。
-- 长函数需要有明确理由，例如表驱动解析、结构化命令接线，或内联后更易读的测试
-  setup。
-- 当校验、转换、执行或渲染步骤可以被独立命名和测试时，应拆分函数。
-- 模块应聚焦在单一职责上。如果一个文件积累了不相关的 helper 家族，优先把 helper
-  移到拥有该功能或 crate surface 的位置附近。
+### RUST-3：新增依赖必须说明理由
 
-在把机械化预算加入脚本或 CI 之前，应先在这里记录提案。
+新增 workspace 依赖必须在 PR 中说明依赖名称、所属 crate，以及为什么现有 workspace
+依赖或标准库不足以解决问题。
 
-| Surface | Target | Enforcement |
-| --- | --- | --- |
-| Function length | Decide threshold before enforcing | Manual review for now |
-| File length | Decide threshold before enforcing | Manual review for now |
-| Test module length | Decide threshold before enforcing | Manual review for now |
+### RUST-4：禁止的 Rust 模式仍然禁止
 
-## 测试文件组织
+Rust 代码禁止使用 `unwrap`、`expect`、`panic`、`todo`、`unimplemented`、unsafe 代码、
+stdout 调试输出或 stderr 调试输出。
 
-测试应当记录行为，而不仅仅是提高覆盖率数字。
+## 函数大小
 
-- 当测试私有 helper 或狭窄模块行为时，单元测试应放在实现旁边。
-- 集成测试应放在与被测试公共行为匹配的 crate 或 workspace 测试 surface 下。
-- 测试文件应按行为或运行时 surface 分组，而不是按偶然的 bug report 历史分组。
-- 优先使用确定性的输入和输出。除非测试明确用于验证对应集成，否则不应依赖真实
-  home 目录、在线网络服务、墙钟时间或共享可变主机状态。
-- 大型 setup helper 和 fixture 应按领域命名，让未来的 agent 和 reviewer 能找到它们
-  存在的原因。
+### SIZE-1：函数最多 50 行
+
+每个 Rust 函数和方法最多 50 个物理源码行。
+
+行数从 `fn` 签名所在行开始，到匹配的右花括号所在行结束。签名前的属性和文档注释不计入。
+函数内部的空行计入。
+
+### SIZE-2：超长函数必须抽取
+
+当函数会超过 50 个计数行时，校验、转换、执行、格式化或 setup 工作必须抽取到更小的具名函数。
+
+## 测试组织
+
+### TEST-1：私有行为测试放在模块旁边
+
+测试私有 helper 或私有模块行为的测试，必须放在实现所在的同一个 Rust 源文件中。
+
+### TEST-2：公共行为测试使用集成测试 surface
+
+测试公共 CLI、runtime、protocol 或跨 crate 行为的测试，必须放在所属 crate 的 `tests/`
+目录或 workspace 的 `tests/` 目录下。
+
+### TEST-3：单元测试专用 helper 使用 test_utils.rs
+
+仅由内嵌测试模块或单元测试模块使用、且生产代码不使用的函数，必须放在 `test_utils.rs`
+文件中。
+
+`test_utils.rs` 的模块声明必须由 `#[cfg(test)]` guard 保护。生产代码禁止导入
+`test_utils.rs`。
+
+### TEST-4：集成测试支持代码使用 test_support.rs
+
+必须编入 crate 以供集成测试使用的 helper，包括 mock provider、fake transport、harness
+builder 和 integration fixture，必须放在 `test_support.rs` 中。
+
+`test_support.rs` 模块及其 public export 必须由 `test-support` feature 保护。
+`test-support` feature 禁止加入 crate 默认 feature 集，release 构建命令禁止启用该 feature。
+
+### TEST-5：测试模块名称受限
+
+Rust 测试模块必须命名为 `tests`，或以 `tests_` 开头。
+
+### TEST-6：测试模块必须带测试 guard
+
+Rust 测试模块必须由 `#[cfg(test)]` guard 保护。
+
+### TEST-7：内嵌测试模块必须位于文件末尾
+
+内嵌 Rust 测试模块必须出现在源文件末尾。
+
+### TEST-8：内嵌测试模块后禁止生产代码
+
+生产代码禁止出现在内嵌 Rust 测试模块之后。
+
+### TEST-9：测试禁止使用真实用户状态
+
+测试禁止读取或写入开发者真实 home 目录。需要 Loong 状态的测试必须将 `LOONG_HOME` 设置为
+隔离的临时目录，或使用 `./scripts/cargo-local-toolchain.sh test`，该脚本会提供隔离的默认测试
+home。
+
+### TEST-10：真实网络测试必须隔离
+
+测试禁止执行真实网络调用，除非该测试被显式标记为 ignored，或被默认关闭的 feature gate 隔离。
 
 ## 测试命名
 
-测试名称应清楚说明行为和预期。
+### NAME-1：测试函数使用行为名称
 
-- 用测试保护的规则或场景来命名测试。
-- 当行为有更精确名称时，避免使用 `test_basic`、`test_error` 或 `test_success` 这类
-  含糊名称。
-- 必要时可以在注释或 PR 文本中引用 regression 背景，但测试名称本身应聚焦于必须
-  持续成立的行为。
+Rust 测试函数名必须用 `snake_case` 描述被保护的行为。
 
-## Fixtures、Snapshots 和生成产物
+### NAME-2：禁止模糊测试名称
 
-Fixture 和 snapshot 是被 review 的契约的一部分。
+测试函数名禁止为 `test_basic`、`test_success`、`test_error`、`test_failure`、
+`test_regression`，也禁止使用这些名称加数字后缀的形式。
 
-- 除非多个 crate 或测试套件有意共享，否则 fixture 应存放在拥有它们的测试附近。
-- Fixture 数据应尽量精简，并且为具体目的服务。
-- 不要在没有 review 其语义变化的情况下更新 snapshot 或生成产物。
-- 生成文件应标明生成器；除非文件头明确允许，否则不要手动编辑。
+### NAME-3：Issue ID 不能替代行为名称
+
+Bug ID、issue ID 和 incident ID 禁止作为测试名称中唯一的行为描述。需要记录 ID 时，将其写入注释。
+
+## Fixtures 和 Snapshots
+
+### DATA-1：Fixture 放在所属测试旁边
+
+Fixture 必须放在拥有它的测试文件旁边的 `fixtures/` 目录下。共享 fixture 必须放在共享
+`fixtures/` 目录下，并带有 README 说明所属测试套件。
+
+### DATA-2：Fixture 名称描述场景
+
+Fixture 文件名必须包含被测试的领域或行为。Fixture 文件名禁止只使用 `sample`、`test`、
+`temp`、`tmp`、`data` 或纯数字名称。
 
 ## 错误处理和可观测性
 
-错误路径应足够明确，让用户、操作者和 agent 不需要先阅读无关源码就能调试问题。
+### ERR-1：安全关键结果必须可观测
 
-- 当所在 crate 已有结构化错误或类型化诊断模式时，应返回结构化错误或类型化诊断。
-- 不要用泛化字符串隐藏 policy denial、capability failure 或 audit-write failure。
-- 安全关键行为应按 kernel 和 reliability 文档要求产生 audit evidence。
-- 生产代码中避免使用 `unwrap`、`expect`、`panic`、`todo` 和 `unimplemented`。Workspace
-  Clippy 设置已经会拒绝这些模式。
+Policy denial、capability failure、token lifecycle change 和 plane invocation 必须产生 kernel
+和 reliability 文档要求的 audit evidence。
 
-## Review 检查清单
+### ERR-2：安全关键 Result 必须处理
 
-Review 对代码规范敏感的变更时，使用这份检查清单：
+来自 policy、capability、audit 和 security-scan 操作的 Result 必须被显式处理。对这些操作禁止使用
+`let _ = ...`。
 
-- 变更是否保持了 crate 依赖方向？
-- 函数和模块是否仍然足够聚焦，可以在局部范围内 review？
-- 新测试是否放在未来维护者会预期的位置？
-- 测试名称描述的是稳定行为，而不是实现细节吗？
-- Fixture、snapshot 和生成文件的变化是否是有意的？
-- 错误路径是否明确且可观测？
-- 是否有任何重复出现的 review 评论可以转化为脚本、lint 或 CI 检查？
+### ERR-3：泛化错误字符串不能隐藏受治理失败
 
-## 执行门禁
-
-当前机械化执行包括：
-
-- 通过 `./scripts/cargo-local-toolchain.sh fmt --all -- --check` 运行 `cargo fmt`
-- 通过 `./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings`
-  运行严格 Clippy
-- 通过 `./scripts/cargo-local-toolchain.sh test --workspace` 运行 workspace 测试
-- 通过 `./scripts/cargo-local-toolchain.sh test --workspace --all-features` 运行 all-feature 测试
-- 通过 `scripts/check_dep_graph.sh` 和 `scripts/check_architecture_boundaries.sh` 运行依赖和架构检查
-
-未来的大小、测试布局或 fixture 检查应先记录在这里，再加入本地验证或 CI。
+新增或修改的 governed runtime 代码禁止将 policy denial、capability failure 或 audit-write
+failure 折叠为泛化错误字符串。

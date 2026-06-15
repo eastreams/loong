@@ -1,136 +1,168 @@
 # Code Standards
 
-This document defines repository-native code standards for Loong maintainers,
-contributors, and agent-assisted work.
-
-Use it for rules that are more concrete than the project principles in
-`docs/design-docs/core-beliefs.md`, but broader than one crate or one feature.
-When a rule can be enforced mechanically, prefer a script, lint, or CI gate over
-manual review.
+This document defines mandatory code standards for Loong source changes.
+The English and Simplified Chinese versions of this document must describe the
+same rule set.
 
 ## Scope
 
-This document covers:
+These rules apply to new and modified repository code unless a rule explicitly
+narrows its scope.
 
-- Rust code shape and maintainability expectations
-- function, module, and file size guidance
-- test placement and test file organization
-- fixture, snapshot, and generated-output handling
-- error-handling and observability conventions
-- review checks for code-standard drift
-- current and planned enforcement hooks
+Vendored third-party source is exempt only when it lives under an explicitly
+vendored path.
+
+This document does not replace `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`,
+`docs/design-docs/core-beliefs.md`, or
+`docs/design-docs/layered-kernel-design.md`.
+
+## Rule Terms
+
+- `MUST` means the rule is required.
+- `MUST NOT` means the pattern is forbidden.
 
 ## Rust Code Shape
 
-Record project-wide Rust style rules here when they go beyond rustfmt and
-Clippy defaults.
+### RUST-1: Public APIs Are Additive
 
-- Prefer explicit, narrow data flow over hidden global state.
-- Keep public APIs additive unless a documented breaking-change decision exists.
-- Keep domain-specific behavior out of lower-layer crates unless the relevant
-  architecture document explicitly allows it.
-- Prefer local helper functions only when they make call sites clearer or remove
-  meaningful duplication.
-- Avoid introducing new dependencies for small utilities that can be expressed
-  clearly with the standard library or existing workspace dependencies.
+Public APIs MUST remain additive unless the change links to a documented
+breaking-change decision.
 
-## Function And Module Size
+### RUST-2: Layer Boundaries Are Mandatory
 
-Use this section for concrete size budgets and refactoring triggers.
+Lower-layer crates MUST NOT contain domain-specific behavior unless the relevant
+architecture document explicitly permits that dependency direction.
 
-- Functions should stay small enough that their control flow can be reviewed in
-  one pass.
-- Long functions need a clear reason, such as table-driven parsing, structured
-  command wiring, or test setup that is easier to read inline.
-- Split functions when separate validation, transformation, execution, or
-  rendering steps can be named and tested independently.
-- Keep modules focused on one responsibility. If a file accumulates unrelated
-  helper families, prefer moving helpers next to the feature or crate surface
-  that owns them.
+### RUST-3: New Dependencies Require A Reason
 
-Proposed mechanical budgets should be added here before they are enforced in
-scripts or CI.
+New workspace dependencies MUST include a PR note naming the dependency, the
+owning crate, and the reason existing workspace dependencies or the standard
+library are insufficient.
 
-| Surface | Target | Enforcement |
-| --- | --- | --- |
-| Function length | Decide threshold before enforcing | Manual review for now |
-| File length | Decide threshold before enforcing | Manual review for now |
-| Test module length | Decide threshold before enforcing | Manual review for now |
+### RUST-4: Forbidden Rust Patterns Stay Forbidden
 
-## Test File Organization
+Rust code MUST NOT use `unwrap`, `expect`, `panic`, `todo`, `unimplemented`,
+unsafe code, stdout debug prints, or stderr debug prints.
 
-Use tests to document behavior, not only to raise coverage numbers.
+## Function Size
 
-- Unit tests should live next to the implementation when they exercise private
-  helpers or narrow module behavior.
-- Integration tests should live under the crate or workspace test surface that
-  matches the public behavior being exercised.
-- Test files should group by behavior or runtime surface, not by incidental bug
-  report history.
-- Prefer deterministic inputs and outputs. Tests should not depend on a real
-  home directory, live network service, wall-clock timing, or shared mutable
-  host state unless the test explicitly exists to validate that integration.
-- Keep large setup helpers and fixtures named by domain so future agents and
-  reviewers can find the reason they exist.
+### SIZE-1: Functions Are Limited To 50 Lines
+
+Every Rust function and method MUST be at most 50 physical source lines.
+
+Line counting starts at the `fn` signature line and ends at the matching closing
+brace. Attributes and doc comments before the signature do not count. Blank
+lines inside the function do count.
+
+### SIZE-2: Oversized Functions Must Be Extracted
+
+When a function would exceed 50 counted lines, validation, transformation,
+execution, formatting, or setup work MUST be extracted into smaller named
+functions.
+
+## Test Organization
+
+### TEST-1: Private Behavior Tests Stay With The Module
+
+Tests for private helpers or private module behavior MUST live in the same Rust
+source file as the implementation.
+
+### TEST-2: Public Behavior Tests Use Integration Surfaces
+
+Tests for public CLI, runtime, protocol, or cross-crate behavior MUST live under
+the owning crate's `tests/` directory or the workspace `tests/` directory.
+
+### TEST-3: Unit-Test-Only Helpers Use test_utils.rs
+
+Functions used only by embedded or unit test modules, and not used by production
+code, MUST live in a `test_utils.rs` file.
+
+The `test_utils.rs` module declaration MUST be guarded by `#[cfg(test)]`.
+Production code MUST NOT import `test_utils.rs`.
+
+### TEST-4: Integration-Test Support Uses test_support.rs
+
+Helpers that must be compiled into a crate for integration tests, including mock
+providers, fake transports, harness builders, and integration fixtures, MUST
+live in `test_support.rs`.
+
+The `test_support.rs` module and its public exports MUST be guarded by the
+`test-support` feature. The `test-support` feature MUST NOT be included in the
+crate's default feature set and MUST NOT be enabled by release build commands.
+
+### TEST-5: Test Module Names Are Restricted
+
+Rust test modules MUST be named `tests` or start with `tests_`.
+
+### TEST-6: Test Modules Require Test Guards
+
+Rust test modules MUST be guarded by `#[cfg(test)]`.
+
+### TEST-7: Embedded Test Modules Are Last
+
+Embedded Rust test modules MUST appear at the end of the source file.
+
+### TEST-8: Production Code Cannot Follow Embedded Tests
+
+Production code MUST NOT appear after an embedded Rust test module.
+
+### TEST-9: Tests Must Not Use Real User State
+
+Tests MUST NOT read from or write to the developer's real home directory. Tests
+that need Loong state MUST set `LOONG_HOME` to an isolated temporary directory or
+use `./scripts/cargo-local-toolchain.sh test`, which provides an isolated default
+test home.
+
+### TEST-10: Live Network Tests Are Isolated
+
+Tests MUST NOT perform live network calls unless they are explicitly marked as
+ignored or gated behind a feature that is disabled by default.
 
 ## Test Naming
 
-Test names should make the behavior and expectation clear.
+### NAME-1: Test Functions Use Behavior Names
 
-- Name tests after the rule or scenario they protect.
-- Avoid vague names such as `test_basic`, `test_error`, or `test_success` when
-  the behavior has a more precise name.
-- Use regression references in comments or PR text when useful, but keep the
-  test name focused on the behavior that must remain true.
+Rust test function names MUST describe the behavior being protected in
+`snake_case`.
 
-## Fixtures, Snapshots, And Generated Output
+### NAME-2: Vague Test Names Are Forbidden
 
-Fixtures and snapshots are part of the reviewed contract.
+Test function names MUST NOT be `test_basic`, `test_success`, `test_error`,
+`test_failure`, `test_regression`, or the same names with numeric suffixes.
 
-- Store fixtures near the tests that own them unless multiple crates or suites
-  intentionally share them.
-- Keep fixture data minimal and purpose-built.
-- Do not update snapshots or generated outputs without reviewing the semantic
-  change they represent.
-- Generated files should identify the generator and should not be manually
-  edited unless their header explicitly allows it.
+### NAME-3: Issue IDs Cannot Replace Behavior Names
+
+Bug IDs, issue IDs, and incident IDs MUST NOT be the only behavior description in
+a test name. Put IDs in comments when they are needed.
+
+## Fixtures And Snapshots
+
+### DATA-1: Fixtures Live Next To Their Owning Tests
+
+Fixtures MUST live under a `fixtures/` directory adjacent to the test file that
+owns them. Shared fixtures MUST live under a shared `fixtures/` directory with a
+README that names the owning test suites.
+
+### DATA-2: Fixture Names Describe The Scenario
+
+Fixture filenames MUST include the domain or behavior under test. Fixture
+filenames MUST NOT use only `sample`, `test`, `temp`, `tmp`, `data`, or numeric
+names.
 
 ## Error Handling And Observability
 
-Error paths should be explicit enough for users, operators, and agents to debug
-without reading unrelated source files first.
+### ERR-1: Security-Critical Outcomes Are Observable
 
-- Return structured errors or typed diagnostics when the surrounding crate
-  already has that pattern.
-- Do not hide policy denials, capability failures, or audit-write failures behind
-  generic strings.
-- Security-critical behavior should produce audit evidence as required by the
-  kernel and reliability documentation.
-- Avoid `unwrap`, `expect`, `panic`, `todo`, and `unimplemented` in production
-  code. Workspace Clippy settings already reject these patterns.
+Policy denials, capability failures, token lifecycle changes, and plane
+invocations MUST emit the audit evidence required by the kernel and reliability
+documentation.
 
-## Review Checklist
+### ERR-2: Security-Critical Results Must Be Handled
 
-Use this checklist when reviewing code-standard-sensitive changes:
+Results from policy, capability, audit, and security-scan operations MUST be
+handled explicitly. `let _ = ...` is forbidden for those operations.
 
-- Does the change preserve the crate dependency direction?
-- Are functions and modules still focused enough to review locally?
-- Are new tests placed where future maintainers will expect them?
-- Do test names describe durable behavior rather than implementation details?
-- Are fixtures, snapshots, and generated files intentionally changed?
-- Are error paths explicit and observable?
-- Can any repeated review comment be turned into a script, lint, or CI check?
+### ERR-3: Generic Error Strings Cannot Hide Governed Failures
 
-## Enforcement
-
-Current mechanical enforcement includes:
-
-- `cargo fmt` through `./scripts/cargo-local-toolchain.sh fmt --all -- --check`
-- strict Clippy through `./scripts/cargo-local-toolchain.sh clippy --workspace --all-targets --all-features -- -D warnings`
-- workspace tests through `./scripts/cargo-local-toolchain.sh test --workspace`
-- all-feature tests through `./scripts/cargo-local-toolchain.sh test --workspace --all-features`
-- dependency and architecture checks through `scripts/check_dep_graph.sh` and
-  `scripts/check_architecture_boundaries.sh`
-
-Future size, test-layout, or fixture checks should be documented here before
-being added to local verification or CI.
+New or modified governed runtime code MUST NOT collapse policy denials,
+capability failures, or audit-write failures into generic error strings.
