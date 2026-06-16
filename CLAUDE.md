@@ -13,7 +13,7 @@ context lives in `docs/`, while the public reader-facing docs surface lives in
 - [Layered Kernel Design](docs/design-docs/layered-kernel-design.md) — layered model and boundary rules
 - [Roadmap](docs/ROADMAP.md) — stage-based milestones and acceptance criteria
 - [Reliability](docs/RELIABILITY.md) — invariants and operating expectations
-- [Code Standards](docs/references/code-standards.md) — maintainability, test layout, and review checks
+- [Code Standards](docs/design-docs/code-standards.md) — maintainability, test layout, and review checks
 - Product specs and implementation plans now live in `eastreams/knowledge-base` (see `docs/README.md` for routing)
 - [Contributing Guide](CONTRIBUTING.md) — contributor workflow and recipes
 
@@ -99,7 +99,7 @@ commands directly.
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
 | Design decisions, patterns & catalog | `docs/design-docs/index.md` |
 | Harness engineering | `docs/design-docs/harness-engineering.md` |
-| Code standards, test layout & review checks | `docs/references/code-standards.md` |
+| Code standards, test layout & review checks | `docs/design-docs/code-standards.md` |
 | Roadmap | `docs/ROADMAP.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
 | Security model & gaps | `docs/SECURITY.md` |

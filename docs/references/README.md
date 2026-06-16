@@ -20,14 +20,12 @@ public docs landing path.
 
 | If you need... | Start here | Why |
 | --- | --- | --- |
-| repository-native code standards for maintainability, test layout, and review checks | [`code-standards.md`](code-standards.md) | this is the source-facing code-standard reference for humans and agents |
+| repository-native code standards for maintainability, test layout, and review checks | [`../design-docs/code-standards.md`](../design-docs/code-standards.md) | this is the source-facing code-standard reference for humans and agents |
 | a contributor-facing map of where design, docs, QA, systems, or community help is most useful | [`contribution-areas.md`](contribution-areas.md) | this is the public contributor-direction reference |
 | the maintainer-owned GitHub branch model, labels, intake wiring, and automation baseline | [`github-collaboration.md`](github-collaboration.md) | this is repository support material used by automation and maintainer workflow |
 
 ## What Belongs Here
 
-- `code-standards.md` is source-facing code-standard reference material for
-  maintainers, contributors, and agent-assisted work.
 - `contribution-areas.md` is normal contributor-facing reference material.
 - `github-collaboration.md` remains repository-native support material.
 - maintainer workflow references may stay in the repository when automation

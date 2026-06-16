@@ -27,7 +27,7 @@ We care about clear ownership, thoughtful engineering, and kind collaboration.
 | land a small docs, test, or contained bug-fix patch | [Contribution Workflow](site/build-on-loong/contribution-workflow.mdx) and [Contribution Tracks](#contribution-tracks) | [Standard Workflow](#standard-workflow) |
 | improve docs placement, Mintlify structure, or public docs wording | [Docs Workflow](site/build-on-loong/docs-workflow.mdx) | [Documentation Language Scope](#documentation-language-scope) and [Standard Workflow](#standard-workflow) |
 | change runtime behavior, policy, or architecture-sensitive code | [Architecture](site/build-on-loong/architecture.mdx) | [Contribution Tracks](#contribution-tracks), [CI And Required Checks](#ci-and-required-checks), and [Repository Recipes](#repository-recipes) |
-| check repository code standards, test organization, or review expectations | [Code Standards](docs/references/code-standards.md) | [Core Workflow And Validation](#core-workflow-and-validation) |
+| check repository code standards, test organization, or review expectations | [Code Standards](docs/design-docs/code-standards.md) | [Core Workflow And Validation](#core-workflow-and-validation) |
 | understand where your background is most useful | [Contribution Areas We Especially Welcome](docs/references/contribution-areas.md) | [How To Join In](#how-to-join-in) |
 | read the full repository-native contributor guide directly | this file | the [Section Map](#section-map) and the sections below |
 

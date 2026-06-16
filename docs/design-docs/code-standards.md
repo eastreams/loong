@@ -46,19 +46,28 @@ unsafe code, stdout debug prints, or stderr debug prints.
 
 ## Function Size
 
-### SIZE-1: Functions Are Limited To 50 Lines
+### SIZE-1: Functions Are Limited To 50 Lines By Default
 
-Every Rust function and method MUST be at most 50 physical source lines.
+Every Rust function and method MUST be at most 50 physical source lines unless
+the function itself is annotated with `#[allow(clippy::too_many_lines)]`.
 
 Line counting starts at the `fn` signature line and ends at the matching closing
 brace. Attributes and doc comments before the signature do not count. Blank
 lines inside the function do count.
 
-### SIZE-2: Oversized Functions Must Be Extracted
+### SIZE-2: Oversized Function Exceptions Require Reviewer Rationale
+
+Any function or method over 50 counted lines MUST carry
+`#[allow(clippy::too_many_lines)]` on that function or method.
+
+The author MUST explain the exception reason to reviewers in the PR, review
+thread, or adjacent source comment.
+
+### SIZE-3: Oversized Functions Must Be Extracted
 
 When a function would exceed 50 counted lines, validation, transformation,
 execution, formatting, or setup work MUST be extracted into smaller named
-functions.
+functions unless the function follows `SIZE-2`.
 
 ## Test Organization
 
@@ -86,9 +95,10 @@ Helpers that must be compiled into a crate for integration tests, including mock
 providers, fake transports, harness builders, and integration fixtures, MUST
 live in `test_support.rs`.
 
-The `test_support.rs` module and its public exports MUST be guarded by the
-`test-support` feature. The `test-support` feature MUST NOT be included in the
-crate's default feature set and MUST NOT be enabled by release build commands.
+The `test_support.rs` module and its public exports MUST be guarded by both
+`#[cfg(test)]` and the `dev-test-support` feature. The `dev-test-support`
+feature MUST NOT be included in the crate's default feature set and MUST NOT be
+enabled by release build commands.
 
 ### TEST-5: Test Module Names Are Restricted
 

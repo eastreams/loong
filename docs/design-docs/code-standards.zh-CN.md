@@ -38,16 +38,25 @@ stdout 调试输出或 stderr 调试输出。
 
 ## 函数大小
 
-### SIZE-1：函数最多 50 行
+### SIZE-1：函数默认最多 50 行
 
-每个 Rust 函数和方法最多 50 个物理源码行。
+每个 Rust 函数和方法默认最多 50 个物理源码行，除非函数本身标注
+`#[allow(clippy::too_many_lines)]`。
 
 行数从 `fn` 签名所在行开始，到匹配的右花括号所在行结束。签名前的属性和文档注释不计入。
 函数内部的空行计入。
 
-### SIZE-2：超长函数必须抽取
+### SIZE-2：超长函数例外必须向 reviewer 说明原因
 
-当函数会超过 50 个计数行时，校验、转换、执行、格式化或 setup 工作必须抽取到更小的具名函数。
+任何超过 50 个计数行的函数或方法，必须在该函数或方法上标注
+`#[allow(clippy::too_many_lines)]`。
+
+作者必须在 PR、review 讨论或相邻源码注释中向 reviewer 说明例外原因。
+
+### SIZE-3：超长函数必须抽取
+
+当函数会超过 50 个计数行时，校验、转换、执行、格式化或 setup 工作必须抽取到更小的具名函数，
+除非该函数符合 `SIZE-2`。
 
 ## 测试组织
 
@@ -73,8 +82,9 @@ stdout 调试输出或 stderr 调试输出。
 必须编入 crate 以供集成测试使用的 helper，包括 mock provider、fake transport、harness
 builder 和 integration fixture，必须放在 `test_support.rs` 中。
 
-`test_support.rs` 模块及其 public export 必须由 `test-support` feature 保护。
-`test-support` feature 禁止加入 crate 默认 feature 集，release 构建命令禁止启用该 feature。
+`test_support.rs` 模块及其 public export 必须同时由 `#[cfg(test)]` 和
+`dev-test-support` feature 保护。`dev-test-support` feature 禁止加入 crate 默认 feature 集，
+release 构建命令禁止启用该 feature。
 
 ### TEST-5：测试模块名称受限
 

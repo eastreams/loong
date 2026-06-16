@@ -32,6 +32,7 @@ design backlog artifacts are intentionally out of the public docs flow.
 | Document | Read it when... |
 | --- | --- |
 | [Core Beliefs](core-beliefs.md) | you need the engineering principles that should survive refactors |
+| [Code Standards](code-standards.md) | you need mandatory code-shape, function-size, test-layout, fixture, and error-handling rules |
 | [Layered Kernel Design](layered-kernel-design.md) | you need the crate and layer boundary model before changing runtime shape |
 | [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) | you need the shortest source-facing map of how CLI, channel, gateway, control-plane, and daemon task turns enter the shared runtime |
 | [Single-Entry Runtime Convergence](single-entry-runtime-convergence.md) | you are working on session-vs-memory ownership or converging host turn seams without breaking the current crate contract |
@@ -51,14 +52,16 @@ design backlog artifacts are intentionally out of the public docs flow.
 ## Suggested Reading Order
 1. Start with [Core Beliefs](core-beliefs.md) if you need the repository's
    architectural taste and invariants.
-2. Continue to [Layered Kernel Design](layered-kernel-design.md) if the change
+2. Read [Code Standards](code-standards.md) before changing source layout,
+   test organization, function shape, or test-support boundaries.
+3. Continue to [Layered Kernel Design](layered-kernel-design.md) if the change
    touches boundaries, ownership, or layering.
-3. Read [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) when
+4. Read [Runtime Entrypoint and Bootstrap Map](runtime-entrypoint-map.md) when
    the problem is “which runtime/bootstrap surface actually owns this turn?”
-4. Read [Execution Discipline And Long-Running Ownership](execution-discipline-and-long-running-ownership.md)
+5. Read [Execution Discipline And Long-Running Ownership](execution-discipline-and-long-running-ownership.md)
    when the work is really about proactive execution, long-running task state,
    or completion semantics.
-5. Read [Tool Surface Exposure](tool-surface-exposure.md) when the work touches
+6. Read [Tool Surface Exposure](tool-surface-exposure.md) when the work touches
    provider-visible tools, discovery, or hidden-tool progressive disclosure.
-6. Read [Harness Engineering](harness-engineering.md) only when the work is
+7. Read [Harness Engineering](harness-engineering.md) only when the work is
    really about the development environment or agent workflow itself.
