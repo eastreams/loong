@@ -132,34 +132,21 @@ pub fn render_tui_screen_spec(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let subtitle = spec.subtitle.as_deref();
-    let mut lines = render_header(spec.header_style, width, subtitle, color_enabled);
-
-    if let Some(title) = spec.title.as_deref() {
-        lines.push(String::new());
-        lines.extend(render_wrapped_display_lines([title], width));
-    }
-
-    if let Some(progress_line) = spec.progress_line.as_deref() {
-        lines.extend(render_wrapped_display_lines([progress_line], width));
-    }
-
-    if !spec.intro_lines.is_empty() {
-        lines.extend(render_wrapped_display_lines(&spec.intro_lines, width));
-    }
+    let mut lines = build_screen_header_lines(spec, width, color_enabled);
 
     for section in &spec.sections {
         append_section_lines(&mut lines, section, width);
     }
 
     if !spec.choices.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_choice_lines(&spec.choices, width));
+        append_spaced_lines(&mut lines, render_choice_lines(&spec.choices, width));
     }
 
     if !spec.footer_lines.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_wrapped_display_lines(&spec.footer_lines, width));
+        append_spaced_lines(
+            &mut lines,
+            render_wrapped_display_lines(&spec.footer_lines, width),
+        );
     }
 
     lines
@@ -249,8 +236,10 @@ pub fn render_tui_message_body_spec(spec: &TuiMessageSpec, width: usize) -> Vec<
     }
 
     if !spec.footer_lines.is_empty() {
-        lines.push(String::new());
-        lines.extend(render_wrapped_display_lines(&spec.footer_lines, width));
+        append_spaced_lines(
+            &mut lines,
+            render_wrapped_display_lines(&spec.footer_lines, width),
+        );
     }
 
     lines
@@ -327,6 +316,14 @@ fn render_message_heading(spec: &TuiMessageSpec) -> String {
     format!("{role}: {trimmed_caption}")
 }
 
+fn normalized_title(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn normalized_title_owned(value: Option<&str>) -> Option<String> {
+    normalized_title(value).map(str::to_owned)
+}
+
 fn build_screen_section_block(
     section: &TuiSectionSpec,
     width: usize,
@@ -336,19 +333,11 @@ fn build_screen_section_block(
             title,
             lines: content,
         } => (
-            title
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned),
+            normalized_title_owned(title.as_deref()),
             render_wrapped_display_lines(content, width),
         ),
         TuiSectionSpec::KeyValues { title, items } => (
-            title
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned),
+            normalized_title_owned(title.as_deref()),
             items
                 .iter()
                 .flat_map(|item| render_key_value_item_lines(item, width))
@@ -359,19 +348,11 @@ fn build_screen_section_block(
             inline_title_when_wide,
             items,
         } => (
-            title
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned),
+            normalized_title_owned(title.as_deref()),
             render_action_group_lines(None, *inline_title_when_wide, items, width),
         ),
         TuiSectionSpec::Checklist { title, items } => (
-            title
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned),
+            normalized_title_owned(title.as_deref()),
             render_checklist_lines(None, items, width),
         ),
         TuiSectionSpec::Callout {
@@ -379,16 +360,7 @@ fn build_screen_section_block(
             title,
             lines: content,
         } => (
-            Some(
-                match title
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    Some(title) => format!("{}: {title}", tone_label(*tone)),
-                    None => tone_label(*tone).to_owned(),
-                },
-            ),
+            Some(callout_heading(*tone, title.as_deref())),
             render_wrapped_display_lines(content, width),
         ),
         TuiSectionSpec::Preformatted {
@@ -396,26 +368,8 @@ fn build_screen_section_block(
             language,
             lines: content,
         } => (
-            build_preformatted_heading(
-                title
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty()),
-                language
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty()),
-            ),
-            content
-                .iter()
-                .map(|line| {
-                    if line.is_empty() {
-                        String::new()
-                    } else {
-                        format!("    {line}")
-                    }
-                })
-                .collect(),
+            build_preformatted_heading(title.as_deref(), language.as_deref()),
+            render_indented_preformatted_content(content),
         ),
     }
 }
@@ -427,7 +381,7 @@ fn append_section_lines(lines: &mut Vec<String>, section: &TuiSectionSpec, width
             lines: content,
         } => {
             let mut rendered = Vec::new();
-            if let Some(title) = title.as_deref().filter(|title| !title.trim().is_empty()) {
+            if let Some(title) = normalized_title(title.as_deref()) {
                 rendered.push(title.to_owned());
             }
             rendered.extend(render_wrapped_display_lines(content, width));
@@ -435,7 +389,7 @@ fn append_section_lines(lines: &mut Vec<String>, section: &TuiSectionSpec, width
         }
         TuiSectionSpec::KeyValues { title, items } => {
             let mut rendered = Vec::new();
-            if let Some(title) = title.as_deref().filter(|title| !title.trim().is_empty()) {
+            if let Some(title) = normalized_title(title.as_deref()) {
                 rendered.push(title.to_owned());
             }
             for item in items {
@@ -463,6 +417,10 @@ fn append_section_lines(lines: &mut Vec<String>, section: &TuiSectionSpec, width
         } => render_preformatted_lines(title.as_deref(), language.as_deref(), content),
     };
 
+    append_spaced_lines(lines, section_lines);
+}
+
+fn append_spaced_lines(lines: &mut Vec<String>, section_lines: Vec<String>) {
     if section_lines.is_empty() {
         return;
     }
@@ -489,7 +447,7 @@ fn render_action_group_lines(
     items: &[TuiActionSpec],
     width: usize,
 ) -> Vec<String> {
-    let title = title.map(str::trim).filter(|value| !value.is_empty());
+    let title = normalized_title(title);
 
     if inline_title_when_wide
         && width >= INLINE_ACTION_GROUP_WIDTH
@@ -525,7 +483,7 @@ fn render_checklist_lines(
     width: usize,
 ) -> Vec<String> {
     let mut rendered = Vec::new();
-    if let Some(title) = title.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(title) = normalized_title(title) {
         rendered.push(title.to_owned());
     }
 
@@ -590,18 +548,20 @@ fn render_callout_lines(
     lines: &[String],
     width: usize,
 ) -> Vec<String> {
-    let heading = match title.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(title) => format!("{}: {title}", tone_label(tone)),
-        None => tone_label(tone).to_owned(),
-    };
-
-    let mut rendered = vec![heading];
+    let mut rendered = vec![callout_heading(tone, title)];
     for line in lines {
         rendered.extend(crate::presentation::render_wrapped_text_line(
             "- ", line, width,
         ));
     }
     rendered
+}
+
+fn callout_heading(tone: TuiCalloutTone, title: Option<&str>) -> String {
+    match normalized_title(title) {
+        Some(title) => format!("{}: {title}", tone_label(tone)),
+        None => tone_label(tone).to_owned(),
+    }
 }
 
 fn tone_label(tone: TuiCalloutTone) -> &'static str {
@@ -617,11 +577,9 @@ fn render_preformatted_lines(
     language: Option<&str>,
     lines: &[String],
 ) -> Vec<String> {
-    let trimmed_title = title.map(str::trim).filter(|value| !value.is_empty());
-    let trimmed_language = language.map(str::trim).filter(|value| !value.is_empty());
     let mut rendered = Vec::new();
 
-    if let Some(heading) = build_preformatted_heading(trimmed_title, trimmed_language) {
+    if let Some(heading) = build_preformatted_heading(title, language) {
         rendered.push(heading);
     }
 
@@ -630,24 +588,34 @@ fn render_preformatted_lines(
         return rendered;
     }
 
-    for line in lines {
-        if line.is_empty() {
-            rendered.push(String::new());
-            continue;
-        }
-        rendered.push(format!("    {line}"));
-    }
+    rendered.extend(render_indented_preformatted_content(lines));
 
     rendered
 }
 
 fn build_preformatted_heading(title: Option<&str>, language: Option<&str>) -> Option<String> {
+    let title = normalized_title(title);
+    let language = normalized_title(language);
+
     match (title, language) {
         (Some(title), Some(language)) => Some(format!("{title} [{language}]")),
         (Some(title), None) => Some(title.to_owned()),
         (None, Some(language)) => Some(format!("code [{language}]")),
         (None, None) => Some("code".to_owned()),
     }
+}
+
+fn render_indented_preformatted_content(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("    {line}")
+            }
+        })
+        .collect()
 }
 
 fn render_wrapped_display_lines<I, S>(display_lines: I, width: usize) -> Vec<String>
@@ -870,6 +838,39 @@ mod tests {
                 .iter()
                 .any(|line| line == "press Enter to use default 1, continue"),
             "footer guidance should remain visible after structured sections: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn legacy_section_renderer_trims_section_titles() {
+        let spec = TuiMessageSpec {
+            role: "assistant".to_owned(),
+            caption: None,
+            sections: vec![
+                TuiSectionSpec::Narrative {
+                    title: Some("  plan  ".to_owned()),
+                    lines: vec!["inspect current config".to_owned()],
+                },
+                TuiSectionSpec::KeyValues {
+                    title: Some("  metadata  ".to_owned()),
+                    items: vec![TuiKeyValueSpec::Plain {
+                        key: "provider".to_owned(),
+                        value: "openai".to_owned(),
+                    }],
+                },
+            ],
+            footer_lines: Vec::new(),
+        };
+
+        let lines = render_tui_message_body_spec(&spec, 80);
+
+        assert!(lines.iter().any(|line| line == "plan"), "{lines:#?}");
+        assert!(lines.iter().any(|line| line == "metadata"), "{lines:#?}");
+        assert!(
+            lines
+                .iter()
+                .all(|line| line != "  plan  " && line != "  metadata  "),
+            "{lines:#?}"
         );
     }
 
