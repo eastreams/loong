@@ -5,7 +5,7 @@ pub struct RenderSectionHeights {
     spacer: u16,
     pending: u16,
     composer_separator: u16,
-    comsposer: u16,
+    composer: u16,
     palette_separator: u16,
     palette: u16,
     footer_separator: u16,
@@ -20,7 +20,7 @@ impl RenderSectionHeights {
             self.spacer,
             self.pending,
             self.composer_separator,
-            self.comsposer,
+            self.composer,
             self.palette_separator,
             self.palette,
             self.footer_separator,
@@ -86,6 +86,29 @@ impl RenderSections {
             footer_bottom_spacing,
         })
     }
+}
+
+const COMPOSER_SEPARATOR_HEIGHT: u16 = 1;
+const PALETTE_SEPARATOR_HEIGHT: u16 = 1;
+const FOOTER_SEPARATOR_HEIGHT: u16 = 1;
+const FOOTER_HEIGHT: u16 = 1;
+
+fn palette_band_height(palette_height: u16) -> u16 {
+    if palette_height > 0 {
+        PALETTE_SEPARATOR_HEIGHT + palette_height
+    } else {
+        0
+    }
+}
+
+fn bottom_band_height(interstitial_height: u16, composer_height: u16, palette_height: u16) -> u16 {
+    interstitial_height
+        + COMPOSER_SEPARATOR_HEIGHT
+        + composer_height
+        + palette_band_height(palette_height)
+        + FOOTER_SEPARATOR_HEIGHT
+        + FOOTER_HEIGHT
+        + FOOTER_BOTTOM_BREATHING_HEIGHT
 }
 
 impl App {
@@ -186,19 +209,9 @@ impl App {
                 size.width,
                 provisional_assistant_text.as_deref(),
             ) as u16;
-        // TODO: translate magic numbers
-        let bottom_band_height = interstitial_height
-            + 1
-            + composer_height
-            + if palette_height > 0 {
-                1 + palette_height
-            } else {
-                0
-            }
-            + 1
-            + 1
-            + FOOTER_BOTTOM_BREATHING_HEIGHT;
-        let available_transcript_height = size.height.saturating_sub(bottom_band_height).max(1);
+        let reserved_bottom_height =
+            bottom_band_height(interstitial_height, composer_height, palette_height);
+        let available_transcript_height = size.height.saturating_sub(reserved_bottom_height).max(1);
         let transcript_height = if self.message_list.messages.is_empty() {
             0
         } else {
@@ -209,12 +222,16 @@ impl App {
             transcript: transcript_height,
             spacer: 0,
             pending: interstitial_height,
-            composer_separator: 1,
-            comsposer: composer_height,
-            palette_separator: if palette_height > 0 { 1 } else { 0 },
+            composer_separator: COMPOSER_SEPARATOR_HEIGHT,
+            composer: composer_height,
+            palette_separator: if palette_height > 0 {
+                PALETTE_SEPARATOR_HEIGHT
+            } else {
+                0
+            },
             palette: palette_height,
-            footer_separator: 1,
-            footer: 1,
+            footer_separator: FOOTER_SEPARATOR_HEIGHT,
+            footer: FOOTER_HEIGHT,
             footer_bottom_spacing: FOOTER_BOTTOM_BREATHING_HEIGHT,
         }
     }
@@ -550,5 +567,16 @@ impl App {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bottom_band_height_includes_palette_separator_only_when_palette_is_visible() {
+        assert_eq!(bottom_band_height(3, 4, 0), 11);
+        assert_eq!(bottom_band_height(3, 4, 5), 17);
     }
 }
