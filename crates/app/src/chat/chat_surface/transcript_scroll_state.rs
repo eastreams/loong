@@ -23,17 +23,13 @@ impl TranscriptScrollState {
     }
 
     pub(crate) fn reset(&mut self) {
-        self.offset_from_bottom = 0;
         self.last_scroll_start = 0;
-        self.follow_tail = true;
-        self.snap_on_next_render = true;
+        self.reset_to_tail(true);
     }
 
     pub(crate) fn reset_for_empty_render(&mut self) {
-        self.offset_from_bottom = 0;
         self.last_scroll_start = 0;
-        self.follow_tail = true;
-        self.snap_on_next_render = false;
+        self.reset_to_tail(false);
     }
 
     pub(crate) fn note_cache_invalidated(&mut self) {
@@ -80,8 +76,7 @@ impl TranscriptScrollState {
 
     #[cfg(test)]
     pub(crate) fn set_scroll_offset_for_test(&mut self, value: u16) {
-        self.offset_from_bottom = value;
-        self.follow_tail = value == 0;
+        self.set_offset_from_bottom(value);
     }
 
     #[cfg(test)]
@@ -95,39 +90,43 @@ impl TranscriptScrollState {
     }
 
     pub(crate) fn scroll_line_up(&mut self) {
-        self.offset_from_bottom = self.offset_from_bottom.saturating_add(1);
-        self.follow_tail = self.offset_from_bottom == 0;
-        self.snap_on_next_render = true;
+        self.apply_user_scroll_offset(self.offset_from_bottom.saturating_add(1));
     }
 
     pub(crate) fn scroll_line_down(&mut self) {
-        self.offset_from_bottom = self.offset_from_bottom.saturating_sub(1);
-        self.follow_tail = self.offset_from_bottom == 0;
-        self.snap_on_next_render = true;
+        self.apply_user_scroll_offset(self.offset_from_bottom.saturating_sub(1));
     }
 
     pub(crate) fn scroll_page_up(&mut self, step: u16) {
-        self.offset_from_bottom = self.offset_from_bottom.saturating_add(step);
-        self.follow_tail = self.offset_from_bottom == 0;
-        self.snap_on_next_render = true;
+        self.apply_user_scroll_offset(self.offset_from_bottom.saturating_add(step));
     }
 
     pub(crate) fn scroll_page_down(&mut self, step: u16) {
-        self.offset_from_bottom = self.offset_from_bottom.saturating_sub(step);
-        self.follow_tail = self.offset_from_bottom == 0;
-        self.snap_on_next_render = true;
+        self.apply_user_scroll_offset(self.offset_from_bottom.saturating_sub(step));
     }
 
     pub(crate) fn jump_home(&mut self) {
-        self.offset_from_bottom = u16::MAX;
-        self.follow_tail = false;
-        self.snap_on_next_render = true;
+        self.apply_user_scroll_offset(u16::MAX);
     }
 
     pub(crate) fn jump_end(&mut self) {
+        self.reset_to_tail(true);
+    }
+
+    fn reset_to_tail(&mut self, snap_on_next_render: bool) {
         self.offset_from_bottom = 0;
         self.follow_tail = true;
+        self.snap_on_next_render = snap_on_next_render;
+    }
+
+    fn apply_user_scroll_offset(&mut self, offset_from_bottom: u16) {
+        self.set_offset_from_bottom(offset_from_bottom);
         self.snap_on_next_render = true;
+    }
+
+    fn set_offset_from_bottom(&mut self, offset_from_bottom: u16) {
+        self.offset_from_bottom = offset_from_bottom;
+        self.follow_tail = offset_from_bottom == 0;
     }
 }
 
@@ -162,5 +161,32 @@ mod tests {
         state.apply_rendered_scroll_start(10, 10);
         assert_eq!(state.scroll_offset(), 0);
         assert!(state.follow_tail());
+    }
+
+    #[test]
+    fn prepare_for_appended_content_preserves_tail_following_state() {
+        let mut state = TranscriptScrollState::new();
+        state.apply_rendered_scroll_start(20, 12);
+        assert_eq!(state.scroll_offset(), 8);
+        assert!(!state.follow_tail());
+        assert!(!state.snap_on_next_render());
+
+        state.prepare_for_appended_content();
+
+        assert_eq!(state.scroll_offset(), 0);
+        assert!(!state.follow_tail());
+        assert!(!state.snap_on_next_render());
+
+        let mut state = TranscriptScrollState::new();
+        state.scroll_page_up(4);
+        assert_eq!(state.scroll_offset(), 4);
+        assert!(!state.follow_tail());
+        assert!(state.snap_on_next_render());
+
+        state.prepare_for_appended_content();
+
+        assert_eq!(state.scroll_offset(), 0);
+        assert!(!state.follow_tail());
+        assert!(state.snap_on_next_render());
     }
 }
