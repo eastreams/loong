@@ -23,10 +23,12 @@ use crate::runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
     RuntimeExtensionOutcome, RuntimeExtensionRequest,
 };
+use crate::tool::{ToolAdapter, ToolContext};
 use crate::tool_v1::{
     CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
     ToolExtensionRequest,
 };
+use loong_contracts::{ToolOutcome, ToolRequest};
 
 pub struct MockEmbeddedPiHarness {
     pub seen_tasks: Mutex<Vec<String>>,
@@ -41,8 +43,11 @@ pub struct MockAcpHarness;
 pub struct MockCoreRuntime;
 pub struct MockCoreRuntimeFallback;
 pub struct MockRuntimeExtension;
+#[deprecated]
 pub struct MockCoreTool;
+#[deprecated]
 pub struct MockToolExtension;
+pub struct MockToolAdapter;
 pub struct MockCoreMemory;
 pub struct MockMemoryExtension;
 pub struct NoNetworkEgressPolicyExtension;
@@ -301,6 +306,19 @@ impl ToolExtensionAdapter for MockToolExtension {
         Ok(ToolExtensionOutcome {
             status: "ok".to_owned(),
             payload: json!({"extension":"sql-analytics","action":request.extension_action,"core_probe":core_probe.payload}),
+        })
+    }
+}
+#[async_trait]
+impl ToolAdapter for MockToolAdapter {
+    async fn execute(
+        &self,
+        _ctx: &ToolContext,
+        request: ToolRequest,
+    ) -> Result<ToolOutcome, crate::ToolPlaneError> {
+        Ok(ToolOutcome {
+            status: "ok".to_owned(),
+            payload: json!({}),
         })
     }
 }

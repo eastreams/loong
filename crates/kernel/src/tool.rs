@@ -1,4 +1,4 @@
-use loong_contracts::{SharedStr, ToolSpec};
+use loong_contracts::ToolSpec;
 pub use loong_contracts::{ToolOutcome, ToolRequest};
 
 mod tool_directory;
@@ -16,8 +16,10 @@ mod sealed {
     pub trait Sealed {}
 }
 
+impl sealed::Sealed for super::test_support::MockToolAdapter {}
+
 // TODO
-type ToolContext = ();
+pub type ToolContext = ();
 
 #[async_trait]
 pub trait ToolAdapter: Send + Sync + Sealed {
@@ -35,8 +37,8 @@ pub struct Tool {
 
 #[derive(Default)]
 pub struct ToolPlane {
-    tools: BTreeMap<SharedStr, Tool>,
-    default_adapter: Option<SharedStr>,
+    tools: BTreeMap<Box<str>, Tool>,
+    default_adapter: Option<Box<str>>,
 }
 
 impl ToolPlane {
@@ -61,7 +63,11 @@ impl ToolPlane {
         self.tools.insert(spec.name.clone(), Tool { spec, adapter });
     }
 
-    pub fn set_default_core_adapter(&mut self, name: SharedStr) -> Result<(), ToolPlaneError> {
+    pub fn set_default_core_adapter(
+        &mut self,
+        name: impl Into<Box<str>>,
+    ) -> Result<(), ToolPlaneError> {
+        let name = name.into();
         if !self.tools.contains_key(&name) {
             return Err(ToolPlaneError::CoreAdapterNotFound((*name).to_owned()));
         }

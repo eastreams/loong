@@ -3,7 +3,7 @@ use std::borrow::{Borrow, Cow};
 use std::ops::Deref;
 use std::sync::Arc;
 
-/// An ergonomic type for str sharing
+/// An ergonomic type for str sharing betweem threads
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SharedStr(pub Arc<Cow<'static, str>>);
 
