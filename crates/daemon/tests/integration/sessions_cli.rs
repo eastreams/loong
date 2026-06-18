@@ -1,5 +1,7 @@
 use super::*;
 
+const TEST_RENDER_WIDTH: usize = 240;
+
 fn create_delegate_session(
     repo: &mvp::session::repository::SessionRepository,
     parent_session_id: &str,
@@ -226,8 +228,11 @@ async fn execute_sessions_command_list_returns_visible_sessions_with_workflow_me
         "advisory_only"
     );
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions list");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions list");
     assert!(
         rendered.contains("task=research release readiness"),
         "list render should surface workflow task: {rendered}"
@@ -519,8 +524,11 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "expected events recipe in {recipe_values:?}"
     );
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions status");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions status");
     assert!(
         rendered.contains("workflow_id: ops-root"),
         "status render should surface workflow id: {rendered}"
@@ -637,8 +645,11 @@ async fn execute_sessions_command_heal_plans_overdue_session_recovery() {
     );
     assert_eq!(execution.payload["plan"]["actions"][0]["can_apply"], true);
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions heal plan");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions heal plan");
     assert!(
         rendered.contains("recommended_action: tool=session_recover"),
         "heal render should surface recommended action: {rendered}"
@@ -706,8 +717,11 @@ async fn execute_sessions_command_heal_apply_runs_session_recover() {
         "present"
     );
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions heal apply");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions heal apply");
     assert!(
         rendered.contains("applied actions"),
         "heal apply render should surface applied actions: {rendered}"
@@ -775,8 +789,11 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     let next_after_id = events_execution.payload["next_after_id"]
         .as_i64()
         .expect("next_after_id");
-    let rendered_events = loong_daemon::sessions_cli::render_sessions_cli_text(&events_execution)
-        .expect("render sessions events");
+    let rendered_events = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &events_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions events");
 
     assert_eq!(events_execution.payload["command"], "events");
     assert_eq!(events_execution.payload["session_id"], "delegate:session-1");
@@ -804,8 +821,11 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     .await
     .expect("sessions history should succeed");
 
-    let rendered_history = loong_daemon::sessions_cli::render_sessions_cli_text(&history_execution)
-        .expect("render sessions history");
+    let rendered_history = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &history_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions history");
 
     assert_eq!(history_execution.payload["command"], "history");
     assert_eq!(
@@ -834,8 +854,11 @@ async fn execute_sessions_command_events_history_and_wait_surface_incremental_pa
     .await
     .expect("sessions wait should succeed");
 
-    let rendered_wait = loong_daemon::sessions_cli::render_sessions_cli_text(&wait_execution)
-        .expect("render sessions wait");
+    let rendered_wait = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &wait_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions wait");
 
     assert_eq!(wait_execution.payload["command"], "wait");
     assert_eq!(wait_execution.payload["session_id"], "delegate:session-1");
@@ -878,8 +901,11 @@ async fn execute_sessions_tree_commands_surface_head_modes_paths_and_artifacts()
 
     assert_eq!(fork_execution.payload["command"], "fork-head");
     assert_eq!(fork_execution.payload["detail"]["head"]["mode"], "live");
-    let rendered_fork = loong_daemon::sessions_cli::render_sessions_cli_text(&fork_execution)
-        .expect("render fork head");
+    let rendered_fork = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &fork_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render fork head");
     assert!(
         rendered_fork.contains("head: thread/alpha -> session-turn:ops-root:1 mode=live"),
         "fork render should expose head mode: {rendered_fork}"
@@ -932,8 +958,11 @@ async fn execute_sessions_tree_commands_surface_head_modes_paths_and_artifacts()
         heads_execution.payload["detail"]["heads"][1]["mode"],
         "pinned"
     );
-    let rendered_heads = loong_daemon::sessions_cli::render_sessions_cli_text(&heads_execution)
-        .expect("render heads");
+    let rendered_heads = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &heads_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render heads");
     assert!(
         rendered_heads.contains("thread/alpha -> session-turn:ops-root:1 mode=pinned"),
         "heads render should expose pinned mode: {rendered_heads}"
@@ -984,9 +1013,11 @@ async fn execute_sessions_tree_commands_surface_head_modes_paths_and_artifacts()
         checkpoint_execution.payload["detail"]["head"]["mode"],
         "pinned"
     );
-    let rendered_checkpoint =
-        loong_daemon::sessions_cli::render_sessions_cli_text(&checkpoint_execution)
-            .expect("render checkpoint");
+    let rendered_checkpoint = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &checkpoint_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render checkpoint");
     assert!(
         rendered_checkpoint.contains("head: checkpoint/draft-a"),
         "checkpoint render should include checkpoint head: {rendered_checkpoint}"
@@ -1077,8 +1108,11 @@ async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
     .await
     .expect("sessions cancel dry run should succeed");
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions cancel");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions cancel");
 
     assert_eq!(execution.payload["command"], "cancel");
     assert_eq!(execution.payload["dry_run"], true);
@@ -1133,8 +1167,11 @@ async fn execute_sessions_command_recover_dry_run_surfaces_non_recoverable_resul
     .await
     .expect("sessions recover dry run should succeed");
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions recover");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions recover");
 
     assert_eq!(execution.payload["command"], "recover");
     assert_eq!(execution.payload["dry_run"], true);
@@ -1201,8 +1238,11 @@ async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
     .await
     .expect("sessions archive dry run should succeed");
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions archive");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions archive");
 
     assert_eq!(execution.payload["command"], "archive");
     assert_eq!(execution.payload["dry_run"], true);
@@ -1262,8 +1302,11 @@ fn render_sessions_status_text_escapes_control_characters() {
         }),
     };
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions status");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions status");
 
     assert!(
         !rendered.contains('\u{1b}'),
@@ -1301,8 +1344,11 @@ fn render_sessions_history_text_escapes_control_characters() {
         }),
     };
 
-    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text(&execution)
-        .expect("render sessions history");
+    let rendered = loong_daemon::sessions_cli::render_sessions_cli_text_with_width(
+        &execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render sessions history");
 
     assert!(
         !rendered.contains('\u{1b}'),

@@ -104,13 +104,14 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
                         inner_request.payload,
                         self.ingress,
                     );
-                    (
-                        crate::tools::normalize_shell_payload_for_request(
-                            resolved_tool.canonical_name,
-                            injected.payload,
-                        ),
-                        injected.trusted_internal_context,
-                    )
+                    #[cfg(feature = "tool-shell")]
+                    let payload = crate::tools::normalize_shell_payload_for_request(
+                        resolved_tool.canonical_name,
+                        injected.payload,
+                    );
+                    #[cfg(not(feature = "tool-shell"))]
+                    let payload = injected.payload;
+                    (payload, injected.trusted_internal_context)
                 }
                 Err(reason) => {
                     let turn_result = if reason.starts_with("invalid_tool_lease:") {
@@ -153,13 +154,14 @@ impl<'a, 'b, D: AppToolDispatcher + ?Sized> ToolIntentPreparationHarness<'a, 'b,
                     intent.args_json.clone(),
                     self.ingress,
                 );
-                (
-                    crate::tools::normalize_shell_payload_for_request(
-                        resolved_tool.canonical_name,
-                        injected.payload,
-                    ),
-                    injected.trusted_internal_context,
-                )
+                #[cfg(feature = "tool-shell")]
+                let payload = crate::tools::normalize_shell_payload_for_request(
+                    resolved_tool.canonical_name,
+                    injected.payload,
+                );
+                #[cfg(not(feature = "tool-shell"))]
+                let payload = injected.payload;
+                (payload, injected.trusted_internal_context)
             }
         };
         let injected_payload_uses_reserved_internal_context =

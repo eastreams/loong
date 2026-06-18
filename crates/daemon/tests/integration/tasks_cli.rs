@@ -1,6 +1,8 @@
 #![allow(unsafe_code)]
 
 use super::*;
+
+const TEST_RENDER_WIDTH: usize = 240;
 use loong_app::tools::runtime_config::{
     SKILLS_ALLOWED_DOMAINS_ENV, SKILLS_AUTO_EXPOSE_INSTALLED_ENV, SKILLS_BLOCKED_DOMAINS_ENV,
     SKILLS_ENABLED_ENV, SKILLS_INSTALL_ROOT_ENV, SKILLS_REQUIRE_DOWNLOAD_APPROVAL_ENV,
@@ -551,7 +553,8 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
         "approval_pending"
     );
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks list");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render tasks list");
     assert!(
         rendered.contains("status=approval_pending"),
         "list render should surface derived task status: {rendered}"
@@ -870,7 +873,8 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
     );
 
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks status");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render tasks status");
     assert!(
         rendered.contains("approval_requests: 1"),
         "status render should surface approval count: {rendered}"
@@ -1033,7 +1037,8 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
         3
     );
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks create");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render tasks create");
     let expected_status_line = format!("task_status: {task_status}");
     let expected_next_action_line = format!("task_next_action: {task_next_action}");
     assert!(
@@ -1066,7 +1071,8 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
     );
 
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks create");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render tasks create");
     assert!(
         rendered.contains("owner_kind: background_task_host"),
         "tasks create render should surface owner kind: {rendered}"
@@ -1100,7 +1106,8 @@ async fn execute_tasks_command_create_returns_queued_outcome_when_task_hydration
         .as_str()
         .expect("queued task id");
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks create");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render tasks create");
 
     assert_eq!(execution.payload["command"], "create");
     assert_eq!(execution.payload["task"]["task_id"], queued_task_id);
@@ -1368,8 +1375,11 @@ async fn execute_tasks_command_events_and_wait_surface_incremental_payloads() {
         wait_execution.payload["task"]["task_status"]["status"],
         "approval_pending"
     );
-    let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&wait_execution).expect("render tasks wait");
+    let rendered = loong_daemon::tasks_cli::render_tasks_cli_text_with_width(
+        &wait_execution,
+        TEST_RENDER_WIDTH,
+    )
+    .expect("render tasks wait");
     assert!(
         rendered.contains("task_status: approval_pending"),
         "wait render should surface derived task status: {rendered}"
@@ -1427,7 +1437,8 @@ fn render_tasks_status_text_escapes_control_characters() {
     };
 
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render tasks");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render tasks");
 
     assert!(
         !rendered.contains('\u{1b}'),
@@ -1487,7 +1498,8 @@ fn render_tasks_events_text_escapes_control_characters() {
     };
 
     let rendered =
-        loong_daemon::tasks_cli::render_tasks_cli_text(&execution).expect("render events");
+        loong_daemon::tasks_cli::render_tasks_cli_text_with_width(&execution, TEST_RENDER_WIDTH)
+            .expect("render events");
 
     assert!(
         !rendered.contains('\u{1b}'),

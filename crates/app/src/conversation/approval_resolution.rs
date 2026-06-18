@@ -125,10 +125,12 @@ where
                 trusted_internal_context: false,
             }),
             ToolExecutionKind::Core => {
-                let canonical_tool_name = crate::tools::canonical_tool_name(tool_name);
                 #[cfg(feature = "tool-shell")]
-                if canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME {
-                    return self.replay_shell_request(approval_request, tool_name, &payload);
+                {
+                    let canonical_tool_name = crate::tools::canonical_tool_name(tool_name);
+                    if canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME {
+                        return self.replay_shell_request(approval_request, tool_name, &payload);
+                    }
                 }
 
                 Ok(ApprovalReplayRequest {

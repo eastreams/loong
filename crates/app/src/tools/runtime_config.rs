@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "tool-shell")]
 use super::bash;
+#[cfg(feature = "tool-shell")]
 use super::shell_policy_ext::ShellPolicyDefault;
 
 use crate::config::{AutonomyProfile, LoongConfig};
@@ -117,6 +118,7 @@ impl BashExecRuntimePolicy {
     }
 }
 
+#[cfg(feature = "tool-shell")]
 #[allow(clippy::print_stderr)]
 fn emit_runtime_warning(warning: &str) {
     eprintln!("warning: {warning}");
@@ -676,10 +678,13 @@ impl ToolRuntimeConfig {
         let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
             .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
         let config_path = std::env::var("LOONG_CONFIG_PATH").ok().map(PathBuf::from);
+
+        #[cfg(feature = "tool-shell")]
         let shell_allow: BTreeSet<String> = crate::config::DEFAULT_SHELL_ALLOW
             .iter()
             .map(|value| (*value).to_owned())
             .collect();
+        #[cfg(feature = "tool-shell")]
         let shell_deny = BTreeSet::new();
         let sessions_enabled = parse_env_bool("LOONG_TOOL_SESSIONS_ENABLED").unwrap_or(true);
         let sessions_allow_mutation =
@@ -1872,6 +1877,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "tool-shell")]
     fn from_env_defaults_to_empty_allowlist() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);

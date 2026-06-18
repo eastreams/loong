@@ -1,4 +1,6 @@
-use crate::config::{GovernedToolApprovalMode, LoongConfig};
+#[cfg(feature = "tool-shell")]
+use crate::config::GovernedToolApprovalMode;
+use crate::config::LoongConfig;
 
 use super::runtime_config::SkillsRuntimePolicy;
 use super::runtime_config::{ToolRuntimeConfig, WebFetchRuntimePolicy};

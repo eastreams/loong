@@ -33,6 +33,7 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tool-shell")]
     use std::collections::BTreeSet;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

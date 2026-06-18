@@ -1,11 +1,9 @@
 use super::*;
+use crate::control_plane_device_auth::{control_plane_device_signature_message, current_time_ms};
 use base64::Engine as _;
 use futures_util::StreamExt;
 use loong_contracts::SecretRef;
 use loong_protocol::ControlPlanePairingStatus;
-use crate::control_plane_device_auth::{
-    control_plane_device_signature_message, current_time_ms,
-};
 
 fn build_control_plane_router(manager: Arc<mvp::control_plane::ControlPlaneManager>) -> Router {
     super::build_control_plane_router(manager).expect("router")
@@ -243,13 +241,14 @@ fn seeded_turn_runtime(
         }
     })
     .expect("register control-plane turn backend");
-    let config = turn_runtime_test_config(backend_id);
+    let mut config = turn_runtime_test_config(backend_id);
     let temp_root = std::env::temp_dir().join(format!(
         "loong-control-plane-turn-runtime-{}-{}",
         backend_id,
         current_time_ms()
     ));
     std::fs::create_dir_all(&temp_root).expect("create control-plane turn runtime temp root");
+    config.memory.sqlite_path = temp_root.join("memory.sqlite3").display().to_string();
     let resolved_path = temp_root.join("config.toml");
     mvp::config::write(
         Some(resolved_path.to_str().expect("utf8 config path")),

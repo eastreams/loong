@@ -190,6 +190,7 @@ pub(super) fn build_provider_turn_tool_terminal_events(
 }
 
 #[cfg(test)]
+#[cfg(feature = "tool-shell")]
 pub(super) fn summarize_tool_event_request(intent: &ToolIntent) -> Option<String> {
     summarize_single_tool_followup_request(intent)
 }

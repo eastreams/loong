@@ -1,11 +1,14 @@
+#[cfg(feature = "tool-shell")]
 use crate::context::bootstrap_test_kernel_context;
 use std::fs;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
-use crate::config::{AutonomyProfile, GovernedToolApprovalMode, ToolConfig};
+#[cfg(feature = "tool-shell")]
+use crate::config::GovernedToolApprovalMode;
+use crate::config::{AutonomyProfile, ToolConfig};
 use crate::session::repository::{
     ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord, SessionKind,
     SessionRepository, SessionState,
@@ -169,6 +172,7 @@ fn validate_turn_in_context_allows_internal_approval_control_resolve_tool() {
     assert_eq!(validation, TurnValidation::ToolExecutionRequired);
 }
 
+#[cfg(feature = "tool-shell")]
 #[test]
 fn prepare_tool_intent_uses_direct_shell_metadata_for_provider_shell_requests() {
     use crate::test_support::TurnTestHarness;
@@ -275,6 +279,7 @@ fn skills_policy_get_turn(session_id: &str, turn_id: &str, tool_call_id: &str) -
     }
 }
 
+#[cfg(feature = "tool-shell")]
 fn discovered_shell_exec_turn(session_id: &str, turn_id: &str, tool_call_id: &str) -> ProviderTurn {
     let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
         "shell.exec",
@@ -969,6 +974,7 @@ async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting
     assert!(requests.is_empty());
 }
 
+#[cfg(feature = "tool-shell")]
 #[tokio::test]
 async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec() {
     let memory_config = isolated_memory_config("persist-shell");
@@ -1043,6 +1049,7 @@ async fn governed_tool_approval_request_is_persisted_for_discovered_shell_exec()
     );
 }
 
+#[cfg(feature = "tool-shell")]
 #[tokio::test]
 async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked_call() {
     let memory_config = isolated_memory_config("reuse-shell");

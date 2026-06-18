@@ -1,6 +1,9 @@
 use super::*;
+#[cfg(feature = "tool-shell")]
 use loong_contracts::Capability;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(feature = "tool-shell")]
+use std::collections::BTreeSet;
 use std::sync::mpsc;
 use std::time::Duration;
 

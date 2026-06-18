@@ -96,6 +96,7 @@ impl ToolTestRuntimeConfig {
 pub fn test_tool_runtime_config(root: impl AsRef<std::path::Path>) -> ToolTestRuntimeConfig {
     let runtime_home = ScopedLoongHome::new("loong-tool-runtime-home");
     let config = runtime_config::ToolRuntimeConfig {
+        #[cfg(feature = "tool-shell")]
         shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
         file_root: Some(root.as_ref().to_path_buf()),
         messages_enabled: true,

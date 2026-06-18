@@ -1536,30 +1536,36 @@ fn required_string_field(value: &Value, field: &str, context: &str) -> CliResult
 }
 
 pub fn render_sessions_cli_text(execution: &SessionsCommandExecution) -> CliResult<String> {
+    render_sessions_cli_text_with_width(execution, mvp::presentation::detect_render_width())
+}
+
+pub fn render_sessions_cli_text_with_width(
+    execution: &SessionsCommandExecution,
+    render_width: usize,
+) -> CliResult<String> {
     let command = execution
         .payload
         .get("command")
         .and_then(Value::as_str)
         .ok_or_else(|| "sessions CLI payload missing command".to_owned())?;
 
-    let rendered = match command {
-        "list" => render_sessions_list_text(&execution.payload)?,
-        "status" => render_sessions_status_text(&execution.payload)?,
-        "heal" => render_sessions_heal_text(&execution.payload)?,
-        "events" => render_sessions_events_text(&execution.payload)?,
-        "wait" => render_sessions_wait_text(&execution.payload)?,
-        "history" => render_sessions_history_text(&execution.payload)?,
-        "heads" => render_sessions_heads_text(&execution.payload)?,
-        "path" => render_sessions_path_text(&execution.payload)?,
-        "artifacts" => render_sessions_artifacts_text(&execution.payload)?,
+    match command {
+        "list" => render_sessions_list_text(&execution.payload, render_width),
+        "status" => render_sessions_status_text(&execution.payload, render_width),
+        "heal" => render_sessions_heal_text(&execution.payload, render_width),
+        "events" => render_sessions_events_text(&execution.payload, render_width),
+        "wait" => render_sessions_wait_text(&execution.payload, render_width),
+        "history" => render_sessions_history_text(&execution.payload, render_width),
+        "heads" => render_sessions_heads_text(&execution.payload, render_width),
+        "path" => render_sessions_path_text(&execution.payload, render_width),
+        "artifacts" => render_sessions_artifacts_text(&execution.payload, render_width),
         "fork-head" | "pin-head" | "set-active-head" | "unpin-head" | "checkpoint"
-        | "branch-summary" => render_sessions_tree_mutation_text(&execution.payload)?,
-        "cancel" | "recover" | "archive" => render_sessions_mutation_text(&execution.payload)?,
-        other => {
-            return Err(format!("unknown sessions CLI render command `{other}`"));
+        | "branch-summary" => render_sessions_tree_mutation_text(&execution.payload, render_width),
+        "cancel" | "recover" | "archive" => {
+            render_sessions_mutation_text(&execution.payload, render_width)
         }
-    };
-    Ok(rendered)
+        other => Err(format!("unknown sessions CLI render command `{other}`")),
+    }
 }
 
 pub(crate) fn sanitize_terminal_text(value: &str) -> String {
@@ -1575,7 +1581,7 @@ pub(crate) fn sanitize_terminal_text(value: &str) -> String {
     sanitized
 }
 
-fn render_sessions_list_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_list_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let sessions = payload
         .get("sessions")
         .and_then(Value::as_array)
@@ -1606,6 +1612,7 @@ fn render_sessions_list_text(payload: &Value) -> CliResult<String> {
             Vec::new(),
             vec![("sessions", session_lines)],
             vec!["Use `sessions status <id>` to inspect one session in detail.".to_owned()],
+            render_width,
         ));
     }
 
@@ -1623,10 +1630,11 @@ fn render_sessions_list_text(payload: &Value) -> CliResult<String> {
             "Use `sessions status <id>` for a single session, or `sessions history <id>` for transcript turns."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_sessions_status_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_status_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let detail = payload
         .get("detail")
         .ok_or_else(|| "sessions status payload missing detail".to_owned())?;
@@ -1675,10 +1683,11 @@ fn render_sessions_status_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         sections,
         footer_lines,
+        render_width,
     ))
 }
 
-fn render_sessions_heal_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_heal_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let detail = payload
         .get("detail")
         .ok_or_else(|| "sessions heal payload missing detail".to_owned())?;
@@ -1736,6 +1745,7 @@ fn render_sessions_heal_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         sections,
         vec!["Use `sessions heal --apply` only when the surfaced actions match the desired bounded recovery path.".to_owned()],
+        render_width,
     ))
 }
 
@@ -1823,7 +1833,7 @@ fn render_session_heal_applied_lines(applied_actions: &[Value]) -> Vec<String> {
     lines
 }
 
-fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_events_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let session_id = payload
         .get("session_id")
         .and_then(Value::as_str)
@@ -1852,6 +1862,7 @@ fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
             vec![
                 "Use `sessions wait` to keep following the same session incrementally.".to_owned(),
             ],
+            render_width,
         ));
     }
 
@@ -1872,10 +1883,11 @@ fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("events", lines)],
         vec!["Use `sessions wait` for incremental follow-up or `sessions status` for the latest session state.".to_owned()],
+        render_width,
     ))
 }
 
-fn render_sessions_wait_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_wait_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let wait_status = payload
         .get("wait_status")
         .and_then(Value::as_str)
@@ -1919,10 +1931,11 @@ fn render_sessions_wait_text(payload: &Value) -> CliResult<String> {
             "Re-run `sessions wait` with the returned cursor when you need more lifecycle changes."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_history_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let session_id = payload
         .get("session_id")
         .and_then(Value::as_str)
@@ -1946,6 +1959,7 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
             Vec::new(),
             vec![("history", lines)],
             vec!["Use `sessions status` to compare transcript turns with workflow state and lifecycle metadata.".to_owned()],
+            render_width,
         ));
     }
 
@@ -1966,10 +1980,11 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("history", lines)],
         vec!["Use `sessions status` to compare transcript turns with workflow state and lifecycle metadata.".to_owned()],
+        render_width,
     ))
 }
 
-fn render_sessions_heads_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_heads_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let detail = payload
         .get("detail")
         .ok_or_else(|| "sessions heads payload missing detail".to_owned())?;
@@ -2012,10 +2027,11 @@ fn render_sessions_heads_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("heads", lines)],
         vec!["Use `sessions path <id> --head-name <name>` to inspect one branch path.".to_owned()],
+        render_width,
     ))
 }
 
-fn render_sessions_path_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_path_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let detail = payload
         .get("detail")
         .ok_or_else(|| "sessions path payload missing detail".to_owned())?;
@@ -2061,10 +2077,11 @@ fn render_sessions_path_text(payload: &Value) -> CliResult<String> {
         Vec::new(),
         vec![("path", lines)],
         vec!["Use `sessions heads <id>` to list other branches for the same session.".to_owned()],
+        render_width,
     ))
 }
 
-fn render_sessions_artifacts_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_artifacts_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let detail = payload
         .get("detail")
         .ok_or_else(|| "sessions artifacts payload missing detail".to_owned())?;
@@ -2121,10 +2138,11 @@ fn render_sessions_artifacts_text(payload: &Value) -> CliResult<String> {
             "Use `sessions status <id>` to correlate artifacts with the active tree summary."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_sessions_tree_mutation_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_tree_mutation_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let command = payload
         .get("command")
         .and_then(Value::as_str)
@@ -2203,10 +2221,11 @@ fn render_sessions_tree_mutation_text(payload: &Value) -> CliResult<String> {
             "Use `sessions status <id>` or `sessions path <id>` to inspect the updated tree."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
-fn render_sessions_mutation_text(payload: &Value) -> CliResult<String> {
+fn render_sessions_mutation_text(payload: &Value, render_width: usize) -> CliResult<String> {
     let command = payload
         .get("command")
         .and_then(Value::as_str)
@@ -2252,6 +2271,7 @@ fn render_sessions_mutation_text(payload: &Value) -> CliResult<String> {
             "Use `sessions status <id>` to confirm the current session state after the mutation."
                 .to_owned(),
         ],
+        render_width,
     ))
 }
 
@@ -2261,6 +2281,7 @@ fn render_sessions_surface(
     intro_lines: Vec<String>,
     sections: Vec<(&str, Vec<String>)>,
     footer_lines: Vec<String>,
+    render_width: usize,
 ) -> String {
     let sections = sections
         .into_iter()
@@ -2281,12 +2302,7 @@ fn render_sessions_surface(
         choices: Vec::new(),
         footer_lines,
     };
-    mvp::tui_surface::render_tui_screen_spec_ratatui(
-        &screen,
-        mvp::presentation::detect_render_width(),
-        false,
-    )
-    .join("\n")
+    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, render_width, false).join("\n")
 }
 
 fn render_session_brief_line(session: &Value) -> CliResult<String> {

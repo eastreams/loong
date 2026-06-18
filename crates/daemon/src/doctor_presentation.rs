@@ -33,6 +33,26 @@ pub(crate) fn render_doctor_text(
     config_path: &Path,
     fix_requested: bool,
 ) -> String {
+    render_doctor_text_with_width(
+        checks,
+        summary,
+        fixes,
+        next_steps,
+        config_path,
+        fix_requested,
+        mvp::presentation::detect_render_width(),
+    )
+}
+
+fn render_doctor_text_with_width(
+    checks: &[DoctorCheck],
+    summary: DoctorSummary,
+    fixes: &[String],
+    next_steps: &[String],
+    config_path: &Path,
+    fix_requested: bool,
+    render_width: usize,
+) -> String {
     let mut sections = Vec::new();
     sections.push(mvp::tui_surface::TuiSectionSpec::Callout {
         tone: if summary.fail == 0 {
@@ -111,12 +131,7 @@ pub(crate) fn render_doctor_text(
         ],
     };
 
-    mvp::tui_surface::render_tui_screen_spec_ratatui(
-        &screen,
-        mvp::presentation::detect_render_width(),
-        false,
-    )
-    .join("\n")
+    mvp::tui_surface::render_tui_screen_spec_ratatui(&screen, render_width, false).join("\n")
 }
 
 #[cfg(test)]
@@ -132,13 +147,14 @@ mod tests {
             detail: "missing".to_owned(),
         }];
         let summary = summarize_checks(&checks);
-        let rendered = render_doctor_text(
+        let rendered = render_doctor_text_with_width(
             &checks,
             summary,
             &[],
             &["Run diagnostics: loong doctor --config /tmp/loong.toml".to_owned()],
             Path::new("/tmp/loong.toml"),
             false,
+            160,
         );
 
         assert!(rendered.contains("summary"));

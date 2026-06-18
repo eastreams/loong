@@ -207,8 +207,11 @@ async fn build_doctor_security_execution(
     let audit_finding = assess_audit_retention(config);
     findings.push(audit_finding);
 
-    let shell_finding = assess_shell_execution(config, &runtime);
-    findings.push(shell_finding);
+    #[cfg(feature = "tool-shell")]
+    {
+        let shell_finding = assess_shell_execution(config, &runtime);
+        findings.push(shell_finding);
+    }
 
     let file_root_finding = assess_tool_file_root(config);
     findings.push(file_root_finding);
@@ -310,6 +313,7 @@ fn assess_audit_retention(config: &mvp::config::LoongConfig) -> SecurityFinding 
     )
 }
 
+#[cfg(feature = "tool-shell")]
 fn assess_shell_execution(
     config: &mvp::config::LoongConfig,
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
@@ -854,6 +858,7 @@ fn summarize_findings(findings: &[SecurityFinding]) -> SecurityAuditSummary {
     summary
 }
 
+#[cfg(feature = "tool-shell")]
 fn render_shell_default_mode(
     mode: mvp::tools::shell_policy_ext::ShellPolicyDefault,
 ) -> &'static str {
@@ -863,6 +868,7 @@ fn render_shell_default_mode(
     }
 }
 
+#[allow(dead_code)]
 fn render_tool_approval_mode(mode: mvp::config::GovernedToolApprovalMode) -> &'static str {
     match mode {
         mvp::config::GovernedToolApprovalMode::Disabled => "disabled",
@@ -969,6 +975,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "tool-shell")]
     #[tokio::test]
     async fn default_shell_execution_is_exposed_in_yolo_mode() {
         let path = temp_config_path("shell-covered");

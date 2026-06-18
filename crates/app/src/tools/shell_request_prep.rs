@@ -1,11 +1,5 @@
-use std::collections::BTreeSet;
-
-use loong_contracts::{Capability, ToolCoreRequest};
+use loong_contracts::ToolCoreRequest;
 use serde_json::Value;
-
-use super::tool_lease_binding::inject_tool_lease_binding;
-
-pub(crate) const TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: &str = "_granted_capabilities";
 
 pub(crate) fn normalize_shell_payload_for_request(tool_name: &str, payload: Value) -> Value {
     match super::canonical_tool_name(tool_name) {
@@ -22,50 +16,7 @@ pub(crate) fn normalize_shell_request_for_execution(
     request
 }
 
-pub fn summarize_tool_request_for_display(tool_name: &str, payload: Value) -> Value {
-    let canonical_tool_name = super::canonical_tool_name(tool_name);
-    let normalized_payload = normalize_shell_payload_for_request(canonical_tool_name, payload);
-
-    let is_shell_like_request =
-        canonical_tool_name == super::SHELL_EXEC_TOOL_NAME || canonical_tool_name == "bash.exec";
-    if !is_shell_like_request {
-        return normalized_payload;
-    }
-
-    summarize_shell_request_for_display(normalized_payload)
-}
-
-pub(crate) fn prepare_kernel_tool_request(
-    mut request: ToolCoreRequest,
-    granted_capabilities: &BTreeSet<Capability>,
-    token_id: Option<&str>,
-    session_id: Option<&str>,
-    turn_id: Option<&str>,
-) -> ToolCoreRequest {
-    request = normalize_shell_request_for_execution(request);
-    let canonical_tool_name = super::canonical_tool_name(request.tool_name.as_str());
-    if !matches!(canonical_tool_name, "tool.search" | "tool.invoke") {
-        return request;
-    }
-
-    if let Value::Object(payload) = &mut request.payload {
-        if canonical_tool_name == "tool.search" {
-            let granted_capabilities_json =
-                serde_json::to_value(granted_capabilities.iter().copied().collect::<Vec<_>>());
-            let granted_capabilities_json =
-                granted_capabilities_json.unwrap_or_else(|_| Value::Array(Vec::new()));
-            payload.insert(
-                TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD.to_owned(),
-                granted_capabilities_json,
-            );
-        }
-        inject_tool_lease_binding(payload, token_id, session_id, turn_id);
-    }
-
-    request
-}
-
-fn summarize_shell_request_for_display(request: Value) -> Value {
+pub(crate) fn summarize_shell_request_for_display(request: Value) -> Value {
     let Value::Object(request_object) = request else {
         return request;
     };
@@ -178,7 +129,7 @@ fn split_shell_command_if_safe(command: &str) -> Option<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_tool_request_for_display;
+    use super::super::tool_request_prep::summarize_tool_request_for_display;
     use serde_json::json;
 
     #[test]

@@ -288,6 +288,7 @@ pub(super) fn web_search_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+#[cfg(feature = "tool-shell")]
 pub(super) fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -324,6 +325,7 @@ pub(super) fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+#[cfg(feature = "tool-shell")]
 pub(super) fn bash_exec_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
