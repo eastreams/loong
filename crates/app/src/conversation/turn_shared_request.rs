@@ -123,5 +123,13 @@ pub(crate) fn effective_followup_request(intent: &ToolIntent) -> Value {
                 intent.args_json.clone(),
             )
         });
-    crate::tools::normalize_shell_payload_for_request(canonical_tool_name, payload)
+    #[cfg(feature = "tool-shell")]
+    {
+        crate::tools::normalize_shell_payload_for_request(canonical_tool_name, payload)
+    }
+    #[cfg(not(feature = "tool-shell"))]
+    {
+        let _ = canonical_tool_name;
+        payload
+    }
 }

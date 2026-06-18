@@ -1187,7 +1187,10 @@ mod tests {
         let backend = AcpxCliProbeBackend;
         let config = LoongConfig {
             acp: AcpConfig {
-                allow_mcp_server_injection: true,
+                // Keep the configured MCP server in the profile, but disable
+                // injection for this probe so the version-check contract does
+                // not depend on a host Node runtime.
+                allow_mcp_server_injection: false,
                 backends: AcpBackendProfilesConfig {
                     acpx: Some(AcpxBackendConfig {
                         command: Some(script_path.display().to_string()),
@@ -1241,7 +1244,7 @@ mod tests {
         );
         assert_eq!(
             report.diagnostics.get("mcp_runtime_proxy"),
-            Some(&"embedded_node_proxy".to_owned())
+            Some(&"available_but_disabled_by_policy".to_owned())
         );
 
         let _ = std::fs::remove_file(&script_path);

@@ -1772,6 +1772,7 @@ pub(super) fn resolve_safe_file_path_with_config(
     resolve_path_within_allowed_roots(&allowed_roots, &primary_root, &normalized)
 }
 
+#[allow(dead_code)]
 pub(super) fn resolve_safe_directory_path_with_config(
     raw: &str,
     config: &super::runtime_config::ToolRuntimeConfig,

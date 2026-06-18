@@ -646,6 +646,7 @@ mod tests {
         assert_eq!(issue, Some(ToolInputContractIssue::PayloadMustBeObject));
     }
 
+    #[cfg(feature = "tool-shell")]
     #[test]
     fn render_tool_input_repair_guidance_from_reason_preserves_array_type_guidance() {
         let guidance = render_tool_input_repair_guidance_from_reason(

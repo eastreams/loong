@@ -370,6 +370,10 @@ fn build_status_cli_recipes(config_path: &str) -> Vec<String> {
 }
 
 fn render_status_cli_text(status: &StatusCliReadModel) -> String {
+    render_status_cli_text_with_width(status, loong_app::presentation::detect_render_width())
+}
+
+fn render_status_cli_text_with_width(status: &StatusCliReadModel, render_width: usize) -> String {
     let gateway = &status.gateway;
     let owner = &gateway.owner;
     let control_surface = &gateway.control_surface;
@@ -823,12 +827,7 @@ fn render_status_cli_text(status: &StatusCliReadModel) -> String {
         ],
     };
 
-    loong_app::tui_surface::render_tui_screen_spec_ratatui(
-        &screen,
-        loong_app::presentation::detect_render_width(),
-        false,
-    )
-    .join("\n")
+    loong_app::tui_surface::render_tui_screen_spec_ratatui(&screen, render_width, false).join("\n")
 }
 
 fn collect_status_runtime_attention_actions(
@@ -1293,7 +1292,7 @@ mod tests {
             recipes: vec!["loong gateway status".to_owned()],
         };
 
-        let rendered = render_status_cli_text(&status);
+        let rendered = render_status_cli_text_with_width(&status, 240);
 
         assert!(rendered.contains("start here"));
         assert!(
@@ -1849,7 +1848,7 @@ mod tests {
             recipes: vec!["loong gateway status".to_owned()],
         };
 
-        let rendered = render_status_cli_text(&status);
+        let rendered = render_status_cli_text_with_width(&status, 240);
 
         assert!(rendered.contains("channel runtime attention"));
         assert!(rendered.contains("[WARN] Weixin"));

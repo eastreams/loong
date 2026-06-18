@@ -234,6 +234,7 @@ pub(super) fn tool_search_entry_is_runtime_usable(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> bool {
     match tool_name {
+        #[cfg(feature = "tool-shell")]
         "shell.exec" => {
             !config.shell_allow.is_empty()
                 || matches!(

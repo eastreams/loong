@@ -1132,8 +1132,10 @@ fn approval_request_request_summary_json(record: &ApprovalRequestRecord) -> Valu
         .and_then(|payload| payload.get("args_json"))
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let request =
-        crate::tools::summarize_tool_request_for_display(record.tool_name.as_str(), raw_request);
+    let request = crate::tools::tool_request_prep::summarize_tool_request_for_display(
+        record.tool_name.as_str(),
+        raw_request,
+    );
 
     json!({
         "tool": visible_tool_name,
@@ -1759,7 +1761,7 @@ mod tests {
         assert_eq!(request["attention"]["sources"], json!(["execution"]));
     }
 
-    #[cfg(feature = "memory-sqlite")]
+    #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
     #[test]
     fn approval_request_status_surfaces_visible_direct_tool_name_and_sanitized_request_summary() {
         let config = isolated_memory_config("approval-query-status-visible-direct-tool");

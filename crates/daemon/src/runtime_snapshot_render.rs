@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::runtime_snapshot_compaction_presentation::{
     build_compaction_hygiene_json, render_runtime_snapshot_compaction_lines,
@@ -32,6 +32,13 @@ fn channel_service_contract_model_text(channel_id: &str) -> &'static str {
 }
 
 pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
+    render_runtime_snapshot_text_with_width(snapshot, mvp::presentation::detect_render_width())
+}
+
+pub fn render_runtime_snapshot_text_with_width(
+    snapshot: &RuntimeSnapshotCliState,
+    render_width: usize,
+) -> String {
     let mut lines = vec![
         format!("config={}", snapshot.config),
         format!(
@@ -294,6 +301,7 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         ));
         push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
     }
+    #[cfg(feature = "tool-shell")]
     lines.push(format!(
         "tool_runtime shell_default={} shell_allow={} shell_deny={} sessions_enabled={} messages_enabled={} delegate_enabled={}",
         shell_policy_default_str(snapshot.tool_runtime.shell_default_mode),
@@ -427,12 +435,13 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
             snapshot.capability_snapshot.clone(),
         ])
         .collect::<Vec<_>>();
-    crate::render_operator_shell_surface(
+    crate::render_operator_shell_surface_with_width(
         "runtime snapshot",
         "operator runtime snapshot",
         Vec::new(),
         body_lines,
         Vec::new(),
+        render_width,
     )
 }
 
@@ -674,27 +683,44 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
     runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
     tool_access: &crate::RuntimeToolAccessSummary,
 ) -> Value {
-    json!({
-        "file_root": runtime
-            .file_root
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        "shell": {
+    let mut object = Map::new();
+
+    object.insert(
+        "file_root".into(),
+        json!(
+            runtime
+                .file_root
+                .as_ref()
+                .map(|path| path.display().to_string())
+        ),
+    );
+
+    #[cfg(feature = "tool-shell")]
+    object.insert(
+        "shell".into(),
+        json!({
             "default_mode": shell_policy_default_str(runtime.shell_default_mode),
             "allow": runtime.shell_allow.iter().collect::<Vec<_>>(),
             "deny": runtime.shell_deny.iter().collect::<Vec<_>>(),
-        },
-        "sessions_enabled": runtime.sessions_enabled,
-        "messages_enabled": runtime.messages_enabled,
-        "delegate_enabled": runtime.delegate_enabled,
-        "browser": {
+        }),
+    );
+
+    object.insert("sessions_enabled".into(), json!(runtime.sessions_enabled));
+    object.insert("messages_enabled".into(), json!(runtime.messages_enabled));
+    object.insert("delegate_enabled".into(), json!(runtime.delegate_enabled));
+    object.insert(
+        "browser".into(),
+        json!({
             "enabled": runtime.browser.enabled,
             "execution_tier": runtime.browser_execution_security_tier().as_str(),
             "max_sessions": runtime.browser.max_sessions,
             "max_links": runtime.browser.max_links,
             "max_text_chars": runtime.browser.max_text_chars,
-        },
-        "web_fetch": {
+        }),
+    );
+    object.insert(
+        "web_fetch".into(),
+        json!({
             "enabled": runtime.web_fetch.enabled,
             "allow_private_hosts": runtime.web_fetch.allow_private_hosts,
             "allowed_domains": runtime.web_fetch.allowed_domains.iter().collect::<Vec<_>>(),
@@ -702,22 +728,34 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
             "timeout_seconds": runtime.web_fetch.timeout_seconds,
             "max_bytes": runtime.web_fetch.max_bytes,
             "max_redirects": runtime.web_fetch.max_redirects,
-        },
-        "web_search": {
+        }),
+    );
+    object.insert(
+        "web_search".into(),
+        json!({
             "enabled": runtime.web_search.enabled,
             "default_provider": runtime.web_search.default_provider,
             "source": tool_access.query_search_source,
             "provider_label": tool_access.query_search_provider_label,
             "credential_ready": tool_access.query_search_credential_ready,
             "separation_note": tool_access.separation_note,
-        },
-        "consent": {
+        }),
+    );
+    object.insert(
+        "consent".into(),
+        json!({
             "default_mode": tool_access.consent_mode,
-        },
-        "approval": {
+        }),
+    );
+    object.insert(
+        "approval".into(),
+        json!({
             "mode": tool_access.approval_mode,
-        },
-        "access": {
+        }),
+    );
+    object.insert(
+        "access".into(),
+        json!({
             "ordinary_network_access_enabled": tool_access.ordinary_network_access_enabled,
             "query_search_enabled": tool_access.query_search_enabled,
             "query_search_default_provider": tool_access.query_search_default_provider,
@@ -730,8 +768,10 @@ pub(crate) fn runtime_snapshot_tool_runtime_json(
             "consent_mode": tool_access.consent_mode,
             "approval_mode": tool_access.approval_mode,
             "separation_note": tool_access.separation_note,
-        },
-    })
+        }),
+    );
+
+    Value::Object(object)
 }
 
 pub(crate) fn runtime_snapshot_skills_json(snapshot: &RuntimeSnapshotSkillsState) -> Value {
@@ -799,6 +839,7 @@ pub(crate) fn runtime_snapshot_runtime_plugins_json(
     })
 }
 
+#[cfg(feature = "tool-shell")]
 fn shell_policy_default_str(
     mode: mvp::tools::shell_policy_ext::ShellPolicyDefault,
 ) -> &'static str {

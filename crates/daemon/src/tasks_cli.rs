@@ -22,6 +22,7 @@ mod status_support;
 
 pub use self::render_support::{
     render_task_brief_line, render_task_detail_lines, render_tasks_cli_text,
+    render_tasks_cli_text_with_width,
 };
 use self::status_support::{
     TaskStatusSummary, build_task_status_payload, summarize_task_status_payload,

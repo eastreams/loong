@@ -13,6 +13,7 @@ pub(crate) use tool_internal_context::{
 pub(crate) use tool_internal_context::{
     reset_runtime_home_state_for_tests, with_trusted_internal_tool_payload,
 };
+#[cfg(feature = "tool-shell")]
 pub(crate) use tool_lease::merge_trusted_internal_tool_context_into_arguments;
 use tool_search::SearchableToolEntry;
 #[cfg(test)]
@@ -37,6 +38,8 @@ mod shell;
 pub mod shell_policy_ext;
 #[cfg(feature = "tool-shell")]
 mod shell_request_prep;
+
+mod tool_request_prep;
 
 #[cfg(feature = "tool-browser")]
 mod browser;
@@ -108,18 +111,16 @@ pub use catalog::{
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::{KernelToolAdapter, MvpToolAdapter};
 pub use security_posture::{
-    BrowserSurfaceSecurityPosture, ShellExecutionSecurityPosture, SkillsSecurityPosture,
-    SkillsSecurityPostureProbeFailure, ToolFileRootSecurityPosture, WebFetchSecurityPosture,
-    browser_surface_security_posture, shell_execution_security_posture, skills_security_posture,
-    skills_security_posture_probe_failure, tool_file_root_security_posture,
-    web_fetch_security_posture,
+    BrowserSurfaceSecurityPosture, SkillsSecurityPosture, SkillsSecurityPostureProbeFailure,
+    ToolFileRootSecurityPosture, WebFetchSecurityPosture, browser_surface_security_posture,
+    skills_security_posture, skills_security_posture_probe_failure,
+    tool_file_root_security_posture, web_fetch_security_posture,
 };
 #[cfg(feature = "tool-shell")]
-pub use shell_request_prep::summarize_tool_request_for_display;
+pub use security_posture::{ShellExecutionSecurityPosture, shell_execution_security_posture};
 #[cfg(feature = "tool-shell")]
 pub(crate) use shell_request_prep::{
-    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, normalize_shell_payload_for_request,
-    normalize_shell_request_for_execution, prepare_kernel_tool_request,
+    normalize_shell_payload_for_request, normalize_shell_request_for_execution,
 };
 pub(crate) use tool_dispatch::execute_discoverable_tool_core_with_config;
 pub use tool_dispatch::execute_tool_core_with_config;
@@ -135,16 +136,20 @@ pub(crate) use tool_identity::{
 pub use tool_identity::{
     canonical_tool_name, is_known_tool_name, is_known_tool_name_in_view, user_visible_tool_name,
 };
+#[cfg(all(test, feature = "tool-shell"))]
+pub(crate) use tool_lease::synthesize_test_provider_tool_call;
+#[cfg(test)]
+pub(crate) use tool_lease::synthesize_test_provider_tool_call_with_scope;
 pub(crate) use tool_lease::{bridge_provider_tool_call_with_scope, issue_tool_lease};
 pub(crate) use tool_lease::{peek_tool_invoke_request, resolve_tool_invoke_request};
-#[cfg(test)]
-pub(crate) use tool_lease::{
-    synthesize_test_provider_tool_call, synthesize_test_provider_tool_call_with_scope,
-};
 pub(crate) use tool_lease_binding::inject_tool_lease_binding;
 #[cfg(test)]
 pub(crate) use tool_lease_binding::{TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD};
 pub(crate) use tool_path::normalize_without_fs;
+pub use tool_request_prep::summarize_tool_request_for_display;
+pub(crate) use tool_request_prep::{
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, prepare_kernel_tool_request,
+};
 pub use tool_runtime_view::runtime_tool_view_from_loong_config;
 pub(crate) use tool_runtime_view::{
     effective_runtime_visible_tool_view, full_runtime_tool_view_for_runtime_config,

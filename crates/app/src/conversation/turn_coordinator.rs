@@ -108,7 +108,7 @@ use self::flow::{
     provider_turn_usage, resolve_provider_turn, scope_provider_turn_tool_intents,
 };
 use self::lane::execute_provider_turn_lane;
-#[cfg(test)]
+#[cfg(all(test, feature = "tool-shell"))]
 use self::observer::summarize_tool_event_request;
 use self::observer::{
     build_provider_turn_tool_terminal_events, observe_non_provider_turn_terminal_success_phases,

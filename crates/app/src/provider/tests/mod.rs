@@ -1312,7 +1312,10 @@ fn build_messages_includes_capability_snapshot_block() {
     );
     assert!(system_content.contains("- write:"));
     assert!(system_content.contains("- edit:"));
+    #[cfg(feature = "tool-shell")]
     assert!(system_content.contains("- bash:"));
+    #[cfg(not(feature = "tool-shell"))]
+    assert!(!system_content.contains("- bash:"));
     assert!(!system_content.contains("shell.exec"));
     assert!(!system_content.contains("file.read"));
     assert!(!system_content.contains("file.write"));
@@ -1652,9 +1655,8 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
     let addr = listener.local_addr().expect("local addr");
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept local provider request");
-        let mut request_buf = [0_u8; 8192];
-        let len = stream.read(&mut request_buf).expect("read request");
-        let request = String::from_utf8_lossy(&request_buf[..len]).to_string();
+        let request =
+            read_local_provider_request(&mut stream, Instant::now() + Duration::from_secs(1));
 
         let body = r#"{"content":[{"type":"text","text":"claude route ok"}]}"#;
         let response = format!(
@@ -1692,10 +1694,13 @@ async fn opencode_zen_claude_route_skips_oauth_only_profiles_before_request_disp
     assert_eq!(completion, "claude route ok");
 
     let request = server.join().expect("join local provider server");
+    // Header casing is transport-defined; this test cares that the Claude route
+    // selected x-api-key auth instead of the OAuth-only profile.
+    let normalized_request = request.to_ascii_lowercase();
     assert!(request.starts_with("POST /messages "));
-    assert!(request.contains("x-api-key: opencode-api-key"));
-    assert!(request.contains("anthropic-version: 2023-06-01"));
-    assert!(!request.contains("authorization: Bearer oauth-token"));
+    assert!(normalized_request.contains("x-api-key: opencode-api-key"));
+    assert!(normalized_request.contains("anthropic-version: 2023-06-01"));
+    assert!(!normalized_request.contains("authorization: bearer oauth-token"));
 }
 
 #[cfg(any(feature = "tool-file", feature = "tool-shell"))]
@@ -1723,7 +1728,10 @@ fn turn_body_includes_tool_schema_and_auto_choice() {
         .filter_map(Value::as_str)
         .collect();
 
+    #[cfg(feature = "tool-shell")]
     let expected = vec!["bash", "edit", "read", "web", "write"];
+    #[cfg(not(feature = "tool-shell"))]
+    let expected = vec!["edit", "read", "web", "write"];
 
     for expected_name in expected {
         assert!(

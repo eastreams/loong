@@ -33,6 +33,22 @@ fn isolated_home(prefix: &str) -> (ScopedEnv, PathBuf, PathBuf) {
     (env, home, config_path)
 }
 
+fn compact_rendered_for_assertion(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '│' | '┌' | '┐' | '└' | '┘' | '─'))
+        .collect()
+}
+
+fn assert_rendered_contains_wrapped(rendered: &str, expected: &str, context: &str) {
+    let rendered_compact = compact_rendered_for_assertion(rendered);
+    let expected_compact = compact_rendered_for_assertion(expected);
+    assert!(
+        rendered_compact.contains(&expected_compact),
+        "{context}: {rendered}"
+    );
+}
+
 #[test]
 fn resolve_default_entry_command_routes_to_onboard_when_config_is_missing() {
     let (_env, _home, _config_path) = isolated_home("loong-default-entry-missing");
@@ -282,17 +298,20 @@ fn render_welcome_banner_includes_version_and_next_commands() {
         rendered.contains("start here"),
         "welcome banner should lead with a start-here handoff: {rendered}"
     );
-    assert!(
-        rendered.contains("loong ask --config '/tmp/loong'\"'\"'s config.toml'"),
-        "welcome banner should include a quoted ask command: {rendered}"
+    assert_rendered_contains_wrapped(
+        &rendered,
+        "loong ask --config '/tmp/loong'\"'\"'s config.toml' --message",
+        "welcome banner should shell-quote the ask command config path",
     );
-    assert!(
-        rendered.contains("LOONG_CONFIG_PATH='/tmp/loong'\"'\"'s config.toml' loong"),
-        "welcome banner should include the root launch command for non-default config paths: {rendered}"
+    assert_rendered_contains_wrapped(
+        &rendered,
+        "LOONG_CONFIG_PATH='/tmp/loong'\"'\"'s config.toml' loong",
+        "welcome banner should include the root launch command for non-default config paths",
     );
-    assert!(
-        rendered.contains("loong personalize"),
-        "welcome banner should include a quoted personalize command: {rendered}"
+    assert_rendered_contains_wrapped(
+        &rendered,
+        "loong personalize --config '/tmp/loong'\"'\"'s config.toml'",
+        "welcome banner should include a quoted personalize command",
     );
 }
 

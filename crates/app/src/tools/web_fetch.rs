@@ -708,16 +708,17 @@ mod tests {
 
     #[test]
     fn web_fetch_allows_private_hosts_in_yolo_default_mode() {
+        // Use an allocated loopback fixture instead of a fixed port so the test
+        // exercises the private-host policy without depending on local machine
+        // port availability.
+        let url = spawn_http_server(|_request| ok_response("text/plain", "local fixture ok"));
         let outcome = execute_web_fetch_tool_with_config(
-            request(json!({"url": "http://127.0.0.1:8080"})),
+            request(json!({"url": url})),
             &super::super::runtime_config::ToolRuntimeConfig::default(),
-        );
-        assert!(
-            outcome.is_err(),
-            "the local fixture still lacks a listener, but the yolo default should no longer fail at the private-host guard"
-        );
-        let error = outcome.expect_err("localhost fixture should still fail without a listener");
-        assert!(!error.contains("private or special-use"));
+        )
+        .expect("default yolo-mode policy should allow local private-host fixtures");
+
+        assert_eq!(outcome.payload["content"], "local fixture ok");
     }
 
     #[test]
