@@ -10,10 +10,10 @@ services:
     ports:
       - "4318:4318"
       - "4317:4317"
+    depends_on:
+      - jaeger
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/jaeger:2.19.0
     ports:
       - "16686:16686"
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true

@@ -14,7 +14,7 @@ flowchart LR
     subgraph server["Server"]
         C["OTel Collector"]
         CRT["server.crt + server.key\n(TLS)"]
-        J["Jaeger\nUI :16686"]
+        J["Jaeger v2\nUI :16686"]
     end
 
     L -- "OTLP/HTTPS\n:4318" --> C
@@ -67,7 +67,9 @@ This starts two containers:
 | Container | Ports | Role |
 |-----------|-------|------|
 | `otel-collector` | 4318 (HTTPS), 4317 (gRPC) | Receives traces from Loong, forwards to Jaeger |
-| `jaeger` | 16686 (HTTP) | Trace storage and web UI |
+| `jaeger` | 16686 (HTTP) | Trace storage and web UI (Jaeger v2 unified image) |
+
+Jaeger v2 uses a single `jaegertracing/jaeger` image; the OTLP receiver is enabled by default, so no extra environment variables are required.
 
 The Collector loads its TLS config from `otel-collector-config.yaml`, which references `server.crt` and `server.key` mounted into the container via `docker-compose.yml`.
 
