@@ -95,11 +95,6 @@ Helpers that must be compiled into a crate for integration tests, including mock
 providers, fake transports, harness builders, and integration fixtures, MUST
 live in `test_support.rs`.
 
-The `test_support.rs` module and its public exports MUST be guarded by both
-`#[cfg(test)]` and the `dev-test-support` feature. The `dev-test-support`
-feature MUST NOT be included in the crate's default feature set and MUST NOT be
-enabled by release build commands.
-
 ### TEST-5: Test Module Names Are Restricted
 
 Rust test modules MUST be named `tests` or start with `tests_`.

@@ -82,10 +82,6 @@ stdout 调试输出或 stderr 调试输出。
 必须编入 crate 以供集成测试使用的 helper，包括 mock provider、fake transport、harness
 builder 和 integration fixture，必须放在 `test_support.rs` 中。
 
-`test_support.rs` 模块及其 public export 必须同时由 `#[cfg(test)]` 和
-`dev-test-support` feature 保护。`dev-test-support` feature 禁止加入 crate 默认 feature 集，
-release 构建命令禁止启用该 feature。
-
 ### TEST-5：测试模块名称受限
 
 Rust 测试模块必须命名为 `tests`，或以 `tests_` 开头。
