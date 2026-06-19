@@ -48,6 +48,7 @@ use super::{
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
     memory::MemoryConfig,
+    observability::{self, ObservabilityConfig},
     outbound_http::OutboundHttpConfig,
     provider::{ProviderConfig, ProviderProfileConfig},
     shared::{
@@ -206,6 +207,8 @@ pub struct LoongConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
     #[serde(default, skip_serializing_if = "GatewayConfig::is_default")]
     pub gateway: GatewayConfig,
     #[serde(default, skip_serializing_if = "ControlPlaneConfig::is_default")]
@@ -1078,9 +1081,10 @@ pub fn write_template(path: Option<&str>, force: bool) -> CliResult<PathBuf> {
     }
 
     let encoded = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         template_secret_usage_comment(),
         template_web_search_usage_comment(),
+        observability::template_usage_comment(),
         encode_toml_config(&LoongConfig::default())?
     );
     fs::write(&output_path, encoded).map_err(|error| {
@@ -1328,6 +1332,31 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains(WEB_SEARCH_JINA_API_KEY_ENV));
         assert!(raw.contains(WEB_SEARCH_JINA_AUTH_TOKEN_ENV));
         assert!(raw.contains("These settings affect only `web { query }` / `web.search`"));
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_template_includes_observability_capture_content_warning() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loong-template-observability-notes-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+
+        write_template(Some(config_path.to_string_lossy().as_ref()), true)
+            .expect("write template should succeed");
+
+        let raw = std::fs::read_to_string(&config_path).expect("read template");
+        assert!(raw.contains("# Observability notes:"));
+        assert!(raw.contains("[observability].capture_content = true"));
+        assert!(raw.contains("raw provider messages"));
+        assert!(raw.contains("LOONG_OTEL_CAPTURE_CONTENT=1|true"));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();

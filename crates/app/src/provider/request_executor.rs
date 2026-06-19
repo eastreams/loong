@@ -79,6 +79,7 @@ pub(super) struct StreamingModelRequestRuntime<'a> {
     pub(super) transport: &'a dyn ProviderTransport,
     pub(super) auth_context: &'a transport::RequestAuthContext,
     pub(super) retry_progress: ProviderRetryProgressCallback,
+    pub(super) capture_content: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -937,8 +938,7 @@ where
     let base_url = runtime.provider.base_url.clone();
 
     let otel_tracer = global::tracer_provider().tracer("loong");
-    let capture_content =
-        std::env::var("LOONG_OTEL_CAPTURE_CONTENT").is_ok_and(|v| v == "1" || v == "true");
+    let capture_content = runtime.capture_content;
     let mut otel_span = otel_tracer
         .span_builder(format!("chat {model_name}"))
         .with_kind(SpanKind::Client)
@@ -1877,6 +1877,7 @@ mod tests {
             transport: &transport,
             auth_context: &auth_context,
             retry_progress: None,
+            capture_content: false,
         };
 
         let mut stream = execute_streaming_model_request(
@@ -1962,6 +1963,7 @@ mod tests {
             transport: &transport,
             auth_context: &auth_context,
             retry_progress: None,
+            capture_content: false,
         };
 
         let turn = execute_streaming_turn_request(
@@ -2038,6 +2040,7 @@ mod tests {
             transport: &transport,
             auth_context: &auth_context,
             retry_progress: None,
+            capture_content: false,
         };
 
         let turn = execute_streaming_turn_request(
@@ -2135,6 +2138,7 @@ mod tests {
             transport: &transport,
             auth_context: &auth_context,
             retry_progress: None,
+            capture_content: false,
         };
 
         let mut stream =
@@ -2193,6 +2197,7 @@ mod tests {
             transport: &transport,
             auth_context: &auth_context,
             retry_progress: None,
+            capture_content: false,
         };
 
         let error =

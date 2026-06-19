@@ -4,6 +4,7 @@ mod conversation;
 mod feishu_integration;
 mod irc;
 mod memory;
+mod observability;
 mod outbound_http;
 mod provider;
 mod runtime;
@@ -87,6 +88,8 @@ pub use memory::{
     InitiativeLevel, MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile,
     MemorySystemKind, PersonalizationConfig, PersonalizationPromptState, ResponseDensity,
 };
+#[allow(unused_imports)]
+pub use observability::ObservabilityConfig;
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;
 pub(crate) use provider::{
