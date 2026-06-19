@@ -559,6 +559,7 @@ pub(super) async fn request_turn_streaming_with_transport(
             transport,
             auth_context,
             retry_progress: retry_progress.clone(),
+            capture_content: base_config.observability.capture_content_enabled(),
         };
 
         match execute_streaming_turn_request(
