@@ -3,8 +3,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};
-use opentelemetry::trace::{SpanKind, TraceContextExt, Tracer, TracerProvider};
-use opentelemetry::{Context, KeyValue, global};
 use serde_json::Value;
 
 use super::*;
@@ -13,28 +11,30 @@ pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let observability_config = crate::config::ObservabilityConfig::runtime_default();
+    execute_tool_core_with_config_and_observability(request, config, &observability_config)
+}
+
+pub(crate) fn execute_tool_core_with_config_and_observability(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+    observability_config: &crate::config::ObservabilityConfig,
+) -> Result<ToolCoreOutcome, String> {
     let requested_tool_name = request.tool_name.clone();
     let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();
-    let otel_tracer = global::tracer_provider().tracer("loong");
-    let otel_span_name = format!("execute_tool {canonical_name}");
-    let otel_span = otel_tracer
-        .span_builder(otel_span_name)
-        .with_kind(SpanKind::Internal)
-        .with_attributes([
-            KeyValue::new("gen_ai.operation.name", "execute_tool"),
-            KeyValue::new("gen_ai.tool.name", canonical_name.clone()),
-        ])
-        .start(&otel_tracer);
-    let otel_context = Context::current().with_span(otel_span);
-    let span_context = otel_context.clone();
-    let _otel_guard = otel_context.attach();
+    let otel_span = crate::otel::OtelAttachedSpanHandle::start(
+        format!("execute_tool {canonical_name}"),
+        crate::otel::OtelSpanKind::Internal,
+        [
+            crate::otel::attr("gen_ai.operation.name", "execute_tool"),
+            crate::otel::attr("gen_ai.tool.name", canonical_name.clone()),
+        ],
+    );
     let payload = request.payload;
-    let capture_content = std::env::var("LOONG_OTEL_CAPTURE_CONTENT")
-        .is_ok_and(|value| value == "1" || value == "true");
+    let capture_content = observability_config.capture_content;
     if capture_content && let Ok(payload_string) = serde_json::to_string(&payload) {
         let truncated_payload = truncate_tool_payload_for_otel(payload_string.as_str());
-        let span = span_context.span();
-        span.set_attribute(KeyValue::new("tool.payload", truncated_payload));
+        otel_span.set_attribute("tool.payload", truncated_payload);
     }
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
     let runtime_narrowing = trusted_runtime_narrowing_from_payload(&payload)?;
@@ -90,11 +90,10 @@ pub fn execute_tool_core_with_config(
     };
     let result = execute_request();
     let duration_ms = started_at.elapsed().as_millis();
-    let span = span_context.span();
-    span.set_attribute(KeyValue::new("tool.duration_ms", duration_ms as i64));
+    otel_span.set_attribute("tool.duration_ms", duration_ms as i64);
     match &result {
         Ok(outcome) => {
-            span.set_attribute(KeyValue::new("tool.status", outcome.status.clone()));
+            otel_span.set_attribute("tool.status", outcome.status.clone());
             if debug_log_enabled {
                 tracing::debug!(
                     target: "loong.tools",
@@ -110,8 +109,8 @@ pub fn execute_tool_core_with_config(
             }
         }
         Err(error) => {
-            span.set_attribute(KeyValue::new("tool.status", "error"));
-            span.set_attribute(KeyValue::new("error.type", "tool_execution_error"));
+            otel_span.set_attribute("tool.status", "error");
+            otel_span.set_attribute("error.type", "tool_execution_error");
             if is_expected_tool_request_error(error) {
                 if debug_log_enabled {
                     tracing::debug!(
@@ -141,7 +140,7 @@ pub fn execute_tool_core_with_config(
             }
         }
     }
-    span.end();
+    otel_span.end();
 
     result
 }

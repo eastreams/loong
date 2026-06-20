@@ -160,7 +160,12 @@ fn bootstrap_kernel_context_with_audit_sink(
 
     let tool_rt = crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
     let file_root = tool_rt.file_root.clone();
-    kernel.register_core_tool_adapter(crate::tools::KernelToolAdapter::with_config(tool_rt));
+    kernel.register_core_tool_adapter(
+        crate::tools::KernelToolAdapter::with_config_and_observability(
+            tool_rt,
+            config.observability.clone(),
+        ),
+    );
     kernel
         .set_default_core_tool_adapter("mvp-tools")
         .map_err(|e| format!("set default tool adapter failed: {e}"))?;
