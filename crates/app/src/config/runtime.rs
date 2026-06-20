@@ -207,7 +207,7 @@ pub struct LoongConfig {
     pub memory: MemoryConfig,
     #[serde(default)]
     pub audit: AuditConfig,
-    #[serde(default)]
+    #[serde(default = "ObservabilityConfig::runtime_default")]
     pub observability: ObservabilityConfig,
     #[serde(default, skip_serializing_if = "GatewayConfig::is_default")]
     pub gateway: GatewayConfig,

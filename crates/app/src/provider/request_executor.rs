@@ -5,8 +5,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::Stream;
-use opentelemetry::trace::{Span, SpanKind, Tracer, TracerProvider};
-use opentelemetry::{KeyValue, global};
 use serde_json::Value;
 use tokio::time::sleep;
 
@@ -937,29 +935,28 @@ where
     let provider_name = runtime.provider.kind.as_str().to_owned();
     let base_url = runtime.provider.base_url.clone();
 
-    let otel_tracer = global::tracer_provider().tracer("loong");
-    let capture_content = runtime.capture_content;
-    let mut otel_span = otel_tracer
-        .span_builder(format!("chat {model_name}"))
-        .with_kind(SpanKind::Client)
-        .with_attributes([
-            KeyValue::new("gen_ai.operation.name", "chat"),
-            KeyValue::new("gen_ai.request.model", model_name.clone()),
-            KeyValue::new("gen_ai.provider.name", provider_name),
-            KeyValue::new("gen_ai.request.stream", true),
-            KeyValue::new(
+    let mut otel_span = crate::otel::OtelSpanHandle::start(
+        format!("chat {model_name}"),
+        crate::otel::OtelSpanKind::Client,
+        [
+            crate::otel::attr("gen_ai.operation.name", "chat"),
+            crate::otel::attr("gen_ai.request.model", model_name.clone()),
+            crate::otel::attr("gen_ai.provider.name", provider_name),
+            crate::otel::attr("gen_ai.request.stream", true),
+            crate::otel::attr(
                 "gen_ai.conversation.id",
                 session_id.unwrap_or("").to_owned(),
             ),
-            KeyValue::new("server.address", base_url),
-        ])
-        .start(&otel_tracer);
+            crate::otel::attr("server.address", base_url),
+        ],
+    );
+    let capture_content = runtime.capture_content;
 
     if capture_content
         && !_messages.is_empty()
         && let Ok(input_json) = serde_json::to_string(_messages)
     {
-        otel_span.set_attribute(KeyValue::new("gen_ai.input.messages", input_json));
+        otel_span.set_attribute("gen_ai.input.messages", input_json);
     }
     let transport_mode = runtime.runtime_contract.transport_mode;
     let mut build_body = build_body;
@@ -1120,13 +1117,13 @@ where
     };
 
     if let Some(error) = accumulator.error {
-        otel_span.set_attribute(KeyValue::new("error.type", "streaming_error"));
+        otel_span.set_attribute("error.type", "streaming_error");
         otel_span.end();
         return Err(error);
     }
 
     if !accumulator.done {
-        otel_span.set_attribute(KeyValue::new("error.type", "incomplete_stream"));
+        otel_span.set_attribute("error.type", "incomplete_stream");
         otel_span.end();
         return Err(build_model_request_error(
             "streaming response ended without message_stop event".to_owned(),
@@ -1169,14 +1166,14 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    otel_span.set_attribute(KeyValue::new(
+    otel_span.set_attribute(
         "gen_ai.response.finish_reasons",
         if tool_intents.is_empty() {
             "[\"stop\"]".to_owned()
         } else {
             "[\"tool_calls\"]".to_owned()
         },
-    ));
+    );
     if capture_content {
         let mut output_parts = serde_json::json!({"parts": []});
         if !accumulator.text.is_empty()
@@ -1194,17 +1191,17 @@ where
             }
         }
         if let Ok(output_json) = serde_json::to_string(&output_parts) {
-            otel_span.set_attribute(KeyValue::new("gen_ai.output.messages", output_json));
+            otel_span.set_attribute("gen_ai.output.messages", output_json);
         }
     }
     if let Some(meta_obj) = accumulator.meta.as_object()
         && let Some(usage) = meta_obj.get("usage")
     {
         if let Some(input_tokens) = usage.get("input_tokens").and_then(|v| v.as_i64()) {
-            otel_span.set_attribute(KeyValue::new("gen_ai.usage.input_tokens", input_tokens));
+            otel_span.set_attribute("gen_ai.usage.input_tokens", input_tokens);
         }
         if let Some(output_tokens) = usage.get("output_tokens").and_then(|v| v.as_i64()) {
-            otel_span.set_attribute(KeyValue::new("gen_ai.usage.output_tokens", output_tokens));
+            otel_span.set_attribute("gen_ai.usage.output_tokens", output_tokens);
         }
     }
     otel_span.end();

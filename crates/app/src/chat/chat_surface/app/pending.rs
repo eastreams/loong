@@ -1617,65 +1617,56 @@ pub(super) fn spawn_pending_turn(
     observer: crate::conversation::ConversationTurnObserverHandle,
 ) -> JoinHandle<CliResult<String>> {
     let session_id = runtime.session_address.session_id.clone();
-    let otel_tracer = global::tracer_provider().tracer("loong");
-    let otel_span = otel_tracer
-        .span_builder("invoke_agent loong")
-        .with_kind(SpanKind::Internal)
-        .with_attributes([
-            KeyValue::new("gen_ai.operation.name", "invoke_agent"),
-            KeyValue::new("gen_ai.agent.name", "loong"),
-            KeyValue::new("gen_ai.conversation.id", session_id),
-        ])
-        .start(&otel_tracer);
-    let otel_context = Context::current().with_span(otel_span);
-    let task_context = otel_context.clone();
+    let otel_span = crate::otel::OtelContextSpanHandle::start(
+        "invoke_agent loong",
+        crate::otel::OtelSpanKind::Internal,
+        [
+            crate::otel::attr("gen_ai.operation.name", "invoke_agent"),
+            crate::otel::attr("gen_ai.agent.name", "loong"),
+            crate::otel::attr("gen_ai.conversation.id", session_id),
+        ],
+    );
+    let task_span = otel_span.clone();
 
-    tokio::spawn(
-        async move {
-            let result = crate::agent_runtime::AgentRuntime::new()
-                .run_turn_with_runtime_and_observer(
-                    &runtime,
-                    &crate::agent_runtime::AgentTurnRequest {
-                        message: input,
-                        turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
-                        channel_id: runtime.session_address.channel_id.clone(),
-                        account_id: runtime.session_address.account_id.clone(),
-                        conversation_id: runtime.session_address.conversation_id.clone(),
-                        participant_id: runtime.session_address.participant_id.clone(),
-                        thread_id: runtime.session_address.thread_id.clone(),
-                        metadata: std::collections::BTreeMap::new(),
-                        live_surface_enabled: true,
-                    },
-                    None,
-                    Some(observer),
-                )
-                .await;
+    crate::otel::spawn_with_context(&otel_span, async move {
+        let result = crate::agent_runtime::AgentRuntime::new()
+            .run_turn_with_runtime_and_observer(
+                &runtime,
+                &crate::agent_runtime::AgentTurnRequest {
+                    message: input,
+                    turn_mode: crate::agent_runtime::AgentTurnMode::Interactive,
+                    channel_id: runtime.session_address.channel_id.clone(),
+                    account_id: runtime.session_address.account_id.clone(),
+                    conversation_id: runtime.session_address.conversation_id.clone(),
+                    participant_id: runtime.session_address.participant_id.clone(),
+                    thread_id: runtime.session_address.thread_id.clone(),
+                    metadata: std::collections::BTreeMap::new(),
+                    live_surface_enabled: true,
+                },
+                None,
+                Some(observer),
+            )
+            .await;
 
-            let span = task_context.span();
-            match &result {
-                Ok(turn_result) => {
-                    if let Some(stop_reason) = &turn_result.stop_reason {
-                        let finish_reason = format!("[\"{stop_reason}\"]");
-                        span.set_attribute(KeyValue::new(
-                            "gen_ai.response.finish_reasons",
-                            finish_reason,
-                        ));
-                    }
-
-                    let event_count = turn_result.event_count as i64;
-                    span.set_attribute(KeyValue::new("agent.event_count", event_count));
+        match &result {
+            Ok(turn_result) => {
+                if let Some(stop_reason) = &turn_result.stop_reason {
+                    let finish_reason = format!("[\"{stop_reason}\"]");
+                    task_span.set_attribute("gen_ai.response.finish_reasons", finish_reason);
                 }
-                Err(error) => {
-                    span.set_attribute(KeyValue::new("error.type", "agent_turn_error"));
-                    span.set_attribute(KeyValue::new("error.message", error.clone()));
-                }
+
+                let event_count = turn_result.event_count as i64;
+                task_span.set_attribute("agent.event_count", event_count);
             }
-            span.end();
-
-            result.map(|turn_result| turn_result.output_text)
+            Err(error) => {
+                task_span.set_attribute("error.type", "agent_turn_error");
+                task_span.set_attribute("error.message", error.clone());
+            }
         }
-        .with_context(otel_context),
-    )
+        task_span.end();
+
+        result.map(|turn_result| turn_result.output_text)
+    })
 }
 
 pub(super) fn clear_live_transcript(live_transcript: &Arc<StdMutex<LiveTranscriptState>>) {

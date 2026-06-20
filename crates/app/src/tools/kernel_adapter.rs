@@ -3,9 +3,11 @@ use loong_contracts::ToolPlaneError;
 use loong_kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
 
 use super::runtime_config::ToolRuntimeConfig;
+use crate::config::ObservabilityConfig;
 
 pub struct KernelToolAdapter {
     config: Option<ToolRuntimeConfig>,
+    observability_config: ObservabilityConfig,
 }
 
 impl Default for KernelToolAdapter {
@@ -16,14 +18,32 @@ impl Default for KernelToolAdapter {
 
 impl KernelToolAdapter {
     pub fn new() -> Self {
-        Self { config: None }
+        Self {
+            config: None,
+            observability_config: default_observability_config(),
+        }
     }
 
     pub fn with_config(config: ToolRuntimeConfig) -> Self {
         Self {
             config: Some(config),
+            observability_config: default_observability_config(),
         }
     }
+
+    pub fn with_config_and_observability(
+        config: ToolRuntimeConfig,
+        observability_config: ObservabilityConfig,
+    ) -> Self {
+        Self {
+            config: Some(config),
+            observability_config,
+        }
+    }
+}
+
+fn default_observability_config() -> ObservabilityConfig {
+    ObservabilityConfig::runtime_default()
 }
 
 #[async_trait]
@@ -37,7 +57,11 @@ impl CoreToolAdapter for KernelToolAdapter {
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         match &self.config {
-            Some(config) => super::execute_tool_core_with_config(request, config),
+            Some(config) => super::tool_dispatch::execute_tool_core_with_config_and_observability(
+                request,
+                config,
+                &self.observability_config,
+            ),
             None => super::execute_tool_core(request),
         }
         .map_err(ToolPlaneError::Execution)
