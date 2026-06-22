@@ -2,6 +2,7 @@ mod http_json;
 mod policy;
 mod process_stdio;
 mod protocol;
+mod wasm_component;
 
 pub use http_json::{
     BridgeExecutionFailure, BridgeExecutionSuccess, execute_http_json_bridge_call,
@@ -20,3 +21,4 @@ pub use protocol::{
     parse_process_timeout_ms, process_stdio_runtime_evidence,
     protocol_capabilities_for_connector_command, serialize_runtime_evidence,
 };
+pub use wasm_component::execute_wasm_component_bridge_call;

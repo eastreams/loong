@@ -78,6 +78,10 @@ fn execute_app_tool_dispatch(
             memory_config,
             tool_config,
         ),
+        "plugin" => crate::tools::runtime_plugin::execute_runtime_plugin_tool_with_config(
+            request,
+            tool_config,
+        ),
         _ => Err(format!(
             "app_tool_not_found: unknown app tool `{}`",
             request.tool_name

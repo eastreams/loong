@@ -42,7 +42,8 @@ use io_definition_support::web_search_definition;
 use io_definition_support::{
     bash_exec_definition, content_search_definition, glob_search_definition,
     http_request_definition, memory_get_definition, memory_retrieve_definition,
-    memory_search_definition, shell_exec_definition, web_fetch_definition,
+    memory_search_definition, runtime_plugin_definition, shell_exec_definition,
+    web_fetch_definition,
 };
 #[path = "catalog_session_definition_support.rs"]
 mod session_definition_support;
@@ -658,6 +659,7 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "session_recover"
         | "session_unpin_head"
         | "sessions_send"
+        | "plugin"
         | "http.request"
         | "file.write"
         | "file.edit"
@@ -814,6 +816,20 @@ fn build_tool_catalog() -> ToolCatalog {
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: provider_switch_definition,
+        },
+        ToolDescriptor {
+            name: "plugin",
+            provider_name: "plugin",
+            aliases: &["runtime_plugin", "plugin.invoke"],
+            description: "Invoke a local runtime plugin such as the bundled WASM demo plugin from the current workspace.",
+            execution_kind: ToolExecutionKind::App,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Gateway,
+            visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
+            provider_definition_builder: runtime_plugin_definition,
         },
         ToolDescriptor {
             name: "approval_request_resolve",

@@ -3135,6 +3135,8 @@ dependencies = [
  "unicode-width 0.2.2",
  "uuid",
  "wait-timeout",
+ "wasmtime",
+ "wat",
  "which",
  "zip",
 ]
@@ -3176,6 +3178,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "wasmtime",
+ "wat",
 ]
 
 [[package]]

@@ -1,0 +1,381 @@
+---
+title: WASM Plugins
+description: Build and run manifest-first WebAssembly bridge plugins in Loong.
+---
+
+# WASM Plugins
+
+Loong can discover, activate, and execute manifest-first WebAssembly bridge plugins through the managed bridge runtime.
+
+Use this guide when you want to:
+
+- invoke the bundled demo WASM plugin directly from the TUI with only a working provider API key
+- inspect the bundled demo WASM plugin without channel credentials
+- author a minimal `.wat` or `.wasm` bridge package
+- understand Loong's current demo JSON ABI for WebAssembly plugins
+
+> The current runtime surface uses `bridge_kind = "wasm_component"`, but the demo executor intentionally uses a small core WebAssembly JSON ABI instead of full WIT/component-model bindings. This keeps local demos simple and source-visible while leaving room for a stricter component-model SDK later.
+
+## What Is Supported Today
+
+| Capability | Status |
+| --- | --- |
+| Manifest discovery via `loong.plugin.json` | Supported |
+| `metadata.bridge_kind = "wasm_component"` | Supported |
+| `.wasm` binary endpoint | Supported |
+| `.wat` text endpoint for demos | Supported |
+| JSON request/response exchange | Supported |
+| Managed channel bridge send path | Supported |
+| Full WIT/component-model bindings | Not required for the demo ABI |
+| WASI/network/filesystem host APIs | Not part of this demo ABI |
+
+## Demo Plugin Layout
+
+The repository includes a small source-visible demo plugin:
+
+```text
+runtime-plugins/demo-wasm-bridge/
+├── README.md
+├── loong.plugin.json
+└── plugin.wat
+```
+
+The important files are:
+
+- [`runtime-plugins/demo-wasm-bridge/loong.plugin.json`](https://github.com/eastreams/loong/blob/dev/runtime-plugins/demo-wasm-bridge/loong.plugin.json) — package manifest
+- [`runtime-plugins/demo-wasm-bridge/plugin.wat`](https://github.com/eastreams/loong/blob/dev/runtime-plugins/demo-wasm-bridge/plugin.wat) — WebAssembly Text source loaded by the demo runtime
+
+`plugin.wat` returns a fixed JSON payload:
+
+```json
+{
+  "ok": true,
+  "via": "wasm",
+  "messages": [],
+  "demo_message": "handled by Loong demo WASM plugin"
+}
+```
+
+The empty `messages` array allows `receive_batch`-style demo paths to return no inbound messages without depending on an external service. The send path only needs the invocation to complete successfully.
+
+## Inspect The Demo Plugin
+
+From the repository root:
+
+```bash
+./scripts/cargo-local-toolchain.sh run -p loong -- \
+  plugins inventory \
+  --root runtime-plugins \
+  --json
+```
+
+Look for the `demo-wasm-bridge` result:
+
+```json
+{
+  "plugin_id": "demo-wasm-bridge",
+  "bridge_kind": "wasm_component",
+  "adapter_family": "channel-bridge",
+  "activation_status": "ready"
+}
+```
+
+If more than one plugin is installed for the same channel, select one explicitly in channel config with `managed_bridge_plugin_id`.
+
+## TUI-Only Invocation Demo
+
+The shortest customer-demo path does **not** require Weixin, a bridge URL, a contact allowlist, or any channel credential. It only requires the normal Loong TUI path to have a working provider API key.
+
+1. Export a provider API key that your local TUI setup already supports. For example:
+
+```bash
+export OPENAI_API_KEY="..."
+```
+
+Use the provider key that matches your local onboarding path. The exact variable may be `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ARK_API_KEY`, or another provider-specific key.
+
+2. Start the TUI from the repository root:
+
+```bash
+cargo run -p loong
+```
+
+3. Ask the TUI to call the bundled WASM plugin directly:
+
+```text
+Use the plugin tool to call the bundled demo WASM plugin. Send a payload with text "hello from the TUI" and summarize the result.
+```
+
+Expected behavior:
+
+- the model emits a `plugin` tool call
+- the tool defaults to `plugin_id = demo-wasm-bridge`
+- the runtime scans `./runtime-plugins`
+- Wasmtime loads `runtime-plugins/demo-wasm-bridge/plugin.wat`
+- the tool result contains `via = "wasm"`
+
+If the active provider profile disables structured tool schemas, the model will not see the `plugin` tool. In that case, re-enable provider tool schemas or use the direct terminal smoke check below.
+
+This proves the end-to-end local path without any external channel service:
+
+```text
+TUI with provider API key
+  -> provider tool schema includes `plugin`
+  -> agent emits tool call
+  -> app tool dispatcher scans ./runtime-plugins
+  -> Wasmtime invokes loong_json_abi_v1
+  -> guest returns JSON payload with via=wasm
+```
+
+## Plugin Tool Request Shape
+
+The TUI-visible tool name is:
+
+```text
+plugin
+```
+
+It accepts this payload shape:
+
+```json
+{
+  "plugin_id": "demo-wasm-bridge",
+  "operation": "demo",
+  "payload": {
+    "text": "hello from the TUI"
+  },
+  "root": "./runtime-plugins"
+}
+```
+
+Current behavior:
+
+- `plugin_id` is optional and defaults to `demo-wasm-bridge`
+- `operation` is optional and defaults to `demo`
+- `payload` is forwarded into the WASM JSON ABI request body
+- `root` is optional and defaults to `./runtime-plugins` relative to the current workspace root
+
+## Direct Terminal Smoke Check
+
+If you do not want to involve the TUI, these local checks still validate the same runtime pieces from the repository root:
+
+```bash
+./scripts/cargo-local-toolchain.sh run -p loong -- \
+  plugins inventory \
+  --root runtime-plugins \
+  --query demo-wasm-bridge \
+  --json
+
+./scripts/cargo-local-toolchain.sh test -p loong-bridge-runtime \
+  --test wasm_component_json_abi
+```
+
+The direct terminal path does not need a model API key because it does not ask the TUI to drive the invocation.
+
+## Optional Channel Bridge Send Demo
+
+Use this only when you specifically want to prove the managed channel send path. The TUI smoke check above is enough to prove the WASM plugin runtime itself.
+
+```toml
+[runtime_plugins]
+enabled = true
+roots = ["./runtime-plugins"]
+supported_bridges = ["wasm_component"]
+
+[weixin]
+enabled = true
+managed_bridge_plugin_id = "demo-wasm-bridge"
+allowed_contact_ids = ["wxid_demo"]
+```
+
+Then run:
+
+```bash
+./scripts/cargo-local-toolchain.sh run -p loong -- \
+  channels send weixin \
+  --config ./loong.toml \
+  --target contact:wxid_demo \
+  --text "hello from wasm"
+```
+
+Expected shape:
+
+```text
+weixin message sent via managed bridge runtime (plugin_id=demo-wasm-bridge, ...)
+```
+
+For `wasm_component`, Loong uses the plugin manifest `endpoint` (`./plugin.wat`) instead of any account bridge URL override.
+
+## Manifest Contract
+
+A minimal WASM bridge manifest looks like this:
+
+```json
+{
+  "api_version": "v1alpha1",
+  "plugin_id": "demo-wasm-bridge",
+  "version": "0.1.0",
+  "provider_id": "demo-wasm-provider",
+  "connector_name": "demo-wasm-connector",
+  "channel_id": "weixin",
+  "endpoint": "./plugin.wat",
+  "capabilities": ["InvokeConnector"],
+  "trust_tier": "unverified",
+  "metadata": {
+    "bridge_kind": "wasm_component",
+    "adapter_family": "channel-bridge",
+    "transport_family": "demo_wasm_bridge",
+    "target_contract": "weixin_reply_loop",
+    "account_scope": "per_account",
+    "channel_runtime_contract": "loong_channel_bridge_v1",
+    "channel_runtime_operations_json": "[\"send_message\",\"receive_batch\"]"
+  },
+  "setup": {
+    "surface": "channel"
+  }
+}
+```
+
+Required fields for the demo runtime:
+
+| Field | Purpose |
+| --- | --- |
+| `endpoint` | Path to `.wasm` or `.wat`. Relative paths resolve from the plugin package root. |
+| `metadata.bridge_kind` | Must be `wasm_component`. |
+| `metadata.adapter_family` | Use `channel-bridge` for managed channel bridge plugins. |
+| `metadata.channel_runtime_contract` | Use `loong_channel_bridge_v1`. |
+| `metadata.channel_runtime_operations_json` | JSON array of operations such as `send_message` and `receive_batch`. |
+| `setup.surface` | Use `channel` for channel bridge packages. |
+
+## JSON ABI
+
+The current demo ABI is named:
+
+```text
+loong_json_abi_v1
+```
+
+The guest module must export:
+
+| Export | Required | Meaning |
+| --- | --- | --- |
+| `memory` | Yes | Linear memory used for request and response bytes. |
+| `loong_alloc(len: i32) -> i32` | Yes | Allocates `len` bytes in guest memory and returns the pointer. |
+| `loong_invoke(ptr: i32, len: i32) -> i64` | Yes | Reads request bytes and returns packed response pointer/length. |
+| `loong_free(ptr: i32, len: i32)` | No | Optional cleanup hook called by the host after request/response exchange. |
+
+`loong_invoke` returns a packed value:
+
+```text
+high 32 bits = response_ptr
+low  32 bits = response_len
+```
+
+### Request JSON
+
+Loong writes a JSON request into guest memory:
+
+```json
+{
+  "provider_id": "demo-wasm-provider",
+  "channel_id": "weixin",
+  "operation": "send_message",
+  "payload": {
+    "runtime_context": {},
+    "target": {},
+    "message": {}
+  }
+}
+```
+
+The exact `payload` depends on the bridge operation.
+
+### Response JSON
+
+The guest may return either a wrapped payload:
+
+```json
+{
+  "payload": {
+    "ok": true,
+    "via": "wasm"
+  }
+}
+```
+
+or a direct JSON value:
+
+```json
+{
+  "ok": true,
+  "via": "wasm"
+}
+```
+
+If `payload` is present, Loong uses that as the bridge response payload. Otherwise, Loong uses the whole response JSON.
+
+For `receive_batch`, return an object with `messages`:
+
+```json
+{
+  "payload": {
+    "messages": []
+  }
+}
+```
+
+## Author A New Plugin
+
+1. Create a package directory under a runtime plugin root:
+
+```text
+runtime-plugins/my-wasm-bridge/
+├── loong.plugin.json
+└── plugin.wasm
+```
+
+2. Set the manifest endpoint:
+
+```json
+"endpoint": "./plugin.wasm"
+```
+
+For demos, you can use source-visible WAT instead:
+
+```json
+"endpoint": "./plugin.wat"
+```
+
+3. Export the JSON ABI functions from your WebAssembly module.
+
+4. Scan the package:
+
+```bash
+./scripts/cargo-local-toolchain.sh run -p loong -- \
+  plugins inventory \
+  --root runtime-plugins \
+  --query my-wasm-bridge \
+  --json
+```
+
+5. Configure the channel with `managed_bridge_plugin_id` and run the relevant `channels send` or `channels serve` command.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Plugin does not appear in inventory | Confirm `runtime_plugins.roots` or `--root` points at the directory containing `loong.plugin.json`. |
+| Plugin appears but is not ready | Inspect `activation_status`, `activation_reason`, and `diagnostic_findings` in `plugins inventory --json`. |
+| `wasm_component execution is disabled by runtime policy` | Add `wasm_component` to `runtime_plugins.supported_bridges`, or leave `supported_bridges` empty to use the default bridge matrix. |
+| `module must export memory` | Export a linear memory named `memory`. |
+| `module must export loong_alloc` | Export `loong_alloc(len: i32) -> i32`. |
+| `module must export loong_invoke` | Export `loong_invoke(ptr: i32, len: i32) -> i64`. |
+| Response JSON decode fails | Ensure the bytes returned by `loong_invoke` are UTF-8 JSON. |
+| TUI cannot run the verification | First confirm the base TUI path works with your provider API key by asking a simple question. Then ask it to run the two smoke-check commands shown above. |
+| Channel send is rejected before WASM runs | This only applies to the optional channel bridge send demo. Ensure the target contact is included in `weixin.allowed_contact_ids`, or use the same target id as the allowlist. |
+
+## Related Docs
+
+- Continue to [Architecture](/build-on-loong/architecture) for crate ownership and runtime boundaries.
+- Continue to [Channel Setup](/use-loong/channel-setup) for managed bridge channel configuration.
+- Continue to [Weixin](/use-loong/channel-guides/weixin) for the Weixin bridge surface and target contract.

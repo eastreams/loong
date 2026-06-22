@@ -19,6 +19,7 @@ pub async fn execute_process_stdio_bridge(
     let execution_policy = BridgeExecutionPolicy {
         execute_process_stdio: runtime_policy.execute_process_stdio,
         execute_http_json: runtime_policy.execute_http_json,
+        execute_wasm_component: runtime_policy.execute_wasm_component,
         allowed_process_commands: runtime_policy.allowed_process_commands.clone(),
     };
     let execution_result =

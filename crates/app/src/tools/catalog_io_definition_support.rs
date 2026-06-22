@@ -288,6 +288,39 @@ pub(super) fn web_search_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+pub(super) fn runtime_plugin_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plugin_id": {
+                        "type": "string",
+                        "description": "Optional runtime plugin id. Defaults to `demo-wasm-bridge`."
+                    },
+                    "operation": {
+                        "type": "string",
+                        "description": "Optional operation label forwarded into the plugin request. Defaults to `demo`."
+                    },
+                    "payload": {
+                        "type": "object",
+                        "description": "Optional arbitrary JSON object forwarded to the plugin as payload.",
+                        "additionalProperties": true
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Optional runtime plugin scan root. Defaults to `./runtime-plugins` relative to the current workspace root."
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 pub(super) fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",

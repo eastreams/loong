@@ -1,11 +1,66 @@
 use super::test_utils::*;
 use super::*;
 use crate::config::ToolConfig;
+use crate::session::store::SessionStoreConfig;
 use crate::test_utils::unique_temp_dir;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use loong_contracts::Capability;
+use loong_contracts::{Capability, ToolCoreRequest};
 use std::collections::{BTreeMap, BTreeSet};
+
+fn write_runtime_plugin_fixture(root: &std::path::Path) {
+    let plugin_root = root.join("runtime-plugins").join("demo-wasm-bridge");
+    std::fs::create_dir_all(&plugin_root).expect("create runtime plugin fixture root");
+    std::fs::write(
+        plugin_root.join("loong.plugin.json"),
+        r#"{
+  "api_version": "v1alpha1",
+  "plugin_id": "demo-wasm-bridge",
+  "version": "0.1.0",
+  "provider_id": "demo-wasm-provider",
+  "connector_name": "demo-wasm-connector",
+  "channel_id": "weixin",
+  "endpoint": "./plugin.wat",
+  "capabilities": ["InvokeConnector"],
+  "trust_tier": "unverified",
+  "metadata": {
+    "bridge_kind": "wasm_component",
+    "adapter_family": "channel-bridge",
+    "transport_family": "demo_wasm_bridge",
+    "target_contract": "weixin_reply_loop",
+    "account_scope": "per_account",
+    "channel_runtime_contract": "loong_channel_bridge_v1",
+    "channel_runtime_operations_json": "[\"send_message\",\"receive_batch\"]"
+  },
+  "setup": {
+    "surface": "channel"
+  }
+}"#,
+    )
+    .expect("write runtime plugin manifest");
+    std::fs::write(
+        plugin_root.join("plugin.wat"),
+        r#"(module
+  (memory (export "memory") 1)
+  (global $heap (mut i32) (i32.const 2048))
+  (data (i32.const 1024) "{\"payload\":{\"ok\":true,\"via\":\"wasm\",\"messages\":[],\"demo_message\":\"handled by Loong demo WASM plugin\"}}")
+  (func (export "loong_alloc") (param $len i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $heap))
+    (global.set $heap (i32.add (global.get $heap) (local.get $len)))
+    (local.get $ptr)
+  )
+  (func (export "loong_free") (param $ptr i32) (param $len i32))
+  (func (export "loong_invoke") (param $ptr i32) (param $len i32) (result i64)
+    (i64.or
+      (i64.shl (i64.extend_i32_u (i32.const 1024)) (i64.const 32))
+      (i64.extend_i32_u (i32.const 101))
+    )
+  )
+)"#,
+    )
+    .expect("write runtime plugin WAT");
+}
 
 #[test]
 fn normalize_without_fs_preserves_relative_parent_segments() {
@@ -531,7 +586,7 @@ fn delegate_child_tool_view_can_allow_shell_when_enabled() {
 fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
     let config = runtime_config::ToolRuntimeConfig::default();
     let defs = provider_tool_definitions_with_config(Some(&config));
-    let expected_names = vec!["bash", "browse", "edit", "read", "web", "write"];
+    let expected_names = vec!["bash", "browse", "edit", "plugin", "read", "web", "write"];
     assert_eq!(defs.len(), expected_names.len());
 
     let names: Vec<&str> = defs
@@ -580,12 +635,46 @@ fn provider_tool_definitions_are_stable_and_cover_direct_surface() {
 }
 
 #[test]
+fn runtime_plugin_tool_executes_demo_wasm_fixture() {
+    let root = unique_temp_dir("loong-runtime-plugin-tool-demo");
+    std::fs::create_dir_all(&root).expect("create root dir");
+    write_runtime_plugin_fixture(&root);
+
+    let tool_config = ToolConfig {
+        runtime_workspace_root: Some(root.display().to_string()),
+        ..ToolConfig::default()
+    };
+    let outcome = crate::tools::execute_app_tool_with_config(
+        ToolCoreRequest {
+            tool_name: "plugin".to_owned(),
+            payload: json!({
+                "payload": {
+                    "text": "hello from test"
+                }
+            }),
+        },
+        "root-session",
+        &SessionStoreConfig::default(),
+        &tool_config,
+    )
+    .expect("plugin tool execution should succeed");
+
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(outcome.payload["plugin_id"], "demo-wasm-bridge");
+    assert_eq!(outcome.payload["bridge_kind"], "wasm_component");
+    assert_eq!(outcome.payload["result"]["via"], "wasm");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn provider_exposed_tool_gate_covers_direct_and_gateway_tools() {
     assert!(is_provider_exposed_tool_name("read"));
     assert!(is_provider_exposed_tool_name("write"));
     assert!(is_provider_exposed_tool_name("bash"));
     assert!(is_provider_exposed_tool_name("edit"));
     assert!(is_provider_exposed_tool_name("browse"));
+    assert!(is_provider_exposed_tool_name("plugin"));
     assert!(is_provider_exposed_tool_name("file.read"));
     assert!(!is_provider_exposed_tool_name("shell.exec"));
 }

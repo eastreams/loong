@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use loong_bridge_runtime::BridgeExecutionPolicy;
 use loong_bridge_runtime::execute_http_json_bridge_call;
 use loong_bridge_runtime::execute_process_stdio_bridge_call;
+use loong_bridge_runtime::execute_wasm_component_bridge_call;
 use loong_contracts::Capability;
 use loong_spec::CliResult;
 use serde_json::{Map, Value};
@@ -324,12 +325,19 @@ fn load_managed_bridge_runtime_config(
 fn bridge_execution_policy_from_config(
     config: &mvp::config::LoongConfig,
 ) -> CliResult<BridgeExecutionPolicy> {
-    let supported_bridges = config
+    let bridge_matrix = config
         .runtime_plugins
-        .resolved_supported_bridges()
-        .map_err(|error| format!("resolve runtime plugin bridge kinds failed: {error}"))?;
-    let execute_http_json = supported_bridges.contains(&kernel::PluginBridgeKind::HttpJson);
-    let execute_process_stdio = supported_bridges.contains(&kernel::PluginBridgeKind::ProcessStdio);
+        .resolved_bridge_support_matrix()
+        .map_err(|error| format!("resolve runtime plugin bridge matrix failed: {error}"))?;
+    let execute_http_json = bridge_matrix
+        .supported_bridges
+        .contains(&kernel::PluginBridgeKind::HttpJson);
+    let execute_process_stdio = bridge_matrix
+        .supported_bridges
+        .contains(&kernel::PluginBridgeKind::ProcessStdio);
+    let execute_wasm_component = bridge_matrix
+        .supported_bridges
+        .contains(&kernel::PluginBridgeKind::WasmComponent);
     let mut allowed_process_commands = BTreeSet::new();
     let normalized_allowed_commands = config.runtime_plugins.normalized_allowed_process_commands();
 
@@ -340,6 +348,7 @@ fn bridge_execution_policy_from_config(
     Ok(BridgeExecutionPolicy {
         execute_process_stdio,
         execute_http_json,
+        execute_wasm_component,
         allowed_process_commands,
     })
 }
@@ -630,8 +639,17 @@ async fn invoke_managed_bridge_operation(
                 runtime_evidence: execution_result.runtime_evidence,
             })
         }
+        kernel::PluginBridgeKind::WasmComponent => {
+            let execution_result =
+                execute_wasm_component_bridge_call(&provider, &channel, &command, bridge_policy)
+                    .await;
+            let execution_result = execution_result.map_err(|failure| failure.reason)?;
+            Ok(ManagedBridgeInvocationSuccess {
+                response_payload: execution_result.response_payload,
+                runtime_evidence: execution_result.runtime_evidence,
+            })
+        }
         kernel::PluginBridgeKind::NativeFfi
-        | kernel::PluginBridgeKind::WasmComponent
         | kernel::PluginBridgeKind::McpServer
         | kernel::PluginBridgeKind::AcpBridge
         | kernel::PluginBridgeKind::AcpRuntime
@@ -665,6 +683,10 @@ fn provider_config_from_binding(
     metadata.insert(
         "channel_runtime_contract".to_owned(),
         binding.runtime_contract.clone(),
+    );
+    metadata.insert(
+        "package_root".to_owned(),
+        binding.plugin.package_root.clone(),
     );
 
     kernel::ProviderConfig {

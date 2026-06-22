@@ -119,6 +119,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 pulldown-cmark = "0.13.0"
 similar = "3.1.0"
 uuid = { version = "1", features = ["v4"] }
+wasmtime.workspace = true
+wat = "1"
 
 [dev-dependencies]
 axum.workspace = true

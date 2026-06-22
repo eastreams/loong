@@ -8,6 +8,7 @@ use loong_kernel as kernel;
 pub struct BridgeExecutionPolicy {
     pub execute_process_stdio: bool,
     pub execute_http_json: bool,
+    pub execute_wasm_component: bool,
     pub allowed_process_commands: BTreeSet<String>,
 }
 

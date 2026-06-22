@@ -175,6 +175,7 @@ pub(super) fn tool_argument_hint(name: &str) -> &'static str {
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
+        "plugin" => "plugin_id?:string,operation?:string,payload?:object,root?:string",
         "delegate" | "delegate_async" => {
             "task:string,label?:string,profile?:string,isolation?:string,timeout_seconds?:integer"
         }
@@ -238,6 +239,9 @@ pub(super) fn tool_search_hint(name: &str, fallback: &'static str) -> &'static s
         }
         "memory_get" => "read a memory note by path, inspect saved durable memory content",
         "provider.switch" => "switch model provider, change runtime provider selection",
+        "plugin" => {
+            "invoke a local runtime plugin, call the bundled wasm demo plugin, run a workspace runtime plugin by id"
+        }
         _ => fallback,
     }
 }
@@ -647,6 +651,12 @@ pub(super) fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'sta
             ("timeout_ms", "integer"),
         ],
         "provider.switch" => &[("selector", "string")],
+        "plugin" => &[
+            ("plugin_id", "string"),
+            ("operation", "string"),
+            ("payload", "object"),
+            ("root", "string"),
+        ],
         "delegate" | "delegate_async" => &[
             ("task", "string"),
             ("label", "string"),
@@ -799,6 +809,7 @@ pub(super) fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "memory_get" => &["path"],
         "shell.exec" => &["command"],
         "bash.exec" => &["command"],
+        "plugin" => &[],
         "delegate" | "delegate_async" => &["task"],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[],
         "session_tool_policy_set" => &[],
@@ -908,6 +919,7 @@ pub(super) fn tool_tags(name: &str) -> &'static [&'static str] {
         "shell.exec" => &["shell", "command", "process", "exec"],
         "bash.exec" => &["bash", "command", "process", "exec"],
         "provider.switch" => &["provider", "switch", "model", "runtime"],
+        "plugin" => &["plugin", "runtime", "wasm", "local"],
         "delegate" | "delegate_async" => &["session", "delegate", "child"],
         "session_tool_policy_status" | "session_tool_policy_set" | "session_tool_policy_clear" => {
             &["session", "policy", "tools", "security"]

@@ -576,6 +576,12 @@ fn resolved_runtime_endpoint(
     plugin: &PluginIR,
     account: &ManagedPluginBridgeResolvedAccount,
 ) -> CliResult<String> {
+    if plugin.runtime.bridge_kind == PluginBridgeKind::WasmComponent
+        && let Some(endpoint) = non_empty_plugin_endpoint(plugin)
+    {
+        return Ok(endpoint);
+    }
+
     if let Some(endpoint_override) = account.endpoint_override.as_ref() {
         let trimmed_endpoint_override = endpoint_override.trim();
         if !trimmed_endpoint_override.is_empty() {
@@ -583,11 +589,8 @@ fn resolved_runtime_endpoint(
         }
     }
 
-    if let Some(endpoint) = plugin.endpoint.as_ref() {
-        let trimmed_endpoint = endpoint.trim();
-        if !trimmed_endpoint.is_empty() {
-            return Ok(trimmed_endpoint.to_owned());
-        }
+    if let Some(endpoint) = non_empty_plugin_endpoint(plugin) {
+        return Ok(endpoint);
     }
 
     let entrypoint_hint = plugin.runtime.entrypoint_hint.trim();
@@ -599,6 +602,16 @@ fn resolved_runtime_endpoint(
         "managed bridge runtime plugin {} has no usable endpoint or entrypoint hint",
         plugin.plugin_id
     ))
+}
+
+fn non_empty_plugin_endpoint(plugin: &PluginIR) -> Option<String> {
+    let endpoint = plugin.endpoint.as_ref()?;
+    let trimmed_endpoint = endpoint.trim();
+    if trimmed_endpoint.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_endpoint.to_owned())
 }
 
 fn canonical_channel_bridge_contract(
@@ -880,6 +893,36 @@ mod tests {
         );
         assert!(binding.supports_operation(CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION));
         assert!(binding.supports_operation(CHANNEL_PLUGIN_BRIDGE_RUNTIME_RECEIVE_BATCH_OPERATION));
+    }
+
+    #[test]
+    fn resolve_managed_bridge_runtime_binding_keeps_wasm_manifest_endpoint() {
+        let root = TempDir::new().expect("create runtime plugin root");
+        let mut manifest = sample_manifest(
+            "weixin-wasm-bridge-runtime",
+            "weixin",
+            "wasm_component",
+            vec![CHANNEL_PLUGIN_BRIDGE_RUNTIME_SEND_MESSAGE_OPERATION],
+        );
+        manifest.endpoint = Some("./plugin.wat".to_owned());
+        write_manifest(root.path(), "weixin-wasm-bridge-runtime", &manifest);
+
+        let mut config = LoongConfig::default();
+        config.runtime_plugins.enabled = true;
+        config.runtime_plugins.roots = vec![root.path().display().to_string()];
+        config.runtime_plugins.supported_bridges = vec!["wasm_component".to_owned()];
+        config.weixin.enabled = true;
+        config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+        config.weixin.bridge_access_token = Some(loong_contracts::SecretRef::Inline(
+            "bridge-token".to_owned(),
+        ));
+        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+        let binding = resolve_managed_plugin_bridge_runtime_binding(&config, "weixin", None)
+            .expect("resolve managed wasm bridge runtime binding");
+
+        assert_eq!(binding.plugin.plugin_id, "weixin-wasm-bridge-runtime");
+        assert_eq!(binding.endpoint, "./plugin.wat".to_owned());
     }
 
     #[test]

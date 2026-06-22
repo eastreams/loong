@@ -439,6 +439,7 @@ mod tests {
         let runtime_policy = BridgeExecutionPolicy {
             execute_process_stdio: false,
             execute_http_json: false,
+            execute_wasm_component: false,
             allowed_process_commands: BTreeSet::from(["cat".to_owned()]),
         };
 

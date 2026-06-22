@@ -57,6 +57,7 @@ mod required_capabilities_tests;
 mod routing;
 pub mod runtime_config;
 pub(crate) mod runtime_events;
+mod runtime_plugin;
 mod security_posture;
 pub(crate) mod session;
 #[cfg(feature = "memory-sqlite")]

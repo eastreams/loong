@@ -16,6 +16,7 @@ should be validated.
 | If you are asking... | Start here | Why |
 | --- | --- | --- |
 | Where should a runtime or architecture change live? | [Architecture](/build-on-loong/architecture) | it is the public system map and boundary reference |
+| How do I build or demo a WebAssembly bridge plugin? | [WASM Plugins](/build-on-loong/wasm-plugins) | it explains manifest discovery, the demo JSON ABI, and the bundled source-visible plugin |
 | What validation bar should a contribution meet? | [Contributing](/build-on-loong/contributing) | it explains workflow, CI, and review expectations |
 | What is the normal public PR and verification path? | [Contribution Workflow](/build-on-loong/contribution-workflow) | it captures the public delivery lane |
 | How should public docs changes be routed and validated? | [Docs Workflow](/build-on-loong/docs-workflow) | it explains the README, Mintlify, and repo-docs split plus the Mintlify validation loop |
@@ -49,8 +50,9 @@ The public repository exposes a small set of architecture references on purpose:
 ## Suggested Reading Order
 
 1. Read [Architecture](/build-on-loong/architecture) first if your change touches runtime shape, crate boundaries, or ownership.
-2. Read [Contributing](/build-on-loong/contributing) next if you are preparing a real patch.
-3. Read [Contribution Workflow](/build-on-loong/contribution-workflow) if you need the public validation and PR lane.
-4. Read [Docs Workflow](/build-on-loong/docs-workflow) when the patch is primarily about public docs structure, placement, or Mintlify delivery.
-5. Read [Contribution Areas](/build-on-loong/contribution-areas) if you want to match your background to current leverage points.
-6. Read [Reference](/reference/overview) or [Documentation Policy](/reference/documentation-policy) when you need the surrounding public contract and docs boundary.
+2. Read [WASM Plugins](/build-on-loong/wasm-plugins) when your extension is a manifest-first WebAssembly bridge.
+3. Read [Contributing](/build-on-loong/contributing) next if you are preparing a real patch.
+4. Read [Contribution Workflow](/build-on-loong/contribution-workflow) if you need the public validation and PR lane.
+5. Read [Docs Workflow](/build-on-loong/docs-workflow) when the patch is primarily about public docs structure, placement, or Mintlify delivery.
+6. Read [Contribution Areas](/build-on-loong/contribution-areas) if you want to match your background to current leverage points.
+7. Read [Reference](/reference/overview) or [Documentation Policy](/reference/documentation-policy) when you need the surrounding public contract and docs boundary.

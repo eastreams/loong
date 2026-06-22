@@ -11963,6 +11963,131 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_routes_plugin_tool_through_default_app_dispatcher() {
+    fn write_runtime_plugin_fixture(root: &std::path::Path) {
+        let plugin_root = root.join("runtime-plugins").join("demo-wasm-bridge");
+        std::fs::create_dir_all(&plugin_root).expect("create runtime plugin fixture root");
+        std::fs::write(
+            plugin_root.join("loong.plugin.json"),
+            r#"{
+  "api_version": "v1alpha1",
+  "plugin_id": "demo-wasm-bridge",
+  "version": "0.1.0",
+  "provider_id": "demo-wasm-provider",
+  "connector_name": "demo-wasm-connector",
+  "channel_id": "weixin",
+  "endpoint": "./plugin.wat",
+  "capabilities": ["InvokeConnector"],
+  "trust_tier": "unverified",
+  "metadata": {
+    "bridge_kind": "wasm_component",
+    "adapter_family": "channel-bridge",
+    "transport_family": "demo_wasm_bridge",
+    "target_contract": "weixin_reply_loop",
+    "account_scope": "per_account",
+    "channel_runtime_contract": "loong_channel_bridge_v1",
+    "channel_runtime_operations_json": "[\"send_message\",\"receive_batch\"]"
+  },
+  "setup": {
+    "surface": "channel"
+  }
+}"#,
+        )
+        .expect("write runtime plugin manifest");
+        std::fs::write(
+            plugin_root.join("plugin.wat"),
+            r#"(module
+  (memory (export "memory") 1)
+  (global $heap (mut i32) (i32.const 2048))
+  (data (i32.const 1024) "{\"payload\":{\"ok\":true,\"via\":\"wasm\",\"messages\":[],\"demo_message\":\"handled by Loong demo WASM plugin\"}}")
+  (func (export "loong_alloc") (param $len i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $heap))
+    (global.set $heap (i32.add (global.get $heap) (local.get $len)))
+    (local.get $ptr)
+  )
+  (func (export "loong_free") (param $ptr i32) (param $len i32))
+  (func (export "loong_invoke") (param $ptr i32) (param $len i32) (result i64)
+    (i64.or
+      (i64.shl (i64.extend_i32_u (i32.const 1024)) (i64.const 32))
+      (i64.extend_i32_u (i32.const 101))
+    )
+  )
+)"#,
+        )
+        .expect("write runtime plugin WAT");
+    }
+
+    let root = unique_temp_dir("conversation-plugin-tool-dispatch");
+    std::fs::create_dir_all(&root).expect("create root dir");
+    write_runtime_plugin_fixture(&root);
+
+    let mut config = test_config();
+    config.tools.runtime_workspace_root = Some(root.display().to_string());
+    let memory_config = session_store_config_from_config(&config);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let engine = TurnEngine::new(1);
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![provider_tool_intent(
+            "plugin",
+            json!({
+                "payload": {
+                    "text": "hello from conversation test"
+                }
+            }),
+            "root-session",
+            "turn-plugin-tool",
+            "call-plugin-tool",
+        )],
+        raw_meta: Value::Null,
+    };
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "root-session",
+        crate::tools::runtime_tool_view_for_config(&config.tools),
+    );
+
+    let result = engine
+        .execute_turn_in_context(
+            &turn,
+            &session_context,
+            &dispatcher,
+            crate::conversation::ConversationRuntimeBinding::direct(),
+            None,
+        )
+        .await;
+
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+            assert_eq!(envelope["tool"], "plugin");
+            assert!(
+                envelope["payload_summary"]
+                    .as_str()
+                    .expect("payload summary should be text")
+                    .contains("\"via\":\"wasm\""),
+                "expected wasm payload in output, got: {text}"
+            );
+        }
+        other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_) => {
+            panic!("expected FinalText, got: {other:?}")
+        }
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_direct_binding_denies_sessions_send_before_dispatch() {
     use async_trait::async_trait;
     use loong_contracts::{ToolCoreOutcome, ToolCoreRequest};

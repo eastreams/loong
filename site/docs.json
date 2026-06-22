@@ -12,9 +12,7 @@
     "groups": [
       {
         "group": "Overview",
-        "pages": [
-          "index"
-        ]
+        "pages": ["index"]
       },
       {
         "group": "Get Started",
@@ -131,6 +129,7 @@
         "pages": [
           "build-on-loong/overview",
           "build-on-loong/architecture",
+          "build-on-loong/wasm-plugins",
           "build-on-loong/contributing",
           "build-on-loong/contribution-workflow",
           "build-on-loong/docs-workflow",
