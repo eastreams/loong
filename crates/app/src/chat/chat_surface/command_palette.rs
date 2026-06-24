@@ -15,6 +15,8 @@ use ratatui::{
     widgets::{Clear, List, ListItem, ListState, Paragraph},
 };
 
+mod skills;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandAction {
     RunCommand(&'static str),
@@ -755,7 +757,7 @@ impl CommandPalette {
             let list = List::new(items).highlight_style(Style::default());
             let mut visible_state = ListState::default();
             f.render_stateful_widget(list, list_area, &mut visible_state);
-            f.render_widget(Paragraph::new(skill_popup_hint_line()), hint_area);
+            f.render_widget(Paragraph::new(skills::skill_popup_hint_line()), hint_area);
             return;
         }
 
@@ -773,116 +775,15 @@ impl CommandPalette {
             .map(|(visible_index, entry)| {
                 let index = start + visible_index;
                 let is_selected = index == selected && entry.selectable;
-                let (category_tag, raw_description) =
-                    split_category_tag(entry.description.as_str());
-                let category_width = crate::presentation::display_width(category_tag);
-                let (description_context, description_detail) =
-                    split_description_context(raw_description);
-                let source_has_detail = !description_detail.is_empty();
-                let label_limit = entry
-                    .source_skill
-                    .as_ref()
-                    .map(skill_label_max_width)
-                    .unwrap_or(Self::SKILL_LABEL_TRUNCATE_LEN);
-                let available_after_prefix = list_area.width.saturating_sub(2) as usize;
-                let label_separator_width = 2usize;
-                let desc_leading_space_width = usize::from(!raw_description.is_empty());
-                let desc_context_separator_width =
-                    if !description_context.is_empty() && source_has_detail {
-                        3
-                    } else {
-                        0
-                    };
-                let estimated_context_width =
-                    crate::presentation::display_width(description_context).min(
-                        entry
-                            .source_skill
-                            .as_ref()
-                            .map(skill_context_max_width)
-                            .unwrap_or(18),
-                    );
-                let reserved_for_category = label_separator_width
-                    + category_width
-                    + desc_leading_space_width
-                    + estimated_context_width
-                    + desc_context_separator_width;
-                let label_budget = available_after_prefix
-                    .saturating_sub(reserved_for_category)
-                    .max(1);
-                let label = truncate(entry.label.as_str(), label_limit.min(label_budget));
-                let label_width = crate::presentation::display_width(label.as_str());
-                let desc_available_width = available_after_prefix.saturating_sub(
-                    label_width + label_separator_width + category_width + desc_leading_space_width,
-                );
-                let min_detail_width = if source_has_detail && !description_context.is_empty() {
-                    2
-                } else if source_has_detail {
-                    6
-                } else {
-                    0
+                let Some(skill_item) = entry.skill.as_ref() else {
+                    return ListItem::new(Line::from(""));
                 };
-                let max_context_by_remaining = desc_available_width
-                    .saturating_sub(desc_context_separator_width + min_detail_width)
-                    .max(1);
-                let max_context_by_balance = if source_has_detail && description_context.len() > 12
-                {
-                    (desc_available_width / 2).max(8)
-                } else {
-                    max_context_by_remaining
-                };
-                let context_limit = entry
-                    .source_skill
-                    .as_ref()
-                    .map(skill_context_max_width)
-                    .unwrap_or(18)
-                    .min(max_context_by_remaining.min(max_context_by_balance).max(1));
-                let truncated_context = truncate(description_context, context_limit);
-                let desc_context_width =
-                    crate::presentation::display_width(truncated_context.as_str());
-                let max_desc = desc_available_width
-                    .saturating_sub(desc_context_width + desc_context_separator_width);
-                let truncated_detail = truncate(description_detail, max_desc);
-                let description = if description_context.is_empty() {
-                    truncated_detail
-                } else if !source_has_detail || truncated_detail.is_empty() {
-                    truncated_context.clone()
-                } else {
-                    format!("{truncated_context} · {truncated_detail}")
-                };
-                let label_spans = render_match_highlight_spans(
-                    label.as_str(),
-                    entry
-                        .match_target
-                        .clone()
-                        .filter(|target| target.is_label()),
-                    skill_label_style(is_selected),
-                    skill_label_highlight_style(is_selected),
-                );
-                let description_spans = render_skill_description_spans(
-                    truncated_context.as_str(),
-                    description.as_str(),
-                    entry.match_target.clone(),
+                skills::render_skill_item(
+                    skill_item,
                     is_selected,
-                );
-                let mut spans = vec![Span::styled(
-                    if is_selected { "› " } else { "  " },
-                    Style::default().fg(if is_selected {
-                        SURFACE_CYAN
-                    } else {
-                        SURFACE_DIM_GRAY
-                    }),
-                )];
-                spans.extend(label_spans);
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    category_tag.to_owned(),
-                    skill_category_style(is_selected),
-                ));
-                if !description.is_empty() {
-                    spans.push(Span::raw(" "));
-                    spans.extend(description_spans);
-                }
-                ListItem::new(Line::from(spans))
+                    list_area.width,
+                    Self::SKILL_LABEL_TRUNCATE_LEN,
+                )
             })
             .collect();
 
@@ -895,7 +796,7 @@ impl CommandPalette {
         let mut visible_state = ListState::default();
         visible_state.select(Some(selected.saturating_sub(start)));
         f.render_stateful_widget(list, list_area, &mut visible_state);
-        f.render_widget(Paragraph::new(skill_popup_hint_line()), hint_area);
+        f.render_widget(Paragraph::new(skills::skill_popup_hint_line()), hint_area);
     }
 
     fn render_settings_mode(
@@ -1466,8 +1367,7 @@ impl CommandPalette {
                 description: entry.description,
                 action: entry.action,
                 selectable: true,
-                match_target: None,
-                source_skill: None,
+                skill: None,
             })
             .collect()
     }
@@ -1502,8 +1402,7 @@ impl CommandPalette {
                     session_id: entry.session_id,
                 },
                 selectable: true,
-                match_target: None,
-                source_skill: None,
+                skill: None,
             })
             .collect()
     }
@@ -1545,71 +1444,21 @@ impl CommandPalette {
                 },
                 action: entry.action,
                 selectable: entry.selectable,
-                match_target: None,
-                source_skill: None,
+                skill: None,
             })
             .collect()
     }
 
     fn filtered_skills(&self) -> Vec<PaletteItem> {
-        let query = self.query.trim().to_ascii_lowercase();
-        let mut matches = self
-            .skills
-            .iter()
-            .filter_map(|skill| {
-                if query.is_empty() {
-                    return Some((skill, SkillMatchTarget::Label(usize::MAX, 0)));
-                }
-
-                let name = skill.name.to_ascii_lowercase();
-                let desc = skill.description.to_ascii_lowercase();
-                if let Some(index) = name.find(query.as_str()) {
-                    return Some((skill, SkillMatchTarget::Label(index, query.len())));
-                }
-                if let Some(indices) = fuzzy_match_positions(skill.name.as_str(), query.as_str()) {
-                    return Some((skill, SkillMatchTarget::LabelFuzzy(indices)));
-                }
-                if let Some((index, term)) = skill.search_terms.iter().find_map(|term| {
-                    let lower = term.to_ascii_lowercase();
-                    lower
-                        .find(query.as_str())
-                        .map(|index| (index, term.to_owned()))
-                }) {
-                    return Some((skill, SkillMatchTarget::SearchTerm { index, term }));
-                }
-                desc.find(query.as_str())
-                    .map(|index| (skill, SkillMatchTarget::Description(index, query.len())))
-            })
-            .collect::<Vec<_>>();
-
-        matches.sort_by(|(left_skill, left_target), (right_skill, right_target)| {
-            if query.is_empty() {
-                skill_label_priority(left_skill)
-                    .cmp(&skill_label_priority(right_skill))
-                    .then_with(|| left_skill.name.cmp(&right_skill.name))
-            } else {
-                left_target
-                    .sort_priority()
-                    .cmp(&right_target.sort_priority())
-                    .then_with(|| left_target.match_index().cmp(&right_target.match_index()))
-                    .then_with(|| {
-                        skill_label_priority(left_skill).cmp(&skill_label_priority(right_skill))
-                    })
-                    .then_with(|| left_skill.name.cmp(&right_skill.name))
-            }
-        });
-
-        matches
+        skills::filtered_skill_items(self.skills.as_slice(), self.query.as_str())
             .into_iter()
-            .map(|(skill, match_target)| PaletteItem {
-                label: format!("${}", skill.name),
+            .map(|skill| PaletteItem {
+                label: skill.label.clone(),
                 status_tag: None,
-                description: format_skill_popup_description(skill, &match_target),
-                action: CommandAction::InsertText(format!("${} ", skill.name)),
+                description: skill.description.clone(),
+                action: CommandAction::InsertText(skill.insertion.clone()),
                 selectable: true,
-                match_target: (!query.is_empty())
-                    .then_some(adjust_skill_match_target_for_label(match_target, 1)),
-                source_skill: Some(skill.clone()),
+                skill: Some(skill),
             })
             .collect()
     }
@@ -1739,333 +1588,6 @@ fn selection_index_for_entries(entries: &[SettingsEntry], selected_label: Option
         .unwrap_or(0)
 }
 
-fn skill_popup_hint_line() -> Line<'static> {
-    Line::from(vec![
-        Span::raw("Press "),
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(SURFACE_ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" / "),
-        Span::styled(
-            "Tab",
-            Style::default()
-                .fg(SURFACE_ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" to insert or "),
-        Span::styled(
-            "Esc",
-            Style::default()
-                .fg(SURFACE_ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" to close"),
-    ])
-}
-
-fn skill_label_max_width(skill: &SkillEntry) -> usize {
-    match skill.category_tag.as_str() {
-        "[Plugin]" | "[Connector]" => 22,
-        _ => 24,
-    }
-}
-
-fn skill_context_max_width(skill: &SkillEntry) -> usize {
-    match skill.category_tag.as_str() {
-        "[Plugin]" | "[Connector]" => 14,
-        _ => 18,
-    }
-}
-
-fn skill_label_priority(skill: &SkillEntry) -> u8 {
-    let category = skill.category_tag.to_ascii_lowercase();
-    if category.contains("repo") {
-        0
-    } else if category.contains("plugin") {
-        1
-    } else if category.contains("connector") {
-        2
-    } else if category.contains("skill") {
-        3
-    } else if skill.name.contains("browser") {
-        4
-    } else {
-        5
-    }
-}
-
-fn format_skill_popup_description(skill: &SkillEntry, match_target: &SkillMatchTarget) -> String {
-    match match_target {
-        SkillMatchTarget::SearchTerm { term, .. } if term != &skill.name => {
-            format!("{} {} · {}", skill.category_tag, term, skill.description)
-        }
-        SkillMatchTarget::Label(..)
-        | SkillMatchTarget::LabelFuzzy(..)
-        | SkillMatchTarget::SearchTerm { .. }
-        | SkillMatchTarget::Description(..) => {
-            if let Some(alias) = skill.source_alias.as_deref() {
-                format!("{} {} · {}", skill.category_tag, alias, skill.description)
-            } else {
-                format!("{} {}", skill.category_tag, skill.description)
-            }
-        }
-    }
-}
-
-fn split_category_tag(description: &str) -> (&str, &str) {
-    let trimmed = description.trim_start();
-    if let Some(rest) = trimmed.strip_prefix('[')
-        && let Some((tag_body, remainder)) = rest.split_once(']')
-    {
-        let tag_len = tag_body.len() + 2;
-        let (tag, _) = trimmed.split_at(tag_len);
-        return (tag, remainder.trim_start());
-    }
-    ("", trimmed)
-}
-
-fn adjust_skill_match_target_for_label(
-    match_target: SkillMatchTarget,
-    offset: usize,
-) -> SkillMatchTarget {
-    match match_target {
-        SkillMatchTarget::Label(start, len) => {
-            SkillMatchTarget::Label(start.saturating_add(offset), len)
-        }
-        SkillMatchTarget::LabelFuzzy(indices) => SkillMatchTarget::LabelFuzzy(
-            indices
-                .into_iter()
-                .map(|index| index.saturating_add(offset))
-                .collect(),
-        ),
-        other @ SkillMatchTarget::SearchTerm { .. } | other @ SkillMatchTarget::Description(..) => {
-            other
-        }
-    }
-}
-
-fn split_description_context(description: &str) -> (&str, &str) {
-    description
-        .split_once(" · ")
-        .map(|(context, detail)| (context.trim_end(), detail.trim_start()))
-        .unwrap_or(("", description))
-}
-
-fn render_match_highlight_spans(
-    text: &str,
-    match_target: Option<SkillMatchTarget>,
-    normal_style: Style,
-    highlight_style: Style,
-) -> Vec<Span<'static>> {
-    let Some(ranges) = match_target.and_then(|target| target.highlight_ranges(text)) else {
-        return vec![Span::styled(text.to_owned(), normal_style)];
-    };
-    let mut spans = Vec::new();
-    let mut cursor = 0usize;
-    for range in ranges {
-        if range.start > cursor {
-            spans.push(Span::styled(
-                text[cursor..range.start].to_owned(),
-                normal_style,
-            ));
-        }
-        spans.push(Span::styled(
-            text[range.clone()].to_owned(),
-            highlight_style,
-        ));
-        cursor = range.end;
-    }
-    if cursor < text.len() {
-        spans.push(Span::styled(text[cursor..].to_owned(), normal_style));
-    }
-    spans
-}
-
-fn skill_category_style(selected: bool) -> Style {
-    Style::default().fg(if selected {
-        SURFACE_GRAY
-    } else {
-        SURFACE_DIM_GRAY
-    })
-}
-
-fn skill_label_style(selected: bool) -> Style {
-    Style::default()
-        .fg(if selected {
-            SURFACE_CYAN
-        } else {
-            ratatui::style::Color::White
-        })
-        .add_modifier(if selected {
-            Modifier::BOLD
-        } else {
-            Modifier::empty()
-        })
-}
-
-fn skill_label_highlight_style(selected: bool) -> Style {
-    Style::default()
-        .fg(if selected {
-            SURFACE_CYAN
-        } else {
-            SURFACE_ACCENT
-        })
-        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-}
-
-fn skill_context_style(selected: bool) -> Style {
-    Style::default().fg(if selected {
-        SURFACE_GRAY
-    } else {
-        SURFACE_DIM_GRAY
-    })
-}
-
-fn skill_separator_style() -> Style {
-    Style::default().fg(SURFACE_DIM_GRAY)
-}
-
-fn skill_description_style(selected: bool) -> Style {
-    Style::default().fg(if selected {
-        SURFACE_ACCENT
-    } else {
-        SURFACE_GRAY
-    })
-}
-
-fn skill_highlight_style() -> Style {
-    Style::default()
-        .fg(ratatui::style::Color::White)
-        .add_modifier(Modifier::UNDERLINED)
-}
-
-fn render_skill_description_spans(
-    context: &str,
-    full_description: &str,
-    match_target: Option<SkillMatchTarget>,
-    selected: bool,
-) -> Vec<Span<'static>> {
-    let (context_part, detail_part) = split_description_context(full_description);
-    let highlighted_range = description_match_target(full_description, match_target)
-        .and_then(|target| target.highlight_ranges(full_description))
-        .and_then(|mut ranges| ranges.drain(..).next());
-    let mut spans = Vec::new();
-    if !context_part.is_empty() {
-        spans.extend(render_segment_highlight_spans(
-            context_part,
-            0,
-            skill_context_style(selected),
-            skill_highlight_style(),
-            highlighted_range.clone(),
-        ));
-    }
-    if !context_part.is_empty() && !detail_part.is_empty() {
-        spans.push(Span::styled(" · ", skill_separator_style()));
-    }
-    if !detail_part.is_empty() {
-        let detail_start = if context_part.is_empty() {
-            0
-        } else {
-            context_part.len() + 3
-        };
-        spans.extend(render_segment_highlight_spans(
-            detail_part,
-            detail_start,
-            skill_description_style(selected),
-            skill_highlight_style(),
-            highlighted_range,
-        ));
-    }
-    if context_part.is_empty() && detail_part.is_empty() && !context.is_empty() {
-        spans.push(Span::styled(
-            context.to_owned(),
-            skill_context_style(selected),
-        ));
-    }
-    spans
-}
-
-fn render_segment_highlight_spans(
-    text: &str,
-    offset: usize,
-    normal_style: Style,
-    highlight_style: Style,
-    highlight_range: Option<std::ops::Range<usize>>,
-) -> Vec<Span<'static>> {
-    let Some(range) = highlight_range else {
-        return vec![Span::styled(text.to_owned(), normal_style)];
-    };
-    let segment_start = offset;
-    let segment_end = offset.saturating_add(text.len());
-    let overlap_start = range.start.max(segment_start);
-    let overlap_end = range.end.min(segment_end);
-    if overlap_start >= overlap_end {
-        return vec![Span::styled(text.to_owned(), normal_style)];
-    }
-
-    let relative_start = overlap_start.saturating_sub(segment_start);
-    let relative_end = overlap_end.saturating_sub(segment_start);
-    let mut spans = Vec::new();
-    if relative_start > 0 {
-        spans.push(Span::styled(
-            text[..relative_start].to_owned(),
-            normal_style,
-        ));
-    }
-    spans.push(Span::styled(
-        text[relative_start..relative_end].to_owned(),
-        highlight_style,
-    ));
-    if relative_end < text.len() {
-        spans.push(Span::styled(text[relative_end..].to_owned(), normal_style));
-    }
-    spans
-}
-
-fn fuzzy_match_positions(text: &str, query: &str) -> Option<Vec<usize>> {
-    if query.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let query_chars = query
-        .chars()
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let mut matched_positions = Vec::new();
-    let mut query_index = 0usize;
-
-    for (index, ch) in text.char_indices() {
-        let Some(expected) = query_chars.get(query_index) else {
-            break;
-        };
-        if ch.to_ascii_lowercase() == *expected {
-            matched_positions.push(index);
-            query_index += 1;
-        }
-    }
-
-    (query_index == query_chars.len()).then_some(matched_positions)
-}
-
-fn description_match_target(
-    description: &str,
-    match_target: Option<SkillMatchTarget>,
-) -> Option<SkillMatchTarget> {
-    match match_target {
-        Some(SkillMatchTarget::SearchTerm { term, .. }) => {
-            let lower_description = description.to_ascii_lowercase();
-            let lower_term = term.to_ascii_lowercase();
-            lower_description
-                .find(lower_term.as_str())
-                .map(|index| SkillMatchTarget::Description(index, term.len()))
-        }
-        other => other.filter(|target| target.is_description()),
-    }
-}
-
 #[derive(Debug, Clone)]
 struct PaletteItem {
     label: String,
@@ -2073,75 +1595,7 @@ struct PaletteItem {
     description: String,
     action: CommandAction,
     selectable: bool,
-    match_target: Option<SkillMatchTarget>,
-    source_skill: Option<SkillEntry>,
-}
-
-#[derive(Debug, Clone)]
-enum SkillMatchTarget {
-    Label(usize, usize),
-    LabelFuzzy(Vec<usize>),
-    SearchTerm { index: usize, term: String },
-    Description(usize, usize),
-}
-
-impl SkillMatchTarget {
-    fn sort_priority(&self) -> usize {
-        match self {
-            Self::Label(..) => 0,
-            Self::LabelFuzzy(..) => 1,
-            Self::SearchTerm { .. } => 2,
-            Self::Description(..) => 3,
-        }
-    }
-
-    fn match_index(&self) -> usize {
-        match self {
-            Self::Label(index, _) | Self::Description(index, _) => *index,
-            Self::LabelFuzzy(indices) => indices.first().copied().unwrap_or(usize::MAX),
-            Self::SearchTerm { index, .. } => *index,
-        }
-    }
-
-    fn is_label(&self) -> bool {
-        matches!(self, Self::Label(..) | Self::LabelFuzzy(..))
-    }
-
-    fn is_description(&self) -> bool {
-        matches!(self, Self::Description(..))
-    }
-
-    fn highlight_ranges(&self, text: &str) -> Option<Vec<std::ops::Range<usize>>> {
-        match self {
-            Self::Label(start, len) | Self::Description(start, len) => {
-                let end = start.saturating_add(*len);
-                if *start <= text.len()
-                    && end <= text.len()
-                    && text.is_char_boundary(*start)
-                    && text.is_char_boundary(end)
-                {
-                    Some(std::iter::once(*start..end).collect())
-                } else {
-                    None
-                }
-            }
-            Self::LabelFuzzy(indices) => {
-                let mut ranges = Vec::new();
-                for start in indices {
-                    if !text.is_char_boundary(*start) {
-                        return None;
-                    }
-                    let end = text[*start..]
-                        .chars()
-                        .next()
-                        .map(|ch| start.saturating_add(ch.len_utf8()))?;
-                    ranges.push(*start..end);
-                }
-                Some(ranges)
-            }
-            Self::SearchTerm { .. } => None,
-        }
-    }
+    skill: Option<skills::SkillPaletteItem>,
 }
 
 fn truncate(text: &str, max_len: usize) -> String {
@@ -2192,7 +1646,6 @@ mod tests {
     use crate::provider::ProviderModelCatalogEntry;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use ratatui::style::{Modifier, Style};
     use ratatui::{Terminal, backend::TestBackend};
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -2576,174 +2029,6 @@ mod tests {
     }
 
     #[test]
-    fn split_category_tag_separates_tag_from_description() {
-        let (tag, description) = super::split_category_tag("[Skill] demo description");
-        assert_eq!(tag, "[Skill]");
-        assert_eq!(description, "demo description");
-
-        let (tag, description) = super::split_category_tag("demo description");
-        assert_eq!(tag, "");
-        assert_eq!(description, "demo description");
-    }
-
-    #[test]
-    fn split_description_context_preserves_alias_prefix() {
-        let (context, detail) =
-            super::split_description_context("babysit-pr · triage pull requests");
-        assert_eq!(context, "babysit-pr");
-        assert_eq!(detail, "triage pull requests");
-
-        let (context, detail) = super::split_description_context("plain description");
-        assert_eq!(context, "");
-        assert_eq!(detail, "plain description");
-    }
-
-    #[test]
-    fn adjust_skill_match_target_for_label_offsets_name_matches() {
-        match super::adjust_skill_match_target_for_label(super::SkillMatchTarget::Label(0, 4), 1) {
-            super::SkillMatchTarget::Label(start, len) => {
-                assert_eq!(start, 1);
-                assert_eq!(len, 4);
-            }
-            other @ super::SkillMatchTarget::LabelFuzzy(_)
-            | other @ super::SkillMatchTarget::SearchTerm { .. }
-            | other @ super::SkillMatchTarget::Description(..) => {
-                panic!("expected shifted label target, got {other:?}")
-            }
-        }
-    }
-
-    #[test]
-    fn render_match_highlight_spans_splits_highlighted_segment() {
-        let spans = super::render_match_highlight_spans(
-            "$demo-skill",
-            Some(super::SkillMatchTarget::Label(1, 4)),
-            Style::default(),
-            Style::default().add_modifier(Modifier::BOLD),
-        );
-
-        assert_eq!(spans.len(), 3);
-        assert_eq!(spans[0].content.as_ref(), "$");
-        assert_eq!(spans[1].content.as_ref(), "demo");
-        assert_eq!(spans[2].content.as_ref(), "-skill");
-    }
-
-    #[test]
-    fn render_match_highlight_spans_supports_fuzzy_positions() {
-        let spans = super::render_match_highlight_spans(
-            "$github",
-            Some(super::SkillMatchTarget::LabelFuzzy(vec![1, 3, 6])),
-            Style::default(),
-            Style::default().add_modifier(Modifier::BOLD),
-        );
-
-        assert_eq!(spans.len(), 6);
-        assert_eq!(spans[0].content.as_ref(), "$");
-        assert_eq!(spans[1].content.as_ref(), "g");
-        assert_eq!(spans[2].content.as_ref(), "i");
-        assert_eq!(spans[3].content.as_ref(), "t");
-        assert_eq!(spans[4].content.as_ref(), "hu");
-        assert_eq!(spans[5].content.as_ref(), "b");
-    }
-
-    #[test]
-    fn skill_highlight_style_uses_underlined_white_text() {
-        let style = super::skill_highlight_style();
-        assert_eq!(style.fg, Some(ratatui::style::Color::White));
-        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
-    }
-
-    #[test]
-    fn skill_label_highlight_style_uses_accent_when_unselected() {
-        let style = super::skill_label_highlight_style(false);
-        assert_eq!(style.fg, Some(super::SURFACE_ACCENT));
-        assert!(style.add_modifier.contains(Modifier::BOLD));
-        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
-    }
-
-    #[test]
-    fn skill_label_highlight_style_uses_cyan_when_selected() {
-        let style = super::skill_label_highlight_style(true);
-        assert_eq!(style.fg, Some(super::SURFACE_CYAN));
-        assert!(style.add_modifier.contains(Modifier::BOLD));
-        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
-    }
-
-    #[test]
-    fn skill_label_style_selected_matches_popup_emphasis() {
-        let style = super::skill_label_style(true);
-        assert_eq!(style.fg, Some(super::SURFACE_CYAN));
-        assert!(style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn skill_category_style_dims_unselected_rows() {
-        assert_eq!(
-            super::skill_category_style(false).fg,
-            Some(super::SURFACE_DIM_GRAY)
-        );
-        assert_eq!(
-            super::skill_category_style(true).fg,
-            Some(super::SURFACE_GRAY)
-        );
-    }
-
-    #[test]
-    fn render_skill_description_spans_splits_context_and_detail_without_match() {
-        let spans = super::render_skill_description_spans(
-            "babysit-pr",
-            "babysit-pr · triage pull requests",
-            None,
-            false,
-        );
-
-        assert_eq!(spans.len(), 3);
-        assert_eq!(spans[0].content.as_ref(), "babysit-pr");
-        assert_eq!(spans[1].content.as_ref(), " · ");
-        assert_eq!(spans[2].content.as_ref(), "triage pull requests");
-        assert_eq!(spans[0].style.fg, Some(super::SURFACE_DIM_GRAY));
-        assert_eq!(spans[2].style.fg, Some(super::SURFACE_GRAY));
-    }
-
-    #[test]
-    fn render_skill_description_spans_preserves_context_and_detail_styles_around_highlight() {
-        let spans = super::render_skill_description_spans(
-            "babysit-pr",
-            "babysit-pr · triage pull requests",
-            Some(super::SkillMatchTarget::SearchTerm {
-                index: 0,
-                term: "babysit-pr".to_owned(),
-            }),
-            false,
-        );
-
-        assert_eq!(spans[0].content.as_ref(), "babysit-pr");
-        assert_eq!(spans[1].content.as_ref(), " · ");
-        assert_eq!(spans[2].content.as_ref(), "triage pull requests");
-        assert!(spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(spans[2].style.fg, Some(super::SURFACE_GRAY));
-    }
-
-    #[test]
-    fn description_match_target_uses_alias_term_when_search_term_matched() {
-        let target = super::description_match_target(
-            "babysit-pr · triage pull requests",
-            Some(super::SkillMatchTarget::SearchTerm {
-                index: 0,
-                term: "babysit-pr".to_owned(),
-            }),
-        );
-
-        match target {
-            Some(super::SkillMatchTarget::Description(index, len)) => {
-                assert_eq!(index, 0);
-                assert_eq!(len, "babysit-pr".len());
-            }
-            other => panic!("expected description highlight target, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn skill_palette_name_match_sorts_before_description_only_match() {
         let mut palette = CommandPalette::new(
             Language::En,
@@ -2793,24 +2078,6 @@ mod tests {
             Some(CommandAction::InsertText(text)) => assert_eq!(text, "$github-plugin "),
             other => panic!("expected plugin category to sort first on empty query, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn plugin_labels_use_compact_width_budget() {
-        let plugin = plugin("very-long-plugin-name-for-popup", "plugin description");
-        assert_eq!(super::skill_label_max_width(&plugin), 22);
-
-        let skill = skill("very-long-skill-name-for-popup", "skill description");
-        assert_eq!(super::skill_label_max_width(&skill), 24);
-    }
-
-    #[test]
-    fn plugin_context_uses_compact_width_budget() {
-        let plugin = plugin("very-long-plugin-name-for-popup", "plugin description");
-        assert_eq!(super::skill_context_max_width(&plugin), 14);
-
-        let skill = skill("very-long-skill-name-for-popup", "skill description");
-        assert_eq!(super::skill_context_max_width(&skill), 18);
     }
 
     #[test]
@@ -2894,26 +2161,6 @@ mod tests {
     }
 
     #[test]
-    fn skill_popup_alias_match_highlights_alias_in_description() {
-        let target = super::description_match_target(
-            "babysit-pr · triage pull requests",
-            Some(super::SkillMatchTarget::SearchTerm {
-                index: 0,
-                term: "babysit-pr".to_owned(),
-            }),
-        );
-        let spans = super::render_match_highlight_spans(
-            "babysit-pr · triage pull requests",
-            target,
-            Style::default(),
-            Style::default().add_modifier(Modifier::UNDERLINED),
-        );
-
-        assert_eq!(spans[0].content.as_ref(), "babysit-pr");
-        assert!(spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
-    }
-
-    #[test]
     fn skill_popup_fuzzy_label_highlights_matching_characters_in_row_buffer() {
         let mut palette = CommandPalette::new(
             Language::En,
@@ -2925,11 +2172,8 @@ mod tests {
         let buffer = render_to_buffer(&mut palette, area);
         let row = row_text(&buffer, 0, area.width);
         let label_index = row.find("$github-issues").expect("label");
-        let fuzzy_positions =
-            super::fuzzy_match_positions("github-issues", "gti").expect("fuzzy positions");
-        for relative in fuzzy_positions.into_iter().map(|index| index + 1) {
-            let idx = label_index + relative;
-            let cell = &buffer[(idx as u16, 0)];
+        for relative in [1, 3, 6] {
+            let cell = &buffer[((label_index + relative) as u16, 0)];
             assert_eq!(cell.fg, super::SURFACE_CYAN);
         }
     }
@@ -2976,21 +2220,6 @@ mod tests {
             Some(CommandAction::InsertText(text)) => assert_eq!(text, "$PR Babysitter "),
             other => panic!("expected alias search to match mention, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn format_skill_popup_description_includes_alias_when_present() {
-        let skill = SkillEntry {
-            name: "PR Babysitter".to_owned(),
-            description: "triage pull requests".to_owned(),
-            search_terms: vec!["PR Babysitter".to_owned(), "babysit-pr".to_owned()],
-            category_tag: "[Skill]".to_owned(),
-            source_alias: Some("babysit-pr".to_owned()),
-        };
-
-        let description =
-            super::format_skill_popup_description(&skill, &super::SkillMatchTarget::Label(0, 2));
-        assert_eq!(description, "[Skill] babysit-pr · triage pull requests");
     }
 
     #[test]
