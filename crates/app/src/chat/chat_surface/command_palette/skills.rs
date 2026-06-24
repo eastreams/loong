@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 #[derive(Debug, Clone)]
-pub(super) struct SkillPaletteItem {
+pub(super) struct SkillMatchEntry {
     pub(super) label: String,
     pub(super) description: String,
     pub(super) insertion: String,
@@ -15,7 +15,7 @@ pub(super) struct SkillPaletteItem {
     match_target: Option<SkillMatchTarget>,
 }
 
-pub(super) fn filtered_skill_items(skills: &[SkillEntry], query: &str) -> Vec<SkillPaletteItem> {
+pub(super) fn filtered_skill_items(skills: &[SkillEntry], query: &str) -> Vec<SkillMatchEntry> {
     let query = query.trim().to_ascii_lowercase();
     let mut matches = skills
         .iter()
@@ -29,7 +29,7 @@ pub(super) fn filtered_skill_items(skills: &[SkillEntry], query: &str) -> Vec<Sk
         .map(|(skill, match_target)| {
             let adjusted_target = (!query.is_empty())
                 .then_some(adjust_skill_match_target_for_label(match_target.clone(), 1));
-            SkillPaletteItem {
+            SkillMatchEntry {
                 label: format!("${}", skill.name),
                 description: format_skill_popup_description(skill, &match_target),
                 insertion: format!("${} ", skill.name),
@@ -41,7 +41,7 @@ pub(super) fn filtered_skill_items(skills: &[SkillEntry], query: &str) -> Vec<Sk
 }
 
 pub(super) fn render_skill_item(
-    item: &SkillPaletteItem,
+    item: &SkillMatchEntry,
     selected: bool,
     list_width: u16,
     default_label_truncate_len: usize,
@@ -178,7 +178,7 @@ impl<'a> SkillDescriptionParts<'a> {
 }
 
 fn skill_row_text(
-    item: &SkillPaletteItem,
+    item: &SkillMatchEntry,
     list_width: u16,
     default_label_truncate_len: usize,
 ) -> SkillRowText {

@@ -14,6 +14,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Clear, List, ListItem, ListState, Paragraph},
 };
+use std::borrow::Cow;
 
 mod skills;
 
@@ -484,7 +485,7 @@ impl CommandPalette {
 
         let label_width = filtered
             .iter()
-            .map(|entry| crate::presentation::display_width(entry.label.as_str()))
+            .map(|entry| crate::presentation::display_width(entry.label().as_ref()))
             .max()
             .unwrap_or(0)
             .clamp(8, 18);
@@ -494,10 +495,10 @@ impl CommandPalette {
             .enumerate()
             .map(|(visible_index, entry)| {
                 let index = start + visible_index;
-                let label = entry.label.clone();
-                let is_selected = index == selected && entry.selectable;
+                let label = entry.label().into_owned();
+                let is_selected = index == selected && entry.selectable();
                 let prefix = if is_selected { "→ " } else { "  " };
-                let status_tag = entry.status_tag.clone().unwrap_or_default();
+                let status_tag = entry.status_tag().unwrap_or_default();
                 let status_width = if status_tag.is_empty() {
                     0
                 } else {
@@ -510,7 +511,7 @@ impl CommandPalette {
                     (crate::presentation::display_width(prefix) + label_width + 2 + status_width)
                         as u16,
                 ) as usize;
-                let desc = truncate(entry.description.as_str(), max_desc);
+                let desc = truncate(entry.description().as_ref(), max_desc);
 
                 let mut spans = vec![
                     Span::styled(
@@ -655,7 +656,7 @@ impl CommandPalette {
         let visible = filtered.get(start..end).unwrap_or(&[]);
         let label_width = filtered
             .iter()
-            .map(|entry| crate::presentation::display_width(entry.label.as_str()))
+            .map(|entry| crate::presentation::display_width(entry.label().as_ref()))
             .max()
             .unwrap_or(0)
             .clamp(10, 20);
@@ -669,13 +670,13 @@ impl CommandPalette {
                 let prefix = if is_selected { "→ " } else { "  " };
                 let gap = " ".repeat(
                     label_width
-                        .saturating_sub(crate::presentation::display_width(entry.label.as_str()))
+                        .saturating_sub(crate::presentation::display_width(entry.label().as_ref()))
                         + 2,
                 );
                 let max_desc = list_area.width.saturating_sub(
                     (crate::presentation::display_width(prefix) + label_width + 2) as u16,
                 ) as usize;
-                let desc = truncate(entry.description.as_str(), max_desc);
+                let desc = truncate(entry.description().as_ref(), max_desc);
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         prefix,
@@ -686,7 +687,7 @@ impl CommandPalette {
                         }),
                     ),
                     Span::styled(
-                        entry.label.clone(),
+                        entry.label().into_owned(),
                         Style::default()
                             .fg(if is_selected {
                                 SURFACE_CYAN
@@ -774,8 +775,8 @@ impl CommandPalette {
             .enumerate()
             .map(|(visible_index, entry)| {
                 let index = start + visible_index;
-                let is_selected = index == selected && entry.selectable;
-                let Some(skill_item) = entry.skill.as_ref() else {
+                let is_selected = index == selected && entry.selectable();
+                let PaletteItem::Skill(skill_item) = entry else {
                     return ListItem::new(Line::from(""));
                 };
                 skills::render_skill_item(
@@ -862,7 +863,7 @@ impl CommandPalette {
 
         let label_width = filtered
             .iter()
-            .map(|entry| crate::presentation::display_width(entry.label.as_str()))
+            .map(|entry| crate::presentation::display_width(entry.label().as_ref()))
             .max()
             .unwrap_or(0)
             .clamp(10, 20);
@@ -873,21 +874,22 @@ impl CommandPalette {
                 let index = start + visible_index;
                 let is_selected = index == selected;
                 let prefix = if is_selected { "→ " } else { "  " };
-                let status_tag = entry.status_tag.clone().unwrap_or_default();
+                let status_tag = entry.status_tag().unwrap_or_default();
                 let status_width = if status_tag.is_empty() {
                     0
                 } else {
                     crate::presentation::display_width(status_tag.as_str()) + 1
                 };
                 let gap = " ".repeat(
-                    label_width.saturating_sub(crate::presentation::display_width(&entry.label))
+                    label_width
+                        .saturating_sub(crate::presentation::display_width(entry.label().as_ref()))
                         + 2,
                 );
                 let max_desc = list_area.width.saturating_sub(
                     (crate::presentation::display_width(prefix) + label_width + 2 + status_width)
                         as u16,
                 ) as usize;
-                let desc = truncate(entry.description.as_str(), max_desc);
+                let desc = truncate(entry.description().as_ref(), max_desc);
                 let mut spans = vec![
                     Span::styled(
                         prefix,
@@ -898,7 +900,7 @@ impl CommandPalette {
                         }),
                     ),
                     Span::styled(
-                        entry.label.clone(),
+                        entry.label().into_owned(),
                         Style::default()
                             .fg(if is_selected {
                                 SURFACE_CYAN
@@ -1014,7 +1016,7 @@ impl CommandPalette {
 
         let label_width = filtered
             .iter()
-            .map(|entry| crate::presentation::display_width(entry.label.as_str()))
+            .map(|entry| crate::presentation::display_width(entry.label().as_ref()))
             .max()
             .unwrap_or(0)
             .clamp(10, 24);
@@ -1025,21 +1027,22 @@ impl CommandPalette {
                 let index = start + visible_index;
                 let is_selected = index == selected;
                 let prefix = if is_selected { "→ " } else { "  " };
-                let status_tag = entry.status_tag.clone().unwrap_or_default();
+                let status_tag = entry.status_tag().unwrap_or_default();
                 let status_width = if status_tag.is_empty() {
                     0
                 } else {
                     crate::presentation::display_width(status_tag.as_str()) + 1
                 };
                 let gap = " ".repeat(
-                    label_width.saturating_sub(crate::presentation::display_width(&entry.label))
+                    label_width
+                        .saturating_sub(crate::presentation::display_width(entry.label().as_ref()))
                         + 2,
                 );
                 let max_desc = list_area.width.saturating_sub(
                     (crate::presentation::display_width(prefix) + label_width + 2 + status_width)
                         as u16,
                 ) as usize;
-                let desc = truncate(entry.description.as_str(), max_desc);
+                let desc = truncate(entry.description().as_ref(), max_desc);
                 let mut spans = vec![
                     Span::styled(
                         prefix,
@@ -1050,7 +1053,7 @@ impl CommandPalette {
                         }),
                     ),
                     Span::styled(
-                        entry.label.clone(),
+                        entry.label().into_owned(),
                         Style::default()
                             .fg(if is_selected {
                                 SURFACE_CYAN
@@ -1303,7 +1306,7 @@ impl CommandPalette {
                 if index >= filtered.len() {
                     return None;
                 }
-                if filtered.get(index).is_none_or(|entry| !entry.selectable) {
+                if filtered.get(index).is_none_or(|entry| !entry.selectable()) {
                     return None;
                 }
                 self.scroll_state.selected_idx = Some(index);
@@ -1333,8 +1336,8 @@ impl CommandPalette {
             .min(filtered.len().saturating_sub(1));
         filtered
             .get(index)
-            .filter(|entry| entry.selectable)
-            .map(|entry| entry.action.clone())
+            .filter(|entry| entry.selectable())
+            .map(|entry| entry.action())
     }
 
     fn filtered_items(&self) -> Vec<PaletteItem> {
@@ -1361,14 +1364,7 @@ impl CommandPalette {
                 command.contains(query.as_str()) || desc.contains(query.as_str())
             })
             .cloned()
-            .map(|entry| PaletteItem {
-                label: self.display_label(&entry),
-                status_tag: None,
-                description: entry.description,
-                action: entry.action,
-                selectable: true,
-                skill: None,
-            })
+            .map(PaletteItem::Command)
             .collect()
     }
 
@@ -1394,16 +1390,7 @@ impl CommandPalette {
                         .contains(query.as_str())
             })
             .cloned()
-            .map(|entry| PaletteItem {
-                label: entry.timestamp_label,
-                status_tag: None,
-                description: entry.preview_text,
-                action: CommandAction::SelectResumeSession {
-                    session_id: entry.session_id,
-                },
-                selectable: true,
-                skill: None,
-            })
+            .map(PaletteItem::Resume)
             .collect()
     }
 
@@ -1434,37 +1421,15 @@ impl CommandPalette {
                         .contains(query.as_str())
             })
             .cloned()
-            .map(|entry| PaletteItem {
-                label: entry.label,
-                status_tag: entry.status_tag,
-                description: if entry.category_tag.is_empty() {
-                    entry.description
-                } else {
-                    format!("{} {}", entry.category_tag, entry.description)
-                },
-                action: entry.action,
-                selectable: entry.selectable,
-                skill: None,
-            })
+            .map(PaletteItem::Selection)
             .collect()
     }
 
     fn filtered_skills(&self) -> Vec<PaletteItem> {
         skills::filtered_skill_items(self.skills.as_slice(), self.query.as_str())
             .into_iter()
-            .map(|skill| PaletteItem {
-                label: skill.label.clone(),
-                status_tag: None,
-                description: skill.description.clone(),
-                action: CommandAction::InsertText(skill.insertion.clone()),
-                selectable: true,
-                skill: Some(skill),
-            })
+            .map(PaletteItem::Skill)
             .collect()
-    }
-
-    fn display_label(&self, entry: &CommandEntry) -> String {
-        entry.command.to_owned()
     }
 
     fn visible_rows_for_total(total: usize) -> usize {
@@ -1481,7 +1446,7 @@ impl CommandPalette {
         let selectable = filtered
             .iter()
             .enumerate()
-            .filter_map(|(idx, entry)| entry.selectable.then_some(idx))
+            .filter_map(|(idx, entry)| entry.selectable().then_some(idx))
             .collect::<Vec<_>>();
         let Some(first_selectable) = selectable.first().copied() else {
             self.scroll_state.reset();
@@ -1490,7 +1455,7 @@ impl CommandPalette {
         let current = self
             .scroll_state
             .selected_idx
-            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
+            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable()))
             .unwrap_or(first_selectable);
         let current_pos = selectable
             .iter()
@@ -1529,7 +1494,7 @@ impl CommandPalette {
         let selected = self
             .scroll_state
             .selected_idx
-            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
+            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable()))
             .unwrap_or_else(|| selectable.first().copied().unwrap_or(0));
         self.scroll_state.selected_idx = Some(selected);
         self.scroll_state
@@ -1547,7 +1512,7 @@ impl CommandPalette {
         let current = self
             .scroll_state
             .selected_idx
-            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable))
+            .filter(|idx| filtered.get(*idx).is_some_and(|entry| entry.selectable()))
             .unwrap_or(first_selectable);
         let current_pos = selectable
             .iter()
@@ -1573,7 +1538,7 @@ fn selectable_indices(filtered: &[PaletteItem]) -> Vec<usize> {
     filtered
         .iter()
         .enumerate()
-        .filter_map(|(idx, entry)| entry.selectable.then_some(idx))
+        .filter_map(|(idx, entry)| entry.selectable().then_some(idx))
         .collect()
 }
 
@@ -1589,13 +1554,61 @@ fn selection_index_for_entries(entries: &[SettingsEntry], selected_label: Option
 }
 
 #[derive(Debug, Clone)]
-struct PaletteItem {
-    label: String,
-    status_tag: Option<String>,
-    description: String,
-    action: CommandAction,
-    selectable: bool,
-    skill: Option<skills::SkillPaletteItem>,
+enum PaletteItem {
+    Command(CommandEntry),
+    Resume(ResumePaletteEntry),
+    Selection(SettingsEntry),
+    Skill(skills::SkillMatchEntry),
+}
+
+impl PaletteItem {
+    fn label(&self) -> Cow<'_, str> {
+        match self {
+            Self::Command(entry) => Cow::Borrowed(entry.command),
+            Self::Resume(entry) => Cow::Borrowed(entry.timestamp_label.as_str()),
+            Self::Selection(entry) => Cow::Borrowed(entry.label.as_str()),
+            Self::Skill(entry) => Cow::Borrowed(entry.label.as_str()),
+        }
+    }
+
+    fn status_tag(&self) -> Option<String> {
+        match self {
+            Self::Command(_) | Self::Resume(_) | Self::Skill(_) => None,
+            Self::Selection(entry) => entry.status_tag.clone(),
+        }
+    }
+
+    fn description(&self) -> Cow<'_, str> {
+        match self {
+            Self::Command(entry) => Cow::Borrowed(entry.description.as_str()),
+            Self::Resume(entry) => Cow::Borrowed(entry.preview_text.as_str()),
+            Self::Selection(entry) if entry.category_tag.is_empty() => {
+                Cow::Borrowed(entry.description.as_str())
+            }
+            Self::Selection(entry) => {
+                Cow::Owned(format!("{} {}", entry.category_tag, entry.description))
+            }
+            Self::Skill(entry) => Cow::Borrowed(entry.description.as_str()),
+        }
+    }
+
+    fn action(&self) -> CommandAction {
+        match self {
+            Self::Command(entry) => entry.action.clone(),
+            Self::Resume(entry) => CommandAction::SelectResumeSession {
+                session_id: entry.session_id.clone(),
+            },
+            Self::Selection(entry) => entry.action.clone(),
+            Self::Skill(entry) => CommandAction::InsertText(entry.insertion.clone()),
+        }
+    }
+
+    fn selectable(&self) -> bool {
+        match self {
+            Self::Command(_) | Self::Resume(_) | Self::Skill(_) => true,
+            Self::Selection(entry) => entry.selectable,
+        }
+    }
 }
 
 fn truncate(text: &str, max_len: usize) -> String {
@@ -1870,9 +1883,9 @@ mod tests {
         palette.show_commands("");
 
         for entry in palette.filtered_commands() {
-            assert!(!entry.description.contains("coming soon"));
-            assert!(!entry.description.contains("placeholder"));
-            assert!(!entry.description.contains("not wired"));
+            assert!(!entry.description().contains("coming soon"));
+            assert!(!entry.description().contains("placeholder"));
+            assert!(!entry.description().contains("not wired"));
         }
     }
 
