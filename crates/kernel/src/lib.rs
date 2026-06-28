@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod action;
 pub mod architecture;
 pub mod audit;
 pub mod awareness;
@@ -22,6 +23,7 @@ pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
 
+pub use action::{Action, ActionExecutor, ActionGrantId, ActionGrantRecord, Granted};
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
     ArchitecturePathReport,
