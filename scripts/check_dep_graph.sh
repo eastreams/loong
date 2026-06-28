@@ -6,7 +6,8 @@ set -euo pipefail
 #
 # Repository-visible contract:
 #   contracts (leaf — zero internal deps)
-#   ├── kernel → contracts
+#   ├── loong-core → contracts
+#   ├── kernel → contracts, loong-core
 #   ├── protocol (independent leaf)
 #   ├── bridge-runtime → contracts, kernel, protocol
 #   ├── app → contracts, kernel
@@ -15,7 +16,7 @@ set -euo pipefail
 #   └── daemon (binary) → app, bench, contracts, kernel, spec, bridge-runtime
 #
 # Additive local-only Phase 2 spine:
-#   loong-core (leaf)
+#   loong-core
 #   ├── loong-runtime → loong-core
 #   ├── loong-app-protocol → loong-runtime
 #   ├── loong-cli → loong-app-protocol
@@ -29,9 +30,11 @@ cd "$REPO_ROOT"
 
 violations=0
 
-# Extract workspace-internal dependency edges from cargo metadata.
+# Extract workspace-internal dependency edges from cargo metadata without
+# resolving external dependencies. The architecture check only cares about path
+# deps between workspace packages, so downloading registry crates is noise.
 # Output: "<crate-alias> -> <crate-alias>" lines for every checked workspace package.
-edges="$(cargo metadata --format-version 1 2>/dev/null \
+edges="$(cargo metadata --format-version 1 --no-deps \
   | python3 -c '
 import json, sys
 meta = json.load(sys.stdin)
@@ -51,25 +54,24 @@ ALIASES = {
     "loong-cli": "cli",
     "loong-plugin-sdk": "plugin-sdk",
 }
-ws_ids = {
-    p["id"]: ALIASES[p["name"]]
+ws_packages = {
+    p["name"]: p
     for p in meta["packages"]
     if p["manifest_path"].startswith(workspace_root + "/")
     and p["name"] in ALIASES
 }
-for node in meta["resolve"]["nodes"]:
-    if node["id"] not in ws_ids:
-        continue
-    src = ws_ids[node["id"]]
-    for dep in node["deps"]:
-        if dep["pkg"] in ws_ids:
-            dst = ws_ids[dep["pkg"]]
+for package_name, package in ws_packages.items():
+    src = ALIASES[package_name]
+    for dep in package["dependencies"]:
+        if dep["name"] in ws_packages:
+            dst = ALIASES[dep["name"]]
             print(f"{src} -> {dst}")
 ' | sort -u)"
 
 # Allowed edges (from architecture contract).
 allowed=(
   "kernel -> plugin-sdk"
+  "kernel -> core"
   "kernel -> contracts"
   "bridge-runtime -> contracts"
   "bridge-runtime -> kernel"
@@ -90,6 +92,7 @@ allowed=(
   "daemon -> spec"
   "daemon -> bench"
   "daemon -> app-protocol"
+  "core -> contracts"
   "runtime -> core"
   "app-protocol -> runtime"
   "cli -> app-protocol"

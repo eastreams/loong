@@ -48,17 +48,19 @@ maintainers who need the codebase-level structure behind the Mintlify docs.
 ## Crate Structure
 
 The workspace DAG matters, but so does the ownership model behind it. Today the
-codebase has three manifest-level leaves (`loong-core`, `contracts`,
-`protocol`), five additive spine crates, four governed runtime support crates,
+codebase has two manifest-level leaves (`contracts`, `protocol`), one core
+foundation crate above contracts (`loong-core`), five additive spine crates, four governed runtime support crates,
 one benchmark rail, and one shipped binary crate.
 
 ```text
 direct workspace dependency DAG
 
 leaves
-- loong-core
 - contracts
 - protocol
+
+core foundation
+- loong-core -> contracts
 
 additive spine
 - loong-plugin-sdk -> loong-core
@@ -67,7 +69,7 @@ additive spine
 - loong-cli -> loong-app-protocol
 
 governed runtime rail
-- kernel -> contracts, loong-plugin-sdk
+- kernel -> contracts, loong-core, loong-plugin-sdk
 - bridge-runtime -> contracts, kernel, protocol
 - app -> contracts, kernel
 - spec -> contracts, kernel, protocol, bridge-runtime
@@ -91,7 +93,7 @@ The 13 packages fall into two ownership families:
 
 | Crate | Role |
 |-------|------|
-| `loong-core` | Leaf object model for sessions, tasks, turns, artifacts, workspace context, and execution lifecycle facts used by the additive spine. |
+| `loong-core` | Core action/policy/grant foundation plus sessions, tasks, turns, artifacts, workspace context, and execution lifecycle facts used by the additive spine. |
 | `loong-plugin-sdk` | Plugin contract spine above `loong-core`. Owns the additive plugin-facing contract that `kernel` already consumes. |
 | `loong-runtime` | Runtime ownership spine above `loong-core`. Defines oneshot, interactive, and task-status runtime contracts without yet taking over the shipped bootstrap path. |
 | `loong-app-protocol` | App-facing task/session/turn protocol built on `loong-runtime`. This is the transitional boundary that `daemon` already consumes directly. |

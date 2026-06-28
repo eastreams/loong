@@ -22,8 +22,11 @@ context lives in `docs/`, while the public reader-facing docs surface lives in
 The workspace currently has 13 crates across two connected families:
 
 ```text
+core foundation
+loong-core → contracts
+
 additive spine
-loong-core (leaf)
+loong-core
 ├── loong-plugin-sdk → loong-core
 ├── loong-runtime → loong-core
 ├── loong-app-protocol → loong-runtime
@@ -31,7 +34,7 @@ loong-core (leaf)
 
 governed runtime
 contracts (leaf)
-├── kernel → contracts, loong-plugin-sdk
+├── kernel → contracts, loong-core, loong-plugin-sdk
 ├── protocol (independent leaf)
 ├── bridge-runtime → contracts, kernel, protocol
 ├── app → contracts, kernel
