@@ -3071,18 +3071,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "loong-access"
-version = "0.1.2-alpha.1"
-dependencies = [
- "async-trait",
- "loong-contracts",
- "loong-core",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "loong-app"
 version = "0.1.2-alpha.1"
 dependencies = [
