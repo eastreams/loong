@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyGrant, PolicyOutcome};
 
 use crate::{
+    ActionExecutor,
     action::Action,
-    error::AuthorizationError,
+    error::{AuthorizationError, ExecutionError},
     policy::{PolicyContext, PolicyContextFactory},
 };
 
@@ -100,5 +101,27 @@ impl PolicyEngine for MockPolicyEngine {
             grant_source: None,
             reason: "".into(),
         }
+    }
+}
+
+#[async_trait]
+pub trait HasPolicyEngine: Sync {
+    type PolicyEngine<'a>: PolicyEngine
+    where
+        Self: 'a;
+
+    fn policy_engine(&self) -> &Self::PolicyEngine<'_>;
+
+    async fn execute_granted<A, E>(
+        &self,
+        granted: Granted<A>,
+        executor: &E,
+    ) -> Result<E::Output, ExecutionError>
+    where
+        Self: Sized,
+        A: Action,
+        E: ActionExecutor<A> + ?Sized,
+    {
+        granted.execute_with(executor).await
     }
 }

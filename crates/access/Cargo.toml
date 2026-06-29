@@ -1,0 +1,20 @@
+[package]
+name = "loong-access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Provide authencated low-level access like fs & network"
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "loong_access"
+
+[dependencies]
+loong-core = { path = "../loong-core" }
+loong-contracts = { path = "../contracts" }
+tokio.workspace = true
+serde.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true

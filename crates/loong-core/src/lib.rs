@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
-mod action;
+pub mod action;
 mod artifact;
 mod budget;
-mod error;
+pub mod error;
 mod event;
 mod execution;
 mod lifecycle;
-mod policy;
+pub mod policy;
 mod session;
 mod task;
 mod workspace;
