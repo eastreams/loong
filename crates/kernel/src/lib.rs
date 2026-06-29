@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-pub mod action;
+pub mod action_policy;
 pub mod architecture;
 pub mod audit;
 pub mod awareness;
@@ -23,7 +23,6 @@ pub mod runtime;
 pub mod task_supervisor;
 pub mod tool;
 
-pub use action::{Action, ActionExecutor, ActionGrantId, ActionGrantRecord, Granted};
 pub use architecture::{
     ArchitectureBoundaryPolicy, ArchitectureGuardReport, ArchitecturePathDecision,
     ArchitecturePathReport,
@@ -79,7 +78,7 @@ pub use plugin_ir::{
     PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
-pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
+pub use policy::{PolicyEngine, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
 pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,

@@ -6,8 +6,7 @@ use std::{
     },
 };
 
-// Re-export data types from contracts
-pub use loong_contracts::{PolicyContext, PolicyDecision, PolicyRequest};
+use loong_contracts::{PolicyDecision, PolicyRequest};
 
 use crate::{contracts::CapabilityToken, errors::PolicyError, pack::VerticalPackManifest};
 
@@ -168,6 +167,7 @@ impl PolicyEngine for StaticPolicyEngine {
 mod tests {
     use std::collections::BTreeSet;
 
+    use loong_contracts::PolicyContext;
     use serde_json::json;
 
     use super::*;

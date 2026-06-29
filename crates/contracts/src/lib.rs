@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod action_grant;
 mod audit_types;
 mod child_process_env;
 mod clock;
@@ -20,6 +21,7 @@ mod tool_types;
 mod work_types;
 mod workflow_types;
 
+pub use action_grant::{ActionPolicyEvaluation, GrantId, GrantSource, PolicyGrant, PolicyOutcome};
 pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
 pub use child_process_env::{
     HIGH_RISK_CHILD_PROCESS_ENV_VARS, child_process_env_var_is_allowed, sanitized_child_process_env,

@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use loong_contracts::GrantId;
+
 use crate::{
     audit::{
         AuditEvent, AuditEventKind, AuditSink, ExecutionPlane, InMemoryAuditSink, NoopAuditSink,
@@ -24,7 +26,7 @@ use crate::{
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy::PolicyEngine,
+    policy::PolicyEngine as TokenPolicyEngine,
     policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext},
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
@@ -60,7 +62,7 @@ struct PlaneInvocationRecord<'a> {
     required_capabilities: &'a BTreeSet<Capability>,
 }
 
-pub struct LoongKernel<P: PolicyEngine> {
+pub struct LoongKernel<P: TokenPolicyEngine> {
     policy: P,
     packs: BTreeMap<String, VerticalPackManifest>,
     namespaces: BTreeMap<String, loong_contracts::Namespace>,
@@ -73,6 +75,7 @@ pub struct LoongKernel<P: PolicyEngine> {
     clock: Arc<dyn Clock>,
     audit: Arc<dyn AuditSink>,
     event_seq: AtomicU64,
+    action_grant_seq: AtomicU64,
 }
 
 /// Additive migration alias for the legacy kernel surface.
@@ -82,11 +85,11 @@ pub struct LoongKernel<P: PolicyEngine> {
 /// frozen `Kernel<P>` handle.
 pub type KernelBuilder<P> = LoongKernel<P>;
 
-pub struct Kernel<P: PolicyEngine> {
+pub struct Kernel<P: TokenPolicyEngine> {
     inner: LoongKernel<P>,
 }
 
-impl<P: PolicyEngine> LoongKernel<P> {
+impl<P: TokenPolicyEngine> LoongKernel<P> {
     /// Safe convenience constructor for callers that do not need to customize
     /// runtime components. This defaults to in-memory audit rather than silent
     /// audit dropping.
@@ -128,6 +131,7 @@ impl<P: PolicyEngine> LoongKernel<P> {
             clock,
             audit,
             event_seq: AtomicU64::new(0),
+            action_grant_seq: AtomicU64::new(0),
         }
     }
 
@@ -864,6 +868,25 @@ impl<P: PolicyEngine> LoongKernel<P> {
         Ok(())
     }
 
+    fn record_authorization_denial(
+        &self,
+        pack: &VerticalPackManifest,
+        token: &CapabilityToken,
+        now_epoch_s: u64,
+        error: &crate::errors::PolicyError,
+    ) -> Result<(), KernelError> {
+        self.audit.record(self.new_event(
+            now_epoch_s,
+            Some(token.agent_id.clone()),
+            AuditEventKind::AuthorizationDenied {
+                pack_id: pack.pack_id.clone(),
+                token_id: token.token_id.clone(),
+                reason: error.to_string(),
+            },
+        ))?;
+        Ok(())
+    }
+
     fn authorize_or_audit_denial(
         &self,
         pack: &VerticalPackManifest,
@@ -876,15 +899,7 @@ impl<P: PolicyEngine> LoongKernel<P> {
             self.policy
                 .authorize(token, &pack.pack_id, now_epoch_s, required_capabilities)
         {
-            self.audit.record(self.new_event(
-                now_epoch_s,
-                Some(token.agent_id.clone()),
-                AuditEventKind::AuthorizationDenied {
-                    pack_id: pack.pack_id.clone(),
-                    token_id: token.token_id.clone(),
-                    reason: policy_error.to_string(),
-                },
-            ))?;
+            self.record_authorization_denial(pack, token, now_epoch_s, &policy_error)?;
             return Err(KernelError::Policy(policy_error));
         }
 
@@ -895,15 +910,7 @@ impl<P: PolicyEngine> LoongKernel<P> {
             required_capabilities,
             request_parameters,
         }) {
-            self.audit.record(self.new_event(
-                now_epoch_s,
-                Some(token.agent_id.clone()),
-                AuditEventKind::AuthorizationDenied {
-                    pack_id: pack.pack_id.clone(),
-                    token_id: token.token_id.clone(),
-                    reason: policy_error.to_string(),
-                },
-            ))?;
+            self.record_authorization_denial(pack, token, now_epoch_s, &policy_error)?;
             return Err(KernelError::Policy(policy_error));
         }
 
@@ -924,9 +931,14 @@ impl<P: PolicyEngine> LoongKernel<P> {
             kind,
         }
     }
+
+    fn next_action_grant_id(&self) -> GrantId {
+        let seq = self.action_grant_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        GrantId(seq)
+    }
 }
 
-impl<P: PolicyEngine> Kernel<P> {
+impl<P: TokenPolicyEngine> Kernel<P> {
     pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.inner.get_namespace(pack_id)
     }
@@ -1097,13 +1109,13 @@ impl<P: PolicyEngine> Kernel<P> {
     }
 }
 
-impl<P: PolicyEngine> AsRef<LoongKernel<P>> for Kernel<P> {
+impl<P: TokenPolicyEngine> AsRef<LoongKernel<P>> for Kernel<P> {
     fn as_ref(&self) -> &LoongKernel<P> {
         &self.inner
     }
 }
 
-impl<P: PolicyEngine> Deref for Kernel<P> {
+impl<P: TokenPolicyEngine> Deref for Kernel<P> {
     type Target = LoongKernel<P>;
 
     fn deref(&self) -> &Self::Target {
