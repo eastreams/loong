@@ -887,11 +887,11 @@ impl<P: PolicyEngine> LoongKernel<P> {
     #[deprecated]
     fn authorize_or_audit_denial(
         &self,
-        pack: &VerticalPackManifest,
-        token: &CapabilityToken,
-        now_epoch_s: u64,
-        required_capabilities: &BTreeSet<Capability>,
-        request_parameters: Option<&serde_json::Value>,
+        _pack: &VerticalPackManifest,
+        _token: &CapabilityToken,
+        _now_epoch_s: u64,
+        _required_capabilities: &BTreeSet<Capability>,
+        _request_parameters: Option<&serde_json::Value>,
     ) -> Result<(), KernelError> {
         unimplemented!()
         // if let Err(policy_error) =

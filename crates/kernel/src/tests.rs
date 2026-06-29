@@ -1,6 +1,5 @@
 //! This module should be split into small test modules, so no more non-universal tests should be added.
 
-use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -13,12 +12,12 @@ use proptest::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use loong_core::{Action, MockPolicyEngine};
+use loong_core::MockPolicyEngine;
 
 use crate::audit::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, AuditSink, FanoutAuditSink, InMemoryAuditSink,
-    JsonlAuditSink, NoopAuditSink, probe_jsonl_audit_journal_runtime_ready,
-    repair_jsonl_audit_journal, verify_jsonl_audit_journal,
+    JsonlAuditSink, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
+    verify_jsonl_audit_journal,
 };
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
@@ -68,49 +67,6 @@ fn compute_test_entry_hash(event: &AuditEvent, prev_hash: Option<&str>) -> Strin
     .expect("serialize audit chain material");
     let digest = Sha256::digest(material);
     hex::encode(digest)
-}
-
-struct TestKernelAction {
-    operation: &'static str,
-    resource: Option<&'static str>,
-    required_capabilities: BTreeSet<Capability>,
-}
-
-impl TestKernelAction {
-    fn invoke_tool(operation: &'static str, required_capabilities: BTreeSet<Capability>) -> Self {
-        Self {
-            operation,
-            resource: None,
-            required_capabilities,
-        }
-    }
-
-    fn with_resource(mut self, resource: &'static str) -> Self {
-        self.resource = Some(resource);
-        self
-    }
-}
-
-impl Action for TestKernelAction {
-    fn kind(&self) -> &'static str {
-        "test.kernel-action"
-    }
-
-    fn operation(&self) -> Cow<'static, str> {
-        self.operation.into()
-    }
-
-    fn audit_resource(&self) -> Option<Cow<'static, str>> {
-        self.resource.map(Cow::from)
-    }
-
-    fn execution_plane(&self) -> ExecutionPlane {
-        ExecutionPlane::Tool
-    }
-
-    fn required_capabilities(&self) -> BTreeSet<Capability> {
-        self.required_capabilities.clone()
-    }
 }
 
 #[test]
