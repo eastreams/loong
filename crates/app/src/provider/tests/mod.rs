@@ -5,7 +5,7 @@ use crate::provider::rate_limit::RateLimitObservation;
 use crate::test_utils::ScopedEnv;
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, SecretRef};
 use loong_kernel::{
-    AuditEventKind, FixedClock, InMemoryAuditSink, LoongKernel, StaticPolicyEngine,
+    AuditEventKind, FixedClock, InMemoryAuditSink, LoongKernel, MockPolicyEngine,
     VerticalPackManifest,
 };
 use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
@@ -32,7 +32,7 @@ fn build_provider_failover_test_kernel_context(
 ) -> (KernelContext, Arc<InMemoryAuditSink>) {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_321));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit.clone());
     kernel
         .register_pack(VerticalPackManifest {
             pack_id: "provider-test-pack".to_owned(),

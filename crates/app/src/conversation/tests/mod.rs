@@ -8,7 +8,7 @@ use loong_contracts::{
 };
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
-    MemoryCoreRequest, StaticPolicyEngine, VerticalPackManifest,
+    MemoryCoreRequest, MockPolicyEngine, VerticalPackManifest,
 };
 #[cfg(feature = "memory-sqlite")]
 use rusqlite::Connection;
@@ -1799,7 +1799,7 @@ fn test_kernel_context_with_memory(
 ) -> KernelContext {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack-memory".to_owned(),
@@ -8874,7 +8874,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_path_does_not_parallelize_fast_
 
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let mut kernel = LoongKernel::with_runtime(
-        StaticPolicyEngine::default(),
+        MockPolicyEngine::default(),
         clock,
         Arc::new(InMemoryAuditSink::default()),
     );
@@ -9400,7 +9400,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_replans_after_transient_tool_fa
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -9607,7 +9607,7 @@ async fn handle_turn_with_runtime_safe_lane_backpressure_guard_blocks_retry_stor
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -9741,7 +9741,7 @@ async fn handle_turn_with_runtime_safe_lane_verify_non_retryable_failure_skips_r
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -9964,7 +9964,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_forces_no_replan() 
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10192,7 +10192,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_requests_extended_h
     let memory_invocations = Arc::new(Mutex::new(Vec::<MemoryCoreRequest>::new()));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10371,7 +10371,7 @@ async fn handle_turn_with_runtime_safe_lane_session_governor_does_not_reuse_sqli
     let call_counter = Arc::new(Mutex::new(0usize));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -10554,7 +10554,7 @@ async fn handle_turn_with_runtime_safe_lane_replans_failed_subgraph_only() {
     let counters = Arc::new(Mutex::new(CallCounters::default()));
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -13966,7 +13966,7 @@ async fn turn_engine_tool_execution_error_is_marked_retryable() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -14153,7 +14153,7 @@ async fn turn_engine_executes_known_tool_with_kernel() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -14274,7 +14274,7 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -14404,7 +14404,7 @@ async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compact
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15479,7 +15479,7 @@ async fn turn_engine_rejects_legacy_external_skill_invoke_runtime_tool() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15561,7 +15561,7 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15665,7 +15665,7 @@ async fn turn_engine_execute_turn_denied_without_capability() {
 
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     // Grant only MemoryRead — InvokeTool is missing
     let pack = VerticalPackManifest {
@@ -15820,7 +15820,7 @@ fn build_kernel_context_with_window_turns(
     window_turns: Value,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15907,7 +15907,7 @@ fn build_kernel_context_with_window_turn_sequence(
     window_turn_sequence: Vec<Value>,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15950,7 +15950,7 @@ fn build_kernel_context_with_window_error(
     error: &str,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -15992,7 +15992,7 @@ fn build_kernel_context_with_raw_window_payload(
     payload: Value,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16033,7 +16033,7 @@ fn build_kernel_context_with_compaction_conflict(
     audit: Arc<InMemoryAuditSink>,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -16077,7 +16077,7 @@ fn build_kernel_context_with_incomplete_compaction_snapshot(
     turn_count: usize,
 ) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
@@ -19383,7 +19383,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
 
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
     let pack = VerticalPackManifest {
         pack_id: "test-pack".to_owned(),
         domain: "testing".to_owned(),

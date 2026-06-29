@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn bootstrap_builder_runtime_derefs_to_legacy_kernel_helpers() {
         fn issue_default_pack_token(
-            kernel: &LoongKernel<StaticPolicyEngine>,
+            kernel: &LoongKernel<MockPolicyEngine>,
         ) -> kernel::CapabilityToken {
             kernel
                 .issue_token(DEFAULT_PACK_ID, "test-agent", 60)

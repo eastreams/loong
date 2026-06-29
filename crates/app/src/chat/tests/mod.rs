@@ -20,7 +20,7 @@ use loong_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError}
 #[cfg(feature = "memory-sqlite")]
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
-    MemoryCoreRequest, StaticPolicyEngine, VerticalPackManifest,
+    MemoryCoreRequest, MockPolicyEngine, VerticalPackManifest,
 };
 #[cfg(feature = "memory-sqlite")]
 use serde_json::Value;
@@ -58,7 +58,7 @@ fn test_kernel_context_with_memory(
 ) -> crate::KernelContext {
     let clock = Arc::new(FixedClock::new(1_700_000_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "test-pack-memory".to_owned(),
@@ -278,7 +278,7 @@ fn build_kernel_context_with_window_outcome(
 ) -> (crate::KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
     let audit = Arc::new(InMemoryAuditSink::default());
     let clock = Arc::new(FixedClock::new(1_700_000_000));
-    let mut kernel = LoongKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit);
 
     let pack = VerticalPackManifest {
         pack_id: "chat-test-pack".to_owned(),

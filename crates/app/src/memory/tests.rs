@@ -101,10 +101,10 @@ async fn mvp_memory_adapter_routes_through_kernel() {
 
     use loong_contracts::Capability;
     use loong_kernel::{
-        ExecutionRoute, HarnessKind, LoongKernel, StaticPolicyEngine, VerticalPackManifest,
+        ExecutionRoute, HarnessKind, LoongKernel, MockPolicyEngine, VerticalPackManifest,
     };
 
-    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(MockPolicyEngine::default());
 
     kernel.register_core_memory_adapter(KernelMemoryAdapter::new());
     kernel
