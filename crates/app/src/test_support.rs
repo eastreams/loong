@@ -155,15 +155,7 @@ impl TurnTestHarness {
             .set_default_core_tool_adapter("mvp-tools")
             .expect("set default adapter");
 
-        // Register policy extensions for unified security enforcement.
-        // Policy rules come exclusively from the runtime config; no hardcoded
-        // lists are injected here.
-        kernel.register_policy_extension(
-            crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_config),
-        );
-        kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
-            tool_config.file_root,
-        ));
+        // TODO: The policy-extension is deleted, there may be new policy register logic
 
         #[cfg(feature = "memory-sqlite")]
         {

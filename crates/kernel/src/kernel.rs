@@ -27,7 +27,7 @@ use crate::{
         MemoryExtensionOutcome, MemoryExtensionRequest, MemoryPlane,
     },
     pack::VerticalPackManifest,
-    policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext},
+    policy_ext::{PolicyExtension, PolicyExtensionChain},
     runtime::{
         CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
         RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane,
@@ -65,18 +65,19 @@ struct PlaneInvocationRecord<'a> {
 // TODO: methods should be implemented in trait from core
 pub struct LoongKernel<P: PolicyEngine> {
     policy: P,
+    action_grant_seq: AtomicU64,
+
+    audit: Arc<dyn AuditSink>,
+
+    tool_plane: ToolPlane,
+    memory_plane: MemoryPlane,
+    connector_plane: ConnectorPlane,
+    runtime_plane: RuntimePlane,
     packs: BTreeMap<String, VerticalPackManifest>,
     namespaces: BTreeMap<String, loong_contracts::Namespace>,
     harness: HarnessBroker,
-    connector_plane: ConnectorPlane,
-    runtime_plane: RuntimePlane,
-    tool_plane: ToolPlane,
-    memory_plane: MemoryPlane,
-    policy_extensions: PolicyExtensionChain,
     clock: Arc<dyn Clock>,
-    audit: Arc<dyn AuditSink>,
     event_seq: AtomicU64,
-    action_grant_seq: AtomicU64,
 }
 
 /// Additive migration alias for the legacy kernel surface.
@@ -128,7 +129,6 @@ impl<P: PolicyEngine> LoongKernel<P> {
             runtime_plane: RuntimePlane::new(),
             tool_plane: ToolPlane::new(),
             memory_plane: MemoryPlane::new(),
-            policy_extensions: PolicyExtensionChain::new(),
             clock,
             audit,
             event_seq: AtomicU64::new(0),
@@ -155,10 +155,6 @@ impl<P: PolicyEngine> LoongKernel<P> {
 
     pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.namespaces.get(pack_id)
-    }
-
-    pub fn register_policy_extension<E: PolicyExtension + 'static>(&mut self, extension: E) {
-        self.policy_extensions.register(extension);
     }
 
     pub fn register_harness_adapter<A: HarnessAdapter + 'static>(&mut self, adapter: A) {

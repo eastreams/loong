@@ -13222,7 +13222,6 @@ async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() 
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
-    kernel.register_policy_extension(loong_kernel::test_support::NoNetworkEgressPolicyExtension);
 
     let mut config = runtime_config::ToolRuntimeConfig::default();
     config.web_fetch.enabled = true;

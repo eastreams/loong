@@ -1147,7 +1147,6 @@ async fn policy_extension_chain_can_block_high_risk_capabilities() {
     kernel.register_harness_adapter(MockEmbeddedPiHarness {
         seen_tasks: Mutex::new(Vec::new()),
     });
-    kernel.register_policy_extension(NoNetworkEgressPolicyExtension);
 
     let token = kernel
         .issue_token("strict-env", "agent-secure", 120)
@@ -1370,10 +1369,6 @@ async fn tool_core_call_is_denied_when_policy_engine_rejects_rule_of_two_gate() 
         })
         .expect("pack should register");
     kernel.register_core_tool_adapter(MockCoreTool);
-    kernel.register_policy_extension(ToolGatePolicyExtension::new(
-        "shell.exec",
-        ToolGateMode::Deny,
-    ));
 
     let token = kernel
         .issue_token("tool-gate-deny", "agent-deny", 120)

@@ -5,7 +5,6 @@ use serde_json::Value;
 
 use crate::contracts::Capability;
 
-#[deprecated]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PolicyContext {
     pub conversation_hash: Option<String>,
