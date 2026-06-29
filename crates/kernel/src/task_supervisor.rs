@@ -1,9 +1,9 @@
 use crate::{
     contracts::{CapabilityToken, TaskIntent},
     kernel::{KernelDispatch, LoongKernel},
-    policy::PolicyEngine,
 };
 use loong_contracts::{Fault, TaskState};
+use loong_core::{PolicyContextFactory, PolicyEngine};
 
 /// Opt-in wrapper around `execute_task` that enforces FSM transitions.
 pub struct TaskSupervisor {
@@ -32,9 +32,9 @@ impl TaskSupervisor {
     }
 
     /// Execute the task through the kernel, tracking state transitions.
-    pub async fn execute<P: PolicyEngine>(
+    pub async fn execute<F: PolicyContextFactory, P: PolicyEngine<F>>(
         &mut self,
-        kernel: &LoongKernel<P>,
+        kernel: &LoongKernel<F, P>,
         pack_id: &str,
         token: &CapabilityToken,
     ) -> Result<KernelDispatch, Fault> {

@@ -1,6 +1,6 @@
 use std::{borrow::Cow, path::PathBuf};
 
-use loong_contracts::{Capability, GrantSource};
+use loong_contracts::{Capability, PolicyEntry};
 use thiserror::Error;
 
 use crate::TaskLifecycle;
@@ -11,7 +11,7 @@ pub enum AuthorizationError {
     MissingCapability(Capability),
     #[error("authorization denied: {grant_source:?} {reason:?}")]
     Denied {
-        grant_source: Option<GrantSource>,
+        grant_source: Option<PolicyEntry>,
         reason: Cow<'static, str>,
     },
     #[error("IO error: {0:?}")]

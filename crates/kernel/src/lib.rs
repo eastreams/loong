@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-pub mod action_policy;
 pub mod architecture;
 pub mod audit;
 pub mod awareness;
@@ -78,7 +77,6 @@ pub use plugin_ir::{
     PluginTranslationReport, PluginTranslator, canonical_channel_bridge_contract,
     evaluate_plugin_setup_requirements, plugin_runtime_scaffold_defaults,
 };
-pub use policy::{PolicyEngine, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};
 pub use runtime::{
     CoreRuntimeAdapter, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,

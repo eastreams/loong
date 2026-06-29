@@ -24,7 +24,6 @@ use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
 use crate::errors::{AuditError, KernelError, PolicyError};
 use crate::kernel::LoongKernel;
-use crate::policy::{PolicyEngine, StaticPolicyEngine};
 use crate::task_supervisor::TaskSupervisor;
 use crate::{ExecutionPlane, PlaneTier};
 use crate::{Fault, TaskState};
@@ -494,7 +493,7 @@ fn pack_validation_rejects_invalid_semver() {
 
 #[test]
 fn token_generation_increments_on_each_issue() {
-    let engine = StaticPolicyEngine::default();
+    let engine = MockPolicy::default();
     let pack = sample_pack();
     let t1 = engine.issue_token(&pack, "a1", 1_000_000, 3600).unwrap();
     let t2 = engine.issue_token(&pack, "a2", 1_000_000, 3600).unwrap();
