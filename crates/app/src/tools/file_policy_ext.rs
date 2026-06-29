@@ -908,16 +908,16 @@ mod tests {
     fn try_symlink(original: &Path, link: &Path) -> bool {
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(original, link).is_ok()
+            return std::os::unix::fs::symlink(original, link).is_ok();
         }
         #[cfg(windows)]
         {
-            std::os::windows::fs::symlink_file(original, link).is_ok()
+            return std::os::windows::fs::symlink_file(original, link).is_ok();
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = (original, link);
-            false
+            return false;
         }
     }
 
@@ -925,16 +925,16 @@ mod tests {
     fn try_symlink_dir(original: &Path, link: &Path) -> bool {
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(original, link).is_ok()
+            return std::os::unix::fs::symlink(original, link).is_ok();
         }
         #[cfg(windows)]
         {
-            std::os::windows::fs::symlink_dir(original, link).is_ok()
+            return std::os::windows::fs::symlink_dir(original, link).is_ok();
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = (original, link);
-            false
+            return false;
         }
     }
 
