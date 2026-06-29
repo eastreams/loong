@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel::{
-    AuditEventKind, IntegrationCatalog, LoongKernel, PluginActivationCandidate,
+    AuditEventKind, IntegrationCatalog, LoongKernel, MockPolicyEngine, PluginActivationCandidate,
     PluginActivationInventoryEntry, PluginActivationPlan, PluginBridgeKind, PluginCompatibility,
     PluginCompatibilityMode, PluginCompatibilityShim, PluginContractDialect,
     PluginDiagnosticFinding, PluginScanReport, PluginSetupReadinessContext, PluginSlotClaim,
-    PluginTranslationReport, PluginTrustTier, StaticPolicyEngine,
-    evaluate_plugin_setup_requirements, plugin_provenance_summary_for_descriptor,
+    PluginTranslationReport, PluginTrustTier, evaluate_plugin_setup_requirements,
+    plugin_provenance_summary_for_descriptor,
 };
 use serde_json::Value;
 
@@ -163,7 +163,7 @@ fn build_tool_search_operation_headline(
 }
 
 pub(super) fn emit_tool_search_audit_event(
-    kernel: &LoongKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<MockPolicyEngine>,
     pack_id: &str,
     agent_id: &str,
     summary: &ToolSearchOperationSummary,

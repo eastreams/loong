@@ -6,6 +6,7 @@ pub trait PolicyContext: Send + Sync {
     fn capabilities(&self) -> BTreeSet<Capability>;
 }
 
+/// To make Policy: 'static + Any
 pub trait PolicyContextFactory: 'static {
     type Context<'a>: PolicyContext;
 }

@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    marker::PhantomData,
     ops::Deref,
     sync::{
         Arc,
@@ -9,7 +8,7 @@ use std::{
 };
 
 use loong_contracts::GrantId;
-use loong_core::{PolicyContextFactory, PolicyEngine};
+use loong_core::PolicyEngine;
 
 use crate::{
     audit::{
@@ -63,9 +62,8 @@ struct PlaneInvocationRecord<'a> {
     required_capabilities: &'a BTreeSet<Capability>,
 }
 
-// TODO: PolicyEngine should be determined in kernel
 // TODO: methods should be implemented in trait from core
-pub struct LoongKernel<F: PolicyContextFactory, P: PolicyEngine<F>> {
+pub struct LoongKernel<P: PolicyEngine> {
     policy: P,
     packs: BTreeMap<String, VerticalPackManifest>,
     namespaces: BTreeMap<String, loong_contracts::Namespace>,
@@ -79,7 +77,6 @@ pub struct LoongKernel<F: PolicyContextFactory, P: PolicyEngine<F>> {
     audit: Arc<dyn AuditSink>,
     event_seq: AtomicU64,
     action_grant_seq: AtomicU64,
-    _phantom_data: PhantomData<F>,
 }
 
 /// Additive migration alias for the legacy kernel surface.
@@ -87,13 +84,13 @@ pub struct LoongKernel<F: PolicyContextFactory, P: PolicyEngine<F>> {
 /// During the compatibility window this still exposes the executable
 /// `LoongKernel` API, while also supporting `.build()` into the new
 /// frozen `Kernel<P>` handle.
-pub type KernelBuilder<F, P> = LoongKernel<F, P>;
+pub type KernelBuilder<P> = LoongKernel<P>;
 
-pub struct Kernel<F: PolicyContextFactory, P: PolicyEngine<F>> {
-    inner: LoongKernel<F, P>,
+pub struct Kernel<P: PolicyEngine> {
+    inner: LoongKernel<P>,
 }
 
-impl<F: PolicyContextFactory, P: PolicyEngine<F>> LoongKernel<F, P> {
+impl<P: PolicyEngine> LoongKernel<P> {
     /// Safe convenience constructor for callers that do not need to customize
     /// runtime components. This defaults to in-memory audit rather than silent
     /// audit dropping.
@@ -136,7 +133,6 @@ impl<F: PolicyContextFactory, P: PolicyEngine<F>> LoongKernel<F, P> {
             audit,
             event_seq: AtomicU64::new(0),
             action_grant_seq: AtomicU64::new(0),
-            _phantom_data: PhantomData,
         }
     }
 
@@ -240,8 +236,84 @@ impl<F: PolicyContextFactory, P: PolicyEngine<F>> LoongKernel<F, P> {
             .map_err(KernelError::from)
     }
 
+    pub fn issue_token(
+        &self,
+        pack_id: &str,
+        agent_id: &str,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, KernelError> {
+        let pack = self.get_pack(pack_id)?;
+        let issued_at_epoch_s = self.clock.now_epoch_s();
+        let generation = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let token = CapabilityToken {
+            token_id: format!("tok-{generation:016x}"),
+            pack_id: pack.pack_id.clone(),
+            agent_id: agent_id.to_owned(),
+            allowed_capabilities: pack.granted_capabilities.clone(),
+            issued_at_epoch_s,
+            expires_at_epoch_s: issued_at_epoch_s.saturating_add(ttl_s),
+            generation,
+        };
+
+        self.audit.record(AuditEvent {
+            event_id: format!("evt-{generation:016x}"),
+            timestamp_epoch_s: issued_at_epoch_s,
+            agent_id: Some(agent_id.to_owned()),
+            kind: AuditEventKind::TokenIssued {
+                token: token.clone(),
+            },
+        })?;
+
+        Ok(token)
+    }
+
+    pub fn issue_scoped_token(
+        &self,
+        pack_id: &str,
+        agent_id: &str,
+        allowed_capabilities: &BTreeSet<Capability>,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, KernelError> {
+        let pack = self.get_pack(pack_id)?;
+        self.assert_pack_grants(pack, allowed_capabilities)?;
+        let issued_at_epoch_s = self.clock.now_epoch_s();
+        let generation = self.event_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let token = CapabilityToken {
+            token_id: format!("tok-{generation:016x}"),
+            pack_id: pack.pack_id.clone(),
+            agent_id: agent_id.to_owned(),
+            allowed_capabilities: allowed_capabilities.clone(),
+            issued_at_epoch_s,
+            expires_at_epoch_s: issued_at_epoch_s.saturating_add(ttl_s),
+            generation,
+        };
+
+        self.audit.record(AuditEvent {
+            event_id: format!("evt-{generation:016x}"),
+            timestamp_epoch_s: issued_at_epoch_s,
+            agent_id: Some(agent_id.to_owned()),
+            kind: AuditEventKind::TokenIssued {
+                token: token.clone(),
+            },
+        })?;
+
+        Ok(token)
+    }
+
+    pub fn revoke_token(&self, token_id: &str, agent_id: Option<&str>) -> Result<(), KernelError> {
+        let now = self.clock.now_epoch_s();
+        self.audit.record(self.new_event(
+            now,
+            agent_id.map(std::string::ToString::to_string),
+            AuditEventKind::TokenRevoked {
+                token_id: token_id.to_owned(),
+            },
+        ))?;
+        Ok(())
+    }
+
     #[must_use]
-    pub fn build(self) -> Kernel<F, P> {
+    pub fn build(self) -> Kernel<P> {
         Kernel { inner: self }
     }
 
@@ -869,7 +941,7 @@ impl<F: PolicyContextFactory, P: PolicyEngine<F>> LoongKernel<F, P> {
     }
 }
 
-impl<F: PolicyContextFactory, P: PolicyEngine<F>> Kernel<F, P> {
+impl<P: PolicyEngine> Kernel<P> {
     pub fn get_namespace(&self, pack_id: &str) -> Option<&loong_contracts::Namespace> {
         self.inner.get_namespace(pack_id)
     }
@@ -1019,14 +1091,14 @@ impl<F: PolicyContextFactory, P: PolicyEngine<F>> Kernel<F, P> {
     }
 }
 
-impl<F: PolicyContextFactory, P: PolicyEngine<F>> AsRef<LoongKernel<F, P>> for Kernel<F, P> {
-    fn as_ref(&self) -> &LoongKernel<F, P> {
+impl<P: PolicyEngine> AsRef<LoongKernel<P>> for Kernel<P> {
+    fn as_ref(&self) -> &LoongKernel<P> {
         &self.inner
     }
 }
 
-impl<F: PolicyContextFactory, P: PolicyEngine<F>> Deref for Kernel<F, P> {
-    type Target = LoongKernel<F, P>;
+impl<P: PolicyEngine> Deref for Kernel<P> {
+    type Target = LoongKernel<P>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner

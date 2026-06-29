@@ -38,15 +38,22 @@ pub trait PolicyAny<F: PolicyContextFactory>: Send + Sync {
 /// Implementors decide actions and provide grant context. Core turns an allow
 /// report into a [`Granted`] token and turns deny reports into structured
 /// authorization errors without inventing policy reasons.
-pub trait PolicyEngine<F: PolicyContextFactory> {
+pub trait PolicyEngine {
+    /// contains PolicyContext
+    type Factory: PolicyContextFactory;
+
     /// Evaluate a borrowed action without consuming it.
-    fn decide<A: Action>(&self, ctx: &F::Context<'_>, action: &A) -> PolicyOutcome;
+    fn decide<A: Action>(
+        &self,
+        ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
+        action: &A,
+    ) -> PolicyOutcome;
 
     /// Authorize `action` and return a grant that can be consumed by an
     /// executor.
     fn grant<A: Action>(
         &self,
-        ctx: &F::Context<'_>,
+        ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
         action: A,
     ) -> Result<Granted<A>, AuthorizationError> {
         let outcome = self.decide(ctx, &action);
@@ -68,11 +75,27 @@ pub trait PolicyEngine<F: PolicyContextFactory> {
     }
 }
 
+impl PolicyContext for () {
+    fn capabilities(&self) -> BTreeSet<Capability> {
+        BTreeSet::new()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MockPolicyContextFactory;
+
+impl PolicyContextFactory for MockPolicyContextFactory {
+    type Context<'a> = ();
+}
+
 /// The temporary replace for old PolicyEngine.
+#[derive(Debug, Default, Clone, Copy)]
 pub struct MockPolicyEngine;
 
-impl<F: PolicyContextFactory> PolicyEngine<F> for MockPolicyEngine {
-    fn decide<A: Action>(&self, _ctx: &F::Context<'_>, _action: &A) -> PolicyOutcome {
+impl PolicyEngine for MockPolicyEngine {
+    type Factory = MockPolicyContextFactory;
+
+    fn decide<A: Action>(&self, _ctx: &(), _action: &A) -> PolicyOutcome {
         PolicyOutcome::Deny {
             grant_source: None,
             reason: "".into(),

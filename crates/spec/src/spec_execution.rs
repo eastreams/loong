@@ -10,11 +10,11 @@ use kernel::{
     AutoProvisionRequest, BootstrapPolicy, BootstrapReport, BootstrapTaskStatus, Clock,
     CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot, ConnectorCommand,
     InMemoryAuditSink, IntegrationCatalog, LoongKernel, MemoryCoreRequest, MemoryExtensionRequest,
-    PluginAbsorbReport, PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor,
-    PluginCompatibility, PluginCompatibilityShimSupport, PluginScanReport, PluginScanner,
-    PluginSetup, PluginSetupReadinessContext, PluginSlotClaim, PluginTranslationReport,
-    PluginTranslator, ProvisionPlan, RuntimeCoreRequest, RuntimeExtensionRequest,
-    StaticPolicyEngine, SystemClock, TaskIntent, TaskSupervisor, ToolCoreRequest,
+    MockPolicyEngine, PluginAbsorbReport, PluginActivationPlan, PluginActivationStatus,
+    PluginBootstrapExecutor, PluginCompatibility, PluginCompatibilityShimSupport, PluginScanReport,
+    PluginScanner, PluginSetup, PluginSetupReadinessContext, PluginSlotClaim,
+    PluginTranslationReport, PluginTranslator, ProvisionPlan, RuntimeCoreRequest,
+    RuntimeExtensionRequest, SystemClock, TaskIntent, TaskSupervisor, ToolCoreRequest,
     ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
     plugin_provenance_summary_for_descriptor,
 };
@@ -875,7 +875,7 @@ struct SecurityScanDelta {
 }
 
 async fn execute_spec_operation(
-    kernel: &LoongKernel<StaticPolicyEngine>,
+    kernel: &LoongKernel<MockPolicyEngine>,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     integration_catalog: &IntegrationCatalog,
