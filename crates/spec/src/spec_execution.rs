@@ -17,7 +17,7 @@ use kernel::{
     TaskIntent, TaskSupervisor, ToolCoreRequest, ToolExtensionRequest,
     plugin_bridge_is_high_risk_auto_apply, plugin_provenance_summary_for_descriptor,
 };
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 use serde_json::{Value, json};
 
 use crate::CliResult;

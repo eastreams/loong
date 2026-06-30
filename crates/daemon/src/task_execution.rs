@@ -8,7 +8,7 @@ use kernel::{
     HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongKernel,
     SystemClock, TaskIntent, TaskState, TaskSupervisor, VerticalPackManifest,
 };
-use loong_core::policy::traits::{MockPolicyEngine, PolicyEngine};
+use loong_core::policy::engine::{MockPolicyEngine, PolicyEngine};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
 #[cfg(feature = "memory-sqlite")]
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 #[cfg(feature = "memory-sqlite")]
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,

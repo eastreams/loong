@@ -6,7 +6,7 @@ use kernel::{
     CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier,
     VerticalPackManifest,
 };
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 
 #[derive(Debug, Clone)]
 pub(super) struct ControlPlaneExposurePolicy {

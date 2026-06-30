@@ -100,7 +100,7 @@ async fn mvp_memory_adapter_routes_through_kernel() {
     use std::collections::{BTreeMap, BTreeSet};
 
     use loong_contracts::Capability;
-    use loong_core::policy::traits::MockPolicyEngine;
+    use loong_core::policy::engine::MockPolicyEngine;
     use loong_kernel::{ExecutionRoute, HarnessKind, LoongKernel, VerticalPackManifest};
 
     let (mut kernel, _audit) = LoongKernel::new_with_in_memory_audit(MockPolicyEngine::default());

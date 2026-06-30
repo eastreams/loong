@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use kernel::{Capability, ConnectorCommand, LoongKernel};
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 use serde_json::{Value, json};
 use tokio::time::{Instant as TokioInstant, sleep};
 

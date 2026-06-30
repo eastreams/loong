@@ -8,7 +8,7 @@ use std::{
 };
 
 use loong_contracts::GrantId;
-use loong_core::policy::traits::PolicyEngine;
+use loong_core::policy::engine::PolicyEngine;
 
 use crate::{
     audit::{

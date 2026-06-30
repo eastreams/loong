@@ -8,7 +8,7 @@ use kernel::{
     PluginTranslationReport, PluginTrustTier, evaluate_plugin_setup_requirements,
     plugin_provenance_summary_for_descriptor,
 };
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;

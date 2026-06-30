@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use loong_contracts::{
     Capability, ExecutionRoute, HarnessKind, MemoryPlaneError, ToolCoreOutcome, ToolCoreRequest,
 };
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
     MemoryCoreRequest, VerticalPackManifest,

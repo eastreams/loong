@@ -4,7 +4,7 @@ use loong_core::{
     error::ExecutionError,
     policy::{
         context::PolicyContextFor,
-        traits::{HasPolicyEngine, PolicyEngine},
+        engine::{HasPolicyEngine, PolicyEngine},
     },
 };
 

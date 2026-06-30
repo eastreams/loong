@@ -6,7 +6,7 @@ use kernel::{
     Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongKernel, SystemClock,
     VerticalPackManifest,
 };
-use loong_core::policy::traits::MockPolicyEngine;
+use loong_core::policy::engine::MockPolicyEngine;
 
 use crate::DEFAULT_PACK_ID;
 use crate::spec_runtime::{

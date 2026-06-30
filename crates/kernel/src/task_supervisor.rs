@@ -3,7 +3,7 @@ use crate::{
     kernel::{KernelDispatch, LoongKernel},
 };
 use loong_contracts::{Fault, TaskState};
-use loong_core::policy::traits::PolicyEngine;
+use loong_core::policy::engine::PolicyEngine;
 
 /// Opt-in wrapper around `execute_task` that enforces FSM transitions.
 pub struct TaskSupervisor {

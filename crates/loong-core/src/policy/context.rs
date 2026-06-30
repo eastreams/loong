@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use loong_contracts::Capability;
 
-use crate::policy::traits::{HasPolicyEngine, PolicyEngine};
+use crate::policy::engine::{HasPolicyEngine, PolicyEngine};
 
 pub trait PolicyContext: Send + Sync {
     fn capabilities(&self) -> BTreeSet<Capability>;
