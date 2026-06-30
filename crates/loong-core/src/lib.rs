@@ -12,7 +12,6 @@ mod session;
 mod task;
 mod workspace;
 
-pub use action::{Action, ActionExecutor};
 pub use artifact::{
     ApprovalState, ArtifactDurabilityClass, DiagnosticSeverity, ExecutionArtifact,
     ExecutionArtifactKind, ExecutionArtifacts,

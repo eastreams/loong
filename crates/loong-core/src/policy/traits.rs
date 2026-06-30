@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use loong_contracts::{Capability, PolicyGrant, PolicyOutcome};
 
 use crate::{
-    ActionExecutor,
-    action::Action,
+    action::{Action, ActionExecutor},
     error::{AuthorizationError, ExecutionError},
     policy::context::{PolicyContext, PolicyContextFactory},
 };

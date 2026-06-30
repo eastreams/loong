@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{Action, error::ExecutionError};
+use crate::{action::Action, error::ExecutionError};
 
 #[derive(Clone, Copy, Debug)]
 pub struct GrantId(pub u64);
