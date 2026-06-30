@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, HarnessKind, InMemoryAuditSink,
-    Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongKernel, MockPolicyEngine,
-    SystemClock, VerticalPackManifest,
+    Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongKernel, SystemClock,
+    VerticalPackManifest,
 };
+use loong_core::policy::traits::MockPolicyEngine;
 
 use crate::DEFAULT_PACK_ID;
 use crate::spec_runtime::{

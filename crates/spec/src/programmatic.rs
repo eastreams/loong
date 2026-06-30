@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use kernel::{Capability, ConnectorCommand, LoongKernel, MockPolicyEngine};
+use kernel::{Capability, ConnectorCommand, LoongKernel};
+use loong_core::policy::traits::MockPolicyEngine;
 use serde_json::{Value, json};
 use tokio::time::{Instant as TokioInstant, sleep};
 

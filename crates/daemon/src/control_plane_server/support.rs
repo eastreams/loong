@@ -3,9 +3,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicU64;
 
 use kernel::{
-    CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, MockPolicyEngine, PlaneTier,
+    CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongKernel, PlaneTier,
     VerticalPackManifest,
 };
+use loong_core::policy::traits::MockPolicyEngine;
 
 #[derive(Debug, Clone)]
 pub(super) struct ControlPlaneExposurePolicy {

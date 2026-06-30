@@ -247,15 +247,15 @@ loong-core          (minimal shared base types)
 ├── loong-runtime      -> loong-core
 ├── loong-plugin-sdk   -> loong-core
 ├── contracts          (stable contract vocabulary)
-├── kernel             -> contracts, plugin-sdk
+├── kernel             -> contracts, loong-core, plugin-sdk
 ├── protocol           (independent transport foundation)
 ├── bridge-runtime     -> contracts, kernel, protocol
 ├── loong-app-protocol -> loong-runtime
 ├── loong-cli          -> loong-app-protocol
-├── app                -> contracts, kernel
-├── spec               -> contracts, kernel, protocol, bridge-runtime
+├── app                -> contracts, loong-core, kernel
+├── spec               -> contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench              -> kernel, spec
-└── daemon             -> app, app-protocol, bench, bridge-runtime, contracts, kernel, protocol, spec
+└── daemon             -> app, app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
 ```
 
 For ownership zones, the layered execution model (L0–L9), and design

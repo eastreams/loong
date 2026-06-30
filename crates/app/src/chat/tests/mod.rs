@@ -18,9 +18,11 @@ use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind, MemoryPlaneError};
 #[cfg(feature = "memory-sqlite")]
+use loong_core::policy::traits::MockPolicyEngine;
+#[cfg(feature = "memory-sqlite")]
 use loong_kernel::{
     CoreMemoryAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MemoryCoreOutcome,
-    MemoryCoreRequest, MockPolicyEngine, VerticalPackManifest,
+    MemoryCoreRequest, VerticalPackManifest,
 };
 #[cfg(feature = "memory-sqlite")]
 use serde_json::Value;

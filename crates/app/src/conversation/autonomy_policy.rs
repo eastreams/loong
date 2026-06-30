@@ -333,9 +333,8 @@ mod tests {
     use crate::config::AutonomyProfile;
     use crate::tools::runtime_config::AutonomyPolicySnapshot;
     use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-    use loong_kernel::{
-        FixedClock, InMemoryAuditSink, LoongKernel, MockPolicyEngine, VerticalPackManifest,
-    };
+    use loong_core::policy::traits::MockPolicyEngine;
+    use loong_kernel::{FixedClock, InMemoryAuditSink, LoongKernel, VerticalPackManifest};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 

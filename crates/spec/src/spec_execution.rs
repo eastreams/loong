@@ -10,14 +10,14 @@ use kernel::{
     AutoProvisionRequest, BootstrapPolicy, BootstrapReport, BootstrapTaskStatus, Clock,
     CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot, ConnectorCommand,
     InMemoryAuditSink, IntegrationCatalog, LoongKernel, MemoryCoreRequest, MemoryExtensionRequest,
-    MockPolicyEngine, PluginAbsorbReport, PluginActivationPlan, PluginActivationStatus,
-    PluginBootstrapExecutor, PluginCompatibility, PluginCompatibilityShimSupport, PluginScanReport,
-    PluginScanner, PluginSetup, PluginSetupReadinessContext, PluginSlotClaim,
-    PluginTranslationReport, PluginTranslator, ProvisionPlan, RuntimeCoreRequest,
-    RuntimeExtensionRequest, SystemClock, TaskIntent, TaskSupervisor, ToolCoreRequest,
-    ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
-    plugin_provenance_summary_for_descriptor,
+    PluginAbsorbReport, PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor,
+    PluginCompatibility, PluginCompatibilityShimSupport, PluginScanReport, PluginScanner,
+    PluginSetup, PluginSetupReadinessContext, PluginSlotClaim, PluginTranslationReport,
+    PluginTranslator, ProvisionPlan, RuntimeCoreRequest, RuntimeExtensionRequest, SystemClock,
+    TaskIntent, TaskSupervisor, ToolCoreRequest, ToolExtensionRequest,
+    plugin_bridge_is_high_risk_auto_apply, plugin_provenance_summary_for_descriptor,
 };
+use loong_core::policy::traits::MockPolicyEngine;
 use serde_json::{Value, json};
 
 use crate::CliResult;

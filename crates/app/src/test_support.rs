@@ -4,9 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use loong_contracts::{Capability, ExecutionRoute, HarnessKind};
-use loong_kernel::{
-    FixedClock, InMemoryAuditSink, LoongKernel, MockPolicyEngine, VerticalPackManifest,
-};
+use loong_core::policy::traits::MockPolicyEngine;
+use loong_kernel::{FixedClock, InMemoryAuditSink, LoongKernel, VerticalPackManifest};
 
 use crate::context::KernelContext;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent, TurnEngine, TurnResult};

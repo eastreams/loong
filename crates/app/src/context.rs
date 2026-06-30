@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use loong_contracts::CapabilityToken;
+use loong_core::policy::traits::MockPolicyEngine;
 use loong_kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
-    JsonlAuditSink, LoongKernel, MockPolicyEngine, SystemClock, VerticalPackManifest,
+    JsonlAuditSink, LoongKernel, SystemClock, VerticalPackManifest,
 };
 
 use crate::config::{AuditMode, LoongConfig};

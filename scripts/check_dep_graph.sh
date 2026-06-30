@@ -10,10 +10,10 @@ set -euo pipefail
 #   ├── kernel → contracts, loong-core
 #   ├── protocol (independent leaf)
 #   ├── bridge-runtime → contracts, kernel, protocol
-#   ├── app → contracts, kernel
-#   ├── spec → contracts, kernel, protocol, bridge-runtime
+#   ├── app → contracts, loong-core, kernel
+#   ├── spec → contracts, loong-core, kernel, protocol, bridge-runtime
 #   ├── bench → kernel, spec
-#   └── daemon (binary) → app, bench, contracts, kernel, spec, bridge-runtime
+#   └── daemon (binary) → app, app-protocol, bench, contracts, loong-core, kernel, protocol, spec, bridge-runtime
 #
 # Additive local-only Phase 2 spine:
 #   loong-core
@@ -77,14 +77,17 @@ allowed=(
   "bridge-runtime -> kernel"
   "bridge-runtime -> protocol"
   "app -> contracts"
+  "app -> core"
   "app -> kernel"
   "spec -> bridge-runtime"
   "spec -> contracts"
+  "spec -> core"
   "spec -> kernel"
   "spec -> protocol"
   "bench -> kernel"
   "bench -> spec"
   "daemon -> contracts"
+  "daemon -> core"
   "daemon -> kernel"
   "daemon -> protocol"
   "daemon -> app"

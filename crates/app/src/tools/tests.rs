@@ -12902,9 +12902,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use loong_contracts::{ExecutionRoute, HarnessKind, ToolPlaneError};
+use loong_core::policy::traits::MockPolicyEngine;
 use loong_kernel::{
-    CoreToolAdapter, FixedClock, InMemoryAuditSink, LoongKernel, MockPolicyEngine,
-    VerticalPackManifest,
+    CoreToolAdapter, FixedClock, InMemoryAuditSink, LoongKernel, VerticalPackManifest,
 };
 
 struct SharedTestToolAdapter {

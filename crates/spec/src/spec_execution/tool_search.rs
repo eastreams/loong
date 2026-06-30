@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kernel::{
-    AuditEventKind, IntegrationCatalog, LoongKernel, MockPolicyEngine, PluginActivationCandidate,
+    AuditEventKind, IntegrationCatalog, LoongKernel, PluginActivationCandidate,
     PluginActivationInventoryEntry, PluginActivationPlan, PluginBridgeKind, PluginCompatibility,
     PluginCompatibilityMode, PluginCompatibilityShim, PluginContractDialect,
     PluginDiagnosticFinding, PluginScanReport, PluginSetupReadinessContext, PluginSlotClaim,
     PluginTranslationReport, PluginTrustTier, evaluate_plugin_setup_requirements,
     plugin_provenance_summary_for_descriptor,
 };
+use loong_core::policy::traits::MockPolicyEngine;
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;

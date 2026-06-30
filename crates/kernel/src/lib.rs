@@ -55,7 +55,6 @@ pub use integration::{
     ProviderConfig, ProviderTemplate, ProvisionAction, ProvisionPlan,
 };
 pub use kernel::{ConnectorDispatch, Kernel, KernelBuilder, KernelDispatch, LoongKernel};
-pub use loong_core::policy::traits::{MockPolicyEngine, PolicyEngine};
 pub use loong_plugin_sdk::PluginChannelBridgeContract as CanonicalPluginChannelBridgeContract;
 pub use memory::{
     CoreMemoryAdapter, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,

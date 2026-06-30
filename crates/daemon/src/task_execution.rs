@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use kernel::{
     AuditSink, Capability, CapabilityToken, ConnectorCommand, ExecutionRoute, HarnessAdapter,
     HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, InMemoryAuditSink, LoongKernel,
-    MockPolicyEngine, PolicyEngine, SystemClock, TaskIntent, TaskState, TaskSupervisor,
-    VerticalPackManifest,
+    SystemClock, TaskIntent, TaskState, TaskSupervisor, VerticalPackManifest,
 };
+use loong_core::policy::traits::{MockPolicyEngine, PolicyEngine};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

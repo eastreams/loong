@@ -37,10 +37,10 @@ contracts (leaf)
 ├── kernel → contracts, loong-core, loong-plugin-sdk
 ├── protocol (independent leaf)
 ├── bridge-runtime → contracts, kernel, protocol
-├── app → contracts, kernel
-├── spec → contracts, kernel, protocol, bridge-runtime
+├── app → contracts, loong-core, kernel
+├── spec → contracts, loong-core, kernel, protocol, bridge-runtime
 ├── bench → kernel, spec
-└── daemon (`loong`) → app, loong-app-protocol, bench, bridge-runtime, contracts, kernel, protocol, spec
+└── daemon (`loong`) → app, loong-app-protocol, bench, bridge-runtime, contracts, loong-core, kernel, protocol, spec
 ```
 
 Non-negotiable: no dependency cycles. See [Core Beliefs](docs/design-docs/core-beliefs.md).
