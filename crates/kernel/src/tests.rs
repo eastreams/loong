@@ -12,7 +12,7 @@ use proptest::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use loong_core::MockPolicyEngine;
+use loong_core::policy::traits::MockPolicyEngine;
 
 use crate::audit::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, AuditSink, FanoutAuditSink, InMemoryAuditSink,

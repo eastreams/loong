@@ -7,10 +7,10 @@ use crate::{
     ActionExecutor,
     action::Action,
     error::{AuthorizationError, ExecutionError},
-    policy::{PolicyContext, PolicyContextFactory},
+    policy::context::{PolicyContext, PolicyContextFactory},
 };
 
-use super::Granted;
+use super::grant::Granted;
 
 /// Typed policy that can evaluate one action kind.
 ///

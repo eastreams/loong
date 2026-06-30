@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use loong_core::error::AuthorizationError;
-use loong_core::policy::Granted;
+use loong_core::policy::grant::Granted;
 
 #[derive(Clone, Debug)]
 pub struct CanonicalPath {

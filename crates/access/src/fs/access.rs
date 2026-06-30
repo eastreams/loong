@@ -2,7 +2,10 @@ use std::path::Path;
 
 use loong_core::{
     error::ExecutionError,
-    policy::{HasPolicyEngine, PolicyContextFor, PolicyEngine},
+    policy::{
+        context::PolicyContextFor,
+        traits::{HasPolicyEngine, PolicyEngine},
+    },
 };
 
 use super::{CanonicalRoot, FsAction, FsBackend, FsReadAction, FsWriteAction, action};

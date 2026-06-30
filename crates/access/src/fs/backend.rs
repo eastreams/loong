@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use loong_core::action::ActionExecutor;
 use loong_core::error::{CapabilityError, ExecutionError};
-use loong_core::policy::Granted;
+use loong_core::policy::grant::Granted;
 
 use super::action::{CanonicalPath, FsReadAction, FsWriteAction};
 

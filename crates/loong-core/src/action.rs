@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::BTreeSet};
 use async_trait::async_trait;
 use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
 
-use crate::{error::ExecutionError, policy::Granted};
+use crate::{error::ExecutionError, policy::grant::Granted};
 
 /// A typed, policy-facing unit of side-effect intent.
 ///
