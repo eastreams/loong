@@ -178,7 +178,7 @@ pub(super) fn required_capabilities_for_route(
     Ok(capabilities)
 }
 
-pub(super) fn authorize_control_plane_request(
+pub(super) async fn authorize_control_plane_request(
     state: &ControlPlaneHttpState,
     method: &str,
     headers: &HeaderMap,
@@ -239,6 +239,7 @@ pub(super) fn authorize_control_plane_request(
     state
         .kernel_authority
         .authorize(&lease.token, method, &route_capabilities)
+        .await
         .map_err(|error| Box::new(error_response(StatusCode::FORBIDDEN, error)))?;
 
     Ok(lease)

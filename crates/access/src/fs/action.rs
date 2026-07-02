@@ -41,12 +41,16 @@ impl CanonicalPath {
         }
 
         let file_name = path.file_name().ok_or_else(|| {
-            AuthorizationError::Denied("write target must include a file name".into())
+            AuthorizationError::Denied {
+                grant_source: None,
+                reason: "write target must include a file name".into(),
+            }
         })?;
         let parent = path.parent().ok_or_else(|| {
-            AuthorizationError::Denied(
-                "write target must have an authorized parent directory".into(),
-            )
+            AuthorizationError::Denied {
+                grant_source: None,
+                reason: "write target must have an authorized parent directory".into(),
+            }
         })?;
         let canonical_parent = std::fs::canonicalize(parent).map_err(AuthorizationError::Io)?;
 
@@ -162,7 +166,10 @@ fn ensure_under_root(
     if root.contains(candidate) {
         Ok(())
     } else {
-        Err(AuthorizationError::OutsideWorkspace)
+        Err(AuthorizationError::Denied {
+            grant_source: None,
+            reason: "path is outside the authorized workspace".into(),
+        })
     }
 }
 

@@ -187,7 +187,7 @@ pub(super) fn build_plugin_trust_summary(
 }
 
 pub(super) fn emit_security_scan_audit_event(
-    kernel: &LoongKernel<MockPolicyEngine>,
+    kernel: &LoongKernel,
     pack_id: &str,
     agent_id: &str,
     report: &SecurityScanReport,
@@ -231,7 +231,7 @@ pub(super) fn emit_security_scan_audit_event(
 }
 
 pub(super) fn emit_plugin_trust_audit_event(
-    kernel: &LoongKernel<MockPolicyEngine>,
+    kernel: &LoongKernel,
     pack_id: &str,
     agent_id: &str,
     summary: &PluginTrustSummary,

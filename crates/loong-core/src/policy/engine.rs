@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use loong_contracts::{Capability, PolicyOutcome};
+use loong_contracts::{Capability, GrantId, PolicyOutcome};
 
 use crate::{
     action::{Action, ActionExecutor},
     error::{AuthorizationError, ExecutionError},
     policy::{
         context::{PolicyContext, PolicyContextFactory},
-        grant::Granted,
+        grant::{ActionGrant, ActionGrantInfo, Granted},
     },
 };
 
@@ -17,32 +17,38 @@ use crate::{
 /// Implementors decide actions and provide grant context. Core turns an allow
 /// report into a [`Granted`] token and turns deny reports into structured
 /// authorization errors without inventing policy reasons.
+#[async_trait]
 pub trait PolicyEngine {
     /// contains PolicyContext
     type Factory: PolicyContextFactory;
 
     /// Evaluate a borrowed action without consuming it.
-    fn decide<A: Action>(
+    async fn decide<A: Action>(
         &self,
         ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
         action: &A,
     ) -> PolicyOutcome;
 
-    /// Authorize `action` and return a grant that can be consumed by an
-    /// executor.
-    fn grant<A: Action>(
+    /// Allocate the next grant id for an allowed action.
+    async fn next_grant_id(&self) -> GrantId;
+
+    /// Authorize `action` and return grant metadata plus a token that can be
+    /// consumed by an executor.
+    async fn grant<A: Action>(
         &self,
         ctx: &<Self::Factory as PolicyContextFactory>::Context<'_>,
         action: A,
-    ) -> Result<Granted<A>, AuthorizationError> {
-        let outcome = self.decide(ctx, &action);
+    ) -> Result<ActionGrant<A>, AuthorizationError> {
+        let outcome = self.decide(ctx, &action).await;
         match outcome {
             PolicyOutcome::Allow {
                 source: _,
                 reason: _,
-            } => {
-                todo!()
-            }
+            } => Ok(ActionGrant::new(
+                self.next_grant_id().await,
+                ActionGrantInfo,
+                action,
+            )),
             PolicyOutcome::Deny {
                 grant_source,
                 reason,
@@ -65,21 +71,6 @@ pub struct MockPolicyContextFactory;
 
 impl PolicyContextFactory for MockPolicyContextFactory {
     type Context<'a> = ();
-}
-
-/// The temporary replace for old PolicyEngine.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MockPolicyEngine;
-
-impl PolicyEngine for MockPolicyEngine {
-    type Factory = MockPolicyContextFactory;
-
-    fn decide<A: Action>(&self, _ctx: &(), _action: &A) -> PolicyOutcome {
-        PolicyOutcome::Deny {
-            grant_source: None,
-            reason: "".into(),
-        }
-    }
 }
 
 #[async_trait]

@@ -6,7 +6,6 @@ use kernel::{
     Kernel as FrozenKernel, KernelBuilder as RuntimeKernelBuilder, LoongKernel, SystemClock,
     VerticalPackManifest,
 };
-use loong_core::policy::engine::MockPolicyEngine;
 
 use crate::DEFAULT_PACK_ID;
 use crate::spec_runtime::{
@@ -68,7 +67,7 @@ impl KernelBuilder {
 
     /// Build and return a fully configured kernel with all builtin adapters
     /// and the default pack manifest registered.
-    pub fn build(self) -> LoongKernel<MockPolicyEngine> {
+    pub fn build(self) -> LoongKernel {
         configured_builder(
             self.clock,
             self.audit,
@@ -88,8 +87,8 @@ impl Default for KernelBuilder {
 /// without breaking the legacy `KernelBuilder` API.
 ///
 /// The returned runtime handle dereferences to the legacy kernel surface so
-/// helper code typed against `&LoongKernel<_>` can continue to work while
-/// callers migrate toward the explicit `Kernel<P>` name.
+/// helper code typed against `&LoongKernel` can continue to work while
+/// callers migrate toward the explicit `Kernel` name.
 pub struct BootstrapBuilder {
     clock: Option<Arc<dyn Clock>>,
     audit: Option<Arc<dyn AuditSink>>,
@@ -127,7 +126,7 @@ impl BootstrapBuilder {
         self
     }
 
-    pub fn build(self) -> FrozenKernel<MockPolicyEngine> {
+    pub fn build(self) -> FrozenKernel {
         self.into_builder().build()
     }
 
@@ -135,8 +134,8 @@ impl BootstrapBuilder {
     ///
     /// This remains a compatibility alias over `LoongKernel`, so it keeps
     /// the legacy executable API while also supporting `.build()` into
-    /// `Kernel<P>`.
-    pub fn into_builder(self) -> RuntimeKernelBuilder<MockPolicyEngine> {
+    /// `Kernel`.
+    pub fn into_builder(self) -> RuntimeKernelBuilder {
         configured_builder(
             self.clock,
             self.audit,
@@ -157,7 +156,7 @@ fn configured_builder(
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
-) -> RuntimeKernelBuilder<MockPolicyEngine> {
+) -> RuntimeKernelBuilder {
     configured_builder_with_default_audit(
         clock,
         audit,
@@ -172,39 +171,24 @@ fn configured_builder_with_default_audit(
     audit: Option<Arc<dyn AuditSink>>,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
-) -> (
-    RuntimeKernelBuilder<MockPolicyEngine>,
-    Option<Arc<InMemoryAuditSink>>,
-) {
+) -> (RuntimeKernelBuilder, Option<Arc<InMemoryAuditSink>>) {
     let (mut kernel, fallback_audit) = match (clock, audit) {
-        (Some(clock), Some(audit)) => (
-            RuntimeKernelBuilder::with_runtime(MockPolicyEngine::default(), clock, audit),
-            None,
-        ),
+        (Some(clock), Some(audit)) => (RuntimeKernelBuilder::with_runtime(clock, audit), None),
         (Some(clock), None) => {
             let audit = default_in_memory_audit_sink();
             (
-                RuntimeKernelBuilder::with_runtime(
-                    MockPolicyEngine::default(),
-                    clock,
-                    audit.clone() as Arc<dyn AuditSink>,
-                ),
+                RuntimeKernelBuilder::with_runtime(clock, audit.clone() as Arc<dyn AuditSink>),
                 Some(audit),
             )
         }
         (None, Some(audit)) => (
-            RuntimeKernelBuilder::with_runtime(
-                MockPolicyEngine::default(),
-                Arc::new(SystemClock) as Arc<dyn Clock>,
-                audit,
-            ),
+            RuntimeKernelBuilder::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit),
             None,
         ),
         (None, None) => {
             let audit = default_in_memory_audit_sink();
             (
                 RuntimeKernelBuilder::with_runtime(
-                    MockPolicyEngine::default(),
                     Arc::new(SystemClock) as Arc<dyn Clock>,
                     audit.clone() as Arc<dyn AuditSink>,
                 ),
@@ -224,7 +208,7 @@ fn configured_builder_with_default_audit(
 }
 
 fn register_builtin_adapters(
-    kernel: &mut RuntimeKernelBuilder<MockPolicyEngine>,
+    kernel: &mut RuntimeKernelBuilder,
     native_tool_executor: Option<crate::NativeToolExecutor>,
     register_default_embedded_harness: bool,
 ) {
@@ -375,9 +359,7 @@ mod tests {
 
     #[test]
     fn bootstrap_builder_runtime_derefs_to_legacy_kernel_helpers() {
-        fn issue_default_pack_token(
-            kernel: &LoongKernel<MockPolicyEngine>,
-        ) -> kernel::CapabilityToken {
+        fn issue_default_pack_token(kernel: &LoongKernel) -> kernel::CapabilityToken {
             kernel
                 .issue_token(DEFAULT_PACK_ID, "test-agent", 60)
                 .expect("token issue should succeed via legacy helper signature")

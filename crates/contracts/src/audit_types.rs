@@ -7,17 +7,31 @@ use crate::contracts::{Capability, CapabilityToken, ExecutionRoute};
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecutionPlane {
+    /// Connector invocations that cross a named integration boundary.
     Connector,
+    /// Agent/runtime execution such as harness-backed tasks or provider turns.
     Runtime,
+    /// Tool invocations exposed to the agent or conversation runtime.
     Tool,
+    /// Memory reads/writes and memory-index operations.
     Memory,
 }
 
+/// Where an invocation lives within an [`ExecutionPlane`].
+///
+/// `ExecutionPlane` answers "what kind of subsystem is being invoked", while
+/// `PlaneTier` answers "which layer inside that subsystem handled it". Keep
+/// policy and audit checks that care about broad capability domains on
+/// `ExecutionPlane`; use `PlaneTier` only when distinguishing built-in/core
+/// execution from extension-mediated execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlaneTier {
+    /// Compatibility path that predates the core/extension split.
     Legacy,
+    /// Built-in kernel-owned implementation for the plane.
     Core,
+    /// Add-on implementation that wraps or delegates to a core implementation.
     Extension,
 }
 

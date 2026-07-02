@@ -1,30 +1,44 @@
-use std::marker::PhantomData;
+use loong_contracts::GrantId;
 
 use crate::{action::Action, error::ExecutionError};
 
-#[derive(Clone, Copy, Debug)]
-pub struct GrantId(pub u64);
+/// Placeholder for structured action grant metadata.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActionGrantInfo;
+
+/// Authorized action plus grant metadata returned by a policy engine.
+#[derive(Debug)]
+pub struct ActionGrant<A: Action> {
+    pub id: GrantId,
+    /// TODO: Replace this placeholder with structured grant/audit metadata.
+    pub info: ActionGrantInfo,
+    pub granted: Granted<A>,
+}
+
+impl<A: Action> ActionGrant<A> {
+    pub(super) fn new(id: GrantId, info: ActionGrantInfo, action: A) -> Self {
+        Self {
+            id,
+            info,
+            granted: Granted::new(action),
+        }
+    }
+}
 
 /// Authorization represented as an unforgeable value.
 ///
 /// The constructor is crate-private. Callers can inspect and execute a grant,
 /// but only policy helpers inside core can mint one.
 #[derive(Debug)]
-pub struct Granted<A: Action> {
-    pub grant_id: GrantId,
-    // info: ActionGrantInfo, // TODO
-    pub action: A,
-    /// avoid manual implementation
-    _phantom_data: PhantomData<()>,
-}
+pub struct Granted<A: Action>(A);
 
 impl<A: Action> Granted<A> {
-    pub(super) fn new(grant_id: GrantId, /*info: ActionGrantInfo,*/ action: A) -> Self {
-        Self {
-            grant_id,
-            action,
-            _phantom_data: PhantomData,
-        }
+    pub(super) fn new(action: A) -> Self {
+        Self(action)
+    }
+
+    pub fn into_action(self) -> A {
+        self.0
     }
 
     pub async fn execute_with<E>(self, executor: &E) -> Result<E::Output, ExecutionError>

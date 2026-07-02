@@ -17,7 +17,6 @@ use kernel::{
     TaskIntent, TaskSupervisor, ToolCoreRequest, ToolExtensionRequest,
     plugin_bridge_is_high_risk_auto_apply, plugin_provenance_summary_for_descriptor,
 };
-use loong_core::policy::engine::MockPolicyEngine;
 use serde_json::{Value, json};
 
 use crate::CliResult;
@@ -875,7 +874,7 @@ struct SecurityScanDelta {
 }
 
 async fn execute_spec_operation(
-    kernel: &LoongKernel<MockPolicyEngine>,
+    kernel: &LoongKernel,
     pack_id: &str,
     token: &kernel::CapabilityToken,
     integration_catalog: &IntegrationCatalog,

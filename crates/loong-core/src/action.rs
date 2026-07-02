@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeSet};
+use std::{any::Any, borrow::Cow, collections::BTreeSet};
 
 use async_trait::async_trait;
 use loong_contracts::{Capability, ExecutionPlane, PlaneTier};
@@ -9,7 +9,7 @@ use crate::{error::ExecutionError, policy::grant::Granted};
 ///
 /// Access facades construct actions, policy engines authorize them, and domain
 /// executors only run after receiving a [`Granted`] value.
-pub trait Action: Send + Sync + 'static {
+pub trait Action: Any + Send + Sync + 'static {
     /// Stable action kind used by policy diagnostics/audit and grant metadata.
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -36,6 +36,12 @@ pub trait Action: Send + Sync + 'static {
 
     /// Capabilities required before this action may be granted.
     fn required_capabilities(&self) -> BTreeSet<Capability>;
+}
+
+impl dyn Action + '_ {
+    pub fn downcast_ref<A: Action>(&self) -> Option<&A> {
+        (self as &dyn Any).downcast_ref::<A>()
+    }
 }
 
 /// Executor for a granted domain action.

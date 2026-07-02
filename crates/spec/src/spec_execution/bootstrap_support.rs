@@ -48,7 +48,7 @@ pub(super) fn bootstrap_policy(spec: &RunnerSpec) -> Option<BootstrapPolicy> {
 }
 
 pub(super) fn apply_default_selection(
-    kernel: &mut LoongKernel<MockPolicyEngine>,
+    kernel: &mut LoongKernel,
     defaults: Option<&DefaultCoreSelection>,
 ) -> CliResult<()> {
     if let Some(defaults) = defaults {

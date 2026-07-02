@@ -38,8 +38,8 @@ pub struct PolicyEvaluation {
 /// Used to reference a policy entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyEntry {
-    policy_name: Cow<'static, str>,
-    policy_id: PolicyId,
+    pub policy_name: Cow<'static, str>,
+    pub policy_id: PolicyId,
 }
 
 /// Final policy outcome for an action authorization attempt.

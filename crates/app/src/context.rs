@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use loong_contracts::CapabilityToken;
-use loong_core::policy::engine::MockPolicyEngine;
 use loong_kernel::{
     AuditSink, Capability, Clock, ExecutionRoute, FanoutAuditSink, HarnessKind, InMemoryAuditSink,
     JsonlAuditSink, LoongKernel, SystemClock, VerticalPackManifest,
@@ -25,7 +24,7 @@ pub const DEFAULT_TOKEN_TTL_S: u64 = 86400;
 /// to avoid data divergence.
 #[derive(Clone)]
 pub struct KernelContext {
-    pub kernel: Arc<LoongKernel<MockPolicyEngine>>,
+    pub kernel: Arc<LoongKernel>,
     pub token: CapabilityToken,
 }
 
@@ -115,11 +114,7 @@ fn bootstrap_kernel_context_with_audit_sink(
     audit_sink: Arc<dyn AuditSink>,
     config: &LoongConfig,
 ) -> Result<KernelContext, String> {
-    let mut kernel = LoongKernel::with_runtime(
-        MockPolicyEngine::default(),
-        Arc::new(SystemClock) as Arc<dyn Clock>,
-        audit_sink,
-    );
+    let mut kernel = LoongKernel::with_runtime(Arc::new(SystemClock) as Arc<dyn Clock>, audit_sink);
 
     let pack = VerticalPackManifest {
         pack_id: EMBEDDED_RUNTIME_PACK_ID.to_owned(),
@@ -174,6 +169,12 @@ fn bootstrap_kernel_context_with_audit_sink(
     // Register policy extensions for unified security enforcement.
     let tool_policy_rt =
         crate::tools::runtime_config::ToolRuntimeConfig::from_loong_config(config, None);
+    kernel.register_policy_extension(crate::tools::file_policy_ext::FilePolicyExtension::new(
+        file_root,
+    ));
+    kernel.register_policy_extension(
+        crate::tools::shell_policy_ext::ToolPolicyExtension::from_config(&tool_policy_rt),
+    );
 
     let token = kernel
         .issue_token(EMBEDDED_RUNTIME_PACK_ID, agent_id, ttl_s)

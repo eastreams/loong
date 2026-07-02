@@ -230,6 +230,24 @@ fn turn_runtime_test_config(backend_id: &str) -> mvp::config::LoongConfig {
     config
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn seed_turn_runtime_session(config: &mvp::config::LoongConfig, session_id: &str) {
+    let memory_config = mvp::session::store::SessionStoreConfig {
+        sqlite_path: Some(config.memory.resolved_sqlite_path()),
+        runtime_config: None,
+    };
+    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+        .expect("turn runtime session repository");
+    repo.ensure_session(mvp::session::repository::NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: mvp::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some(session_id.to_owned()),
+        state: mvp::session::repository::SessionState::Ready,
+    })
+    .expect("seed turn runtime session");
+}
+
 fn seeded_turn_runtime(
     backend_id: &'static str,
     state: Arc<TestTurnBackendState>,
@@ -250,6 +268,12 @@ fn seeded_turn_runtime(
         current_time_ms()
     ));
     std::fs::create_dir_all(&temp_root).expect("create control-plane turn runtime temp root");
+    let mut config = config;
+    config.memory.sqlite_path = temp_root.join("memory.sqlite3").display().to_string();
+    #[cfg(feature = "memory-sqlite")]
+    for session_id in ["session-1", "session-stream", "session-whitespace"] {
+        seed_turn_runtime_session(&config, session_id);
+    }
     let resolved_path = temp_root.join("config.toml");
     mvp::config::write(
         Some(resolved_path.to_str().expect("utf8 config path")),

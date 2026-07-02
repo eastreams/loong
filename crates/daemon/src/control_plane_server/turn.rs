@@ -6,10 +6,11 @@ pub(super) async fn turn_submit(
     State(state): State<ControlPlaneHttpState>,
     Json(request): Json<ControlPlaneTurnSubmitRequest>,
 ) -> Response {
-    let (turn_runtime, session_id, input) = match prepare_turn_submit(&state, &headers, &request) {
-        Ok(prepared) => prepared,
-        Err(response) => return *response,
-    };
+    let (turn_runtime, session_id, input) =
+        match prepare_turn_submit(&state, &headers, &request).await {
+            Ok(prepared) => prepared,
+            Err(response) => return *response,
+        };
 
     let turn_snapshot = turn_runtime.registry.issue_turn(session_id.as_str());
     let turn_id = turn_snapshot.turn_id.clone();
@@ -39,12 +40,12 @@ pub(super) async fn turn_submit(
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
-fn prepare_turn_submit<'a>(
+async fn prepare_turn_submit<'a>(
     state: &'a ControlPlaneHttpState,
     headers: &HeaderMap,
     request: &'a ControlPlaneTurnSubmitRequest,
 ) -> Result<(&'a Arc<ControlPlaneTurnRuntime>, String, String), Box<Response>> {
-    authorize_control_plane_request(state, "turn/submit", headers)?;
+    authorize_control_plane_request(state, "turn/submit", headers).await?;
 
     let Some(turn_runtime) = state.turn_runtime.as_ref() else {
         return Err(Box::new(error_response(
@@ -148,7 +149,7 @@ pub(super) async fn turn_result(
     State(state): State<ControlPlaneHttpState>,
     Query(query): Query<TurnResultQuery>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "turn/result", &headers) {
+    if let Err(response) = authorize_control_plane_request(&state, "turn/result", &headers).await {
         return *response;
     }
 
@@ -184,7 +185,7 @@ pub(super) async fn turn_stream(
     State(state): State<ControlPlaneHttpState>,
     Query(query): Query<TurnStreamQuery>,
 ) -> Response {
-    if let Err(response) = authorize_control_plane_request(&state, "turn/stream", &headers) {
+    if let Err(response) = authorize_control_plane_request(&state, "turn/stream", &headers).await {
         return *response;
     }
 

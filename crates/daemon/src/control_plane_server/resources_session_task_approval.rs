@@ -15,7 +15,9 @@ pub(super) async fn session_list(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "session/list", &headers) {
+        if let Err(response) =
+            authorize_control_plane_request(&state, "session/list", &headers).await
+        {
             return *response;
         }
         let Some(repository_view) = state.repository_view.as_ref() else {
@@ -59,7 +61,9 @@ pub(super) async fn session_read(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "session/read", &headers) {
+        if let Err(response) =
+            authorize_control_plane_request(&state, "session/read", &headers).await
+        {
             return *response;
         }
         let Some(repository_view) = state.repository_view.as_ref() else {
@@ -113,7 +117,8 @@ pub(super) async fn task_list(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "task/list", &headers) {
+        if let Err(response) = authorize_control_plane_request(&state, "task/list", &headers).await
+        {
             return *response;
         }
         let Some(repository_view) = state.repository_view.as_ref() else {
@@ -158,7 +163,8 @@ pub(super) async fn task_read(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "task/read", &headers) {
+        if let Err(response) = authorize_control_plane_request(&state, "task/read", &headers).await
+        {
             return *response;
         }
         let Some(repository_view) = state.repository_view.as_ref() else {
@@ -206,7 +212,9 @@ pub(super) async fn approval_list(
     }
     #[cfg(feature = "memory-sqlite")]
     {
-        if let Err(response) = authorize_control_plane_request(&state, "approval/list", &headers) {
+        if let Err(response) =
+            authorize_control_plane_request(&state, "approval/list", &headers).await
+        {
             return *response;
         }
         let Some(repository_view) = state.repository_view.as_ref() else {

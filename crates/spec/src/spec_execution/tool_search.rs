@@ -8,7 +8,6 @@ use kernel::{
     PluginTranslationReport, PluginTrustTier, evaluate_plugin_setup_requirements,
     plugin_provenance_summary_for_descriptor,
 };
-use loong_core::policy::engine::MockPolicyEngine;
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;
@@ -164,7 +163,7 @@ fn build_tool_search_operation_headline(
 }
 
 pub(super) fn emit_tool_search_audit_event(
-    kernel: &LoongKernel<MockPolicyEngine>,
+    kernel: &LoongKernel,
     pack_id: &str,
     agent_id: &str,
     summary: &ToolSearchOperationSummary,

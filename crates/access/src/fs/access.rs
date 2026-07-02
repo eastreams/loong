@@ -53,15 +53,15 @@ where
             .map_err(ExecutionError::Authorization)?;
 
         let parent = FsAction::new(path);
-        let granted = self
+        let grant = self
             .kernel
             .policy_engine()
             .grant(&self.policy_context, parent)
             .await
             .map_err(ExecutionError::Authorization)?;
 
-        let action = FsReadAction::new(granted);
-        let granted = self
+        let action = FsReadAction::new(grant.granted);
+        let grant = self
             .kernel
             .policy_engine()
             .grant(&self.policy_context, action)
@@ -69,7 +69,7 @@ where
             .map_err(ExecutionError::Authorization)?;
 
         let executor: &dyn FsBackend = self.kernel;
-        self.kernel.execute_granted(granted, executor).await
+        self.kernel.execute_granted(grant.granted, executor).await
     }
 
     pub async fn write_file(&self, path: &str, content: &str) -> Result<(), ExecutionError> {
@@ -77,15 +77,15 @@ where
             .map_err(ExecutionError::Authorization)?;
 
         let parent = FsAction::new(path);
-        let granted = self
+        let grant = self
             .kernel
             .policy_engine()
             .grant(&self.policy_context, parent)
             .await
             .map_err(ExecutionError::Authorization)?;
 
-        let action = FsWriteAction::new(granted, content.to_owned());
-        let granted = self
+        let action = FsWriteAction::new(grant.granted, content.to_owned());
+        let grant = self
             .kernel
             .policy_engine()
             .grant(&self.policy_context, action)
@@ -93,6 +93,6 @@ where
             .map_err(ExecutionError::Authorization)?;
 
         let executor: &dyn FsBackend = self.kernel;
-        self.kernel.execute_granted(granted, executor).await
+        self.kernel.execute_granted(grant.granted, executor).await
     }
 }

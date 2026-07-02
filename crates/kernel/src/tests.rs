@@ -12,8 +12,6 @@ use proptest::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use loong_core::policy::engine::MockPolicyEngine;
-
 use crate::audit::{
     AuditEvent, AuditEventKind, AuditRepairOutcome, AuditSink, FanoutAuditSink, InMemoryAuditSink,
     JsonlAuditSink, probe_jsonl_audit_journal_runtime_ready, repair_jsonl_audit_journal,
@@ -319,7 +317,7 @@ fn fanout_audit_sink_records_to_all_children() {
 
 #[test]
 fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
-    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit(MockPolicyEngine::default());
+    let (mut kernel, audit) = LoongKernel::new_with_in_memory_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -335,7 +333,7 @@ fn explicit_in_memory_kernel_constructor_records_token_audit_events() {
 
 #[test]
 fn explicit_no_audit_kernel_constructor_keeps_side_effect_free_fixture_path() {
-    let mut kernel = LoongKernel::new_without_audit(MockPolicyEngine::default());
+    let mut kernel = LoongKernel::new_without_audit();
     kernel
         .register_pack(sample_pack())
         .expect("pack should register");
@@ -459,7 +457,7 @@ proptest! {
         let required_capabilities = capability_set_from_mask(required_mask);
 
         let (mut kernel, _audit) =
-            LoongKernel::new_with_in_memory_audit(MockPolicyEngine::default());
+            LoongKernel::new_with_in_memory_audit();
         let mut pack = sample_pack();
         pack.granted_capabilities = pack_capabilities.clone();
         kernel
@@ -666,7 +664,7 @@ fn task_supervisor_rejects_execute_after_completion() {
 fn record_tool_call_denial_audits_extension_denied_errors() {
     let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_004_000));
     let audit = Arc::new(InMemoryAuditSink::default());
-    let mut kernel = LoongKernel::with_runtime(MockPolicyEngine::default(), clock, audit.clone());
+    let mut kernel = LoongKernel::with_runtime(clock, audit.clone());
     let pack = sample_pack();
     kernel
         .register_pack(pack.clone())
