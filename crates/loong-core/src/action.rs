@@ -11,14 +11,10 @@ use crate::{error::ExecutionError, policy::grant::Granted};
 /// executors only run after receiving a [`Granted`] value.
 pub trait Action: Any + Send + Sync + 'static {
     /// Stable action kind used by policy diagnostics/audit and grant metadata.
-    fn kind(&self) -> &'static str {
-        std::any::type_name::<Self>()
-    }
+    fn kind(&self) -> &'static str;
 
     /// Human-readable operation within the coarse execution plane.
-    fn operation(&self) -> Cow<'static, str> {
-        self.kind().into()
-    }
+    fn operation(&self) -> Cow<'static, str>;
 
     /// Optional resource label for audit records, such as a path, URL, or
     /// process command.

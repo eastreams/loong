@@ -73,6 +73,10 @@ impl LegacyKernelAction {
 }
 
 impl Action for LegacyKernelAction {
+    fn kind(&self) -> &'static str {
+        "action.legacy"
+    }
+
     fn execution_plane(&self) -> ExecutionPlane {
         self.plane
     }
