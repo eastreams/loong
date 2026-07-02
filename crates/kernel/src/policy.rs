@@ -13,8 +13,8 @@ use loong_contracts::{
     PolicyGrant, PolicyOutcome, VerticalPackManifest,
 };
 use loong_core::{
-    action::Action,
     error::AuthorizationError,
+    policy::action::Action,
     policy::{
         context::{PolicyContext, PolicyContextFactory},
         engine::PolicyEngine,

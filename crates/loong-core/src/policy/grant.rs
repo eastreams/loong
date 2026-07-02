@@ -1,6 +1,6 @@
 use loong_contracts::GrantId;
 
-use crate::{action::Action, error::ExecutionError};
+use crate::{error::ExecutionError, policy::action::Action};
 
 /// Placeholder for structured action grant metadata.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,7 +43,7 @@ impl<A: Action> Granted<A> {
 
     pub async fn execute_with<E>(self, executor: &E) -> Result<E::Output, ExecutionError>
     where
-        E: crate::action::ActionExecutor<A> + ?Sized,
+        E: crate::policy::action::ActionExecutor<A> + ?Sized,
     {
         executor.execute(self).await
     }

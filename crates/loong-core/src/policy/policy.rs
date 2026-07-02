@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use async_trait::async_trait;
 use loong_contracts::PolicyGrant;
 
-use crate::{action::Action, policy::context::PolicyContextFactory};
+use crate::{policy::action::Action, policy::context::PolicyContextFactory};
 
 /// Typed policy that can evaluate one action kind.
 ///

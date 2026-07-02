@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use loong_contracts::{Capability, GrantId, PolicyOutcome};
 
 use crate::{
-    action::{Action, ActionExecutor},
     error::{AuthorizationError, ExecutionError},
     policy::{
+        action::{Action, ActionExecutor},
         context::{PolicyContext, PolicyContextFactory},
         grant::{ActionGrant, ActionGrantInfo, Granted},
     },

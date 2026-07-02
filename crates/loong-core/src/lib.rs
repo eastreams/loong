@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-pub mod action;
 mod artifact;
 mod budget;
 pub mod error;
