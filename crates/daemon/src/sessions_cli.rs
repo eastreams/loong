@@ -555,15 +555,13 @@ async fn load_session_status_payload_with_runtime_summaries(
 ) -> CliResult<Value> {
     let mut detail =
         load_session_status_payload(memory_config, tool_config, current_session_id, session_id)?;
-    let prompt_frame = crate::session_prompt_frame_cli::load_session_prompt_frame_payload(
-        memory_config,
-        session_id,
-    )
-    .await;
-    let safe_lane =
-        crate::session_runtime_truth_cli::load_session_safe_lane_payload(memory_config, session_id)
+    let prompt_frame =
+        crate::session_runtime_detail::load_session_prompt_frame_payload(memory_config, session_id)
             .await;
-    let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
+    let safe_lane =
+        crate::session_runtime_detail::load_session_safe_lane_payload(memory_config, session_id)
+            .await;
+    let turn_checkpoint = crate::session_runtime_detail::load_session_turn_checkpoint_payload(
         memory_config,
         session_id,
     )
@@ -2409,12 +2407,12 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
     let continuity =
         render_runtime_self_continuity_summary(workflow.get("runtime_self_continuity"));
     let prompt_frame_summary =
-        crate::session_prompt_frame_cli::render_prompt_frame_summary(detail.get("prompt_frame"));
+        crate::session_runtime_detail::render_prompt_frame_summary(detail.get("prompt_frame"));
     let prompt_frame_summary = sanitize_terminal_text(prompt_frame_summary.as_str());
     let safe_lane_summary =
-        crate::session_runtime_truth_cli::render_safe_lane_summary(detail.get("safe_lane"));
+        crate::session_runtime_detail::render_safe_lane_summary(detail.get("safe_lane"));
     let safe_lane_summary = sanitize_terminal_text(safe_lane_summary.as_str());
-    let turn_checkpoint_summary = crate::session_runtime_truth_cli::render_turn_checkpoint_summary(
+    let turn_checkpoint_summary = crate::session_runtime_detail::render_turn_checkpoint_summary(
         detail.get("turn_checkpoint"),
     );
     let turn_checkpoint_summary = sanitize_terminal_text(turn_checkpoint_summary.as_str());
@@ -2658,5 +2656,4 @@ fn render_runtime_self_continuity_summary(runtime_self_continuity: Option<&Value
 }
 
 #[cfg(test)]
-#[path = "sessions_cli_tests.rs"]
 mod tests;

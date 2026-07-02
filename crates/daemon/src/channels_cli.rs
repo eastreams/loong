@@ -1,21 +1,47 @@
 use clap::{Args, Subcommand};
 
+mod access_policy_render;
+pub(crate) mod account_keys;
+mod bridge_render;
+mod resolution;
+mod send_target_kind;
+#[cfg(test)]
+mod send_tests;
+mod serve;
+mod specs;
+
+pub(crate) use self::access_policy_render::{
+    channel_access_policy_by_account, render_channel_access_policy_line,
+};
+pub(crate) use self::bridge_render::{
+    push_channel_surface_managed_plugin_bridge_discovery,
+    push_channel_surface_plugin_bridge_contract, render_line_safe_optional_text_value,
+    render_line_safe_text_value, render_line_safe_text_values,
+};
+pub(crate) use self::resolution::{build_channel_resolution, render_channel_resolution_text};
+pub use self::send_target_kind::{default_twitch_send_target_kind, parse_twitch_send_target_kind};
+pub use self::serve::{
+    FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, QQBOT_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC,
+    WHATSAPP_SERVE_CLI_SPEC,
+};
+pub use self::specs::{
+    DINGTALK_SEND_CLI_SPEC, DISCORD_SEND_CLI_SPEC, EMAIL_SEND_CLI_SPEC, FEISHU_SEND_CLI_SPEC,
+    GOOGLE_CHAT_SEND_CLI_SPEC, IMESSAGE_SEND_CLI_SPEC, IRC_SEND_CLI_SPEC, LINE_SEND_CLI_SPEC,
+    MATRIX_SEND_CLI_SPEC, MATRIX_SERVE_CLI_SPEC, MATTERMOST_SEND_CLI_SPEC,
+    NEXTCLOUD_TALK_SEND_CLI_SPEC, NOSTR_SEND_CLI_SPEC, ONEBOT_SEND_CLI_SPEC, ONEBOT_SERVE_CLI_SPEC,
+    QQBOT_SEND_CLI_SPEC, SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC, SYNOLOGY_CHAT_SEND_CLI_SPEC,
+    TEAMS_SEND_CLI_SPEC, TELEGRAM_SEND_CLI_SPEC, TELEGRAM_SERVE_CLI_SPEC, TWITCH_SEND_CLI_SPEC,
+    WEBHOOK_SEND_CLI_SPEC, WECOM_SEND_CLI_SPEC, WECOM_SERVE_CLI_SPEC, WEIXIN_SEND_CLI_SPEC,
+    WEIXIN_SERVE_CLI_SPEC, WHATSAPP_PERSONAL_SEND_CLI_SPEC, WHATSAPP_PERSONAL_SERVE_CLI_SPEC,
+    WHATSAPP_SEND_CLI_SPEC,
+};
+
 const CHANNELS_SEND_LONG_ABOUT: &str = "Send one proactive message through the canonical channel surface.\n\nThe grouped `channels send` contract stays intentionally small: pass one `--target` and one `--text`, then choose the channel family. Family-specific richer send workflows continue to live under their dedicated namespaces, such as `loong feishu send`.";
 
 use crate::{
     ChannelSendCliArgs, ChannelSendCliSpec, ChannelServeCliArgs, ChannelServeCliSpec, CliResult,
-    DINGTALK_SEND_CLI_SPEC, DISCORD_SEND_CLI_SPEC, EMAIL_SEND_CLI_SPEC, FEISHU_SEND_CLI_SPEC,
-    FEISHU_SERVE_CLI_SPEC, GOOGLE_CHAT_SEND_CLI_SPEC, IMESSAGE_SEND_CLI_SPEC, IRC_SEND_CLI_SPEC,
-    LINE_SEND_CLI_SPEC, LINE_SERVE_CLI_SPEC, MATRIX_SEND_CLI_SPEC, MATRIX_SERVE_CLI_SPEC,
-    MATTERMOST_SEND_CLI_SPEC, NEXTCLOUD_TALK_SEND_CLI_SPEC, NOSTR_SEND_CLI_SPEC,
-    ONEBOT_SEND_CLI_SPEC, ONEBOT_SERVE_CLI_SPEC, QQBOT_SEND_CLI_SPEC, QQBOT_SERVE_CLI_SPEC,
-    SIGNAL_SEND_CLI_SPEC, SLACK_SEND_CLI_SPEC, SYNOLOGY_CHAT_SEND_CLI_SPEC, TEAMS_SEND_CLI_SPEC,
-    TELEGRAM_SEND_CLI_SPEC, TELEGRAM_SERVE_CLI_SPEC, TLON_SEND_CLI_SPEC, TWITCH_SEND_CLI_SPEC,
-    WEBHOOK_SEND_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC, WECOM_SEND_CLI_SPEC, WECOM_SERVE_CLI_SPEC,
-    WEIXIN_SEND_CLI_SPEC, WEIXIN_SERVE_CLI_SPEC, WHATSAPP_PERSONAL_SEND_CLI_SPEC,
-    WHATSAPP_PERSONAL_SERVE_CLI_SPEC, WHATSAPP_SEND_CLI_SPEC, WHATSAPP_SERVE_CLI_SPEC,
-    default_channel_send_target_kind, parse_channel_send_target_kind, run_channel_send_cli,
-    run_channel_serve_cli, run_channels_cli,
+    TLON_SEND_CLI_SPEC, default_channel_send_target_kind, parse_channel_send_target_kind,
+    run_channel_send_cli, run_channel_serve_cli, run_channels_cli,
 };
 
 pub use loong_app as app;

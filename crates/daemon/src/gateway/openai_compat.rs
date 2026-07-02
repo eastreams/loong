@@ -709,5 +709,4 @@ pub(crate) fn build_openai_compat_router(app_state: Arc<GatewayControlAppState>)
 }
 
 #[cfg(test)]
-#[path = "openai_compat_tests.rs"]
-mod openai_compat_tests;
+mod tests;

@@ -60,16 +60,18 @@ pub(super) async fn handle_gateway_pairing_requests(
     };
 
     let status = match query.status.as_deref() {
-        Some(raw) => match crate::pairing_projection::parse_pairing_status(raw) {
-            Ok(status) => Some(status),
-            Err(error) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_pairing_status",
-                    error.as_str(),
-                );
+        Some(raw) => {
+            match crate::control_plane_server::pairing_projection::parse_pairing_status(raw) {
+                Ok(status) => Some(status),
+                Err(error) => {
+                    return json_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_pairing_status",
+                        error.as_str(),
+                    );
+                }
             }
-        },
+        }
         None => None,
     };
     let limit = query.limit.unwrap_or(50);
@@ -79,7 +81,7 @@ pub(super) async fn handle_gateway_pairing_requests(
         returned_count: requests.len(),
         requests: requests
             .into_iter()
-            .map(crate::pairing_projection::map_pairing_request_summary)
+            .map(crate::control_plane_server::pairing_projection::map_pairing_request_summary)
             .collect::<Vec<_>>(),
     };
     gateway_control_payload_response(&payload, "gateway pairing requests payload")
@@ -137,7 +139,10 @@ pub(super) async fn handle_gateway_pairing_resolve(
     match pairing_registry.resolve_request(request.pairing_request_id.as_str(), request.approve) {
         Ok(Some(record)) => {
             let payload = ControlPlanePairingResolveResponse {
-                request: crate::pairing_projection::map_pairing_request_summary(record.clone()),
+                request:
+                    crate::control_plane_server::pairing_projection::map_pairing_request_summary(
+                        record.clone(),
+                    ),
                 device_token: record.device_token,
             };
             gateway_control_payload_response(&payload, "gateway pairing resolve payload")

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use loong_contracts::SecretRef;
 
-use crate::provider_credential_policy;
+use crate::provider::credential_policy as provider_credential_policy;
 use crate::{CliResult, mvp};
 
 pub(crate) async fn finalize_github_copilot_onboard_credentials(

@@ -107,7 +107,7 @@ pub fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongConf
             },
             mvp::tui_surface::TuiKeyValueSpec::Plain {
                 key: "provider".to_owned(),
-                value: crate::provider_presentation::active_provider_detail_label(config),
+                value: crate::provider::presentation::active_provider_detail_label(config),
             },
             mvp::tui_surface::TuiKeyValueSpec::Plain {
                 key: "model".to_owned(),
@@ -153,3 +153,6 @@ pub fn run_welcome_cli() -> CliResult<()> {
     println!("{}", render_welcome_banner(config_path.as_path(), &config));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

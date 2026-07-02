@@ -6,10 +6,6 @@ use loong_app as mvp;
 use loong_spec::CliResult;
 use serde_json::{Value, json};
 
-use crate::feishu_onboarding::{
-    FeishuOnboardApplyOptions, FeishuOnboardCredentialSource, FeishuOnboardCredentials,
-    apply_manual_feishu_onboarding, onboard_via_qr_registration,
-};
 use crate::feishu_support::{
     FeishuAuthCapability, FeishuConfiguredCapability, FeishuDaemonContext,
     build_account_recommendations, build_grant_recommendations, build_pkce_pair,
@@ -21,15 +17,17 @@ use crate::feishu_support::{
 
 const DEFAULT_FEISHU_REDIRECT_URI: &str = "http://127.0.0.1:34819/callback";
 
-#[path = "feishu_cli/bitable.rs"]
 mod bitable;
-#[path = "feishu_cli/render.rs"]
+mod onboarding;
 mod render;
 #[cfg(test)]
-#[path = "feishu_cli/render_tests.rs"]
-mod render_tests;
+mod tests;
 
 pub use self::bitable::*;
+use self::onboarding::{
+    FeishuOnboardApplyOptions, FeishuOnboardCredentialSource, FeishuOnboardCredentials,
+    apply_manual_feishu_onboarding, onboard_via_qr_registration,
+};
 use self::render::*;
 
 fn active_cli_command_name() -> &'static str {

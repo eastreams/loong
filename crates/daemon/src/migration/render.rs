@@ -146,7 +146,7 @@ fn render_stacked_provider_choice_lines(
     };
     let mut lines = vec![format!(
         "- {}{}",
-        crate::provider_presentation::provider_choice_label(&choice.profile_id, choice.kind),
+        crate::provider::presentation::provider_choice_label(&choice.profile_id, choice.kind),
         suffix
     )];
     lines.extend(loong_app::presentation::render_wrapped_text_line(
@@ -189,7 +189,7 @@ fn render_wide_provider_choice_line(
     };
     format!(
         "- {:24} {:28} {}{}",
-        crate::provider_presentation::provider_choice_label(&choice.profile_id, choice.kind),
+        crate::provider::presentation::provider_choice_label(&choice.profile_id, choice.kind),
         choice.source,
         choice.summary,
         suffix
@@ -411,7 +411,7 @@ pub fn provider_selection_display_lines(plan: &ProviderSelectionPlan) -> Vec<Str
             ""
         };
         let label =
-            crate::provider_presentation::provider_choice_label(&choice.profile_id, choice.kind);
+            crate::provider::presentation::provider_choice_label(&choice.profile_id, choice.kind);
         lines.push(format!("- {label}{suffix}"));
         lines.push(display_line("  source: ", &choice.source));
         lines.push(display_line("  summary: ", &choice.summary));

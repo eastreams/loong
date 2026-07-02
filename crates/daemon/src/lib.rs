@@ -35,7 +35,8 @@ pub use loong_spec::spec_execution::*;
 pub use loong_spec::spec_runtime::*;
 pub use loong_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
 
-pub use self::channel_cli_specs::{
+pub use self::channels_cli::{ChannelsCommands, run_grouped_channels_cli};
+pub use self::channels_cli::{
     DINGTALK_SEND_CLI_SPEC, DISCORD_SEND_CLI_SPEC, EMAIL_SEND_CLI_SPEC, FEISHU_SEND_CLI_SPEC,
     GOOGLE_CHAT_SEND_CLI_SPEC, IMESSAGE_SEND_CLI_SPEC, IRC_SEND_CLI_SPEC, LINE_SEND_CLI_SPEC,
     MATRIX_SEND_CLI_SPEC, MATRIX_SERVE_CLI_SPEC, MATTERMOST_SEND_CLI_SPEC,
@@ -46,11 +47,7 @@ pub use self::channel_cli_specs::{
     WEIXIN_SERVE_CLI_SPEC, WHATSAPP_PERSONAL_SEND_CLI_SPEC, WHATSAPP_PERSONAL_SERVE_CLI_SPEC,
     WHATSAPP_SEND_CLI_SPEC,
 };
-pub use self::channel_send_target_kind::{
-    default_twitch_send_target_kind, parse_twitch_send_target_kind,
-};
-pub use self::channels_cli::{ChannelsCommands, run_grouped_channels_cli};
-pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
+pub use self::channels_cli::{default_twitch_send_target_kind, parse_twitch_send_target_kind};
 pub use self::delegate_child_cli::run_detached_delegate_child_cli;
 pub use self::env_compat::make_env_compatible;
 pub use self::managed_plugin_bridge_runtime::{
@@ -79,7 +76,9 @@ pub use loong_bench::{
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 pub use memory_context_benchmark::run_memory_context_benchmark_cli;
 pub use runtime_cli::{RuntimeCommands, run_runtime_cli};
-pub use runtime_snapshot_compaction_hygiene::RuntimeSnapshotCompactionHygieneState;
+pub use runtime_snapshot::{
+    RuntimeSnapshotCompactionHygieneState, build_runtime_snapshot_cli_json_payload,
+};
 pub use runtime_trajectory_cli::{format_runtime_trajectory_summary, run_runtime_trajectory_cli};
 pub use whatsapp_personal_cli::run_whatsapp_personal_command;
 #[cfg(not(any(feature = "memory-sqlite", feature = "mvp")))]
@@ -119,37 +118,25 @@ pub use {base64, kernel, sha2};
 mod access_terms;
 pub mod acp_cli;
 pub mod audit_cli;
-mod channel_access_policy_render;
-mod channel_bridge_render;
-mod channel_cli_specs;
-mod channel_resolution;
-#[cfg(test)]
-mod channel_send_cli_tests;
-mod channel_send_target_kind;
-mod channel_serve_cli;
 pub mod channels_cli;
 mod cli_handoff;
 mod cli_json;
 mod command_kind;
 pub mod completions_cli;
-mod configured_account_keys;
 mod control_plane_device_auth;
 mod control_plane_server;
 mod copilot_onboarding;
 pub mod debug_cli;
 mod delegate_child_cli;
 pub mod doctor_cli;
-mod doctor_presentation;
 pub mod doctor_security_cli;
 mod env_compat;
 pub mod feishu_cli;
-mod feishu_onboarding;
 pub mod feishu_support;
 mod first_run_action_presentation;
 pub mod gateway;
 pub mod import_cli;
 mod lib_default_entry;
-mod lib_runtime_snapshot_support;
 mod lib_spec_io;
 mod managed_plugin_bridge_runtime;
 mod mcp_cli;
@@ -157,66 +144,49 @@ mod mcp_cli;
 mod memory_context_benchmark;
 pub mod migrate_cli;
 pub mod migration;
+mod multi_channel_serve;
 pub mod next_actions;
 mod observability;
+mod onboard;
 pub mod onboard_cli;
-mod onboard_finalize;
-mod onboard_import;
-mod onboard_preflight;
-mod onboard_preflight_presentation;
-pub mod onboard_presentation;
-mod onboard_success_render;
-mod onboard_types;
-mod onboard_web_search;
-mod onboard_web_search_probe;
-mod onboard_write_recovery;
-mod onboarding_model_policy;
+// Keep the historical public import path while the implementation lives under
+// the onboarding domain module.
+pub mod onboard_presentation {
+    pub use crate::onboard::presentation::*;
+}
 mod operator_inventory_cli;
-pub mod operator_prompt;
-mod pairing_projection;
 pub mod personalize_cli;
 mod personalize_presentation;
 mod plugin_bridge_account_summary;
 pub mod plugins_cli;
-mod provider_credential_policy;
-mod provider_credentials_guidance;
-mod provider_model_probe_policy;
-pub mod provider_presentation;
-mod provider_route_diagnostics;
-mod query_search_guidance;
+mod provider;
+// Keep the historical public import path while the implementation lives under
+// the provider domain module.
+pub mod provider_presentation {
+    pub use crate::provider::presentation::*;
+}
 mod query_search_surface;
-mod runtime_access;
 pub mod runtime_capability_cli;
 pub mod runtime_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
-mod runtime_snapshot_compaction_assessment;
-mod runtime_snapshot_compaction_hygiene;
-mod runtime_snapshot_compaction_presentation;
-mod runtime_snapshot_compaction_sequence;
-mod runtime_snapshot_render;
-mod runtime_snapshot_types;
+mod runtime_snapshot;
 pub mod runtime_trajectory_cli;
 pub mod session_cli;
-mod session_prompt_frame_cli;
-mod session_runtime_truth_cli;
+mod session_runtime_detail;
 pub mod sessions_cli;
 mod setup_boundary;
 pub mod skills_cli;
-mod skills_policy_probe;
 pub mod source_presentation;
-mod status_access;
 pub mod status_cli;
 pub mod supervisor;
 mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
-mod tool_calling_readiness;
 pub mod trajectory_cli;
 mod turn_cli;
 pub mod update_cli;
 pub mod weixin_cli;
-mod weixin_onboarding;
 mod whatsapp_personal_cli;
 pub mod work_unit_cli;
 pub use self::acp_cli::{
@@ -229,26 +199,31 @@ pub use self::acp_cli::{
     run_acp_doctor_cli, run_acp_event_summary_cli, run_acp_observability_cli, run_acp_status_cli,
     run_list_acp_backends_cli, run_list_acp_sessions_cli,
 };
-use channel_access_policy_render::{
-    channel_access_policy_by_account, render_channel_access_policy_line,
-};
-use channel_bridge_render::{
+use channels_cli::{channel_access_policy_by_account, render_channel_access_policy_line};
+use channels_cli::{
     push_channel_surface_managed_plugin_bridge_discovery,
     push_channel_surface_plugin_bridge_contract,
 };
-pub(crate) use channel_bridge_render::{
+pub(crate) use channels_cli::{
     render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
 };
 use first_run_action_presentation::{
     build_first_run_action_sections, first_run_group_for_setup_action_kind,
 };
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
-pub(crate) use lib_runtime_snapshot_support::{
+pub use loong_spec::programmatic::{
+    acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
+};
+pub use multi_channel_serve::{MultiChannelServeChannelAccount, run_multi_channel_serve_cli};
+pub use observability::{debug_variant_name, init_otel, init_tracing, summarize_error};
+use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
+pub use runtime_snapshot::render_runtime_snapshot_text;
+pub(crate) use runtime_snapshot::{
     RUNTIME_TOOL_ACCESS_SEPARATION_NOTE, RuntimeToolAccessSummary,
     collect_runtime_snapshot_cli_state_from_loaded_config,
     collect_runtime_snapshot_runtime_plugins_state, persist_json_artifact,
 };
-pub use lib_runtime_snapshot_support::{
+pub use runtime_snapshot::{
     RuntimeSnapshotArtifactDocument, RuntimeSnapshotArtifactLineage,
     RuntimeSnapshotArtifactMetadata, RuntimeSnapshotArtifactSchema, RuntimeSnapshotCliState,
     RuntimeSnapshotInventoryStatus, RuntimeSnapshotRestoreManagedSkillSpec,
@@ -258,22 +233,15 @@ pub use lib_runtime_snapshot_support::{
     build_runtime_snapshot_artifact_json_payload, collect_runtime_snapshot_cli_state,
     run_runtime_snapshot_cli,
 };
-pub use loong_spec::programmatic::{
-    acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
-};
-pub use observability::{debug_variant_name, init_otel, init_tracing, summarize_error};
-use personalize_presentation::{PERSONALIZE_COMMAND_ABOUT, PERSONALIZE_COMMAND_LONG_ABOUT};
-use runtime_snapshot_compaction_hygiene::collect_runtime_snapshot_compaction_hygiene_state;
-pub use runtime_snapshot_render::render_runtime_snapshot_text;
-pub(crate) use runtime_snapshot_render::{
-    runtime_snapshot_acp_json, runtime_snapshot_context_engine_json,
-    runtime_snapshot_memory_system_json, runtime_snapshot_provider_json,
-    runtime_snapshot_runtime_plugins_json, runtime_snapshot_skills_json,
-    runtime_snapshot_tool_runtime_json,
-};
-pub use runtime_snapshot_types::{
+pub use runtime_snapshot::{
     RuntimeSnapshotProviderProfileState, RuntimeSnapshotProviderState,
     RuntimeSnapshotProviderTransportState,
+};
+pub(crate) use runtime_snapshot::{
+    RuntimeSnapshotToolCallingState, runtime_snapshot_acp_json,
+    runtime_snapshot_context_engine_json, runtime_snapshot_memory_system_json,
+    runtime_snapshot_provider_json, runtime_snapshot_runtime_plugins_json,
+    runtime_snapshot_skills_json, runtime_snapshot_tool_runtime_json,
 };
 pub use session_cli::{
     SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
@@ -284,10 +252,6 @@ pub use session_cli::{
 use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
-pub use turn_cli::{TurnCommands, run_ask_cli, run_chat_cli, run_turn_run_cli};
-pub use update_cli::run_update_cli;
-#[rustfmt::skip]
-use tool_calling_readiness::{RuntimeSnapshotToolCallingState, collect_runtime_snapshot_tool_calling_state};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -295,6 +259,8 @@ pub use trajectory_cli::{
     format_trajectory_inspect_text, load_trajectory_export_artifact, run_trajectory_export_cli,
     run_trajectory_inspect_cli,
 };
+pub use turn_cli::{TurnCommands, run_ask_cli, run_chat_cli, run_turn_run_cli};
+pub use update_cli::run_update_cli;
 #[allow(
     clippy::expect_used,
     clippy::panic,
@@ -303,7 +269,7 @@ pub use trajectory_cli::{
 )]
 #[doc(hidden)]
 pub mod test_support;
-pub use channel_serve_cli::{
+pub use channels_cli::{
     FEISHU_SERVE_CLI_SPEC, LINE_SERVE_CLI_SPEC, QQBOT_SERVE_CLI_SPEC, WEBHOOK_SERVE_CLI_SPEC,
     WHATSAPP_SERVE_CLI_SPEC,
 };
@@ -315,8 +281,6 @@ pub use lib_default_entry::{
     redacted_command_name, render_welcome_banner, resolve_default_entry_command,
     resolve_default_entry_post_onboard_command, run_welcome_cli,
 };
-#[cfg(test)]
-use lib_default_entry::{resolve_welcome_config_path, should_resolve_default_entry_to_chat};
 pub use lib_spec_io::{
     read_spec_file, read_spec_file_with_bridge_support_resolution,
     read_spec_file_with_bridge_support_selection, write_json_file,
@@ -506,20 +470,6 @@ pub struct ChannelSendCliSpec {
 pub struct ChannelServeCliSpec {
     pub family: mvp::channel::ChannelCatalogCommandFamilyDescriptor,
     pub run: for<'a> fn(ChannelServeCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MultiChannelServeChannelAccount {
-    pub channel_id: String,
-    pub account_id: String,
-}
-
-impl std::str::FromStr for MultiChannelServeChannelAccount {
-    type Err = String;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        parse_multi_channel_serve_channel_account(raw)
-    }
 }
 
 #[derive(Parser, Debug)]
@@ -1041,71 +991,6 @@ pub enum ValidateConfigOutput {
     Json,
     ProblemJson,
 }
-
-fn parse_multi_channel_serve_channel_account(
-    raw: &str,
-) -> Result<MultiChannelServeChannelAccount, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("multi-channel channel-account entries cannot be empty".to_owned());
-    }
-
-    let (raw_channel_id, raw_account_id) = trimmed.split_once('=').ok_or_else(|| {
-        format!("multi-channel channel-account `{trimmed}` must use CHANNEL=ACCOUNT syntax")
-    })?;
-
-    let channel_token = raw_channel_id.trim();
-    if channel_token.is_empty() {
-        return Err(format!(
-            "multi-channel channel-account `{trimmed}` is missing a channel id"
-        ));
-    }
-
-    let normalized_channel_id = mvp::channel::normalize_channel_catalog_id(channel_token)
-        .ok_or_else(|| {
-            let supported_channels = supported_multi_channel_serve_channel_ids().join(", ");
-            format!(
-                "unrecognized multi-channel service channel `{channel_token}` (available runtime-backed channels: {supported_channels})"
-            )
-        })?;
-    let supported_channel_ids = supported_multi_channel_serve_channel_ids();
-    let runtime_channel_id = normalized_channel_id;
-    let runtime_is_supported = supported_channel_ids.contains(&runtime_channel_id);
-    if !runtime_is_supported {
-        let supported_channels = supported_channel_ids.join(", ");
-        return Err(format!(
-            "multi-channel service channel `{channel_token}` resolves to `{runtime_channel_id}` but is not supported in this build (expected one of: {supported_channels})"
-        ));
-    }
-
-    let account_token = raw_account_id.trim();
-    if account_token.is_empty() {
-        return Err(format!(
-            "multi-channel channel-account `{trimmed}` is missing an account id"
-        ));
-    }
-
-    Ok(MultiChannelServeChannelAccount {
-        channel_id: runtime_channel_id.to_owned(),
-        account_id: account_token.to_owned(),
-    })
-}
-
-fn supported_multi_channel_serve_channel_ids() -> Vec<&'static str> {
-    let supported_channels = mvp::channel::background_channel_runtime_descriptors()
-        .into_iter()
-        .map(|descriptor| descriptor.channel_id)
-        .collect::<BTreeSet<_>>();
-    supported_channels.into_iter().collect()
-}
-
-#[cfg(test)]
-#[path = "lib_multi_channel_serve_tests.rs"]
-mod multi_channel_serve_tests;
-
-#[cfg(test)]
-#[path = "lib_first_run_entry_tests.rs"]
-mod first_run_entry_tests;
 
 pub async fn invoke_connector_cli(operation: &str, payload_raw: &str) -> CliResult<()> {
     let payload = cli_json::parse_json_payload(payload_raw, "invoke-connector payload")?;
@@ -2736,19 +2621,6 @@ where
     }
 
     Ok(())
-}
-
-pub async fn run_multi_channel_serve_cli(
-    config_path: Option<&str>,
-    session: &str,
-    channel_accounts: Vec<MultiChannelServeChannelAccount>,
-) -> CliResult<()> {
-    gateway::service::run_multi_channel_serve_gateway_compat_cli(
-        config_path,
-        session,
-        channel_accounts,
-    )
-    .await
 }
 
 pub(crate) fn render_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {

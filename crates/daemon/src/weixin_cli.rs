@@ -5,7 +5,10 @@ use loong_spec::CliResult;
 use serde_json::{Value, json};
 
 use crate::mvp;
-use crate::weixin_onboarding::onboard_via_qr_registration;
+
+mod onboarding;
+
+use self::onboarding::onboard_via_qr_registration;
 
 #[derive(Subcommand, Debug)]
 pub enum WeixinCommand {

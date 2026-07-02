@@ -8,7 +8,10 @@ use loong_app as mvp;
 use loong_spec::CliResult;
 use time::OffsetDateTime;
 
-use crate::operator_prompt::{
+pub(crate) mod prompt;
+
+pub(crate) use self::prompt::OPERATOR_CLEAR_INPUT_TOKEN;
+use self::prompt::{
     OperatorPromptUi, SelectInteractionMode, SelectOption, StdioOperatorUi,
     prompt_optional_operator_text,
 };

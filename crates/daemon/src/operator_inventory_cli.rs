@@ -1,4 +1,5 @@
 use super::*;
+use crate::channels_cli::{build_channel_resolution, render_channel_resolution_text};
 
 pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 3;
 pub const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
@@ -13,22 +14,15 @@ pub fn run_channels_cli(
     let resolved_path_display = resolved_path.display().to_string();
 
     if let Some(resolve) = resolve {
-        let resolution = channel_resolution::build_channel_resolution(
-            resolved_path_display.as_str(),
-            &config,
-            &inventory,
-            resolve,
-        )?;
+        let resolution =
+            build_channel_resolution(resolved_path_display.as_str(), &config, &inventory, resolve)?;
         if as_json {
             let pretty = serde_json::to_string_pretty(&resolution)
                 .map_err(|error| format!("serialize channel resolution output failed: {error}"))?;
             println!("{pretty}");
             return Ok(());
         }
-        println!(
-            "{}",
-            channel_resolution::render_channel_resolution_text(&resolution)
-        );
+        println!("{}", render_channel_resolution_text(&resolution));
         return Ok(());
     }
 
