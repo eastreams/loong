@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use loong_app as mvp;
 
-use crate::provider_credential_policy;
+use crate::provider::credential_policy as provider_credential_policy;
 
 use super::{ImportCandidate, ImportSourceKind, PreviewStatus, SetupDomainKind};
 

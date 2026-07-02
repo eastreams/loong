@@ -1,5 +1,5 @@
 use crate::onboard_cli::SelectOption;
-use crate::operator_prompt::OPERATOR_CLEAR_INPUT_TOKEN;
+use crate::personalize_cli::OPERATOR_CLEAR_INPUT_TOKEN;
 use loong_app as mvp;
 
 pub(crate) const PERSONALIZE_COMMAND_ABOUT: &str =

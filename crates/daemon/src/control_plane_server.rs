@@ -53,6 +53,7 @@ use self::mapping_task_approval::*;
 mod mapping_session;
 use self::mapping_session::*;
 mod connect;
+pub(crate) mod pairing_projection;
 use self::connect::*;
 mod connect_auth;
 use self::connect_auth::*;

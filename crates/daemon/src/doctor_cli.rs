@@ -12,17 +12,17 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
-use crate::provider_credential_policy;
-use crate::provider_model_probe_policy;
+use crate::provider::credential_policy as provider_credential_policy;
+use crate::provider::model_probe_policy as provider_model_probe_policy;
 
-#[path = "doctor_next_steps.rs"]
-mod doctor_next_steps;
-use self::doctor_next_steps::{
+mod next_steps;
+mod presentation;
+use self::next_steps::{
     ManagedBridgeRuntimeAttention, build_doctor_next_steps_with_channel_surfaces_and_path_env,
     doctor_checks_json_payload,
 };
 #[cfg(test)]
-use self::doctor_next_steps::{build_doctor_next_steps, build_doctor_next_steps_with_path_env};
+use self::next_steps::{build_doctor_next_steps, build_doctor_next_steps_with_path_env};
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DoctorCommands {
@@ -132,7 +132,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 checks.push(check);
                 if should_collect_route_probe
                     && let Some(route_probe) =
-                        crate::provider_route_diagnostics::collect_provider_route_probe(
+                        crate::provider::route_diagnostics::collect_provider_route_probe(
                             &config.provider,
                         )
                         .await
@@ -215,7 +215,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         mvp::config::write(Some(path), &config, true)?;
     }
 
-    let summary = crate::doctor_presentation::summarize_checks(&checks);
+    let summary = presentation::summarize_checks(&checks);
     let next_steps = build_doctor_next_steps_with_channel_surfaces_and_path_env(
         &checks,
         &config_path,
@@ -248,7 +248,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
 
     println!(
         "{}",
-        crate::doctor_presentation::render_doctor_text(
+        presentation::render_doctor_text(
             &checks,
             summary,
             &fixes,
@@ -1373,10 +1373,9 @@ fn managed_plugin_bridge_selection_is_ready(
     selection_status.selects_ready_plugin()
 }
 
-#[path = "doctor_cli_render_support.rs"]
-mod render_support;
+mod render;
 
-use render_support::{
+use render::{
     managed_bridge_duplicate_plugin_id_counts, managed_bridge_plugin_label,
     render_managed_bridge_compatible_plugin_labels, render_managed_bridge_configured_plugin_labels,
     render_managed_plugin_bridge_compatible_plugin_ids,
@@ -1841,18 +1840,18 @@ fn provider_transport_doctor_check(provider: &mvp::config::ProviderConfig) -> Do
 }
 
 fn provider_route_probe_doctor_check(
-    probe: &crate::provider_route_diagnostics::ProviderRouteProbe,
+    probe: &crate::provider::route_diagnostics::ProviderRouteProbe,
 ) -> DoctorCheck {
     DoctorCheck {
-        name: crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME.to_owned(),
+        name: crate::provider::route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME.to_owned(),
         level: match probe.level {
-            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Pass => {
+            crate::provider::route_diagnostics::ProviderRouteProbeLevel::Pass => {
                 DoctorCheckLevel::Pass
             }
-            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Warn => {
+            crate::provider::route_diagnostics::ProviderRouteProbeLevel::Warn => {
                 DoctorCheckLevel::Warn
             }
-            crate::provider_route_diagnostics::ProviderRouteProbeLevel::Fail => {
+            crate::provider::route_diagnostics::ProviderRouteProbeLevel::Fail => {
                 DoctorCheckLevel::Fail
             }
         },
@@ -1864,14 +1863,14 @@ fn provider_credentials_doctor_check(
     config: &mvp::config::LoongConfig,
     has_provider_credentials: bool,
 ) -> DoctorCheck {
-    let provider_label = crate::provider_presentation::active_provider_detail_label(config);
-    let status = crate::provider_credentials_guidance::provider_credential_status(
+    let provider_label = crate::provider::presentation::active_provider_detail_label(config);
+    let status = crate::provider::credentials_guidance::provider_credential_status(
         &config.provider,
         has_provider_credentials,
     );
 
     DoctorCheck {
-        name: crate::provider_credentials_guidance::PROVIDER_CREDENTIALS_LABEL.to_owned(),
+        name: crate::provider::credentials_guidance::PROVIDER_CREDENTIALS_LABEL.to_owned(),
         level: if status.is_ready() {
             DoctorCheckLevel::Pass
         } else {
@@ -1890,7 +1889,7 @@ fn web_search_provider_doctor_check(config: &mvp::config::LoongConfig) -> Doctor
         };
     }
 
-    let provider_status = crate::query_search_guidance::query_search_provider_status(config);
+    let provider_status = crate::query_search_surface::query_search_provider_status(config);
 
     if provider_status.credential_available {
         return DoctorCheck {
@@ -1994,5 +1993,4 @@ fn doctor_ready_for_first_turn(checks: &[DoctorCheck]) -> bool {
 }
 
 #[cfg(test)]
-#[path = "doctor_cli_tests.rs"]
 mod tests;

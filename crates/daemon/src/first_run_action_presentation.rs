@@ -17,9 +17,9 @@ pub(crate) const fn first_run_group_for_setup_action_kind(
 }
 
 pub(crate) const fn first_run_group_for_onboarding_action_kind(
-    kind: crate::onboard_finalize::OnboardingActionKind,
+    kind: crate::onboard::finalize::OnboardingActionKind,
 ) -> FirstRunActionGroup {
-    match crate::onboard_finalize::setup_boundary_kind_for_onboarding_action_kind(kind).ownership()
+    match crate::onboard::finalize::setup_boundary_kind_for_onboarding_action_kind(kind).ownership()
     {
         SetupSurfaceOwnership::ContinueSetup => FirstRunActionGroup::ContinueSetup,
         SetupSurfaceOwnership::FollowUpProduct => FirstRunActionGroup::GeneralFollowup,
@@ -175,19 +175,19 @@ mod tests {
         );
         assert_eq!(
             first_run_group_for_onboarding_action_kind(
-                crate::onboard_finalize::OnboardingActionKind::Ask,
+                crate::onboard::finalize::OnboardingActionKind::Ask,
             ),
             FirstRunActionGroup::GeneralFollowup
         );
         assert_eq!(
             first_run_group_for_onboarding_action_kind(
-                crate::onboard_finalize::OnboardingActionKind::Personalize,
+                crate::onboard::finalize::OnboardingActionKind::Personalize,
             ),
             FirstRunActionGroup::GeneralFollowup
         );
         assert_eq!(
             first_run_group_for_onboarding_action_kind(
-                crate::onboard_finalize::OnboardingActionKind::Channel,
+                crate::onboard::finalize::OnboardingActionKind::Channel,
             ),
             FirstRunActionGroup::ContinueSetup
         );

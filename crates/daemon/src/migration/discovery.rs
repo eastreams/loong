@@ -7,7 +7,7 @@ use loong_app as mvp;
 use loong_spec::CliResult;
 use serde::Deserialize;
 
-use crate::provider_credential_policy;
+use crate::provider::credential_policy as provider_credential_policy;
 
 use super::channels;
 use super::provider_transport::ImportedProviderTransport;
@@ -642,7 +642,7 @@ fn provider_import_surface(config: &mvp::config::LoongConfig) -> Option<ImportSu
         } else {
             ImportSurfaceLevel::Review
         },
-        detail: crate::provider_presentation::provider_identity_summary(&config.provider),
+        detail: crate::provider::presentation::provider_identity_summary(&config.provider),
     })
 }
 

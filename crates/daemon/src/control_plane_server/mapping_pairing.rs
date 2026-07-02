@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn map_pairing_request(
     request: mvp::control_plane::ControlPlanePairingRequestRecord,
 ) -> ControlPlanePairingRequestSummary {
-    crate::pairing_projection::map_pairing_request_summary(request)
+    crate::control_plane_server::pairing_projection::map_pairing_request_summary(request)
 }
 
 pub(super) fn principal_from_connect(
@@ -21,7 +21,7 @@ pub(super) fn principal_from_connect(
 pub(super) fn parse_pairing_status(
     raw: &str,
 ) -> Result<mvp::control_plane::ControlPlanePairingStatus, String> {
-    crate::pairing_projection::parse_pairing_status(raw)
+    crate::control_plane_server::pairing_projection::parse_pairing_status(raw)
 }
 
 pub(super) fn normalize_required_text(value: &str, field_name: &str) -> Result<String, String> {

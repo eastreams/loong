@@ -3,7 +3,7 @@ use std::path::Path;
 
 use loong_app as mvp;
 
-use crate::provider_credential_policy;
+use crate::provider::credential_policy as provider_credential_policy;
 
 use super::channels;
 use super::discovery::{build_import_candidate, resolve_channel_import_readiness_from_config};
@@ -784,7 +784,7 @@ fn provider_summary(
     supplemented_from: &[String],
     conflicting_ready_sources: &[String],
 ) -> String {
-    let mut summary = crate::provider_presentation::provider_identity_summary(config);
+    let mut summary = crate::provider::presentation::provider_identity_summary(config);
     if !supplemented_from.is_empty() {
         summary.push_str(" · supplemented from ");
         summary.push_str(&supplemented_from.join(", "));

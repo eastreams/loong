@@ -487,7 +487,7 @@ fn build_import_apply_summary_body_lines(
             .find(|domain| domain.kind == SetupDomainKind::Provider)
             .map(|domain| domain.summary.clone())
             .unwrap_or_else(|| {
-                crate::provider_presentation::provider_identity_summary(&resolved_config.provider)
+                crate::provider::presentation::provider_identity_summary(&resolved_config.provider)
             });
         lines.extend(mvp::presentation::render_wrapped_text_line(
             "- provider: ",
@@ -500,7 +500,7 @@ fn build_import_apply_summary_body_lines(
             width,
         ));
         lines.extend(
-            crate::provider_presentation::render_provider_profile_state_lines(
+            crate::provider::presentation::render_provider_profile_state_lines(
                 resolved_config,
                 width,
                 None,

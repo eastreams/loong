@@ -18,10 +18,8 @@ use crate::{
     materialize_bridge_support_template,
 };
 
-#[path = "plugins_cli_governance.rs"]
-mod governance_support;
-#[path = "plugins_cli_render.rs"]
-mod render_support;
+mod governance;
+mod render;
 
 pub const PLUGINS_COMMAND_SCHEMA_VERSION: u32 = 1;
 pub const PLUGINS_COMMAND_SCHEMA_SURFACE: &str = "plugin_governance";
@@ -40,13 +38,13 @@ fn plugins_command_schema(purpose: &str) -> JsonSchemaDescriptor {
     json_schema_descriptor(version, surface, purpose)
 }
 
-use self::governance_support::{
+use self::governance::{
     build_plugin_doctor_context, build_plugin_inventory_context, build_plugin_preflight_context,
     decode_plugin_inventory_results, decode_preflight_bridge_profile_recommendation,
     decode_preflight_results, decode_preflight_summary, load_bridge_profile_views,
     write_bridge_support_delta_artifact, write_bridge_support_template,
 };
-use self::render_support::{
+use self::render::{
     render_plugins_cli_text, summarize_filtered_actions, summarize_plugin_doctor_results,
     summarize_plugin_inventory_results,
 };
@@ -1394,9 +1392,7 @@ fn action_matches_filters(
 mod tests {
     use super::*;
     use crate::default_plugin_inventory_limit;
-    use crate::plugins_cli::governance_support::{
-        build_policy_signature_spec, normalize_scan_roots,
-    };
+    use crate::plugins_cli::governance::{build_policy_signature_spec, normalize_scan_roots};
     use crate::{
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_PURPOSE, PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_SURFACE,
         PLUGIN_PREFLIGHT_SUMMARY_SCHEMA_VERSION,

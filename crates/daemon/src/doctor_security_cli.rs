@@ -11,6 +11,8 @@ use serde_json::json;
 
 use crate::doctor_cli::durable_audit_target_issue;
 
+mod skills_policy;
+
 const DOCTOR_SECURITY_CLI_JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -216,8 +218,7 @@ async fn build_doctor_security_execution(
     let web_fetch_finding = assess_web_fetch(runtime.web_fetch.clone());
     findings.push(web_fetch_finding);
 
-    let skills_finding = match crate::skills_policy_probe::resolve_effective_skills_policy(&runtime)
-    {
+    let skills_finding = match skills_policy::resolve_effective_skills_policy(&runtime) {
         Ok(policy_probe) => assess_skills(policy_probe),
         Err(error) => assess_skills_probe_failure(runtime.skills.clone(), error),
     };
@@ -531,9 +532,7 @@ fn assess_web_fetch(policy: mvp::tools::runtime_config::WebFetchRuntimePolicy) -
     )
 }
 
-fn assess_skills(
-    policy_probe: crate::skills_policy_probe::EffectiveSkillsPolicyProbe,
-) -> SecurityFinding {
+fn assess_skills(policy_probe: skills_policy::EffectiveSkillsPolicyProbe) -> SecurityFinding {
     let posture =
         mvp::tools::skills_security_posture(&policy_probe.policy, policy_probe.override_active);
     let mut evidence = Vec::new();

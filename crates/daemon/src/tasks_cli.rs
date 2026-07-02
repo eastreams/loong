@@ -15,15 +15,11 @@ use loong_spec::CliResult;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-#[path = "tasks_cli_render.rs"]
-mod render_support;
-#[path = "tasks_cli_status.rs"]
-mod status_support;
+mod render;
+mod status;
 
-pub use self::render_support::{
-    render_task_brief_line, render_task_detail_lines, render_tasks_cli_text,
-};
-use self::status_support::{
+pub use self::render::{render_task_brief_line, render_task_detail_lines, render_tasks_cli_text};
+use self::status::{
     TaskStatusSummary, build_task_status_payload, summarize_task_status_payload,
     unknown_task_status_payload,
 };
@@ -1048,17 +1044,17 @@ async fn build_task_detail(
         &tool_policy,
         &recent_events,
     );
-    let prompt_frame = crate::session_prompt_frame_cli::load_session_prompt_frame_payload(
+    let prompt_frame = crate::session_runtime_detail::load_session_prompt_frame_payload(
         memory_config,
         task_target.owner_session_id.as_str(),
     )
     .await;
-    let safe_lane = crate::session_runtime_truth_cli::load_session_safe_lane_payload(
+    let safe_lane = crate::session_runtime_detail::load_session_safe_lane_payload(
         memory_config,
         task_target.owner_session_id.as_str(),
     )
     .await;
-    let turn_checkpoint = crate::session_runtime_truth_cli::load_session_turn_checkpoint_payload(
+    let turn_checkpoint = crate::session_runtime_detail::load_session_turn_checkpoint_payload(
         memory_config,
         task_target.owner_session_id.as_str(),
     )
@@ -1453,5 +1449,4 @@ fn required_string_field(value: &Value, field: &str, context: &str) -> CliResult
 }
 
 #[cfg(test)]
-#[path = "tasks_cli_tests.rs"]
 mod tests;

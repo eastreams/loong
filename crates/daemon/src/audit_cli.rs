@@ -14,10 +14,9 @@ use serde_json::{Map, Value, json};
 
 const MAX_AUDIT_WINDOW: usize = 10_000;
 
-#[path = "audit_cli_discovery_support.rs"]
-mod discovery_support;
+mod discovery;
 
-use self::discovery_support::{
+use self::discovery::{
     audit_discovery_groups_json, discovery_group_correlated_remediation_command,
     discovery_group_correlated_summary_command, discovery_group_drill_down_command,
 };
@@ -2864,5 +2863,4 @@ fn format_top_rollup(counts: &BTreeMap<String, usize>, limit: usize) -> String {
 }
 
 #[cfg(test)]
-#[path = "audit_cli_tests.rs"]
 mod tests;
